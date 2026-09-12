@@ -1,9 +1,9 @@
 # Rustmux: main-human
 
 This documentation describes the implementation on `main-human`. The branch
-contains a PTY and shell lifecycle library, integration tests and contribution
-rules. The command-line program is still a placeholder: interactive input,
-rendering and terminal multiplexing are not yet connected.
+provides a single interactive shell with keyboard input, direct terminal-output
+forwarding and outer-terminal restoration. It does not yet provide split panes,
+session persistence, a screen parser or dynamic resize propagation.
 
 Developers can review the [PTY lifecycle module](reference/pty-lifecycle.md), which
 starts an interactive shell on a controlling terminal and owns its cleanup.

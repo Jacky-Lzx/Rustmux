@@ -1,8 +1,8 @@
 # PTY Lifecycle
 
 `PtyShell` in `src/pty.rs` owns one interactive shell and the master side of its
-pseudoterminal. This is the H01 candidate; owner review and acceptance are pending.
-The CLI remains a placeholder. This change does not provide input forwarding,
+pseudoterminal. This module implements H01. The CLI now uses it through the
+[input forwarding loop](input-loop.md). The PTY module itself does not provide
 screen rendering, resize handling, a daemon or session persistence.
 
 ## Ownership and startup

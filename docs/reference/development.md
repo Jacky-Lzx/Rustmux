@@ -11,7 +11,8 @@ cargo clippy --all-targets --all-features --locked -- -D warnings
 
 The Rust CI workflow runs these checks on macOS and Linux. PTY integration tests
 start real shells and verify controlling-terminal setup, initial size, exit and
-resource cleanup. They require permission to create PTYs and child processes.
+resource cleanup. The input-loop harness requires Python 3 and creates an outer
+PTY to run the actual binary, checking keyboard forwarding and terminal recovery. They require permission to create PTYs and child processes.
 See [PTY lifecycle](pty-lifecycle.md) for the implementation and review boundaries.
 
 ## Contributions
