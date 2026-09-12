@@ -32,6 +32,10 @@ Fixtures check exact rows and cursor positions for overwrites, control character
 delayed wrap, bottom scrolling, a single-cell screen, split input and rejection
 without mutation. Run `cargo test --lib screen::tests` for the model tests.
 
-Unicode decoding and character width, styles, escape sequences, alternate screens,
+The [basic parser](control-sequences.md) now applies cursor movement and erase
+commands through the screen API. Movement clamps to the grid; erase replaces
+cells with spaces without moving the cursor. Both cancel pending wrap.
+
+Unicode decoding and character width, styles, alternate screens,
 resize policy and rendering are subsequent work. No dependencies are added by this
 step, and interactive CLI behavior is unchanged.

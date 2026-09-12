@@ -2,10 +2,19 @@
 
 use std::io;
 
+/// Inclusive erase range relative to the cursor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EraseMode {
+    ToEnd,
+    ToStart,
+    All,
+}
+
 /// Minimal screen state with zero-based coordinates and full-screen scrolling.
 ///
-/// Only printable ASCII, LF, CR and BS are accepted for now. Unicode width,
-/// styles, escape sequences, scrollback and resizing belong to later steps.
+/// The text API accepts printable ASCII, LF, CR and BS. Cursor movement and
+/// erasure are separate operations used by the parser. Unicode width, styles,
+/// scrollback and resizing belong to later steps.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Screen {
     rows: usize,
@@ -105,6 +114,58 @@ impl Screen {
             }
         }
         Ok(())
+    }
+
+    /// Position the cursor using zero-based coordinates, clamped to the grid.
+    /// Explicit movement cancels delayed wrapping and never scrolls.
+    pub fn move_to(&mut self, row: usize, column: usize) {
+        self.row = row.min(self.rows - 1);
+        self.column = column.min(self.columns - 1);
+        self.wrap_pending = false;
+    }
+
+    pub fn move_up(&mut self, count: usize) {
+        self.move_to(self.row.saturating_sub(count), self.column);
+    }
+
+    pub fn move_down(&mut self, count: usize) {
+        self.move_to(self.row.saturating_add(count), self.column);
+    }
+
+    pub fn move_left(&mut self, count: usize) {
+        self.move_to(self.row, self.column.saturating_sub(count));
+    }
+
+    pub fn move_right(&mut self, count: usize) {
+        self.move_to(self.row, self.column.saturating_add(count));
+    }
+
+    /// Blank part or all of the current row, including the cursor cell.
+    /// Cursor coordinates stay unchanged; delayed wrapping is cancelled.
+    pub fn erase_line(&mut self, mode: EraseMode) {
+        let start = self.row * self.columns;
+        let cursor = start + self.column;
+        let end = start + self.columns;
+        let range = match mode {
+            EraseMode::ToEnd => cursor..end,
+            EraseMode::ToStart => start..cursor + 1,
+            EraseMode::All => start..end,
+        };
+        self.cells[range].fill(' ');
+        self.wrap_pending = false;
+    }
+
+    /// Blank part or all of the grid, including the cursor cell, without homing.
+    /// This model has no saved lines, so only the visible grid is affected.
+    pub fn erase_display(&mut self, mode: EraseMode) {
+        let cursor = self.row * self.columns + self.column;
+        let range = match mode {
+            EraseMode::ToEnd => cursor..self.cells.len(),
+            EraseMode::ToStart => 0..cursor + 1,
+            EraseMode::All => 0..self.cells.len(),
+        };
+        self.cells[range].fill(' ');
+        self.wrap_pending = false;
     }
 
     fn line_feed(&mut self) {
