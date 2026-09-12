@@ -4,7 +4,8 @@ This H03 step adds `Cell`, `Style` and `Color` in `src/style.rs`. The parser
 applies SGR (`ESC [ parameters m`) to the screen's current style. Written cells
 copy that style, so later changes cannot restyle existing text. Cursor movement
 and pending wrap are unaffected by SGR. The CLI still forwards bytes directly;
-these stored styles are not rendered yet.
+the standalone [renderer](rendering.md) can emit these stored styles, but is not
+yet connected to the CLI.
 
 ## Supported subset
 

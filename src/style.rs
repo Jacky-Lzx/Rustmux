@@ -1,4 +1,4 @@
-//! Stored text attributes. Palette/default colors are resolved by a future renderer.
+//! Stored text attributes. The renderer emits symbolic palette/default colors.
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum Color {
