@@ -1,0 +1,8 @@
+[package]
+name = "rustmux"
+version = "0.1.0"
+edition = "2024"
+description = "Rustmux human-reviewed implementation track"
+license = "MIT"
+
+[dependencies]
