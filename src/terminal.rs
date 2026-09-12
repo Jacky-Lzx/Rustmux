@@ -9,14 +9,14 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::process::ExitStatusExt;
 use std::process::ExitStatus;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use nix::errno::Errno;
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use nix::poll::{PollFd, PollFlags, poll};
 use nix::sys::termios::{self, SetArg, Termios};
-use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGQUIT, SIGTERM};
+use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGWINCH};
 
 use crate::pty::PtyShell;
 
@@ -76,7 +76,7 @@ pub fn run(shell_path: &OsStr) -> io::Result<u8> {
     fcntl(master, FcntlArg::F_SETFL(flags | OFlag::O_NONBLOCK))?;
     let signals = Signals::install()?;
     let mut terminal = Terminal::enter(file)?;
-    let result = forward(&mut terminal.file, &mut shell, &signals.pending);
+    let result = forward(&mut terminal.file, &mut shell, &signals);
     // Restore the user's terminal before potentially blocking child cleanup.
     let restored = terminal.restore();
     drop(shell);
@@ -96,12 +96,6 @@ fn window_size(file: &File) -> io::Result<nix::pty::Winsize> {
     // SAFETY: file is live and size points to writable Winsize storage.
     if unsafe { nix::libc::ioctl(file.as_raw_fd(), nix::libc::TIOCGWINSZ, &mut size) } == -1 {
         return Err(io::Error::last_os_error());
-    }
-    if size.ws_row == 0 || size.ws_col == 0 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "terminal size is zero",
-        ));
     }
     Ok(size)
 }
@@ -176,6 +170,7 @@ impl Drop for Terminal {
 
 struct Signals {
     pending: Arc<AtomicUsize>,
+    resize: Arc<AtomicBool>,
     ids: Vec<signal_hook::SigId>,
 }
 
@@ -183,6 +178,8 @@ impl Signals {
     fn install() -> io::Result<Self> {
         let mut signals = Self {
             pending: Arc::new(AtomicUsize::new(0)),
+            // Re-read after installing the handler to cover changes since spawn.
+            resize: Arc::new(AtomicBool::new(true)),
             ids: Vec::new(),
         };
         for signal in [SIGHUP, SIGTERM, SIGINT, SIGQUIT] {
@@ -192,6 +189,10 @@ impl Signals {
                 signal as usize,
             )?);
         }
+        signals.ids.push(signal_hook::flag::register(
+            SIGWINCH,
+            signals.resize.clone(),
+        )?);
         Ok(signals)
     }
 }
@@ -210,19 +211,27 @@ fn exit_code(status: ExitStatus) -> u8 {
         .unwrap_or_else(|| 128 + status.signal().unwrap_or(0)) as u8
 }
 
-fn forward(terminal: &mut File, shell: &mut PtyShell, signal: &AtomicUsize) -> io::Result<u8> {
+fn forward(terminal: &mut File, shell: &mut PtyShell, signals: &Signals) -> io::Result<u8> {
     let mut to_shell = VecDeque::new();
     let mut to_terminal = VecDeque::new();
     let mut eof = false;
     let mut eof_at = None;
     let mut status = None;
     loop {
-        let received = signal.load(Ordering::Relaxed);
+        let received = signals.pending.load(Ordering::Relaxed);
         if received != 0 {
             return Ok((128 + received) as u8);
         }
         if status.is_none() {
             status = shell.try_wait()?;
+        }
+        if status.is_none() && !eof && signals.resize.swap(false, Ordering::Relaxed) {
+            let size = window_size(terminal)?;
+            // Some terminals temporarily report zero while resizing. Keep the last
+            // valid size until a later SIGWINCH. Startup still requires a valid size.
+            if size.ws_row != 0 && size.ws_col != 0 {
+                shell.resize(size.ws_row, size.ws_col)?;
+            }
         }
         if eof && to_terminal.is_empty() {
             if let Some(status) = status {

@@ -22,6 +22,6 @@ status is returned to the caller. Shell output is drained before normal exit, an
 the outer terminal modes and previous screen are restored.
 
 This is a single-pane forwarding implementation. Terminal output is passed through
-directly; there is no screen parser, split layout, session persistence or dynamic
-resize propagation yet. Start it at the desired terminal size. Extended keyboard
+directly; there is no screen parser, split layout or session persistence yet.
+Window size changes propagate to the inner PTY. Extended keyboard
 protocols and arbitrary application terminal modes have not been validated.

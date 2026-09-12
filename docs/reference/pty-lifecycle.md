@@ -3,7 +3,8 @@
 `PtyShell` in `src/pty.rs` owns one interactive shell and the master side of its
 pseudoterminal. This module implements H01. The CLI now uses it through the
 [input forwarding loop](input-loop.md). The PTY module itself does not provide
-screen rendering, resize handling, a daemon or session persistence.
+screen rendering, a daemon or session persistence. Its `resize` method updates
+nonzero row/column dimensions; the kernel notifies the foreground process group.
 
 ## Ownership and startup
 

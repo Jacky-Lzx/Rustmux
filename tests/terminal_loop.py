@@ -124,6 +124,21 @@ try:
     s.expect(b"RUSTMUX_READY> ")
     s.send(b"printf '\\nINT:%s\\n' \"$?\"\n")
     s.expect(b"\r\nINT:130\r\n")
+    # A foreground process must receive the kernel's SIGWINCH and see the new size.
+    s.send(b"python3 -c 'import os,signal; signal.signal(signal.SIGWINCH, lambda *_: print(\"SIZE:%s:%s\" % (os.get_terminal_size().lines, os.get_terminal_size().columns), flush=True)); print(\"WATCH_READY\", flush=True); exec(\"while True: signal.pause()\")'\n")
+    s.expect(b"\r\nWATCH_READY\r\n")
+    for rows, columns in [(40, 120), (18, 60), (55, 150)]:
+        fcntl.ioctl(s.slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, columns, 0, 0))
+        s.expect(f"SIZE:{rows}:{columns}\r\n".encode())
+    # Invalid transient dimensions must not terminate Rustmux or reach the child.
+    fcntl.ioctl(s.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 0, 0, 0, 0))
+    s.read(0.15)
+    assert b"SIZE:0:0" not in s.output
+    assert s.child.poll() is None
+    fcntl.ioctl(s.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+    s.expect(b"SIZE:24:80\r\n")
+    s.send(b"\x03")
+    s.expect(b"RUSTMUX_READY> ")
     # Exit immediately after output exceeding the queue cap: no tail may be lost.
     s.send(b"python3 -c 'import os; os.write(1, b\"Z\" * 200000); print(\"BURST_DONE\")'; printf '\\nLAST_OUTPUT\\n'; exit 7\n")
     s.finish(7)

@@ -1,6 +1,6 @@
 # Input Forwarding Loop
 
-This is the H02 implementation candidate, awaiting owner review. Read
+This describes the H02 forwarding loop and H04 resize handling. Read
 `src/main.rs`, then `src/terminal.rs`, its queue tests, and
 `tests/terminal_loop.py` (launched by `tests/terminal_loop.rs`).
 
@@ -46,14 +46,25 @@ pre-existing private modes and nested alternate-screen state are not captured.
 signal-hook 0.3 installs flag-only handlers for HUP, TERM, INT and QUIT, without
 creating threads. The event loop returns 128 + signal, restores terminal state,
 and then drops the PTY owner to stop/reap its direct child. This dependency avoids
-handwritten signal handlers. Dynamic resize, suspend/resume and whole-process-tree
+handwritten signal handlers. Suspend/resume and whole-process-tree
 supervision remain out of scope. The public run function is intended for the CLI
 process, with exclusive terminal ownership and single-threaded startup.
+
+## Window size changes
+
+SIGWINCH sets a separate atomic flag, so resize events cannot overwrite termination
+signals. The event loop reads the latest outer-terminal size and calls PtyShell::resize;
+TIOCSWINSZ updates the inner PTY and lets the kernel notify its foreground process
+group. No terminal operations run in the signal handler. Coalesced events use the
+latest size, including an initial recheck after handler registration to close the
+startup race. Temporary zero dimensions are ignored after startup; startup still
+requires nonzero dimensions. Pixel dimensions are not propagated. I/O failures use
+the same terminal-restoration path as forwarding failures.
 
 ## Verification
 
 The nested-PTY test drives the real binary: Chinese text, erase, Ctrl-C interrupting
-sleep, 200 KB output, final output plus exit code 7, invalid shell startup,
+sleep, repeated resize with a foreground SIGWINCH observer, transient zero sizes, 200 KB output, final output plus exit code 7, invalid shell startup,
 non-terminal input rejection, SIGTERM, output backpressure, and a live process
 closing its PTY. A supervisor retains the outer controlling session so macOS does
 not revoke its terminal before attributes can be checked. All termios settings

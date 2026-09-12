@@ -166,7 +166,19 @@ fn shell_lifecycle_and_failures() {
     drop(shell);
 
     let mut shell = PtyShell::spawn("/bin/sh", 24, 80).unwrap();
+    assert_eq!(
+        shell.resize(0, 80).unwrap_err().kind(),
+        std::io::ErrorKind::InvalidInput
+    );
+    assert_eq!(
+        shell.resize(24, 0).unwrap_err().kind(),
+        std::io::ErrorKind::InvalidInput
+    );
     let status = shell.terminate().unwrap();
+    assert_eq!(
+        shell.resize(24, 80).unwrap_err().kind(),
+        std::io::ErrorKind::NotConnected
+    );
     assert!(!status.success());
     assert!(shell.master_fd().is_none());
     assert_eq!(shell.terminate().unwrap(), status);

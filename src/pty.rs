@@ -3,7 +3,7 @@
 use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{self, Read, Write};
-use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, ExitStatus, Stdio};
 
@@ -83,6 +83,29 @@ impl PtyShell {
     /// Borrow the master for polling. None after explicit termination.
     pub fn master_fd(&self) -> Option<BorrowedFd<'_>> {
         self.master.as_ref().map(AsFd::as_fd)
+    }
+
+    /// Update character dimensions; the kernel notifies the PTY foreground process group.
+    /// Zero dimensions are rejected. Returns NotConnected after termination.
+    pub fn resize(&mut self, rows: u16, columns: u16) -> io::Result<()> {
+        if rows == 0 || columns == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "PTY dimensions must be nonzero",
+            ));
+        }
+        let size = Winsize {
+            ws_row: rows,
+            ws_col: columns,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        let master = self.master()?;
+        // SAFETY: master is live and size points to initialized Winsize storage.
+        if unsafe { nix::libc::ioctl(master.as_raw_fd(), nix::libc::TIOCSWINSZ, &size) } == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
     }
 
     /// Reap without blocking; repeated calls return the cached exit status.
