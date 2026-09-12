@@ -42,5 +42,6 @@ The [text style layer](text-styles.md) adds SGR attributes and colors. Erased ce
 and newly exposed rows use the active background without text decorations.
 
 The [Unicode layer](unicode.md) adds incremental decoding, wide cells and bounded
-zero-width suffixes using unicode-width. Alternate screens, resize policy and
+zero-width suffixes using unicode-width. [Alternate Screen](alternate-screen.md) adds an isolated
+second grid and saved main state. Resize policy and
 rendering are subsequent work; interactive CLI behavior is unchanged.

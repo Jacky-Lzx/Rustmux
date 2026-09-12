@@ -39,7 +39,7 @@ it. CAN and SUB cancel a sequence; a new ESC restarts ESC/CSI parsing.
 
 ## Unsupported input and limits
 
-Unknown CSI commands, private modes, intermediate bytes, non-SGR colon subparameters,
+Unknown CSI commands, unsupported private commands, intermediate bytes, non-SGR colon subparameters,
 extra parameters and numeric overflow cause the command to be ignored through
 its final byte. At most 32 optional usize parameters are stored. Cursor positioning still accepts
 at most two; one-parameter commands reject extra parameters. Parser storage is constant regardless of
@@ -52,7 +52,8 @@ interpreted or buffered; an unterminated string continues to discard input until
 its terminator or cancellation. Other unsupported controls are ignored.
 UTF-8 decoding and replacement are
 described in [UTF-8 and Character Width](unicode.md). There is no 8-bit C1 command
-support, alternate screen, terminal replies or renderer yet.
+support, terminal replies or renderer yet. Mode 1049 is described in
+[Alternate Screen](alternate-screen.md).
 
 Unlike `Screen::write_ascii`, this streaming interface skips unsupported input;
 it does not reject an entire chunk. Chunk boundaries have no semantic meaning.

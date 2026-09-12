@@ -9,3 +9,4 @@
 - [Basic Control Sequence Parser](reference/control-sequences.md)
 - [Text Styles](reference/text-styles.md)
 - [UTF-8 and Character Width](reference/unicode.md)
+- [Alternate Screen](reference/alternate-screen.md)

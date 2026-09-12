@@ -15,6 +15,14 @@ pub enum EraseMode {
     All,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SavedCursor {
+    row: usize,
+    column: usize,
+    style: Style,
+    wrap_pending: bool,
+}
+
 /// Minimal screen state with zero-based coordinates and full-screen scrolling.
 ///
 /// The text API accepts printable ASCII, LF, CR and BS. Cursor movement and
@@ -25,6 +33,8 @@ pub struct Screen {
     rows: usize,
     columns: usize,
     cells: Vec<Cell>,
+    inactive_cells: Vec<Cell>,
+    saved_main_cursor: Option<SavedCursor>,
     style: Style,
     row: usize,
     column: usize,
@@ -43,15 +53,60 @@ impl Screen {
         let mut cells = Vec::new();
         cells.try_reserve_exact(length).map_err(io::Error::other)?;
         cells.resize(length, Cell::default());
+        // Reserve both grids at construction so mode switching cannot fail allocation.
+        let mut inactive_cells = Vec::new();
+        inactive_cells
+            .try_reserve_exact(length)
+            .map_err(io::Error::other)?;
+        inactive_cells.resize(length, Cell::default());
         Ok(Self {
             rows,
             columns,
             cells,
+            inactive_cells,
+            saved_main_cursor: None,
             style: Style::default(),
             row: 0,
             column: 0,
             wrap_pending: false,
         })
+    }
+
+    pub fn is_alternate(&self) -> bool {
+        self.saved_main_cursor.is_some()
+    }
+
+    /// Enter a cleared alternate grid while retaining the current coordinates and style.
+    /// Repeated entry is a no-op: this is a mode, not a stack of nested screens.
+    pub fn enter_alternate(&mut self) {
+        if self.is_alternate() {
+            return;
+        }
+        self.saved_main_cursor = Some(SavedCursor {
+            row: self.row,
+            column: self.column,
+            style: self.style,
+            wrap_pending: self.wrap_pending,
+        });
+        std::mem::swap(&mut self.cells, &mut self.inactive_cells);
+        let blank = self.blank();
+        self.cells.fill(blank);
+        self.wrap_pending = false;
+    }
+
+    /// Restore main cells, coordinates, writing style and delayed wrap.
+    /// A reset while already on the main screen is a no-op.
+    pub fn leave_alternate(&mut self) {
+        let Some(saved) = self.saved_main_cursor.take() else {
+            return;
+        };
+        std::mem::swap(&mut self.cells, &mut self.inactive_cells);
+        // Release discarded combining suffixes; the next visit starts blank.
+        self.inactive_cells.fill(Cell::default());
+        self.row = saved.row;
+        self.column = saved.column;
+        self.style = saved.style;
+        self.wrap_pending = saved.wrap_pending;
     }
 
     pub fn dimensions(&self) -> (usize, usize) {

@@ -24,6 +24,7 @@ struct Parameters {
     /// True when this value continues the preceding parameter after a colon.
     subparameter: [bool; 32],
     invalid: bool,
+    private: bool,
 }
 
 impl Parameters {
@@ -207,11 +208,17 @@ impl Parser {
                                     parameters.invalid = true;
                                 }
                             }
+                            b'?' if !parameters.private
+                                && parameters.index == 0
+                                && parameters.values[0].is_none() =>
+                            {
+                                parameters.private = true
+                            }
                             b';' | b':' if parameters.index + 1 < parameters.values.len() => {
                                 parameters.index += 1;
                                 parameters.subparameter[parameters.index] = byte == b':'
                             }
-                            // Private prefixes, intermediates and
+                            // Other prefixes, intermediates and
                             // extra parameters are outside this deliberately small subset.
                             _ => parameters.invalid = true,
                         }
@@ -224,6 +231,20 @@ impl Parser {
     }
 
     fn dispatch(screen: &mut Screen, parameters: &Parameters, command: u8) {
+        if parameters.private {
+            if !parameters.subparameter.contains(&true) && matches!(command, b'h' | b'l') {
+                for mode in &parameters.values[..=parameters.index] {
+                    if *mode == Some(1049) {
+                        if command == b'h' {
+                            screen.enter_alternate();
+                        } else {
+                            screen.leave_alternate();
+                        }
+                    }
+                }
+            }
+            return;
+        }
         if command == b'm' {
             if let Some(style) = parameters.sgr(screen.style()) {
                 screen.set_style(style);
