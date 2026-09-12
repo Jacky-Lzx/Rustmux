@@ -1,0 +1,17 @@
+[book]
+title = "Rustmux Human Track Documentation"
+authors = ["Rustmux contributors"]
+language = "en"
+src = "docs"
+
+[build]
+build-dir = "dist"
+create-missing = false
+
+[output.html]
+default-theme = "navy"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/Jacky-Lzx/Rustmux/tree/main-human"
+edit-url-template = "https://github.com/Jacky-Lzx/Rustmux/edit/main-human/{path}"
+site-url = "/"
+no-section-label = true
