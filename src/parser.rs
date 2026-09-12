@@ -1,4 +1,4 @@
-//! Incremental ASCII/CSI parsing for the screen model; not yet used by the CLI.
+//! Incremental UTF-8/CSI parsing for the screen model; not yet used by the CLI.
 
 use crate::screen::{EraseMode, Screen};
 
@@ -67,11 +67,13 @@ impl Parameters {
 
 /// Retain one parser per output stream and feed chunks in order into its Screen.
 /// Incomplete sequences survive calls. Storage is constant even for hostile input.
-/// Non-ASCII bytes and unsupported commands are ignored; this is not a full VT parser.
+/// Invalid UTF-8 is replaced; unsupported commands are ignored. This is not a full VT parser.
 #[derive(Debug, Default)]
 pub struct Parser {
     state: State,
     parameters: Parameters,
+    utf8: [u8; 4],
+    utf8_len: usize,
 }
 
 impl Parser {
@@ -85,7 +87,45 @@ impl Parser {
         }
     }
 
+    /// End a stream, replacing an incomplete UTF-8 prefix and discarding unfinished
+    /// control sequences. Do not call between chunks of the same stream.
+    pub fn finish(&mut self, screen: &mut Screen) {
+        if self.utf8_len != 0 {
+            screen.print('\u{fffd}');
+        }
+        self.utf8_len = 0;
+        self.state = State::Ground;
+    }
+
+    fn text_byte(&mut self, screen: &mut Screen, byte: u8) {
+        self.utf8[self.utf8_len] = byte;
+        self.utf8_len += 1;
+        match std::str::from_utf8(&self.utf8[..self.utf8_len]) {
+            Ok(text) => {
+                screen.print(text.chars().next().expect("one decoded scalar"));
+                self.utf8_len = 0;
+            }
+            Err(error) => {
+                if let Some(invalid_len) = error.error_len() {
+                    let pending = self.utf8;
+                    let length = self.utf8_len;
+                    self.utf8_len = 0;
+                    screen.print('\u{fffd}');
+                    // Reprocess bytes after the invalid prefix: an ESC or ASCII
+                    // character here must retain its ordinary meaning.
+                    for &byte in &pending[invalid_len..length] {
+                        self.byte(screen, byte);
+                    }
+                }
+            }
+        }
+    }
+
     fn byte(&mut self, screen: &mut Screen, byte: u8) {
+        if self.utf8_len != 0 {
+            self.text_byte(screen, byte);
+            return;
+        }
         // CAN and SUB cancel any incomplete sequence, including strings.
         if matches!(byte, 0x18 | 0x1a) {
             self.state = State::Ground;
@@ -121,7 +161,9 @@ impl Parser {
         self.state = match self.state {
             State::Ground => {
                 if byte.is_ascii() {
-                    screen.write_ascii(&[byte]).expect("printable ASCII");
+                    screen.print(char::from(byte));
+                } else {
+                    self.text_byte(screen, byte);
                 }
                 State::Ground
             }
@@ -248,7 +290,7 @@ mod tests {
     // Each fixture runs whole, one byte at a time and at every two-chunk split.
     // Compare against explicit expected screen contents, not just parser output.
     fn fixture(input: &[u8], expected: &[&str], cursor: (usize, usize)) {
-        let new_screen = || Screen::new(expected.len(), expected[0].len()).unwrap();
+        let new_screen = || Screen::new(expected.len(), expected[0].chars().count()).unwrap();
         let mut reference = new_screen();
         Parser::new().advance(&mut reference, input);
         assert_eq!(lines(&reference), expected);
@@ -325,7 +367,7 @@ mod tests {
             &["AB  "],
             (0, 2),
         );
-        fixture("A中B".as_bytes(), &["AB  "], (0, 2));
+        fixture("AéB".as_bytes(), &["AéB  "], (0, 3));
     }
 
     #[test]

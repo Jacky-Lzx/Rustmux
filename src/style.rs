@@ -22,10 +22,15 @@ pub struct Style {
     pub strikethrough: bool,
 }
 
-/// A copied style snapshot: subsequent SGR commands cannot restyle existing text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A stored character with its width and zero-width suffix. The style is a snapshot:
+/// subsequent SGR commands cannot restyle existing text.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cell {
     pub character: char,
+    /// 1 for ordinary cells, 2 for a wide leader, 0 for its trailing placeholder.
+    pub width: u8,
+    /// At most 16 zero-width scalars; only leaders carry suffixes.
+    pub combining: Vec<char>,
     pub style: Style,
 }
 
@@ -33,6 +38,8 @@ impl Default for Cell {
     fn default() -> Self {
         Self {
             character: ' ',
+            width: 1,
+            combining: Vec::new(),
             style: Style::default(),
         }
     }

@@ -41,6 +41,6 @@ cells with spaces without moving the cursor. Both cancel pending wrap.
 The [text style layer](text-styles.md) adds SGR attributes and colors. Erased cells
 and newly exposed rows use the active background without text decorations.
 
-Unicode decoding and character width, alternate screens,
-resize policy and rendering are subsequent work. No dependencies are added by this
-step, and interactive CLI behavior is unchanged.
+The [Unicode layer](unicode.md) adds incremental decoding, wide cells and bounded
+zero-width suffixes using unicode-width. Alternate screens, resize policy and
+rendering are subsequent work; interactive CLI behavior is unchanged.

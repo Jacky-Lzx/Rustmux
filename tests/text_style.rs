@@ -44,7 +44,8 @@ fn attributes_and_individual_resets_are_saved_per_cell() {
                 inverse: true,
                 hidden: true,
                 strikethrough: true,
-            }
+            },
+            ..Cell::default()
         }
     );
     assert_eq!(row[1].style, Style::default());
@@ -143,7 +144,8 @@ fn sgr_keeps_pending_wrap_and_overwrite_only_changes_target_cell() {
         row[1],
         Cell {
             character: 'X',
-            style: Style::default()
+            style: Style::default(),
+            ..Cell::default()
         }
     );
     assert_eq!(row[2].style.foreground, Color::Indexed(1));
@@ -154,7 +156,8 @@ fn sgr_keeps_pending_wrap_and_overwrite_only_changes_target_cell() {
             style: Style {
                 foreground: Color::Indexed(2),
                 ..Style::default()
-            }
+            },
+            ..Cell::default()
         }
     );
     let screen = parsed(1, 3, b"abc\x1b[1m");
@@ -171,10 +174,11 @@ fn erased_and_scrolled_blanks_use_background_without_decorations() {
             background: Color::Indexed(4),
             ..Style::default()
         },
+        ..Cell::default()
     };
     for command in ["2K", "2J"] {
         let screen = parsed(1, 3, format!("abc\x1b[1;7;31;44m\x1b[{command}").as_bytes());
-        assert_eq!(screen.row(0).unwrap(), &[blue_blank; 3]);
+        assert_eq!(screen.row(0).unwrap(), &vec![blue_blank.clone(); 3]);
         assert!(screen.style().bold && screen.style().inverse);
     }
     let screen = parsed(2, 3, b"\x1b[31mabc\r\n\x1b[32mdef\x1b[1;44m\n");
@@ -185,10 +189,11 @@ fn erased_and_scrolled_blanks_use_background_without_decorations() {
             style: Style {
                 foreground: Color::Indexed(2),
                 ..Style::default()
-            }
+            },
+            ..Cell::default()
         }
     );
-    assert_eq!(screen.row(1).unwrap(), &[blue_blank; 3]);
+    assert_eq!(screen.row(1).unwrap(), &vec![blue_blank.clone(); 3]);
     assert_eq!(screen.cursor(), (1, 2));
 }
 

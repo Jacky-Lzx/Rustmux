@@ -1,6 +1,6 @@
 # Basic Control Sequence Parser
 
-`rustmux::parser::Parser` incrementally applies a small ASCII/CSI subset to
+`rustmux::parser::Parser` incrementally applies UTF-8 text and a small CSI subset to
 `Screen`. Keep one parser per output stream and call `advance` with the same
 screen as chunks arrive. Incomplete sequences are retained between calls.
 The CLI still forwards output directly; it does not yet use this parser.
@@ -49,8 +49,10 @@ sequence bytes.
 OSC payload is discarded through BEL or ST (ESC followed by backslash).
 DCS, SOS, PM and APC payloads are discarded through ST. These strings are not
 interpreted or buffered; an unterminated string continues to discard input until
-its terminator or cancellation. Other unsupported controls and non-ASCII text
-are ignored. There is no UTF-8 decoder, 8-bit C1 command support, alternate screen, terminal replies or renderer yet.
+its terminator or cancellation. Other unsupported controls are ignored.
+UTF-8 decoding and replacement are
+described in [UTF-8 and Character Width](unicode.md). There is no 8-bit C1 command
+support, alternate screen, terminal replies or renderer yet.
 
 Unlike `Screen::write_ascii`, this streaming interface skips unsupported input;
 it does not reject an entire chunk. Chunk boundaries have no semantic meaning.

@@ -1,6 +1,9 @@
 //! A fixed-size text grid, independent of PTY I/O and escape-sequence parsing.
 
 use std::io;
+use unicode_width::UnicodeWidthChar;
+
+const MAX_COMBINING_SCALARS: usize = 16;
 
 use crate::style::{Cell, Style};
 
@@ -15,7 +18,7 @@ pub enum EraseMode {
 /// Minimal screen state with zero-based coordinates and full-screen scrolling.
 ///
 /// The text API accepts printable ASCII, LF, CR and BS. Cursor movement and
-/// erasure are separate operations used by the parser. Unicode width,
+/// erasure are separate operations used by the parser. Grapheme-cluster shaping,
 /// scrollback and resizing belong to later steps.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Screen {
@@ -101,26 +104,86 @@ impl Screen {
                     self.wrap_pending = false;
                     self.column = self.column.saturating_sub(1);
                 }
-                _ => {
-                    if self.wrap_pending {
-                        self.column = 0;
-                        self.line_feed();
-                        self.wrap_pending = false;
-                    }
-                    self.cells[self.row * self.columns + self.column] = Cell {
-                        character: char::from(byte),
-                        style: self.style,
-                    };
-                    if self.column + 1 == self.columns {
-                        // Filling the last cell alone must not scroll the screen.
-                        self.wrap_pending = true;
-                    } else {
-                        self.column += 1;
-                    }
-                }
+                _ => self.print(char::from(byte)),
             }
         }
         Ok(())
+    }
+
+    /// Write one decoded scalar using non-CJK Unicode character widths.
+    /// Controls are ignored. This does not implement grapheme-cluster shaping.
+    pub fn print(&mut self, mut character: char) {
+        if character.is_control() {
+            return;
+        }
+        let Some(mut width) = character.width() else {
+            return;
+        };
+        if width == 0 {
+            let column = if self.wrap_pending {
+                self.column
+            } else if self.column > 0 {
+                self.column - 1
+            } else {
+                return;
+            };
+            let mut index = self.row * self.columns + column;
+            if self.cells[index].width == 0 {
+                index -= 1;
+            }
+            if self.cells[index].combining.len() < MAX_COMBINING_SCALARS {
+                self.cells[index].combining.push(character);
+            }
+            return;
+        }
+        // The model supports one- and two-column scalars. A one-column screen
+        // cannot hold a wide glyph; use a visible replacement instead.
+        if width > 2 || width > self.columns {
+            character = '\u{fffd}';
+            width = 1;
+        }
+        if self.wrap_pending || self.column + width > self.columns {
+            if !self.wrap_pending {
+                let start = self.row * self.columns + self.column;
+                self.clear_range(start..(self.row + 1) * self.columns);
+            }
+            self.column = 0;
+            self.line_feed();
+            self.wrap_pending = false;
+        }
+        let index = self.row * self.columns + self.column;
+        self.clear_range(index..index + width);
+        self.cells[index] = Cell {
+            character,
+            width: width as u8,
+            style: self.style,
+            ..Cell::default()
+        };
+        if width == 2 {
+            self.cells[index + 1] = Cell {
+                width: 0,
+                style: self.style,
+                ..Cell::default()
+            };
+        }
+        if self.column + width == self.columns {
+            self.column = self.columns - 1;
+            self.wrap_pending = true;
+        } else {
+            self.column += width;
+        }
+    }
+
+    // Any write or erase touching half a wide glyph clears both halves.
+    fn clear_range(&mut self, mut range: std::ops::Range<usize>) {
+        if self.cells[range.start].width == 0 {
+            range.start -= 1;
+        }
+        if self.cells[range.end - 1].width == 2 {
+            range.end += 1;
+        }
+        let blank = self.blank();
+        self.cells[range].fill(blank);
     }
 
     /// Attributes used for subsequent writes; existing cells are unaffected.
@@ -180,8 +243,7 @@ impl Screen {
             EraseMode::ToStart => start..cursor + 1,
             EraseMode::All => start..end,
         };
-        let blank = self.blank();
-        self.cells[range].fill(blank);
+        self.clear_range(range);
         self.wrap_pending = false;
     }
 
@@ -194,8 +256,7 @@ impl Screen {
             EraseMode::ToStart => 0..cursor + 1,
             EraseMode::All => 0..self.cells.len(),
         };
-        let blank = self.blank();
-        self.cells[range].fill(blank);
+        self.clear_range(range);
         self.wrap_pending = false;
     }
 
@@ -203,7 +264,7 @@ impl Screen {
         if self.row + 1 < self.rows {
             self.row += 1;
         } else {
-            self.cells.copy_within(self.columns.., 0);
+            self.cells.rotate_left(self.columns);
             let last_row = (self.rows - 1) * self.columns;
             let blank = self.blank();
             self.cells[last_row..].fill(blank);

@@ -8,3 +8,4 @@ license = "MIT"
 [dependencies]
 nix = { version = "0.31", features = ["fs", "term", "process", "poll"] }
 signal-hook = "0.3"
+unicode-width = { version = "0.2.2", default-features = false }
