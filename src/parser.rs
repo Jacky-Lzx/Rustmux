@@ -8,20 +8,61 @@ enum State {
     Ground,
     Escape,
     EscapeIntermediate,
-    Csi(Parameters),
+    Csi,
     String {
         osc: bool,
         escape: bool,
     },
 }
 
-/// The supported commands need at most two parameters. Invalid or overflowing
+/// Keep at most 32 parameters for combined SGR commands. Invalid or overflowing
 /// parameters poison the whole command; input is consumed until its final byte.
 #[derive(Debug, Default, Clone, Copy)]
 struct Parameters {
-    values: [usize; 2],
+    values: [Option<usize>; 32],
     index: usize,
+    /// True when this value continues the preceding parameter after a colon.
+    subparameter: [bool; 32],
     invalid: bool,
+}
+
+impl Parameters {
+    fn sgr(&self, mut style: crate::style::Style) -> Option<crate::style::Style> {
+        let len = self.index + 1;
+        let mut start = 0;
+        while start < len {
+            let mut end = start + 1;
+            if end < len && self.subparameter[end] {
+                while end < len && self.subparameter[end] {
+                    end += 1;
+                }
+                let group = &self.values[start..end];
+                if matches!(group[0], Some(38 | 48 | 58)) {
+                    // Kitty omits the color-space slot; accept an empty or zero
+                    // slot too. Keep group boundaries so components never become SGR codes.
+                    let normalized;
+                    let color = match group {
+                        [_, Some(5), Some(_)] | [_, Some(2), Some(_), Some(_), Some(_)] => group,
+                        [code, Some(2), None | Some(0), Some(r), Some(g), Some(b)] => {
+                            normalized = [*code, Some(2), Some(*r), Some(*g), Some(*b)];
+                            &normalized
+                        }
+                        _ => return None,
+                    };
+                    style = style.sgr(color)?;
+                }
+                // Unsupported subparameter groups (for example 4:3) are ignored
+                // as a unit, without treating their values as separate attributes.
+            } else {
+                while end < len && !(end + 1 < len && self.subparameter[end + 1]) {
+                    end += 1;
+                }
+                style = style.sgr(&self.values[start..end])?;
+            }
+            start = end;
+        }
+        Some(style)
+    }
 }
 
 /// Retain one parser per output stream and feed chunks in order into its Screen.
@@ -30,6 +71,7 @@ struct Parameters {
 #[derive(Debug, Default)]
 pub struct Parser {
     state: State,
+    parameters: Parameters,
 }
 
 impl Parser {
@@ -84,7 +126,10 @@ impl Parser {
                 State::Ground
             }
             State::Escape => match byte {
-                b'[' => State::Csi(Parameters::default()),
+                b'[' => {
+                    self.parameters = Parameters::default();
+                    State::Csi
+                }
                 b']' | b'P' | b'X' | b'^' | b'_' => State::String {
                     osc: byte == b']',
                     escape: false,
@@ -99,7 +144,8 @@ impl Parser {
                     State::Ground
                 }
             }
-            State::Csi(mut parameters) => {
+            State::Csi => {
+                let parameters = &mut self.parameters;
                 if (0x40..=0x7e).contains(&byte) {
                     if !parameters.invalid {
                         Self::dispatch(screen, parameters, byte);
@@ -110,30 +156,47 @@ impl Parser {
                         match byte {
                             b'0'..=b'9' => {
                                 let value = parameters.values[parameters.index]
+                                    .unwrap_or(0)
                                     .checked_mul(10)
                                     .and_then(|n| n.checked_add(usize::from(byte - b'0')));
                                 if let Some(value) = value {
-                                    parameters.values[parameters.index] = value;
+                                    parameters.values[parameters.index] = Some(value);
                                 } else {
                                     parameters.invalid = true;
                                 }
                             }
-                            b';' if parameters.index == 0 => parameters.index = 1,
-                            // Private prefixes, intermediates, subparameters and
+                            b';' | b':' if parameters.index + 1 < parameters.values.len() => {
+                                parameters.index += 1;
+                                parameters.subparameter[parameters.index] = byte == b':'
+                            }
+                            // Private prefixes, intermediates and
                             // extra parameters are outside this deliberately small subset.
                             _ => parameters.invalid = true,
                         }
                     }
-                    State::Csi(parameters)
+                    State::Csi
                 }
             }
             State::String { .. } => unreachable!("strings handled above"),
         };
     }
 
-    fn dispatch(screen: &mut Screen, parameters: Parameters, command: u8) {
-        let [first, second] = parameters.values;
+    fn dispatch(screen: &mut Screen, parameters: &Parameters, command: u8) {
+        if command == b'm' {
+            if let Some(style) = parameters.sgr(screen.style()) {
+                screen.set_style(style);
+            }
+            return;
+        }
+        if parameters.subparameter.contains(&true) {
+            return;
+        }
+        let first = parameters.values[0].unwrap_or(0);
+        let second = parameters.values[1].unwrap_or(0);
         if matches!(command, b'H' | b'f') {
+            if parameters.index > 1 {
+                return;
+            }
             // CUP/HVP are one-based; omitted and zero coordinates mean one.
             screen.move_to(first.saturating_sub(1), second.saturating_sub(1));
             return;
@@ -171,7 +234,14 @@ mod tests {
 
     fn lines(screen: &Screen) -> Vec<String> {
         (0..screen.dimensions().0)
-            .map(|row| screen.row(row).unwrap().iter().collect())
+            .map(|row| {
+                screen
+                    .row(row)
+                    .unwrap()
+                    .iter()
+                    .map(|cell| cell.character)
+                    .collect()
+            })
             .collect()
     }
 
@@ -246,7 +316,7 @@ mod tests {
     #[test]
     fn unsupported_and_malformed_sequences_do_not_leak_into_text() {
         fixture(
-            b"A\x1b[31mB\x1b[?2JC\x1b[1:2HD\x1b[1;2;3HE\x1b[1;2AF\x1b[3JG\x1b[2 KH\x1b(BI",
+            b"A\x1b[999mB\x1b[?2JC\x1b[1:2HD\x1b[1;2;3HE\x1b[1;2AF\x1b[3JG\x1b[2 KH\x1b(BI",
             &["ABCDEFGHI   "],
             (0, 9),
         );

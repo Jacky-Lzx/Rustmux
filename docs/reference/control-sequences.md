@@ -25,6 +25,7 @@ CSI below means the two bytes ESC followed by `[`. The command subset follows
 | CSI n A / B / C / D | Move up / down / right / left; omitted or zero count means one |
 | CSI row ; column H / f | Position using one-based coordinates; omitted or zero values mean one |
 | CSI n J | Erase display: 0 cursor through end, 1 start through cursor, 2 whole grid |
+| CSI parameters m | Set text attributes and colors; see [Text Styles](text-styles.md) |
 | CSI n K | Erase line: 0 cursor through end, 1 start through cursor, 2 whole row |
 
 Erase defaults to mode 0, includes the cursor cell, and leaves cursor coordinates
@@ -38,10 +39,10 @@ it. CAN and SUB cancel a sequence; a new ESC restarts ESC/CSI parsing.
 
 ## Unsupported input and limits
 
-Unknown CSI commands, private modes, intermediate bytes, colon subparameters,
+Unknown CSI commands, private modes, intermediate bytes, non-SGR colon subparameters,
 extra parameters and numeric overflow cause the command to be ignored through
-its final byte. At most two usize parameters are stored; supported one-parameter
-commands reject a second parameter. Parser storage is constant regardless of
+its final byte. At most 32 optional usize parameters are stored. Cursor positioning still accepts
+at most two; one-parameter commands reject extra parameters. Parser storage is constant regardless of
 sequence length. Unsupported ESC sequences are consumed without printing their
 sequence bytes.
 
@@ -49,8 +50,7 @@ OSC payload is discarded through BEL or ST (ESC followed by backslash).
 DCS, SOS, PM and APC payloads are discarded through ST. These strings are not
 interpreted or buffered; an unterminated string continues to discard input until
 its terminator or cancellation. Other unsupported controls and non-ASCII text
-are ignored. There is no UTF-8 decoder, 8-bit C1 command support, color/style
-handling, alternate screen, terminal replies or renderer yet.
+are ignored. There is no UTF-8 decoder, 8-bit C1 command support, alternate screen, terminal replies or renderer yet.
 
 Unlike `Screen::write_ascii`, this streaming interface skips unsupported input;
 it does not reject an entire chunk. Chunk boundaries have no semantic meaning.

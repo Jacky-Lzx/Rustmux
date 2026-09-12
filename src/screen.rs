@@ -2,6 +2,8 @@
 
 use std::io;
 
+use crate::style::{Cell, Style};
+
 /// Inclusive erase range relative to the cursor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EraseMode {
@@ -13,13 +15,14 @@ pub enum EraseMode {
 /// Minimal screen state with zero-based coordinates and full-screen scrolling.
 ///
 /// The text API accepts printable ASCII, LF, CR and BS. Cursor movement and
-/// erasure are separate operations used by the parser. Unicode width, styles,
+/// erasure are separate operations used by the parser. Unicode width,
 /// scrollback and resizing belong to later steps.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Screen {
     rows: usize,
     columns: usize,
-    cells: Vec<char>,
+    cells: Vec<Cell>,
+    style: Style,
     row: usize,
     column: usize,
     wrap_pending: bool,
@@ -36,11 +39,12 @@ impl Screen {
             })?;
         let mut cells = Vec::new();
         cells.try_reserve_exact(length).map_err(io::Error::other)?;
-        cells.resize(length, ' ');
+        cells.resize(length, Cell::default());
         Ok(Self {
             rows,
             columns,
             cells,
+            style: Style::default(),
             row: 0,
             column: 0,
             wrap_pending: false,
@@ -61,7 +65,7 @@ impl Screen {
     }
 
     /// Borrow a row, including its trailing blank cells.
-    pub fn row(&self, row: usize) -> Option<&[char]> {
+    pub fn row(&self, row: usize) -> Option<&[Cell]> {
         if row >= self.rows {
             return None;
         }
@@ -103,7 +107,10 @@ impl Screen {
                         self.line_feed();
                         self.wrap_pending = false;
                     }
-                    self.cells[self.row * self.columns + self.column] = char::from(byte);
+                    self.cells[self.row * self.columns + self.column] = Cell {
+                        character: char::from(byte),
+                        style: self.style,
+                    };
                     if self.column + 1 == self.columns {
                         // Filling the last cell alone must not scroll the screen.
                         self.wrap_pending = true;
@@ -114,6 +121,28 @@ impl Screen {
             }
         }
         Ok(())
+    }
+
+    /// Attributes used for subsequent writes; existing cells are unaffected.
+    pub fn style(&self) -> Style {
+        self.style
+    }
+
+    /// Changing attributes leaves the cursor and pending wrap unchanged.
+    pub fn set_style(&mut self, style: Style) {
+        self.style = style;
+    }
+
+    fn blank(&self) -> Cell {
+        // Erasure and newly exposed rows use the active background, without
+        // copying text decorations or inverse into the blank cells.
+        Cell {
+            style: Style {
+                background: self.style.background,
+                ..Style::default()
+            },
+            ..Cell::default()
+        }
     }
 
     /// Position the cursor using zero-based coordinates, clamped to the grid.
@@ -151,7 +180,8 @@ impl Screen {
             EraseMode::ToStart => start..cursor + 1,
             EraseMode::All => start..end,
         };
-        self.cells[range].fill(' ');
+        let blank = self.blank();
+        self.cells[range].fill(blank);
         self.wrap_pending = false;
     }
 
@@ -164,7 +194,8 @@ impl Screen {
             EraseMode::ToStart => 0..cursor + 1,
             EraseMode::All => 0..self.cells.len(),
         };
-        self.cells[range].fill(' ');
+        let blank = self.blank();
+        self.cells[range].fill(blank);
         self.wrap_pending = false;
     }
 
@@ -174,7 +205,8 @@ impl Screen {
         } else {
             self.cells.copy_within(self.columns.., 0);
             let last_row = (self.rows - 1) * self.columns;
-            self.cells[last_row..].fill(' ');
+            let blank = self.blank();
+            self.cells[last_row..].fill(blank);
         }
     }
 }
@@ -185,7 +217,14 @@ mod tests {
 
     fn lines(screen: &Screen) -> Vec<String> {
         (0..screen.dimensions().0)
-            .map(|row| screen.row(row).unwrap().iter().collect())
+            .map(|row| {
+                screen
+                    .row(row)
+                    .unwrap()
+                    .iter()
+                    .map(|cell| cell.character)
+                    .collect()
+            })
             .collect()
     }
 

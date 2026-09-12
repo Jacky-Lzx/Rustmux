@@ -4,9 +4,11 @@ This is the first part of H03, available as `rustmux::screen::Screen`. Read
 `src/screen.rs` and its fixture tests. The CLI still forwards output directly;
 this model is not yet connected to the PTY loop.
 
-The model owns a fixed-size character grid, initialized with spaces, a zero-based
+The model owns a fixed-size cell grid, initialized with default-style spaces, a zero-based
 (row, column) cursor, and a pending-wrap flag. Dimensions must be nonzero and the
-allocation size must fit. Rows can be borrowed read-only, including trailing spaces.
+allocation size must fit. Rows can be borrowed read-only as `&[Cell]`, including trailing spaces. Each cell
+contains a character and a copied `Style`; `Screen::style` is the current style
+for future writes.
 
 ## Text and cursor rules
 
@@ -36,6 +38,9 @@ The [basic parser](control-sequences.md) now applies cursor movement and erase
 commands through the screen API. Movement clamps to the grid; erase replaces
 cells with spaces without moving the cursor. Both cancel pending wrap.
 
-Unicode decoding and character width, styles, alternate screens,
+The [text style layer](text-styles.md) adds SGR attributes and colors. Erased cells
+and newly exposed rows use the active background without text decorations.
+
+Unicode decoding and character width, alternate screens,
 resize policy and rendering are subsequent work. No dependencies are added by this
 step, and interactive CLI behavior is unchanged.
