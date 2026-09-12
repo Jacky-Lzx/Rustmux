@@ -173,6 +173,17 @@ impl Parser {
                 State::Ground
             }
             State::Escape => match byte {
+                b'D' | b'E' => {
+                    screen.line_feed();
+                    if byte == b'E' {
+                        screen.move_to(screen.cursor().0, 0);
+                    }
+                    State::Ground
+                }
+                b'M' => {
+                    screen.reverse_index();
+                    State::Ground
+                }
                 b'7' => {
                     screen.save_cursor();
                     State::Ground
@@ -271,6 +282,17 @@ impl Parser {
         }
         let first = parameters.values[0].unwrap_or(0);
         let second = parameters.values[1].unwrap_or(0);
+        if command == b'r' {
+            if parameters.index <= 1 {
+                let bottom = if second == 0 {
+                    screen.dimensions().0
+                } else {
+                    second
+                };
+                screen.set_scroll_region(first.max(1) - 1, bottom - 1);
+            }
+            return;
+        }
         if matches!(command, b'H' | b'f') {
             if parameters.index > 1 {
                 return;

@@ -26,10 +26,12 @@ CSI below means the two bytes ESC followed by `[`. The command subset follows
 | CSI row ; column H / f | Position using one-based coordinates; omitted or zero values mean one |
 | CSI n J | Erase display: 0 cursor through end, 1 start through cursor, 2 whole grid |
 | CSI parameters m | Set text attributes and colors; see [Text Styles](text-styles.md) |
+| CSI top ; bottom r | Set vertical [scrolling margins](scrolling-regions.md) and home |
+| ESC D / E / M | Index / next line / reverse index within scrolling margins |
 | CSI n K | Erase line: 0 cursor through end, 1 start through cursor, 2 whole row |
 
 Erase defaults to mode 0, includes the cursor cell, and leaves cursor coordinates
-unchanged. Movement clamps to the grid without scrolling. Both movement and erase
+unchanged. Movement clamps without scrolling; vertical relative movement respects scrolling margins. Both movement and erase
 cancel pending wrap. Screen methods use zero-based positions and `EraseMode`;
 the parser handles protocol defaults and one-based conversion.
 

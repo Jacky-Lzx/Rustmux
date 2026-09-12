@@ -21,8 +21,9 @@ state. This deliberately restricted API is not an escape-sequence parser.
 - LF advances one row while preserving the column. CR returns to column zero.
 - BS moves left without erasing, stops at column zero and never crosses rows.
 - LF, CR and BS cancel a pending wrap.
-- Advancing beyond the bottom scrolls the whole grid upward by one row and blanks
-  the bottom row. There is no scrollback; the top row is discarded.
+- At the bottom scrolling margin, LF and wrapping scroll that region upward and
+  blank its bottom row. The default region covers the whole grid. There is no
+  scrollback; the region's top row is discarded. See [Scrolling Regions](scrolling-regions.md).
 
 These rules also apply to a one-row or one-column screen. Valid input split across
 multiple calls produces the same state as a single call.

@@ -200,6 +200,18 @@ try:
     s.send(b"\n")
     s.expect(b"RUSTMUX_READY> ")
     assert s.last_frame.endswith(b"\x1b[?25h")
+
+    # Keep header/footer fixed while LF then RI scroll only the middle rows.
+    s.send(b"stty -echo; printf '\\033[2J\\033[1;1HHEADER\\033[2;1HONE\\033[3;1HTWO"
+           b"\\033[4;1HTHREE\\033[5;1HFOOTER\\033[2;4r\\033[4;1H\\nSCROLLED'; "
+           b"read answer; printf '\\033[2;1H\\033MREVERSED'; read answer; stty echo; printf '\\033[r\\033[6;1H'\n")
+    s.expect(b"\r\nSCROLLED\r\n")
+    assert s.last_rows[:5] == [b"HEADER", b"TWO", b"THREE", b"SCROLLED", b"FOOTER"], s.last_rows
+    s.send(b"\n")
+    s.expect(b"\r\nREVERSED\r\n")
+    assert s.last_rows[:5] == [b"HEADER", b"REVERSED", b"TWO", b"THREE", b"FOOTER"], s.last_rows
+    s.send(b"\n")
+    s.expect(b"RUSTMUX_READY> ")
     s.send(b"exit\n")
     s.finish(0)
 finally:

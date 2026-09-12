@@ -15,7 +15,7 @@ the saved main style supplies the main grid's background.
 A wide character cut in half at the right edge is replaced by a blank, so no
 orphan leader or continuation remains. Both current and saved main cursor
 coordinates clamp to the new bounds. Any actual dimension change clears both
-pending-wrap flags. Resizing to the same dimensions changes nothing.
+pending-wrap flags and resets both scrolling regions to full height. Resizing to the same dimensions changes nothing.
 
 Alternate mode remains active across resize. Leaving it restores the resized main
 grid and the clamped saved cursor/style. Re-entering still starts a blank alternate

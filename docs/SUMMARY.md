@@ -13,3 +13,4 @@
 - [Screen Model Resize](reference/screen-resize.md)
 - [Basic Renderer](reference/rendering.md)
 - [Cursor State](reference/cursor.md)
+- [Scrolling Regions](reference/scrolling-regions.md)

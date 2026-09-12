@@ -23,7 +23,7 @@ struct SavedCursor {
     wrap_pending: bool,
 }
 
-/// Minimal screen state with zero-based coordinates and full-screen scrolling.
+/// Screen state with zero-based coordinates and per-grid vertical scrolling margins.
 ///
 /// The text API accepts printable ASCII, LF, CR and BS. Cursor movement and
 /// erasure are separate operations used by the parser. Grapheme-cluster shaping
@@ -38,6 +38,8 @@ pub struct Screen {
     saved_cursor: Option<SavedCursor>,
     inactive_saved_cursor: Option<SavedCursor>,
     cursor_visible: bool,
+    scroll_region: (usize, usize),
+    inactive_scroll_region: (usize, usize),
     style: Style,
     row: usize,
     column: usize,
@@ -71,6 +73,8 @@ impl Screen {
             saved_cursor: None,
             inactive_saved_cursor: None,
             cursor_visible: true,
+            scroll_region: (0, rows - 1),
+            inactive_scroll_region: (0, rows - 1),
             style: Style::default(),
             row: 0,
             column: 0,
@@ -81,7 +85,8 @@ impl Screen {
     /// Resize both grids, preserving the top-left overlap without text reflow.
     /// New cells use each grid's writing background; clipped content is discarded.
     /// Invalid dimensions or allocation failure leave the entire model unchanged.
-    /// An unchanged size is a no-op; changed sizes cancel current and saved wrap.
+    /// An unchanged size is a no-op; changed sizes cancel current and saved wrap
+    /// and reset both grids to full-height scrolling regions.
     pub fn resize(&mut self, rows: usize, columns: usize) -> io::Result<()> {
         if self.dimensions() == (rows, columns) {
             return Ok(());
@@ -161,6 +166,7 @@ impl Screen {
             wrap_pending: self.wrap_pending,
         });
         std::mem::swap(&mut self.cells, &mut self.inactive_cells);
+        std::mem::swap(&mut self.scroll_region, &mut self.inactive_scroll_region);
         std::mem::swap(&mut self.saved_cursor, &mut self.inactive_saved_cursor);
         let blank = self.blank();
         self.cells.fill(blank);
@@ -174,10 +180,12 @@ impl Screen {
             return;
         };
         std::mem::swap(&mut self.cells, &mut self.inactive_cells);
+        std::mem::swap(&mut self.scroll_region, &mut self.inactive_scroll_region);
         std::mem::swap(&mut self.saved_cursor, &mut self.inactive_saved_cursor);
         // Release discarded combining suffixes; the next visit starts blank.
         self.inactive_cells.fill(Cell::default());
         self.inactive_saved_cursor = None;
+        self.inactive_scroll_region = (0, self.rows - 1);
         self.row = saved.row;
         self.column = saved.column;
         self.style = saved.style;
@@ -383,11 +391,21 @@ impl Screen {
     }
 
     pub fn move_up(&mut self, count: usize) {
-        self.move_to(self.row.saturating_sub(count), self.column);
+        let top = if self.row >= self.scroll_region.0 {
+            self.scroll_region.0
+        } else {
+            0
+        };
+        self.move_to(self.row.saturating_sub(count).max(top), self.column);
     }
 
     pub fn move_down(&mut self, count: usize) {
-        self.move_to(self.row.saturating_add(count), self.column);
+        let bottom = if self.row <= self.scroll_region.1 {
+            self.scroll_region.1
+        } else {
+            self.rows - 1
+        };
+        self.move_to(self.row.saturating_add(count).min(bottom), self.column);
     }
 
     pub fn move_left(&mut self, count: usize) {
@@ -426,14 +444,48 @@ impl Screen {
         self.wrap_pending = false;
     }
 
-    fn line_feed(&mut self) {
-        if self.row + 1 < self.rows {
-            self.row += 1;
-        } else {
-            self.cells.rotate_left(self.columns);
-            let last_row = (self.rows - 1) * self.columns;
+    /// Inclusive zero-based top and bottom rows for the active grid.
+    pub fn scroll_region(&self) -> (usize, usize) {
+        self.scroll_region
+    }
+
+    /// Set valid vertical margins and home the cursor (origin mode is unsupported).
+    /// Reversed, single-row or out-of-bounds regions leave all state unchanged,
+    /// except that a one-row screen accepts its full-height region.
+    pub fn set_scroll_region(&mut self, top: usize, bottom: usize) {
+        if bottom >= self.rows || top > bottom || (top == bottom && self.rows != 1) {
+            return;
+        }
+        self.scroll_region = (top, bottom);
+        self.move_to(0, 0);
+    }
+
+    /// LF/IND: preserve the column and scroll only when at the bottom margin.
+    /// Outside the region, move toward the physical bottom without scrolling.
+    pub fn line_feed(&mut self) {
+        self.wrap_pending = false;
+        if self.row == self.scroll_region.1 {
+            let start = self.scroll_region.0 * self.columns;
+            let end = (self.scroll_region.1 + 1) * self.columns;
             let blank = self.blank();
-            self.cells[last_row..].fill(blank);
+            self.cells[start..end].rotate_left(self.columns);
+            self.cells[end - self.columns..end].fill(blank);
+        } else {
+            self.row = (self.row + 1).min(self.rows - 1);
+        }
+    }
+
+    /// RI: preserve the column and scroll downward only at the top margin.
+    pub fn reverse_index(&mut self) {
+        self.wrap_pending = false;
+        if self.row == self.scroll_region.0 {
+            let start = self.scroll_region.0 * self.columns;
+            let end = (self.scroll_region.1 + 1) * self.columns;
+            let blank = self.blank();
+            self.cells[start..end].rotate_right(self.columns);
+            self.cells[start..start + self.columns].fill(blank);
+        } else {
+            self.row = self.row.saturating_sub(1);
         }
     }
 }
