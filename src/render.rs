@@ -10,7 +10,7 @@ use crate::style::{Color, Style};
 /// The caller owns terminal setup/restoration and must use normal origin mode,
 /// a full-screen scrolling region and compatible character-width rules. This
 /// writes a full frame, including blank cells, without switching screen buffers.
-/// On success attributes are reset and the cursor is visible at the model position.
+/// On success attributes are reset; cursor position and visibility match the model.
 /// It does not flush. Errors may leave a partial frame; the caller must handle
 /// cleanup or redraw. For nonblocking output, render into a buffer and queue it.
 pub fn render(screen: &Screen, output: &mut impl Write) -> io::Result<()> {
@@ -36,7 +36,12 @@ pub fn render(screen: &Screen, output: &mut impl Write) -> io::Result<()> {
     }
     let (row, column) = screen.cursor();
     // CUP also cancels physical delayed wrap; logical pending wrap stays in Screen.
-    write!(output, "\x1b[0m\x1b[{};{}H\x1b[?25h", row + 1, column + 1)
+    write!(output, "\x1b[0m\x1b[{};{}H", row + 1, column + 1)?;
+    output.write_all(if screen.cursor_visible() {
+        b"\x1b[?25h"
+    } else {
+        b"\x1b[?25l"
+    })
 }
 
 fn write_style(output: &mut impl Write, style: Style) -> io::Result<()> {

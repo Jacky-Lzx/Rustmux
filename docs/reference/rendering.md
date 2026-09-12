@@ -15,7 +15,7 @@ then encode the enabled attributes and indexed/RGB colors. Adjacent equal styles
 share the same SGR state.
 
 The frame ends with an attribute reset, an explicit cursor move to the model
-position and a visible cursor. It uses no newlines, avoiding a line-feed scroll
+position and the model's cursor visibility. It uses no newlines, avoiding a line-feed scroll
 at the bottom-right corner. Physical delayed wrap is cancelled by the final
 cursor move; the model's logical pending wrap remains unchanged.
 
@@ -26,8 +26,7 @@ not switch the outer terminal's screen buffer; terminal setup owns that decision
 
 Use a terminal matching the grid's dimensions, with normal origin mode, the full
 scrolling region and compatible Unicode width rules. The current model's emoji
-and grapheme limitations still apply. The renderer assumes a visible cursor at
-frame end; cursor-visibility tracking is subsequent work.
+and grapheme limitations still apply. Cursor visibility at frame end follows [Cursor State](cursor.md).
 
 The caller owns raw mode, alternate-screen setup, restoration and output queuing.
 Write failures are returned and may leave a partial frame or hidden cursor; the

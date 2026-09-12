@@ -21,7 +21,8 @@ The parser accepts a leading private-mode `?` marker and processes 1049 in
 semicolon-separated h/l mode lists. Unknown modes in those lists are ignored.
 Other private commands remain unsupported; malformed prefixes, parameter overflow
 and intermediates invalidate the command as before. Modes 47, 1047 and standalone
-1048 and general cursor save/restore are later work.
+1048 remains unsupported. [Cursor State](cursor.md) describes explicit ESC 7/8
+save slots and cursor visibility.
 [Screen Model Resize](screen-resize.md) adjusts both grids and the saved cursor.
 This implements the currently modeled subset of saved cursor state, not charset
 or origin modes that the model does not yet support.

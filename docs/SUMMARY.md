@@ -12,3 +12,4 @@
 - [Alternate Screen](reference/alternate-screen.md)
 - [Screen Model Resize](reference/screen-resize.md)
 - [Basic Renderer](reference/rendering.md)
+- [Cursor State](reference/cursor.md)

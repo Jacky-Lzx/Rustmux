@@ -85,7 +85,7 @@ fn only_supported_well_formed_private_modes_switch_screens() {
     ] {
         assert_eq!(parse(format!("M{sequence}").as_bytes()), parse(b"M"));
     }
-    let screen = parse(b"M\x1b[?25;1049h\x1b[Halt\x1b[?1049;25l");
+    let screen = parse(b"M\x1b[?999;1049h\x1b[Halt\x1b[?1049;999l");
     assert_eq!(screen, parse(b"M"));
 }
 

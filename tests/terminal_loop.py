@@ -64,10 +64,10 @@ class Session:
                 chunk = os.read(self.master, 65536)
                 self.output.extend(chunk)
                 self.frame_pending.extend(chunk)
-                # Each full renderer frame ends in cursor-show. Decode its row
+                # A full frame ends in cursor positioning plus its visibility mode. Decode rows
                 # payloads independently of the Rust parser; SGR does not occupy cells.
-                while b"\x1b[?25h" in self.frame_pending:
-                    end = self.frame_pending.index(b"\x1b[?25h") + len(b"\x1b[?25h")
+                while (match := re.search(rb"\x1b\[[0-9]+;[0-9]+H\x1b\[\?25[hl]", self.frame_pending)):
+                    end = match.end()
                     frame = bytes(self.frame_pending[:end])
                     del self.frame_pending[:end]
                     if b"\x1b[?25l" not in frame:
@@ -194,6 +194,12 @@ try:
     s.send(b"\n")
     s.expect(b"RUSTMUX_READY> ")
     assert b"aXc" in s.last_rows, s.last_rows
+    s.send(b"printf '\\033[?25l\\nHIDDEN_CURSOR\\n'; read answer; printf '\\033[?25h'\n")
+    s.expect(b"\r\nHIDDEN_CURSOR\r\n")
+    assert s.last_frame.endswith(b"\x1b[?25l"), s.last_frame
+    s.send(b"\n")
+    s.expect(b"RUSTMUX_READY> ")
+    assert s.last_frame.endswith(b"\x1b[?25h")
     s.send(b"exit\n")
     s.finish(0)
 finally:

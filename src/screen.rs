@@ -35,6 +35,9 @@ pub struct Screen {
     cells: Vec<Cell>,
     inactive_cells: Vec<Cell>,
     saved_main_cursor: Option<SavedCursor>,
+    saved_cursor: Option<SavedCursor>,
+    inactive_saved_cursor: Option<SavedCursor>,
+    cursor_visible: bool,
     style: Style,
     row: usize,
     column: usize,
@@ -65,6 +68,9 @@ impl Screen {
             cells,
             inactive_cells,
             saved_main_cursor: None,
+            saved_cursor: None,
+            inactive_saved_cursor: None,
+            cursor_visible: true,
             style: Style::default(),
             row: 0,
             column: 0,
@@ -83,6 +89,15 @@ impl Screen {
         // Allocate both destinations before taking any content out of the old grids.
         // Cell suffixes are moved, not cloned, so copying the overlap cannot allocate.
         let mut resized = Self::new(rows, columns)?;
+        resized.cursor_visible = self.cursor_visible;
+        let clamp = |saved: SavedCursor| SavedCursor {
+            row: saved.row.min(rows - 1),
+            column: saved.column.min(columns - 1),
+            wrap_pending: false,
+            ..saved
+        };
+        resized.saved_cursor = self.saved_cursor.map(clamp);
+        resized.inactive_saved_cursor = self.inactive_saved_cursor.map(clamp);
         resized.style = self.style;
         resized.cells.fill(self.blank());
         resized.row = self.row.min(rows - 1);
@@ -146,6 +161,7 @@ impl Screen {
             wrap_pending: self.wrap_pending,
         });
         std::mem::swap(&mut self.cells, &mut self.inactive_cells);
+        std::mem::swap(&mut self.saved_cursor, &mut self.inactive_saved_cursor);
         let blank = self.blank();
         self.cells.fill(blank);
         self.wrap_pending = false;
@@ -158,12 +174,44 @@ impl Screen {
             return;
         };
         std::mem::swap(&mut self.cells, &mut self.inactive_cells);
+        std::mem::swap(&mut self.saved_cursor, &mut self.inactive_saved_cursor);
         // Release discarded combining suffixes; the next visit starts blank.
         self.inactive_cells.fill(Cell::default());
+        self.inactive_saved_cursor = None;
         self.row = saved.row;
         self.column = saved.column;
         self.style = saved.style;
         self.wrap_pending = saved.wrap_pending;
+    }
+
+    pub fn cursor_visible(&self) -> bool {
+        self.cursor_visible
+    }
+
+    /// Visibility is a global terminal mode, independent of saved cursor state.
+    pub fn set_cursor_visible(&mut self, visible: bool) {
+        self.cursor_visible = visible;
+    }
+
+    /// Replace this grid's single DECSC slot; this is not a stack.
+    pub fn save_cursor(&mut self) {
+        self.saved_cursor = Some(SavedCursor {
+            row: self.row,
+            column: self.column,
+            style: self.style,
+            wrap_pending: self.wrap_pending,
+        });
+    }
+
+    /// Restore this grid's saved coordinates, attributes and pending wrap.
+    /// Without a prior save, leave the current state unchanged.
+    pub fn restore_cursor(&mut self) {
+        if let Some(saved) = self.saved_cursor {
+            self.row = saved.row;
+            self.column = saved.column;
+            self.style = saved.style;
+            self.wrap_pending = saved.wrap_pending;
+        }
     }
 
     pub fn dimensions(&self) -> (usize, usize) {

@@ -173,6 +173,14 @@ impl Parser {
                 State::Ground
             }
             State::Escape => match byte {
+                b'7' => {
+                    screen.save_cursor();
+                    State::Ground
+                }
+                b'8' => {
+                    screen.restore_cursor();
+                    State::Ground
+                }
                 b'[' => {
                     self.parameters = Parameters::default();
                     State::Csi
@@ -238,6 +246,9 @@ impl Parser {
         if parameters.private {
             if !parameters.subparameter.contains(&true) && matches!(command, b'h' | b'l') {
                 for mode in &parameters.values[..=parameters.index] {
+                    if *mode == Some(25) {
+                        screen.set_cursor_visible(command == b'h');
+                    }
                     if *mode == Some(1049) {
                         if command == b'h' {
                             screen.enter_alternate();

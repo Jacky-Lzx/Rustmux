@@ -53,7 +53,8 @@ interpreted or buffered; an unterminated string continues to discard input until
 its terminator or cancellation. Other unsupported controls are ignored.
 UTF-8 decoding and replacement are
 described in [UTF-8 and Character Width](unicode.md). There is no 8-bit C1 command
-support or terminal replies yet. Mode 1049 is described in
+support or terminal replies yet. Cursor visibility and ESC 7/8 are described in [Cursor State](cursor.md).
+Mode 1049 is described in
 [Alternate Screen](alternate-screen.md).
 
 Unlike `Screen::write_ascii`, this streaming interface skips unsupported input;
