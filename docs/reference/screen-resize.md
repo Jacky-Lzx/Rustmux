@@ -2,8 +2,7 @@
 
 `Screen::resize(rows, columns)` resizes the active and inactive grids together.
 This is separate from `PtyShell::resize`, which changes the operating system PTY
-size. The CLI still forwards output directly; connecting model resize to that
-loop belongs to renderer integration.
+size. The CLI now applies both operations when the outer terminal changes size.
 
 ## Policy
 

@@ -1,4 +1,4 @@
-//! Single-pane byte forwarding. No terminal parser or layout engine yet.
+//! Single-pane input forwarding and model-based terminal rendering.
 
 use std::collections::VecDeque;
 use std::ffi::OsStr;
@@ -19,11 +19,14 @@ use nix::sys::termios::{self, SetArg, Termios};
 use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGWINCH};
 
 use crate::pty::PtyShell;
+use crate::{parser::Parser, render::render, screen::Screen};
 
-// Bound each direction's pending byte queue to 64 KiB. Pause reads when full;
-// this applies backpressure without discarding bytes or limiting total output.
+// Bound pending keyboard input to 64 KiB; output retains at most one frame.
 const LIMIT: usize = 64 * 1024;
 const POLL_TIMEOUT_MILLIS: u16 = 50;
+const MAX_CELLS: usize = 64 * 1024;
+const MAX_FRAME: usize = 16 * 1024 * 1024;
+const FRAME_INTERVAL: Duration = Duration::from_millis(6);
 
 // \x1b is ESC; ESC [ introduces a control sequence. For private modes (? prefix),
 // h enables a mode and l (lowercase L) disables it.
@@ -70,13 +73,15 @@ pub fn run(shell_path: &OsStr) -> io::Result<u8> {
     let size = window_size(&file)?;
     // Start the shell before changing the outer terminal, so exec failures
     // cannot leave it raw. Signal registration below creates no worker threads.
+    check_size(size.ws_row, size.ws_col)?;
+    let screen = Screen::new(usize::from(size.ws_row), usize::from(size.ws_col))?;
     let mut shell = PtyShell::spawn(shell_path, size.ws_row, size.ws_col)?;
     let master = shell.master_fd().expect("new PTY is open");
     let flags = OFlag::from_bits_truncate(fcntl(master, FcntlArg::F_GETFL)?);
     fcntl(master, FcntlArg::F_SETFL(flags | OFlag::O_NONBLOCK))?;
     let signals = Signals::install()?;
     let mut terminal = Terminal::enter(file)?;
-    let result = forward(&mut terminal.file, &mut shell, &signals);
+    let result = forward(&mut terminal.file, &mut shell, &signals, screen);
     // Restore the user's terminal before potentially blocking child cleanup.
     let restored = terminal.restore();
     drop(shell);
@@ -211,9 +216,43 @@ fn exit_code(status: ExitStatus) -> u8 {
         .unwrap_or_else(|| 128 + status.signal().unwrap_or(0)) as u8
 }
 
-fn forward(terminal: &mut File, shell: &mut PtyShell, signals: &Signals) -> io::Result<u8> {
+fn check_size(rows: u16, columns: u16) -> io::Result<()> {
+    let cells = usize::from(rows) * usize::from(columns);
+    if cells == 0 || cells > MAX_CELLS {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "terminal dimensions must be nonzero and at most 65536 cells",
+        ));
+    }
+    Ok(())
+}
+
+struct FrameWriter<'a>(&'a mut VecDeque<u8>);
+impl Write for FrameWriter<'_> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if bytes.len() > MAX_FRAME - self.0.len() {
+            return Err(io::Error::other("rendered frame exceeds output limit"));
+        }
+        self.0.try_reserve(bytes.len()).map_err(io::Error::other)?;
+        self.0.extend(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn forward(
+    terminal: &mut File,
+    shell: &mut PtyShell,
+    signals: &Signals,
+    mut screen: Screen,
+) -> io::Result<u8> {
+    let mut parser = Parser::new();
     let mut to_shell = VecDeque::new();
     let mut to_terminal = VecDeque::new();
+    let mut dirty = true;
+    let mut next_frame = Instant::now();
     let mut eof = false;
     let mut eof_at = None;
     let mut status = None;
@@ -225,19 +264,32 @@ fn forward(terminal: &mut File, shell: &mut PtyShell, signals: &Signals) -> io::
         if status.is_none() {
             status = shell.try_wait()?;
         }
-        if status.is_none() && !eof && signals.resize.swap(false, Ordering::Relaxed) {
+        if signals.resize.swap(false, Ordering::Relaxed) {
             let size = window_size(terminal)?;
-            // Some terminals temporarily report zero while resizing. Keep the last
-            // valid size until a later SIGWINCH. Startup still requires a valid size.
             if size.ws_row != 0 && size.ws_col != 0 {
-                shell.resize(size.ws_row, size.ws_col)?;
+                check_size(size.ws_row, size.ws_col)?;
+                screen.resize(usize::from(size.ws_row), usize::from(size.ws_col))?;
+                if status.is_none() && !eof {
+                    shell.resize(size.ws_row, size.ws_col)?;
+                }
+                dirty = true;
             }
         }
-        if eof && to_terminal.is_empty() {
-            if let Some(status) = status {
+        if dirty && to_terminal.is_empty() && (eof || Instant::now() >= next_frame) {
+            render(&screen, &mut FrameWriter(&mut to_terminal))?;
+            dirty = false;
+            next_frame = Instant::now() + FRAME_INTERVAL;
+        }
+        if eof {
+            if !dirty
+                && to_terminal.is_empty()
+                && let Some(status) = status
+            {
                 return Ok(exit_code(status));
             }
-            if eof_at.is_some_and(|time: Instant| time.elapsed() > Duration::from_secs(1)) {
+            if status.is_none()
+                && eof_at.is_some_and(|time: Instant| time.elapsed() > Duration::from_secs(1))
+            {
                 return Err(io::Error::new(
                     io::ErrorKind::TimedOut,
                     "shell kept running after PTY closed",
@@ -252,21 +304,31 @@ fn forward(terminal: &mut File, shell: &mut PtyShell, signals: &Signals) -> io::
         if !to_terminal.is_empty() {
             outer_events |= PollFlags::POLLOUT;
         }
-        if !eof && to_terminal.len() < LIMIT {
+        // Backpressure reaches the child: don't accumulate frames or consume
+        // unbounded child output while the previous frame is still being sent.
+        if !eof && to_terminal.is_empty() {
             inner_events |= PollFlags::POLLIN;
         }
         if status.is_none() && !eof && !to_shell.is_empty() {
             inner_events |= PollFlags::POLLOUT;
         }
+        let timeout = if dirty && to_terminal.is_empty() {
+            next_frame
+                .saturating_duration_since(Instant::now())
+                .as_millis()
+                .clamp(1, 50) as u16
+        } else {
+            50
+        };
         let (outer, inner) = {
             let mut fds = vec![PollFd::new(terminal.as_fd(), outer_events)];
             if !inner_events.is_empty() {
                 fds.push(PollFd::new(
-                    shell.master_fd().expect("PTY stays open during forwarding"),
+                    shell.master_fd().expect("PTY stays open during rendering"),
                     inner_events,
                 ));
             }
-            match poll(&mut fds, POLL_TIMEOUT_MILLIS) {
+            match poll(&mut fds, timeout) {
                 Err(Errno::EINTR) => continue,
                 Err(e) => return Err(e.into()),
                 Ok(_) => {}
@@ -295,17 +357,30 @@ fn forward(terminal: &mut File, shell: &mut PtyShell, signals: &Signals) -> io::
         }
         let readable =
             inner.intersects(PollFlags::POLLIN | PollFlags::POLLHUP | PollFlags::POLLERR);
-        if readable && !eof && to_terminal.len() < LIMIT {
-            eof = receive(shell, &mut to_terminal)?;
-            if eof {
-                eof_at = Some(Instant::now());
+        if !eof && inner_events.contains(PollFlags::POLLIN) {
+            if readable {
+                let mut bytes = [0; 8192];
+                match shell.read(&mut bytes) {
+                    Ok(0) => eof = true,
+                    Ok(n) => {
+                        parser.advance(&mut screen, &bytes[..n]);
+                        dirty = true;
+                    }
+                    Err(e)
+                        if matches!(
+                            e.kind(),
+                            io::ErrorKind::Interrupted | io::ErrorKind::WouldBlock
+                        ) => {}
+                    Err(e) => return Err(e),
+                }
+            } else if status.is_some() {
+                // Descendants retaining the slave must not delay direct-child exit.
+                eof = true;
             }
-        }
-        if let Some(status) = status {
-            // Descendants may retain a slave after the direct shell exits.
-            // Finish buffered output, then stop when no more data is ready.
-            if !readable && to_terminal.is_empty() && inner_events.contains(PollFlags::POLLIN) {
-                return Ok(exit_code(status));
+            if eof {
+                parser.finish(&mut screen);
+                dirty = true; // Always flush the final model before normal exit.
+                eof_at = Some(Instant::now());
             }
         }
         if !eof && status.is_none() {
@@ -369,6 +444,17 @@ fn send(writer: &mut impl Write, pending: &mut VecDeque<u8>) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn frame_and_screen_limits_reject_without_growing_output() {
+        assert!(check_size(256, 256).is_ok());
+        assert!(check_size(257, 256).is_err());
+        assert!(check_size(0, 80).is_err());
+        let mut pending = VecDeque::from(vec![0; MAX_FRAME]);
+        assert!(FrameWriter(&mut pending).write(&[1]).is_err());
+        assert_eq!(pending.len(), MAX_FRAME);
+        assert_eq!(pending.back(), Some(&0));
+    }
 
     #[test]
     fn terminal_modes_restore_when_an_operation_returns_an_error() {

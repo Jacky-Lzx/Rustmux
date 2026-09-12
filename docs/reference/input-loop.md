@@ -1,6 +1,6 @@
-# Input Forwarding Loop
+# Input and Rendering Loop
 
-This describes the H02 forwarding loop and H04 resize handling. Read
+This describes H02 input, H03 rendering integration and H04 resize handling. Read
 `src/main.rs`, then `src/terminal.rs`, its queue tests, and
 `tests/terminal_loop.py` (launched by `tests/terminal_loop.rs`).
 
@@ -13,22 +13,31 @@ this avoids modifying the parent's shared file status flags, and avoids polling
 macOS's /dev/tty indirection. No shell command string is interpolated at startup.
 
 The outer terminal enters raw mode so Ctrl-C and other input arrive as bytes.
-An alternate screen preserves the previous screen contents. A single-threaded
-poll loop transfers input to the PTY and output back to the terminal, without
-parsing text or terminal control sequences. UTF-8 and paste bytes stay unchanged.
-The inner PTY's line discipline and shell handle editing and keyboard signals.
+An alternate screen preserves the previous screen contents. Input is forwarded to
+the inner PTY unchanged. Output follows `PTY -> Parser -> Screen -> render ->
+outer terminal`. The inner PTY's line discipline and shell handle editing and
+keyboard signals. The parser supports the documented control subset and standard
+eight-column tabs; unknown commands are ignored rather than passed through.
 
-Both descriptors are nonblocking. Each direction has a 64 KiB queue; input reads
-pause when its destination queue is full. Poll watches writable events only when
-there is pending data. Each read is at most 8 KiB, writes retain unsent tails,
-and Interrupted/WouldBlock retry on subsequent iterations without losing bytes.
-An idle loop waits up to 50 ms, which bounds checks for child exit and termination
-signals; this is not a rendering frame interval and ready I/O is handled immediately.
+Both descriptors are nonblocking. Keyboard input has a 64 KiB queue. Output holds
+at most one full ANSI frame, capped at 16 MiB; grids are limited to 65,536 cells.
+These limits also apply on resize. A limit error follows normal terminal cleanup.
+Child output reads pause while a frame is pending, applying backpressure without
+accumulating frames. Reads are at most 8 KiB. Writes retain unsent tails and retry
+Interrupted/WouldBlock on later iterations.
+
+Changed screen state is painted at a target minimum spacing of 6 ms after the
+previous frame was generated. Idle screens are not redrawn. Poll waits at most
+50 ms for signal/exit checks, shortened when a frame is due. This is scheduling,
+not a hard real-time guarantee. The final frame bypasses the interval on EOF.
+Scrolling output updates the grid; there is no scrollback, and intermediate states
+may be coalesced before painting. The output is no longer a byte-for-byte copy of
+the child's stream.
 
 ## Exit and terminal restoration
 
 The child status and PTY end-of-output are tracked independently. Normal exit
-flushes queued output. If descendants retain the slave, the loop stops once the
+finishes UTF-8 decoding and flushes the final rendered frame. If descendants retain the slave, the loop stops once the
 direct shell has exited and currently available output is drained; it does not
 wait for detached descendants. A live process retaining execution after closing
 its PTY gets a one-second exit grace period after observable EOF, then an error
@@ -53,24 +62,40 @@ process, with exclusive terminal ownership and single-threaded startup.
 ## Window size changes
 
 SIGWINCH sets a separate atomic flag, so resize events cannot overwrite termination
-signals. The event loop reads the latest outer-terminal size and calls PtyShell::resize;
+signals. The event loop reads the latest outer-terminal size, resizes both model grids,
+and calls PtyShell::resize;
 TIOCSWINSZ updates the inner PTY and lets the kernel notify its foreground process
 group. No terminal operations run in the signal handler. Coalesced events use the
 latest size, including an initial recheck after handler registration to close the
 startup race. Temporary zero dimensions are ignored after startup; startup still
 requires nonzero dimensions. Pixel dimensions are not propagated. I/O failures use
-the same terminal-restoration path as forwarding failures.
+the same terminal-restoration path as forwarding failures. An already partly sent
+frame is completed before rendering the new dimensions, so resize may briefly
+show stale layout before the fresh frame.
 
 ## Verification
 
 The nested-PTY test drives the real binary: Chinese text, erase, Ctrl-C interrupting
-sleep, repeated resize with a foreground SIGWINCH observer, transient zero sizes, 200 KB output, final output plus exit code 7, invalid shell startup,
-non-terminal input rejection, SIGTERM, output backpressure, and a live process
+sleep, colored cursor overwrites, alternate-screen restoration, repeated resize with a foreground SIGWINCH observer, transient zero sizes, 200 KB output, final output plus exit code 7, invalid shell startup,
+non-terminal input rejection, resize-limit errors, SIGTERM, output backpressure, and a live process
 closing its PTY. A supervisor retains the outer controlling session so macOS does
 not revoke its terminal before attributes can be checked. All termios settings
 are compared except the kernel-maintained PENDIN transient state.
 
-Unit tests force partial writes, Interrupted and WouldBlock, queue saturation,
+Tests decode complete renderer frames into rows independently of the Rust parser.
+The burst test checks the final marker after 200 KB is consumed, not retention of
+all scrolled text.
+
+Unit tests force frame/size limits, partial writes, Interrupted and WouldBlock, queue saturation,
 and an operation error while a raw-terminal guard is active, checking restoration.
 The previous PTY lifecycle tests remain in CI. Python 3 and PTY/process permissions
 are required. Local validation is on macOS; Linux results require the CI run.
+
+## Current compatibility
+
+The CLI now depends on our parser's supported subset. Scrolling regions, line
+insertion/deletion, terminal queries, custom tab stops, mouse modes, cursor
+visibility tracking and full emoji shaping are not implemented. Programs requiring
+those features may display incorrectly or wait for an unsupported terminal reply.
+Full-screen editor compatibility is not yet an acceptance claim. There is no
+split layout or persistent session support.

@@ -1,9 +1,10 @@
 # Rustmux: main-human
 
 This documentation describes the implementation on `main-human`. The branch
-provides a single interactive shell with keyboard input, direct terminal-output
-forwarding, dynamic resize propagation and outer-terminal restoration. It does not yet provide split panes,
-session persistence, a screen parser.
+provides a single interactive shell with keyboard input, parsed screen rendering,
+dynamic resize propagation and outer-terminal restoration. The terminal protocol
+subset is documented in the [input and rendering loop](reference/input-loop.md).
+Split panes and session persistence are not yet implemented.
 
 Developers can review the [PTY lifecycle module](reference/pty-lifecycle.md), which
 starts an interactive shell on a controlling terminal and owns its cleanup.

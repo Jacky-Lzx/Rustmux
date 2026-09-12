@@ -1,4 +1,4 @@
-//! Incremental UTF-8/CSI parsing for the screen model; not yet used by the CLI.
+//! Incremental UTF-8/CSI parsing for the CLI screen model.
 
 use crate::screen::{EraseMode, Screen};
 
@@ -147,6 +147,10 @@ impl Parser {
         }
         if byte == 0x1b {
             self.state = State::Escape;
+            return;
+        }
+        if byte == b'\t' {
+            screen.tab();
             return;
         }
         // Supported C0 controls execute inside ESC/CSI without ending the sequence.
@@ -329,6 +333,12 @@ mod tests {
             parser.advance(&mut screen, &[*byte]);
         }
         assert_eq!(screen, reference);
+    }
+
+    #[test]
+    fn tabs_advance_without_erasing_or_wrapping() {
+        fixture(b"A\tB\tC", &["A       B      C"], (0, 15));
+        fixture(b"abcd\tX", &["abcX"], (0, 3));
     }
 
     #[test]

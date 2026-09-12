@@ -3,7 +3,7 @@
 The model supports `CSI ? 1049 h` to enter and `CSI ? 1049 l` to leave the
 alternate screen. This is the save/switch/restore mode described in the
 [XTerm reference](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html).
-The CLI still forwards output directly; this implementation is model-only.
+The CLI parses these switches and renders the active model grid.
 
 `Screen` allocates two equal-sized grids at construction. Entry preserves the
 main grid and saves its cursor coordinates, current writing style and pending
@@ -21,7 +21,7 @@ The parser accepts a leading private-mode `?` marker and processes 1049 in
 semicolon-separated h/l mode lists. Unknown modes in those lists are ignored.
 Other private commands remain unsupported; malformed prefixes, parameter overflow
 and intermediates invalidate the command as before. Modes 47, 1047 and standalone
-1048, general cursor save/restore and renderer integration are later work.
+1048 and general cursor save/restore are later work.
 [Screen Model Resize](screen-resize.md) adjusts both grids and the saved cursor.
 This implements the currently modeled subset of saved cursor state, not charset
 or origin modes that the model does not yet support.

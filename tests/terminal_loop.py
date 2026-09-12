@@ -3,6 +3,7 @@ import errno
 import fcntl
 import json
 import os
+import re
 import select
 import signal
 import struct
@@ -52,22 +53,55 @@ class Session:
         self.app_pid = json.loads(self.report.readline())["pid"]
         os.set_blocking(self.master, False)
         self.output = bytearray()
+        self.frame_pending = bytearray()
+        self.frames = []
+        self.last_rows = []
+        self.last_frame = b""
 
     def read(self, seconds=0.05):
         if select.select([self.master], [], [], seconds)[0]:
             try:
-                self.output.extend(os.read(self.master, 65536))
+                chunk = os.read(self.master, 65536)
+                self.output.extend(chunk)
+                self.frame_pending.extend(chunk)
+                # Each full renderer frame ends in cursor-show. Decode its row
+                # payloads independently of the Rust parser; SGR does not occupy cells.
+                while b"\x1b[?25h" in self.frame_pending:
+                    end = self.frame_pending.index(b"\x1b[?25h") + len(b"\x1b[?25h")
+                    frame = bytes(self.frame_pending[:end])
+                    del self.frame_pending[:end]
+                    if b"\x1b[?25l" not in frame:
+                        continue
+                    self.last_frame = frame
+                    payloads = re.split(rb"\x1b\[[0-9]+;[0-9]+H", frame)[1:-1]
+                    self.last_rows = [re.sub(rb"\x1b\[[0-9;]*m", b"", row).rstrip(b" ") for row in payloads]
+                    self.frames.append(self.last_rows)
+                    self.frames = self.frames[-64:]
             except OSError as error:
                 if error.errno not in (errno.EIO, errno.EAGAIN):
                     raise
 
     def expect(self, text):
+        def matches():
+            target = text.strip(b"\r\n")
+            for rows in self.frames:
+                if text.startswith(b"\r\n"):
+                    if target in rows:
+                        return True
+                elif target == b"RUSTMUX_READY> ":
+                    nonempty = [row for row in rows if row]
+                    if nonempty and nonempty[-1].endswith(target.rstrip()):
+                        return True
+                elif any(target in row for row in rows):
+                    return True
+            return False
         end = time.monotonic() + 8
-        while text not in self.output:
+        while not matches():
             self.read()
             if time.monotonic() > end:
-                raise AssertionError((text, bytes(self.output[-2000:]), self.child.poll()))
+                raise AssertionError((text, self.last_rows, bytes(self.output[-1000:]), self.child.poll()))
         self.output.clear()
+        self.frames.clear()
 
     def send(self, data):
         end = time.monotonic() + 8
@@ -139,12 +173,39 @@ try:
     s.expect(b"SIZE:24:80\r\n")
     s.send(b"\x03")
     s.expect(b"RUSTMUX_READY> ")
-    # Exit immediately after output exceeding the queue cap: no tail may be lost.
+    # Output larger than the grid must still be parsed through the final marker.
     s.send(b"python3 -c 'import os; os.write(1, b\"Z\" * 200000); print(\"BURST_DONE\")'; printf '\\nLAST_OUTPUT\\n'; exit 7\n")
     s.finish(7)
-    assert b"Z" * 200000 + b"BURST_DONE\r\n" in s.output
-    assert b"\r\nLAST_OUTPUT\r\n" in s.output
+    assert any(row.endswith(b"BURST_DONE") for row in s.last_rows), s.last_rows
+    assert b"LAST_OUTPUT" in s.last_rows, s.last_rows
     assert b"\x1b[?1049l" in s.output
+finally:
+    s.close()
+
+# Model operations must change the rendered screen, rather than pass through.
+s = Session()
+try:
+    s.expect(b"RUSTMUX_READY> ")
+    s.send(b"printf '\\033[2J\\033[Habc\\033[1;2H\\033[31mX\\033[0m\\n'\n")
+    s.expect(b"\r\naXc\r\n")
+    assert b"\x1b[0;38;5;1mX" in s.last_frame, s.last_frame
+    s.send(b"printf '\\033[?1049h\\033[HALTSCREEN'; read answer; printf '\\033[?1049l'\n")
+    s.expect(b"\r\nALTSCREEN\r\n")
+    s.send(b"\n")
+    s.expect(b"RUSTMUX_READY> ")
+    assert b"aXc" in s.last_rows, s.last_rows
+    s.send(b"exit\n")
+    s.finish(0)
+finally:
+    s.close()
+
+# A model-allocation limit error during resize must restore the terminal too.
+s = Session()
+try:
+    s.expect(b"RUSTMUX_READY> ")
+    fcntl.ioctl(s.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 257, 256, 0, 0))
+    s.finish(1)
+    assert b"at most 65536 cells" in s.output
 finally:
     s.close()
 
@@ -183,7 +244,7 @@ s = Session()
 try:
     s.expect(b"RUSTMUX_READY> ")
     s.send(b"exec python3 -c 'import os;\nwhile True: os.write(1, b\"X\" * 65536)'\n")
-    s.expect(b"X" * 8192)
+    s.expect(b"X" * 80)
     time.sleep(0.2)
     os.kill(s.app_pid, signal.SIGTERM)
     s.finish(128 + signal.SIGTERM)

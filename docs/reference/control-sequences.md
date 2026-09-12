@@ -3,7 +3,7 @@
 `rustmux::parser::Parser` incrementally applies UTF-8 text and a small CSI subset to
 `Screen`. Keep one parser per output stream and call `advance` with the same
 screen as chunks arrive. Incomplete sequences are retained between calls.
-The CLI still forwards output directly; it does not yet use this parser.
+The CLI uses this parser for all PTY output before rendering the screen.
 
 ```rust
 use rustmux::{parser::Parser, screen::Screen};
@@ -33,6 +33,7 @@ unchanged. Movement clamps to the grid without scrolling. Both movement and eras
 cancel pending wrap. Screen methods use zero-based positions and `EraseMode`;
 the parser handles protocol defaults and one-based conversion.
 
+HT uses fixed eight-column tab stops without erasing or wrapping.
 Printable ASCII and LF/CR/BS retain the screen model's existing behavior. Those
 three controls also execute inside an incomplete ESC/CSI sequence without ending
 it. CAN and SUB cancel a sequence; a new ESC restarts ESC/CSI parsing.
@@ -52,7 +53,7 @@ interpreted or buffered; an unterminated string continues to discard input until
 its terminator or cancellation. Other unsupported controls are ignored.
 UTF-8 decoding and replacement are
 described in [UTF-8 and Character Width](unicode.md). There is no 8-bit C1 command
-support, terminal replies or renderer yet. Mode 1049 is described in
+support or terminal replies yet. Mode 1049 is described in
 [Alternate Screen](alternate-screen.md).
 
 Unlike `Screen::write_ascii`, this streaming interface skips unsupported input;

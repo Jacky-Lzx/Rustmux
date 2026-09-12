@@ -328,6 +328,12 @@ impl Screen {
         self.wrap_pending = false;
     }
 
+    /// Advance to the next conventional eight-column tab stop without erasing.
+    pub fn tab(&mut self) {
+        let next = (self.column / 8).saturating_add(1).saturating_mul(8);
+        self.move_to(self.row, next);
+    }
+
     pub fn move_up(&mut self, count: usize) {
         self.move_to(self.row.saturating_sub(count), self.column);
     }

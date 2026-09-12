@@ -3,9 +3,7 @@
 This H03 step adds `Cell`, `Style` and `Color` in `src/style.rs`. The parser
 applies SGR (`ESC [ parameters m`) to the screen's current style. Written cells
 copy that style, so later changes cannot restyle existing text. Cursor movement
-and pending wrap are unaffected by SGR. The CLI still forwards bytes directly;
-the standalone [renderer](rendering.md) can emit these stored styles, but is not
-yet connected to the CLI.
+and pending wrap are unaffected by SGR. The CLI uses the [renderer](rendering.md) to emit these stored styles.
 
 ## Supported subset
 
@@ -30,7 +28,7 @@ Parameters are applied from left to right; omitted parameters mean reset.
 
 Default colors remain symbolic and distinct from palette index zero. Indexed
 colors are not converted to RGB, and bold does not implicitly select bright
-colors. Inverse and other attributes are stored for the future renderer.
+colors. Inverse and other attributes are stored and emitted by the renderer.
 
 ## Erase and scrolling
 

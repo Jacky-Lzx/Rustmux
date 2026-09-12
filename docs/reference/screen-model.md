@@ -1,8 +1,7 @@
 # Basic Screen Model
 
 This is the first part of H03, available as `rustmux::screen::Screen`. Read
-`src/screen.rs` and its fixture tests. The CLI still forwards output directly;
-this model is not yet connected to the PTY loop.
+`src/screen.rs` and its fixture tests. The CLI parses PTY output into this model and renders its active grid.
 
 The model owns a resizable cell grid, initialized with default-style spaces, a zero-based
 (row, column) cursor, and a pending-wrap flag. Dimensions must be nonzero and the
@@ -45,4 +44,4 @@ The [Unicode layer](unicode.md) adds incremental decoding, wide cells and bounde
 zero-width suffixes using unicode-width. [Alternate Screen](alternate-screen.md) adds an isolated
 second grid and saved main state. [Screen Model Resize](screen-resize.md) defines
 clipping and growth for both grids. The [renderer](rendering.md) emits full frames;
-CLI integration is subsequent work; interactive CLI behavior is unchanged.
+the CLI now queues these frames in its event loop.

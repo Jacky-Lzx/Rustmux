@@ -1,7 +1,7 @@
 # UTF-8 and Character Width
 
-This H03 step extends `Parser` and `Screen` to store Unicode text. The CLI still
-forwards bytes directly; the model is not yet connected to rendering.
+This H03 step extends `Parser` and `Screen` to store Unicode text. The CLI uses this model
+to render decoded PTY output.
 
 ## Streaming decoding
 

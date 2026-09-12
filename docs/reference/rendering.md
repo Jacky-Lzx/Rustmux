@@ -3,7 +3,7 @@
 `rustmux::render::render(&screen, &mut output)` writes a complete ANSI frame for
 the active screen. The caller supplies any `std::io::Write`, such as a byte
 buffer. The renderer borrows the model without changing it and does not flush.
-It is not yet connected to the CLI's forwarding loop.
+The CLI renders into a bounded frame queue in its event loop.
 
 ## Output
 
@@ -36,8 +36,9 @@ render into a buffer and queue its bytes rather than restarting rendering after
 a partial write. Short writes and Interrupted are handled by Write's write_all
 path. The renderer does not retry WouldBlock or flush.
 
-This first version redraws every cell. Frame scheduling, bounded event-loop
-integration and later changed-cell rendering are separate steps.
+This first version redraws every cell. The CLI schedules and queues frames as
+described in [Input and Rendering Loop](input-loop.md). Changed-cell rendering
+is subsequent work.
 
 ## Verification
 

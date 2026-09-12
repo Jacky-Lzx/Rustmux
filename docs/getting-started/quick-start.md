@@ -21,7 +21,10 @@ Rustmux itself. Type `exit` or use the shell's EOF key to leave. The shell's exi
 status is returned to the caller. Shell output is drained before normal exit, and
 the outer terminal modes and previous screen are restored.
 
-This is a single-pane forwarding implementation. Terminal output is passed through
-directly; there is no screen parser, split layout or session persistence yet.
-Window size changes propagate to the inner PTY. Extended keyboard
-protocols and arbitrary application terminal modes have not been validated.
+The CLI now parses shell output and renders its own screen model. Window changes
+resize both model grids and the inner PTY. Dimensions must fit within 65,536 cells.
+There is no scrollback: old text scrolled out of the grid is discarded.
+
+Only the documented terminal-control subset is supported. Full-screen editors,
+terminal queries and extended keyboard/mouse modes are not yet fully supported;
+see [Input and Rendering Loop](../reference/input-loop.md#current-compatibility).
