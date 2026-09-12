@@ -6,3 +6,4 @@ description = "Rustmux human-reviewed implementation track"
 license = "MIT"
 
 [dependencies]
+nix = { version = "0.31", features = ["fs", "term", "process"] }

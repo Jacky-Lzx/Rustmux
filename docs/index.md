@@ -1,8 +1,12 @@
 # Rustmux: main-human
 
 This documentation describes the implementation on `main-human`. The branch
-currently contains a Rust project skeleton, build checks and contribution rules.
-It does not yet start a shell or provide terminal multiplexing.
+contains a PTY and shell lifecycle library, integration tests and contribution
+rules. The command-line program is still a placeholder: interactive input,
+rendering and terminal multiplexing are not yet connected.
+
+Developers can review the [PTY lifecycle module](reference/pty-lifecycle.md), which
+starts an interactive shell on a controlling terminal and owns its cleanup.
 
 The `main` track has a broader feature set. Use the branch selector on the
 published site to read its documentation; a feature described there is not

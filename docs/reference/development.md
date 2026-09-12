@@ -5,11 +5,14 @@
 ```sh
 cargo fmt --all --check
 cargo build --locked
+cargo test --all-targets --locked
 cargo clippy --all-targets --all-features --locked -- -D warnings
 ```
 
-The Rust CI workflow runs these checks on macOS and Linux. There is no terminal
-behavior test suite yet; tests should accompany the functionality they verify.
+The Rust CI workflow runs these checks on macOS and Linux. PTY integration tests
+start real shells and verify controlling-terminal setup, initial size, exit and
+resource cleanup. They require permission to create PTYs and child processes.
+See [PTY lifecycle](pty-lifecycle.md) for the implementation and review boundaries.
 
 ## Contributions
 
