@@ -4,7 +4,7 @@ This is the first part of H03, available as `rustmux::screen::Screen`. Read
 `src/screen.rs` and its fixture tests. The CLI still forwards output directly;
 this model is not yet connected to the PTY loop.
 
-The model owns a fixed-size cell grid, initialized with default-style spaces, a zero-based
+The model owns a resizable cell grid, initialized with default-style spaces, a zero-based
 (row, column) cursor, and a pending-wrap flag. Dimensions must be nonzero and the
 allocation size must fit. Rows can be borrowed read-only as `&[Cell]`, including trailing spaces. Each cell
 contains a character and a copied `Style`; `Screen::style` is the current style
@@ -43,5 +43,5 @@ and newly exposed rows use the active background without text decorations.
 
 The [Unicode layer](unicode.md) adds incremental decoding, wide cells and bounded
 zero-width suffixes using unicode-width. [Alternate Screen](alternate-screen.md) adds an isolated
-second grid and saved main state. Resize policy and
-rendering are subsequent work; interactive CLI behavior is unchanged.
+second grid and saved main state. [Screen Model Resize](screen-resize.md) defines
+clipping and growth for both grids. Rendering is subsequent work; interactive CLI behavior is unchanged.

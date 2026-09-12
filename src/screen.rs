@@ -1,4 +1,4 @@
-//! A fixed-size text grid, independent of PTY I/O and escape-sequence parsing.
+//! A resizable text grid, independent of PTY I/O and escape-sequence parsing.
 
 use std::io;
 use unicode_width::UnicodeWidthChar;
@@ -26,8 +26,8 @@ struct SavedCursor {
 /// Minimal screen state with zero-based coordinates and full-screen scrolling.
 ///
 /// The text API accepts printable ASCII, LF, CR and BS. Cursor movement and
-/// erasure are separate operations used by the parser. Grapheme-cluster shaping,
-/// scrollback and resizing belong to later steps.
+/// erasure are separate operations used by the parser. Grapheme-cluster shaping
+/// and scrollback belong to later steps.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Screen {
     rows: usize,
@@ -70,6 +70,63 @@ impl Screen {
             column: 0,
             wrap_pending: false,
         })
+    }
+
+    /// Resize both grids, preserving the top-left overlap without text reflow.
+    /// New cells use each grid's writing background; clipped content is discarded.
+    /// Invalid dimensions or allocation failure leave the entire model unchanged.
+    /// An unchanged size is a no-op; changed sizes cancel current and saved wrap.
+    pub fn resize(&mut self, rows: usize, columns: usize) -> io::Result<()> {
+        if self.dimensions() == (rows, columns) {
+            return Ok(());
+        }
+        // Allocate both destinations before taking any content out of the old grids.
+        // Cell suffixes are moved, not cloned, so copying the overlap cannot allocate.
+        let mut resized = Self::new(rows, columns)?;
+        resized.style = self.style;
+        resized.cells.fill(self.blank());
+        resized.row = self.row.min(rows - 1);
+        resized.column = self.column.min(columns - 1);
+        if let Some(saved) = self.saved_main_cursor {
+            resized.saved_main_cursor = Some(SavedCursor {
+                row: saved.row.min(rows - 1),
+                column: saved.column.min(columns - 1),
+                wrap_pending: false,
+                ..saved
+            });
+            resized.inactive_cells.fill(Cell {
+                style: Style {
+                    background: saved.style.background,
+                    ..Style::default()
+                },
+                ..Cell::default()
+            });
+        }
+        Self::move_overlap(&mut self.cells, self.columns, &mut resized.cells, columns);
+        Self::move_overlap(
+            &mut self.inactive_cells,
+            self.columns,
+            &mut resized.inactive_cells,
+            columns,
+        );
+        *self = resized;
+        Ok(())
+    }
+
+    fn move_overlap(source: &mut [Cell], old_columns: usize, target: &mut [Cell], columns: usize) {
+        for (old_row, new_row) in source
+            .chunks_mut(old_columns)
+            .zip(target.chunks_mut(columns))
+        {
+            for (column, (old, new)) in old_row.iter_mut().zip(new_row).enumerate() {
+                // A clipped wide leader is replaced by the destination's blank;
+                // its continuation lies outside the retained overlap.
+                if old.width == 2 && column + 1 == columns {
+                    continue;
+                }
+                *new = std::mem::take(old);
+            }
+        }
     }
 
     pub fn is_alternate(&self) -> bool {
