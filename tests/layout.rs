@@ -170,3 +170,155 @@ fn pane_cap_bounds_tree_and_maximum_dimensions_do_not_overflow() {
         .sum();
     assert_eq!(area, u64::from(u16::MAX).pow(2));
 }
+
+#[test]
+fn closing_promotes_sibling_subtree_and_preserves_its_ids() {
+    let mut layout = Layout::new(7, 11).unwrap();
+    let left = layout.active();
+    let top = layout.split_active(SplitAxis::Columns).unwrap();
+    let bottom = layout.split_active(SplitAxis::Rows).unwrap();
+    assert_eq!(layout.close(left).unwrap(), bottom);
+    assert_eq!(
+        layout.geometry().panes,
+        vec![
+            (
+                top,
+                Rect {
+                    row: 0,
+                    column: 0,
+                    rows: 3,
+                    columns: 11
+                }
+            ),
+            (
+                bottom,
+                Rect {
+                    row: 4,
+                    column: 0,
+                    rows: 3,
+                    columns: 11
+                }
+            ),
+        ]
+    );
+    assert_eq!(layout.minimum_size(), (3, 1));
+    assert_partition(&layout);
+    assert_eq!(layout.close(bottom).unwrap(), top);
+    assert_eq!(layout.minimum_size(), (1, 1));
+    assert_eq!(layout.geometry().separators, vec![]);
+    assert_eq!(
+        layout.geometry().panes[0].1,
+        Rect {
+            row: 0,
+            column: 0,
+            rows: 7,
+            columns: 11
+        }
+    );
+    let before = layout.clone();
+    assert_eq!(
+        layout.close(left).unwrap_err().kind(),
+        std::io::ErrorKind::NotFound
+    );
+    assert_eq!(layout, before);
+    assert!(layout.close(top).is_err());
+    assert_eq!(layout, before);
+    let new = layout.split_active(SplitAxis::Columns).unwrap();
+    assert!(new.get() > bottom.get());
+    layout.resize(1, 3).unwrap();
+    assert_partition(&layout);
+}
+
+#[test]
+fn every_nested_removal_obeys_focus_order_and_preserves_partition() {
+    let mut original = Layout::new(31, 41).unwrap();
+    for axis in [
+        SplitAxis::Columns,
+        SplitAxis::Rows,
+        SplitAxis::Columns,
+        SplitAxis::Rows,
+    ] {
+        original.split_active(axis).unwrap();
+    }
+    let ids: Vec<_> = original
+        .geometry()
+        .panes
+        .iter()
+        .map(|(id, _)| *id)
+        .collect();
+    for &active in &ids {
+        for (index, &removed) in ids.iter().enumerate() {
+            let mut layout = original.clone();
+            layout.select(active).unwrap();
+            let expected = if active != removed {
+                active
+            } else {
+                ids.get(index + 1)
+                    .copied()
+                    .unwrap_or_else(|| ids[index - 1])
+            };
+            assert_eq!(layout.close(removed).unwrap(), expected);
+            assert_eq!(layout.active(), expected);
+            assert_eq!(
+                layout
+                    .geometry()
+                    .panes
+                    .iter()
+                    .map(|(id, _)| *id)
+                    .collect::<Vec<_>>(),
+                ids.iter()
+                    .copied()
+                    .filter(|id| *id != removed)
+                    .collect::<Vec<_>>()
+            );
+            assert_partition(&layout);
+            let (rows, columns) = layout.minimum_size();
+            layout.resize(rows, columns).unwrap();
+            assert_partition(&layout);
+            let before = layout.clone();
+            assert!(layout.select(removed).is_err());
+            assert!(layout.close(removed).is_err());
+            assert_eq!(layout, before);
+        }
+    }
+}
+
+#[test]
+fn closing_at_capacity_allows_another_split_without_reusing_ids() {
+    let mut layout = Layout::new(128, 128).unwrap();
+    for _ in 1..MAX_PANES {
+        let (id, rect) = layout
+            .geometry()
+            .panes
+            .into_iter()
+            .max_by_key(|(_, r)| u32::from(r.rows) * u32::from(r.columns))
+            .unwrap();
+        layout.select(id).unwrap();
+        layout
+            .split_active(if rect.rows > rect.columns {
+                SplitAxis::Rows
+            } else {
+                SplitAxis::Columns
+            })
+            .unwrap();
+    }
+    let removed = layout.active();
+    layout.close(removed).unwrap();
+    let (id, rect) = layout
+        .geometry()
+        .panes
+        .into_iter()
+        .max_by_key(|(_, r)| u32::from(r.rows) * u32::from(r.columns))
+        .unwrap();
+    layout.select(id).unwrap();
+    let new = layout
+        .split_active(if rect.rows > rect.columns {
+            SplitAxis::Rows
+        } else {
+            SplitAxis::Columns
+        })
+        .unwrap();
+    assert_eq!(new.get(), MAX_PANES as u64);
+    assert_eq!(layout.geometry().panes.len(), MAX_PANES);
+    assert_partition(&layout);
+}

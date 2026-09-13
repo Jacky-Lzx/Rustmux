@@ -39,10 +39,30 @@ IDs, tree structure and active pane. Geometry is recomputed from the current siz
 there are no stored user ratios or text reflow decisions here. The caller must
 later decide how to handle outer terminals too small for an existing layout.
 
-The model does not yet support closing or zooming panes, directional selection,
+The model does not yet support zooming panes, directional selection,
 manual separator adjustment, pane swapping, or PTY/model resize coordination.
 Those remain subsequent steps. Ordinary allocation failure may abort as with
 standard Rust collection allocation; logical validation failures are atomic.
+
+## Closing a pane
+
+`close(id)` removes the pane and its parent's separator, promoting the sibling
+subtree into the parent's position. The sibling keeps its structure and IDs,
+and geometry is recalculated using the normal minimum-size rules. The outer
+content dimensions remain unchanged. Minimum required dimensions can decrease,
+allowing later resizing to a smaller terminal.
+
+Closing an inactive pane preserves the active ID. Closing the active pane selects
+the next surviving leaf in first-subtree/second-subtree traversal order, or the
+previous leaf if it was last. The method returns the resulting active ID. Unknown
+or already closed IDs return `NotFound`; removing the final pane returns
+`InvalidInput`. Both leave the entire layout unchanged. The model remains nonempty;
+the future window layer must handle closing a window when its last pane exits.
+
+Closed IDs are never reused, and closing frees a slot under the 64-pane cap.
+This operation changes geometry only: it does not close a PTY, discard input,
+reap a process or resize screen models. Those remain the caller's responsibility
+when interactive splitting is connected.
 
 ## Verification
 
@@ -51,3 +71,7 @@ coverage across many sizes, asymmetric subtree minima, stable IDs/focus, failed
 operations, the pane cap and maximum coordinate dimensions. A unit test checks
 unknown selection and ID exhaustion without mutation. Existing window and CLI
 behavior is unchanged because this module has not been wired into the event loop.
+
+Pane-close tests cover sibling-subtree promotion, all active/removed combinations
+in a nested tree, full nonoverlapping coverage after removal and minimum-size
+resize, stale IDs, final-pane rejection and capacity recovery without ID reuse.

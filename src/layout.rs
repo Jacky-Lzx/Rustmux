@@ -84,6 +84,25 @@ impl Node {
         }
     }
 
+    // Remove a child leaf and promote its sibling into the parent's position.
+    // The temporary leaf is immediately dropped with the old parent; no new allocation.
+    fn remove(&mut self, target: PaneId) -> bool {
+        match self {
+            Self::Pane(_) => false,
+            Self::Split { first, second, .. } => {
+                if matches!(first.as_ref(), Self::Pane(id) if *id == target) {
+                    *self = std::mem::replace(second.as_mut(), Self::Pane(target));
+                    true
+                } else if matches!(second.as_ref(), Self::Pane(id) if *id == target) {
+                    *self = std::mem::replace(first.as_mut(), Self::Pane(target));
+                    true
+                } else {
+                    first.remove(target) || second.remove(target)
+                }
+            }
+        }
+    }
+
     fn place(&self, rect: Rect, geometry: &mut Geometry) {
         match self {
             Self::Pane(id) => geometry.panes.push((*id, rect)),
@@ -219,6 +238,34 @@ impl Layout {
         self.next_id = next;
         self.count += 1;
         Ok(id)
+    }
+
+    /// Remove a pane and promote its sibling subtree, returning the active pane.
+    /// Closing the active pane selects its traversal successor, or predecessor at
+    /// the end. Closing an inactive pane preserves focus. The last pane cannot be
+    /// removed: the caller must close its owning window instead.
+    pub fn close(&mut self, id: PaneId) -> io::Result<PaneId> {
+        let panes = self.geometry().panes;
+        let index = panes
+            .iter()
+            .position(|(pane, _)| *pane == id)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "unknown pane ID"))?;
+        if self.count == 1 {
+            return Err(invalid("cannot close the last pane in a layout"));
+        }
+        let next_active = if self.active == id {
+            panes
+                .get(index + 1)
+                .unwrap_or(&panes[index.saturating_sub(1)])
+                .0
+        } else {
+            self.active
+        };
+        let removed = self.root.remove(id);
+        debug_assert!(removed);
+        self.count -= 1;
+        self.active = next_active;
+        Ok(self.active)
     }
 
     /// Reject sizes below the tree's minimum without mutating layout or focus.
