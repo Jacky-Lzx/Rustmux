@@ -335,8 +335,8 @@ receive(b"\x1b[0n" * 20000)
 writer.join(timeout=2)
 assert not writer.is_alive()
 # Mode replies share the same bounded queue with DSR replies and keyboard input.
-os.write(1, b"\x1b[4$p\x1b[4h\x1b[4$p\x1b[4l\x1b[?2026$p")
-receive(b"\x1b[4;2$y\x1b[4;1$y\x1b[?2026;0$y")
+os.write(1, b"\x1b[4$p\x1b[4h\x1b[4$p\x1b[4l\x1b[?2027$p")
+receive(b"\x1b[4;2$y\x1b[4;1$y\x1b[?2027;0$y")
 os.write(1, b"\x1b[?2004h\x1b[?2004$p\x1b[?2004l\x1b[?2004$p")
 receive(b"\x1b[?2004;1$y\x1b[?2004;2$y")
 def mode_flood():
@@ -628,6 +628,70 @@ for terminate in (False, True):
             assert s.output.rfind(("\x1b[?%dl" % mode).encode()) > s.output.rfind(("\x1b[?%dh" % mode).encode())
     finally:
         s.close()
+
+# Queries and input continue during a batch; intermediate screen text stays hidden.
+sync_probe = r"""
+import os, select, time, tty
+tty.setraw(0)
+def receive(expected):
+    data = bytearray()
+    end = time.monotonic() + 6
+    while len(data) < len(expected):
+        assert time.monotonic() < end, repr(data)
+        if select.select([0], [], [], 0.1)[0]:
+            data.extend(os.read(0, len(expected) - len(data)))
+    assert data == expected, repr(data)
+os.write(1, b"\x1b[2J\x1b[HSYNC_READY")
+receive(b"x")
+os.write(1, b"\x1b[?2026h\x1b[2J\x1b[HPARTIAL_HIDDEN\x1b[?2026$p")
+receive(b"\x1b[?2026;1$y")
+time.sleep(0.2)
+os.write(1, b"\x1b[2J\x1b[HSYNC_COMPLETE\x1b[?2026l")
+receive(b"x")
+os.write(1, b"\x1b[?2026h\x1b[2J\x1b[HSYNC_TIMEOUT")
+receive(b"x")
+os.write(1, b"\x1b[?2026$p")
+receive(b"\x1b[?2026;2$y")
+os.write(1, b"\x1b[?2026h\x1b[2J\x1b[HSYNC_RESIZE")
+receive(b"x")
+os.write(1, b"\x1b[?2026$p")
+receive(b"\x1b[?2026;2$y")
+os.write(1, b"\x1b[?2026h\x1b[2J\x1b[HSYNC_EOF")
+"""
+s = Session()
+try:
+    s.expect(b"RUSTMUX_READY> ")
+    s.send(("exec python3 -c " + shlex.quote(sync_probe) + "\n").encode())
+    s.expect(b"\r\nSYNC_READY\r\n")
+    s.send(b"x")
+    end = time.monotonic() + 6
+    while b"SYNC_COMPLETE" not in s.last_rows:
+        s.read()
+        assert not any(b"PARTIAL_HIDDEN" in row for rows in s.frames for row in rows)
+        assert time.monotonic() < end, "batch did not complete"
+    s.expect(b"\r\nSYNC_COMPLETE\r\n")
+    s.send(b"x")
+    s.expect(b"\r\nSYNC_TIMEOUT\r\n")
+    s.send(b"x")
+    # Let the child enter another batch, then resize before its timeout.
+    s.read(0.15)
+    fcntl.ioctl(s.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 25, 81, 0, 0))
+    s.expect(b"\r\nSYNC_RESIZE\r\n")
+    s.send(b"x")
+    s.expect(b"\r\nSYNC_EOF\r\n")
+    s.finish(0)
+finally:
+    s.close()
+
+s = Session()
+try:
+    s.expect(b"RUSTMUX_READY> ")
+    s.send(b"exec python3 -c 'import os,time; os.write(1,b\"\\x1b[?2026h\"); time.sleep(5)'\n")
+    s.read(0.2)
+    os.kill(s.app_pid, signal.SIGTERM)
+    s.finish(128 + signal.SIGTERM)
+finally:
+    s.close()
 
 # A model-allocation limit error during resize must restore the terminal too.
 s = Session()

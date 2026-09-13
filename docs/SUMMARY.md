@@ -31,3 +31,4 @@
 - [Focus Reporting](reference/focus-reporting.md)
 - [Terminal Mode Queries](reference/mode-queries.md)
 - [Mouse Reporting](reference/mouse-reporting.md)
+- [Synchronized Output](reference/synchronized-output.md)

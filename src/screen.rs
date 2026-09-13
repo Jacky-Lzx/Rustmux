@@ -95,6 +95,7 @@ pub struct Screen {
     insert_mode: bool,
     bracketed_paste: bool,
     focus_reporting: bool,
+    synchronized_output: bool,
     mouse_tracking: MouseTracking,
     sgr_mouse: bool,
     application_cursor_keys: bool,
@@ -147,6 +148,7 @@ impl Screen {
             insert_mode: false,
             bracketed_paste: false,
             focus_reporting: false,
+            synchronized_output: false,
             mouse_tracking: MouseTracking::Off,
             sgr_mouse: false,
             application_cursor_keys: false,
@@ -173,6 +175,7 @@ impl Screen {
         self.saved_cursor = None;
         self.inactive_saved_cursor = None;
         self.cursor_visible = true;
+        self.synchronized_output = false;
         self.cursor_shape = CursorShape::default();
         self.insert_mode = false;
         self.application_cursor_keys = false;
@@ -199,6 +202,7 @@ impl Screen {
     /// active grid and tab stops. Autowrap follows the XTerm default (enabled).
     pub fn soft_reset(&mut self) {
         self.cursor_visible = true;
+        self.synchronized_output = false;
         self.cursor_shape = CursorShape::default();
         self.insert_mode = false;
         self.application_cursor_keys = false;
@@ -239,6 +243,7 @@ impl Screen {
         resized.insert_mode = self.insert_mode;
         resized.bracketed_paste = self.bracketed_paste;
         resized.focus_reporting = self.focus_reporting;
+        resized.synchronized_output = self.synchronized_output;
         resized.mouse_tracking = self.mouse_tracking;
         resized.sgr_mouse = self.sgr_mouse;
         resized.application_cursor_keys = self.application_cursor_keys;
@@ -396,6 +401,15 @@ impl Screen {
     /// Encoding alone does not enable mouse event reporting.
     pub fn set_sgr_mouse(&mut self, enabled: bool) {
         self.sgr_mouse = enabled;
+    }
+
+    pub fn synchronized_output(&self) -> bool {
+        self.synchronized_output
+    }
+
+    /// The event loop defers painting, not parsing or input, while enabled.
+    pub fn set_synchronized_output(&mut self, enabled: bool) {
+        self.synchronized_output = enabled;
     }
 
     pub fn focus_reporting(&self) -> bool {

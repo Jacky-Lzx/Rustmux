@@ -71,7 +71,7 @@ fn unsupported_and_default_modes_report_zero_in_their_own_namespace() {
         ("?", 4),
         ("?", 66),
         ("?", 1005),
-        ("?", 2026),
+        ("?", 2027),
         ("", 0),
         ("?", usize::MAX),
     ] {

@@ -29,7 +29,8 @@ accumulating frames. Reads are at most 8 KiB. Writes retain unsent tails and ret
 Interrupted/WouldBlock on later iterations.
 
 Changed screen state is painted at a target minimum spacing of 6 ms after the
-previous frame was generated. Idle screens are not redrawn. Poll waits at most
+previous frame was generated. Idle screens are not redrawn. [Synchronized output](synchronized-output.md)
+defers new frames until the batch ends or its bounded wait expires. Poll waits at most
 50 ms for signal/exit checks, shortened when a frame is due. This is scheduling,
 not a hard real-time guarantee. The final frame bypasses the interval on EOF.
 Scrolling output updates the grid; there is no scrollback, and intermediate states

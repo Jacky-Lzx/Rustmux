@@ -27,6 +27,7 @@ const LIMIT: usize = 64 * 1024;
 const POLL_TIMEOUT_MILLIS: u16 = 50;
 const MAX_CELLS: usize = 64 * 1024;
 const MAX_FRAME: usize = 16 * 1024 * 1024;
+const SYNC_TIMEOUT: Duration = Duration::from_secs(1);
 const FRAME_INTERVAL: Duration = Duration::from_millis(6);
 
 // \x1b is ESC; ESC [ introduces a control sequence. For private modes (? prefix),
@@ -247,6 +248,31 @@ impl Write for FrameWriter<'_> {
     }
 }
 
+// Bound an observed synchronized batch even if the child stalls or repeats h.
+// Timeout resets the model mode, so subsequent queries report ordinary output.
+fn synchronized_pause(
+    screen: &mut Screen,
+    since: &mut Option<Instant>,
+    now: Instant,
+    eof: bool,
+) -> bool {
+    if eof || !screen.synchronized_output() {
+        *since = None;
+        if eof {
+            screen.set_synchronized_output(false);
+        }
+        return false;
+    }
+    let started = *since.get_or_insert(now);
+    if now.saturating_duration_since(started) >= SYNC_TIMEOUT {
+        screen.set_synchronized_output(false);
+        *since = None;
+        false
+    } else {
+        true
+    }
+}
+
 fn forward(
     terminal: &mut File,
     shell: &mut PtyShell,
@@ -258,6 +284,7 @@ fn forward(
     let mut to_shell = VecDeque::new();
     let mut to_terminal = VecDeque::new();
     let mut dirty = true;
+    let mut synchronized_since = None;
     let mut next_frame = Instant::now();
     let mut eof = false;
     let mut eof_at = None;
@@ -275,13 +302,17 @@ fn forward(
             if size.ws_row != 0 && size.ws_col != 0 {
                 check_size(size.ws_row, size.ws_col)?;
                 screen.resize(usize::from(size.ws_row), usize::from(size.ws_col))?;
+                // A resized outer grid cannot retain the old visual frame.
+                screen.set_synchronized_output(false);
+                synchronized_since = None;
                 if status.is_none() && !eof {
                     shell.resize(size.ws_row, size.ws_col)?;
                 }
                 dirty = true;
             }
         }
-        if dirty && to_terminal.is_empty() && (eof || Instant::now() >= next_frame) {
+        let paused = synchronized_pause(&mut screen, &mut synchronized_since, Instant::now(), eof);
+        if dirty && !paused && to_terminal.is_empty() && (eof || Instant::now() >= next_frame) {
             renderer.render(&screen, &mut FrameWriter(&mut to_terminal))?;
             dirty = false;
             next_frame = Instant::now() + FRAME_INTERVAL;
@@ -325,7 +356,7 @@ fn forward(
         if status.is_none() && !eof && !to_shell.is_empty() {
             inner_events |= PollFlags::POLLOUT;
         }
-        let timeout = if dirty && to_terminal.is_empty() {
+        let timeout = if dirty && !paused && to_terminal.is_empty() {
             next_frame
                 .saturating_duration_since(Instant::now())
                 .as_millis()
@@ -563,5 +594,66 @@ mod tests {
         pending.clear();
         assert!(!receive(&mut Paused, &mut pending).unwrap());
         assert!(receive(&mut io::empty(), &mut pending).unwrap());
+    }
+}
+
+#[cfg(test)]
+mod synchronized_tests {
+    use super::*;
+
+    #[test]
+    fn timeout_repeated_enable_and_eof_release_pending_frames() {
+        let mut screen = Screen::new(2, 8).unwrap();
+        let mut since = None;
+        let now = Instant::now();
+        assert!(!synchronized_pause(&mut screen, &mut since, now, false));
+        screen.set_synchronized_output(true);
+        assert!(synchronized_pause(&mut screen, &mut since, now, false));
+        screen.set_synchronized_output(true);
+        assert!(synchronized_pause(
+            &mut screen,
+            &mut since,
+            now + SYNC_TIMEOUT / 2,
+            false
+        ));
+        assert!(!synchronized_pause(
+            &mut screen,
+            &mut since,
+            now + SYNC_TIMEOUT,
+            false
+        ));
+        assert!(!screen.synchronized_output());
+        screen.set_synchronized_output(true);
+        assert!(synchronized_pause(
+            &mut screen,
+            &mut since,
+            now + SYNC_TIMEOUT,
+            false
+        ));
+        assert!(!synchronized_pause(
+            &mut screen,
+            &mut since,
+            now + SYNC_TIMEOUT,
+            true
+        ));
+        assert!(!screen.synchronized_output());
+    }
+
+    #[test]
+    fn explicit_end_allows_a_new_batch() {
+        let mut screen = Screen::new(2, 8).unwrap();
+        let mut since = None;
+        let now = Instant::now();
+        screen.set_synchronized_output(true);
+        assert!(synchronized_pause(&mut screen, &mut since, now, false));
+        screen.set_synchronized_output(false);
+        assert!(!synchronized_pause(&mut screen, &mut since, now, false));
+        screen.set_synchronized_output(true);
+        assert!(synchronized_pause(
+            &mut screen,
+            &mut since,
+            now + SYNC_TIMEOUT,
+            false
+        ));
     }
 }

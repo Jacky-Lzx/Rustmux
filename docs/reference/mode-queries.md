@@ -20,9 +20,10 @@ See [XTerm DECRQM/DECRPM](https://invisible-island.net/xterm/ctlseqs/ctlseqs.htm
 | DEC private | 1004 | Focus reporting |
 | DEC private | 1049 | Alternate screen |
 | DEC private | 2004 | Bracketed paste |
+| DEC private | 2026 | Synchronized output |
 
 All other numbers report 0, including unsupported DECSET aliases such as 66,
-unsupported mouse extensions and synchronized output mode 2026. Keypad ESC = / ESC > and cursor
+unsupported mouse extensions and mode 2027. Keypad ESC = / ESC > and cursor
 shape commands remain supported separately; that does not imply support for
 other mode-number aliases. ANSI and private numbers are distinct namespaces.
 An omitted Ps is treated as 0, which is unrecognized.

@@ -343,6 +343,7 @@ impl Parser {
                     (true, 1006) => Some(screen.sgr_mouse()),
                     (true, 1004) => Some(screen.focus_reporting()),
                     (true, 1049) => Some(screen.is_alternate()),
+                    (true, 2026) => Some(screen.synchronized_output()),
                     (true, 2004) => Some(screen.bracketed_paste()),
                     _ => None,
                 };
@@ -409,6 +410,9 @@ impl Parser {
                     }
                     if *mode == Some(1004) {
                         screen.set_focus_reporting(command == b'h');
+                    }
+                    if *mode == Some(2026) {
+                        screen.set_synchronized_output(command == b'h');
                     }
                     if *mode == Some(2004) {
                         screen.set_bracketed_paste(command == b'h');
