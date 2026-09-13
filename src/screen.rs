@@ -39,6 +39,7 @@ pub struct Screen {
     saved_cursor: Option<SavedCursor>,
     inactive_saved_cursor: Option<SavedCursor>,
     cursor_visible: bool,
+    insert_mode: bool,
     scroll_region: (usize, usize),
     inactive_scroll_region: (usize, usize),
     style: Style,
@@ -75,6 +76,7 @@ impl Screen {
             saved_cursor: None,
             inactive_saved_cursor: None,
             cursor_visible: true,
+            insert_mode: false,
             scroll_region: (0, rows - 1),
             inactive_scroll_region: (0, rows - 1),
             style: Style::default(),
@@ -98,6 +100,7 @@ impl Screen {
         // Cell suffixes are moved, not cloned, so copying the overlap cannot allocate.
         let mut resized = Self::new(rows, columns)?;
         resized.cursor_visible = self.cursor_visible;
+        resized.insert_mode = self.insert_mode;
         resized.origin_mode = self.origin_mode;
         let clamp = |saved: SavedCursor| SavedCursor {
             row: saved.row.min(rows - 1),
@@ -201,6 +204,16 @@ impl Screen {
     /// Visibility is a global terminal mode, independent of saved cursor state.
     pub fn set_cursor_visible(&mut self, visible: bool) {
         self.cursor_visible = visible;
+    }
+
+    pub fn insert_mode(&self) -> bool {
+        self.insert_mode
+    }
+
+    /// IRM is global, independent of cursor saves and screen switching.
+    /// Changing it does not move the cursor or cancel pending wrap.
+    pub fn set_insert_mode(&mut self, enabled: bool) {
+        self.insert_mode = enabled;
     }
 
     /// Replace this grid's single DECSC slot; this is not a stack.
@@ -352,6 +365,9 @@ impl Screen {
             self.column = 0;
             self.line_feed();
             self.wrap_pending = false;
+        }
+        if self.insert_mode {
+            self.insert_characters(width);
         }
         let index = self.row * self.columns + self.column;
         self.clear_range(index..index + width);

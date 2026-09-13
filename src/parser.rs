@@ -283,6 +283,14 @@ impl Parser {
         if parameters.subparameter.contains(&true) {
             return;
         }
+        if matches!(command, b'h' | b'l') {
+            for mode in &parameters.values[..=parameters.index] {
+                if *mode == Some(4) {
+                    screen.set_insert_mode(command == b'h');
+                }
+            }
+            return;
+        }
         let first = parameters.values[0].unwrap_or(0);
         let second = parameters.values[1].unwrap_or(0);
         if command == b'r' {

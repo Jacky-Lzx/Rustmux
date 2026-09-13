@@ -45,4 +45,4 @@ commands, saved state, alternate switching, resize, one-cell grids and renderer
 replay. The real CLI PTY fixture verifies visible row placement with DECOM,
 VPA and CHA, followed by returning to screen-relative coordinates.
 
-Insert mode, horizontal margins and terminal queries remain future work.
+Horizontal margins and terminal queries remain future work.

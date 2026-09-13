@@ -41,6 +41,6 @@ combinations across mixed wide and narrow text, style and suffix preservation,
 renderer replay, one-cell grids and alternate isolation. The real CLI PTY test
 checks ICH, DCH and ECH on visible text.
 
-Insert mode (IRM), horizontal margins and terminal queries remain
+Horizontal margins and terminal queries remain
 unsupported. These operations improve full-screen application compatibility but
 do not imply complete Neovim support.
