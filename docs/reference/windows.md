@@ -71,9 +71,10 @@ signal and outer-terminal restoration behavior.
 
 The outer renderer stays outside Pane because it describes the physical output
 stream, not an individual child's screen. Switching displayed contents must
-therefore account for the previously displayed grid and modes. Output queues,
-frame deadlines and synchronized-output timers still live in the existing event
-loop; they have not yet been split into per-window runtime state.
+therefore account for the previously displayed grid and modes. Each Pane now also owns its child-bound queue, dirty flag, synchronized-output
+start time, EOF timestamp and cached exit status. These remain attached to the
+same child across focus changes. The physical-terminal output queue, renderer
+cache and 6ms frame cadence remain shared in the event loop.
 
 `cargo test --test panes` starts two real shells in `Windows<Pane>`, verifies
 nonblocking masters, stable PIDs across selection, background screen updates,
@@ -81,3 +82,24 @@ separate parser/mode state and reclamation of one child while the other continue
 executing commands. Startup errors and invalid dimensions are also covered.
 This exercises process ownership but does not add an interactive multi-window
 CLI: multi-PTY polling, focus shortcuts and input routing are the next integration.
+
+## Independent I/O state
+
+The crate-private `PaneIo` keeps keyboard bytes and generated terminal replies
+in one FIFO for that child, bounded to 64 KiB by the event loop. Read capacity
+reserves `MAX_REPLY_BYTES` for every consumed child-output byte; a nearly full
+queue can pause child reads while still accepting a smaller amount of input.
+Once the child has been reaped, final output may be drained without reserving
+reply capacity. EOF stops further input and child reads.
+
+The existing CLI loop now reads and updates this per-pane state rather than
+keeping it in local variables. Direct `process_output` marks the pane dirty;
+`finish_output` records EOF and the first observation time as well as flushing
+partial parser input. The raw shell API remains low-level: lifecycle operations
+performed outside the event loop do not automatically update cached status.
+
+Unit tests cover input/reply capacity boundaries, final draining after exit,
+and window switching/removal with different queues, synchronization times and
+exit states. Existing real-PTY tests cover the actual forwarding and restoration
+paths. This is still preparation for multi-window polling, not an interactive
+window-switching feature.

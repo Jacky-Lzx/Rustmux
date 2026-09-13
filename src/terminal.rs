@@ -17,14 +17,11 @@ use nix::poll::{PollFd, PollFlags, poll};
 use nix::sys::termios::{self, SetArg, Termios};
 use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGWINCH};
 
-use crate::pane::{MAX_CELLS, Pane};
-use crate::parser::MAX_REPLY_BYTES;
+use crate::pane::{INPUT_LIMIT as LIMIT, MAX_CELLS, Pane};
 use crate::{render::Renderer, screen::Screen};
 
 // Bound pending keyboard input to 64 KiB; output retains at most one frame.
-const LIMIT: usize = 64 * 1024;
 const POLL_TIMEOUT_MILLIS: u16 = 50;
-const MAX_CELLS: usize = 64 * 1024;
 const MAX_FRAME: usize = 16 * 1024 * 1024;
 const SYNC_TIMEOUT: Duration = Duration::from_secs(1);
 const FRAME_INTERVAL: Duration = Duration::from_millis(6);
@@ -269,23 +266,17 @@ fn synchronized_pause(
 }
 
 fn forward(terminal: &mut File, pane: &mut Pane, signals: &Signals) -> io::Result<u8> {
-    let (shell, parser, screen) = pane.parts_mut();
+    let (shell, parser, screen, state) = pane.parts_mut();
     let mut renderer = Renderer::default();
-    let mut to_shell = VecDeque::new();
     let mut to_terminal = VecDeque::new();
-    let mut dirty = true;
-    let mut synchronized_since = None;
     let mut next_frame = Instant::now();
-    let mut eof = false;
-    let mut eof_at = None;
-    let mut status = None;
     loop {
         let received = signals.pending.load(Ordering::Relaxed);
         if received != 0 {
             return Ok((128 + received) as u8);
         }
-        if status.is_none() {
-            status = shell.try_wait()?;
+        if state.status.is_none() {
+            state.status = shell.try_wait()?;
         }
         if signals.resize.swap(false, Ordering::Relaxed) {
             let size = window_size(terminal)?;
@@ -295,28 +286,39 @@ fn forward(terminal: &mut File, pane: &mut Pane, signals: &Signals) -> io::Resul
                 renderer.invalidate();
                 // A resized outer grid cannot retain the old visual frame.
                 screen.set_synchronized_output(false);
-                synchronized_since = None;
-                if status.is_none() && !eof {
+                state.synchronized_since = None;
+                if state.status.is_none() && !state.eof {
                     shell.resize(size.ws_row, size.ws_col)?;
                 }
-                dirty = true;
+                state.dirty = true;
             }
         }
-        let paused = synchronized_pause(screen, &mut synchronized_since, Instant::now(), eof);
-        if dirty && !paused && to_terminal.is_empty() && (eof || Instant::now() >= next_frame) {
+        let paused = synchronized_pause(
+            screen,
+            &mut state.synchronized_since,
+            Instant::now(),
+            state.eof,
+        );
+        if state.dirty
+            && !paused
+            && to_terminal.is_empty()
+            && (state.eof || Instant::now() >= next_frame)
+        {
             renderer.render(screen, &mut FrameWriter(&mut to_terminal))?;
-            dirty = false;
+            state.dirty = false;
             next_frame = Instant::now() + FRAME_INTERVAL;
         }
-        if eof {
-            if !dirty
+        if state.eof {
+            if !state.dirty
                 && to_terminal.is_empty()
-                && let Some(status) = status
+                && let Some(status) = state.status
             {
                 return Ok(exit_code(status));
             }
-            if status.is_none()
-                && eof_at.is_some_and(|time: Instant| time.elapsed() > Duration::from_secs(1))
+            if state.status.is_none()
+                && state
+                    .eof_at
+                    .is_some_and(|time: Instant| time.elapsed() > Duration::from_secs(1))
             {
                 return Err(io::Error::new(
                     io::ErrorKind::TimedOut,
@@ -326,7 +328,7 @@ fn forward(terminal: &mut File, pane: &mut Pane, signals: &Signals) -> io::Resul
         }
         let mut outer_events = PollFlags::empty();
         let mut inner_events = PollFlags::empty();
-        if status.is_none() && !eof && to_shell.len() < LIMIT {
+        if state.accepts_input() {
             outer_events |= PollFlags::POLLIN;
         }
         if !to_terminal.is_empty() {
@@ -336,18 +338,14 @@ fn forward(terminal: &mut File, pane: &mut Pane, signals: &Signals) -> io::Resul
         // unbounded child output while the previous frame is still being sent.
         // Reserve worst-case reply space before reading child output. A single
         // byte can finish a query retained from a previous read.
-        let reply_read_limit = if status.is_some() {
-            8192 // No live child to receive replies; drain its final output.
-        } else {
-            (LIMIT - to_shell.len()) / MAX_REPLY_BYTES
-        };
-        if !eof && to_terminal.is_empty() && reply_read_limit != 0 {
+        let reply_read_limit = state.reply_read_limit();
+        if !state.eof && to_terminal.is_empty() && reply_read_limit != 0 {
             inner_events |= PollFlags::POLLIN;
         }
-        if status.is_none() && !eof && !to_shell.is_empty() {
+        if state.status.is_none() && !state.eof && !state.to_shell.is_empty() {
             inner_events |= PollFlags::POLLOUT;
         }
-        let timeout = if dirty && !paused && to_terminal.is_empty() {
+        let timeout = if state.dirty && !paused && to_terminal.is_empty() {
             next_frame
                 .saturating_duration_since(Instant::now())
                 .as_millis()
@@ -392,20 +390,20 @@ fn forward(terminal: &mut File, pane: &mut Pane, signals: &Signals) -> io::Resul
         }
         let readable =
             inner.intersects(PollFlags::POLLIN | PollFlags::POLLHUP | PollFlags::POLLERR);
-        if !eof && inner_events.contains(PollFlags::POLLIN) {
+        if !state.eof && inner_events.contains(PollFlags::POLLIN) {
             if readable {
                 let mut bytes = [0; 8192];
                 let read_limit = bytes.len().min(reply_read_limit);
                 match shell.read(&mut bytes[..read_limit]) {
-                    Ok(0) => eof = true,
+                    Ok(0) => state.eof = true,
                     Ok(n) => {
                         parser.advance_with_replies(screen, &bytes[..n], &mut |reply| {
-                            if status.is_none() {
-                                to_shell.extend(reply);
+                            if state.status.is_none() {
+                                state.to_shell.extend(reply);
                             }
                         });
-                        debug_assert!(to_shell.len() <= LIMIT);
-                        dirty = true;
+                        debug_assert!(state.to_shell.len() <= LIMIT);
+                        state.dirty = true;
                     }
                     Err(e)
                         if matches!(
@@ -414,21 +412,21 @@ fn forward(terminal: &mut File, pane: &mut Pane, signals: &Signals) -> io::Resul
                         ) => {}
                     Err(e) => return Err(e),
                 }
-            } else if status.is_some() {
+            } else if state.status.is_some() {
                 // Descendants retaining the slave must not delay direct-child exit.
-                eof = true;
+                state.eof = true;
             }
-            if eof {
+            if state.eof {
                 parser.finish(screen);
-                dirty = true; // Always flush the final model before normal exit.
-                eof_at = Some(Instant::now());
+                state.dirty = true; // Always flush the final model before normal exit.
+                state.eof_at = Some(Instant::now());
             }
         }
-        if !eof && status.is_none() {
+        if !state.eof && state.status.is_none() {
             if inner.contains(PollFlags::POLLOUT) {
-                send(shell, &mut to_shell)?;
+                send(shell, &mut state.to_shell)?;
             }
-            if outer.contains(PollFlags::POLLIN) && receive(terminal, &mut to_shell)? {
+            if outer.contains(PollFlags::POLLIN) && receive(terminal, &mut state.to_shell)? {
                 return Err(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
                     "terminal input ended",

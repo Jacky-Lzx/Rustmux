@@ -115,3 +115,9 @@ incremental mode synchronization. The large query fixture is executed from a
 temporary Python file rather than pasted through the shell's line editor. Failure
 cleanup closes outer PTY descriptors before waiting, avoiding a macOS terminal
 drain wait; successful restoration checks still happen before those closes.
+
+Child-specific I/O state now belongs to `Pane`: the input/reply FIFO, dirty flag,
+synchronized-output start time, EOF observation time and cached child status.
+The event loop retains one physical-terminal frame queue and render deadline.
+This preserves the current single-window behavior while preventing future focus
+changes from reassigning pending bytes or lifecycle state to another child.
