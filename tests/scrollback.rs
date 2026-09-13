@@ -66,13 +66,13 @@ fn partial_regions_and_alternate_output_do_not_enter_primary_history() {
 }
 
 #[test]
-fn resize_preserves_original_history_widths_and_snapshot_isolation() {
+fn growth_consumes_history_without_changing_existing_snapshots() {
     let mut screen = Screen::new(1, 4).unwrap();
     feed(&mut screen, b"abcd\r\n");
     let snapshot = screen.clone();
     screen.resize(2, 2).unwrap();
     feed(&mut screen, b"ef\r\ngh\r\n");
-    assert_eq!(history_text(&screen, 0), "abcd");
+    assert_eq!(history_text(&screen, 0), "ab"); // Restored at the narrower width, then scrolled again.
     assert_eq!(history_text(&screen, 1), "ef");
     assert_eq!(snapshot.history_len(), 1);
     assert_eq!(history_text(&snapshot, 0), "abcd");

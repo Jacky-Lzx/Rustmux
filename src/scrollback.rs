@@ -22,6 +22,12 @@ impl Scrollback {
         self.rows.get(index).map(AsRef::as_ref)
     }
 
+    pub fn pop_newest(&mut self) -> Option<Arc<[Cell]>> {
+        let row = Arc::make_mut(&mut self.rows).pop_back()?;
+        self.cells -= row.len();
+        Some(row)
+    }
+
     pub fn push(&mut self, row: &[Cell]) {
         // An oversized row cannot fit even on its own. Discard older history too,
         // so retained history never jumps across an unrecorded newer row.

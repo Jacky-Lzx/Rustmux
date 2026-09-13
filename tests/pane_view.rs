@@ -122,3 +122,20 @@ fn minimal_nested_separators_keep_their_orientation() {
         assert!(screens.iter().any(|(id, _)| *id == second));
     }
 }
+
+#[test]
+fn composing_taller_canvas_does_not_restore_history_or_shift_cursor() {
+    let mut layout = Layout::new(5, 4).unwrap();
+    let top = layout.active();
+    let bottom = layout.split_active(SplitAxis::Rows).unwrap();
+    let a = Screen::new(2, 4).unwrap();
+    let mut b = Screen::new(2, 4).unwrap();
+    Parser::new().advance(&mut b, b"OLD1\r\nOLD2\r\nLIVE");
+    let snapshot = b.clone();
+    let view = compose(&layout, &[(top, &a), (bottom, &b)]).unwrap();
+    assert_eq!(view.cursor(), (4, 3));
+    assert_eq!(view.row(3), b.row(0));
+    assert_eq!(view.row(4), b.row(1));
+    assert_eq!(view.history_len(), b.history_len());
+    assert_eq!(b, snapshot);
+}

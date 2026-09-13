@@ -1482,6 +1482,11 @@ try:
     assert b"History " in s.last_rows[0]
     s.send(b"qprintf '\\n%s%s\\n' RESIZE_PROMPT_ OK\n")
     s.expect(b"RESIZE_PROMPT_OK")
+    s.send(b"\x02z")
+    s.expect(b"RESIZE_HIST_00")
+    assert any(b"RESIZE_PROMPT_OK" in row for row in s.last_rows)
+    s.send(b"printf '\\n%s%s\\n' REGROWN_ INPUT_OK\n")
+    s.expect(b"REGROWN_INPUT_OK")
     os.kill(s.app_pid, signal.SIGTERM)
     s.finish(128 + signal.SIGTERM)
 finally:

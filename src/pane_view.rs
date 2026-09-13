@@ -70,7 +70,7 @@ pub fn compose(layout: &Layout, screens: &[(PaneId, &Screen)]) -> io::Result<Scr
         .expect("active pane is visible");
     let cursor = active.cursor();
     let mut frame = (*active).clone();
-    frame.resize(usize::from(rows), usize::from(columns))?;
+    frame.resize_display(usize::from(rows), usize::from(columns))?;
     for (_, rect, source) in &visible {
         frame.copy_display_cells(source, usize::from(rect.row), usize::from(rect.column));
     }

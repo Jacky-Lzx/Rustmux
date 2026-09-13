@@ -253,13 +253,23 @@ impl Screen {
     }
 
     /// Resize both grids without text reflow. Keep the primary cursor visible by
-    /// moving departing top rows into history; the alternate grid keeps its origin.
+    /// moving departing top rows into history. Growth restores newest history above
+    /// the primary grid and shifts its cursors down; alternate keeps its origin.
     /// New cells use each grid's writing background; other clipped content is lost.
     /// Invalid dimensions or reported allocation errors leave the model unchanged.
     /// History allocation may abort on exhaustion, as during ordinary scrolling.
     /// An unchanged size is a no-op; changed sizes cancel current and saved wrap
     /// and reset both grids to full-height scrolling regions.
     pub fn resize(&mut self, rows: usize, columns: usize) -> io::Result<()> {
+        self.resize_grid(rows, columns, true)
+    }
+
+    /// Resize a disposable render canvas without archiving or restoring history.
+    pub(crate) fn resize_display(&mut self, rows: usize, columns: usize) -> io::Result<()> {
+        self.resize_grid(rows, columns, false)
+    }
+
+    fn resize_grid(&mut self, rows: usize, columns: usize, history: bool) -> io::Result<()> {
         if self.dimensions() == (rows, columns) {
             return Ok(());
         }
@@ -267,7 +277,21 @@ impl Screen {
         // Cell suffixes are moved, not cloned, so copying the overlap cannot allocate.
         let mut resized = Self::new(rows, columns)?;
         let main_row = self.saved_main_cursor.map_or(self.row, |saved| saved.row);
-        let shift = main_row.saturating_sub(rows - 1);
+        let shift = if history {
+            main_row.saturating_sub(rows - 1)
+        } else {
+            0
+        };
+        let restore = if history {
+            rows.saturating_sub(self.rows).min(self.scrollback.len())
+        } else {
+            0
+        };
+        let (active_restore, inactive_restore) = if self.is_alternate() {
+            (0, restore)
+        } else {
+            (restore, 0)
+        };
         let (active_shift, inactive_shift) = if self.is_alternate() {
             (0, shift)
         } else {
@@ -299,23 +323,25 @@ impl Screen {
         resized.character_sets = self.character_sets;
         let retained_columns = self.columns.min(columns);
         resized.tab_stops[..retained_columns].copy_from_slice(&self.tab_stops[..retained_columns]);
-        let clamp = |saved: SavedCursor, shift: usize| SavedCursor {
-            row: saved.row.saturating_sub(shift).min(rows - 1),
+        let clamp = |saved: SavedCursor, shift: usize, restore: usize| SavedCursor {
+            row: (saved.row.saturating_sub(shift) + restore).min(rows - 1),
             column: saved.column.min(columns - 1),
             wrap_pending: false,
             ..saved
         };
-        resized.saved_cursor = self.saved_cursor.map(|saved| clamp(saved, active_shift));
+        resized.saved_cursor = self
+            .saved_cursor
+            .map(|saved| clamp(saved, active_shift, active_restore));
         resized.inactive_saved_cursor = self
             .inactive_saved_cursor
-            .map(|saved| clamp(saved, inactive_shift));
+            .map(|saved| clamp(saved, inactive_shift, inactive_restore));
         resized.style = self.style;
         resized.cells.fill(self.blank());
-        resized.row = self.row.saturating_sub(active_shift).min(rows - 1);
+        resized.row = (self.row.saturating_sub(active_shift) + active_restore).min(rows - 1);
         resized.column = self.column.min(columns - 1);
         if let Some(saved) = self.saved_main_cursor {
             resized.saved_main_cursor = Some(SavedCursor {
-                row: saved.row.saturating_sub(inactive_shift).min(rows - 1),
+                row: (saved.row.saturating_sub(inactive_shift) + inactive_restore).min(rows - 1),
                 column: saved.column.min(columns - 1),
                 wrap_pending: false,
                 ..saved
@@ -328,16 +354,33 @@ impl Screen {
                 ..Cell::default()
             });
         }
+        for row in (0..restore).rev() {
+            let cells = resized
+                .scrollback
+                .pop_newest()
+                .expect("restorable history row");
+            let destination = if self.is_alternate() {
+                &mut resized.inactive_cells
+            } else {
+                &mut resized.cells
+            };
+            for (column, cell) in cells.iter().take(columns).enumerate() {
+                if cell.width == 2 && column + 1 == columns {
+                    continue;
+                }
+                destination[row * columns + column] = cell.clone();
+            }
+        }
         Self::move_overlap(
             &mut self.cells[active_shift * self.columns..],
             self.columns,
-            &mut resized.cells,
+            &mut resized.cells[active_restore * columns..],
             columns,
         );
         Self::move_overlap(
             &mut self.inactive_cells[inactive_shift * self.columns..],
             self.columns,
-            &mut resized.inactive_cells,
+            &mut resized.inactive_cells[inactive_restore * columns..],
             columns,
         );
         *self = resized;
@@ -347,7 +390,7 @@ impl Screen {
     /// Reserve a top row on a disposable render copy, shifting active cells and cursor.
     /// This is display composition, not a terminal resize operation for the child.
     pub(crate) fn prepend_display_row(&mut self) -> io::Result<()> {
-        self.resize(self.rows + 1, self.columns)?;
+        self.resize_display(self.rows + 1, self.columns)?;
         self.cells.rotate_right(self.columns);
         self.row += 1;
         Ok(())

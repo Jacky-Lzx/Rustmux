@@ -19,10 +19,24 @@ resize path. While the alternate screen is active, the hidden main grid uses its
 saved main cursor to make the same decision. The alternate grid itself retains
 its top-left overlap and never contributes rows to history.
 
+When height grows, the primary grid restores up to the added number of rows
+from the newest end of scrollback. They appear at the top in their original
+chronological order, and the old visible grid plus its current/saved cursors move
+down together. Restored rows are removed from history, avoiding duplicates.
+If history has fewer rows than the added height, the remaining bottom rows are
+blank. The same policy applies to the hidden main grid while alternate is active;
+the alternate grid never restores history.
+
+Thus a same-width height shrink/grow cycle can recover archived rows while they
+remain within the history limits. Previously frozen history views keep their own
+snapshot and are unaffected by consumption of live history. Repeated same-size
+notifications do not consume history.
+
 There is no text reflow. Right-hand columns and any remaining bottom rows outside
-the retained rectangle are still discarded. Growing does not pull history back
-into the grid. Existing history retains its original widths and is subject to its
-normal oldest-row eviction limits. New cells use the relevant grid's writing
+the retained rectangle are still discarded. Restored rows use the new width:
+short rows are padded; long rows are clipped, removing any cut wide-character
+pair. The clipped part is not kept in history after the row is restored.
+History that remains stored keeps its original widths and normal eviction limits. New cells use the relevant grid's writing
 background with default foreground and no decorations. While alternate is active,
 the saved main style supplies the main grid's background.
 
@@ -34,6 +48,11 @@ pending-wrap flags and resets both scrolling regions to full height. Resizing to
 Alternate mode remains active across resize. Leaving it restores the resized main
 grid and the clamped saved cursor/style. Re-entering still starts a blank alternate
 grid at the new dimensions.
+
+Display composition uses `resize_display`, which preserves top-left overlap and
+never archives/restores rows or translates cursors with history. Adding a bar or
+composing a larger pane canvas therefore cannot accidentally consume history or
+move the displayed cursor.
 
 ## Failure and storage
 
@@ -54,4 +73,8 @@ cursors, pending-wrap policy and unchanged state on invalid dimensions or a
 capacity-limit error. Run `cargo test --test screen_resize`.
 
 The nested-PTY suite checks unzooming a vertically split shell: recent output and
-the prompt remain visible, archived top rows can be browsed, and input still works.
+the prompt remain visible, archived top rows can be browsed, re-zoom restores them
+to the visible grid, and input still works. Model tests additionally cover newest-row
+ordering, partial restoration, saved cursors, hidden primary restoration, wide-cell
+clipping, snapshot isolation and repeated cycles. A compositor regression checks
+that enlarging the render canvas does not restore history or shift the cursor.
