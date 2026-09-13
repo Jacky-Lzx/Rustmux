@@ -15,6 +15,9 @@ resource cleanup. The input-loop harness requires Python 3 and creates an outer
 PTY to run the actual binary, checking keyboard forwarding and terminal recovery. They require permission to create PTYs and child processes.
 See [PTY lifecycle](pty-lifecycle.md) for the implementation and review boundaries.
 
+The optional [SSH rendering experiment](rendering-performance.md#ssh-input-to-frame-experiment)
+is run manually with Python and OpenSSH. It is not invoked by `cargo test` or CI.
+
 ## Contributions
 
 `main-human` currently accepts bug reports and bug-fix PRs for existing code.
