@@ -252,9 +252,11 @@ impl Screen {
         });
     }
 
-    /// Resize both grids, preserving the top-left overlap without text reflow.
-    /// New cells use each grid's writing background; clipped content is discarded.
-    /// Invalid dimensions or allocation failure leave the entire model unchanged.
+    /// Resize both grids without text reflow. Keep the primary cursor visible by
+    /// moving departing top rows into history; the alternate grid keeps its origin.
+    /// New cells use each grid's writing background; other clipped content is lost.
+    /// Invalid dimensions or reported allocation errors leave the model unchanged.
+    /// History allocation may abort on exhaustion, as during ordinary scrolling.
     /// An unchanged size is a no-op; changed sizes cancel current and saved wrap
     /// and reset both grids to full-height scrolling regions.
     pub fn resize(&mut self, rows: usize, columns: usize) -> io::Result<()> {
@@ -264,6 +266,24 @@ impl Screen {
         // Allocate both destinations before taking any content out of the old grids.
         // Cell suffixes are moved, not cloned, so copying the overlap cannot allocate.
         let mut resized = Self::new(rows, columns)?;
+        let main_row = self.saved_main_cursor.map_or(self.row, |saved| saved.row);
+        let shift = main_row.saturating_sub(rows - 1);
+        let (active_shift, inactive_shift) = if self.is_alternate() {
+            (0, shift)
+        } else {
+            (shift, 0)
+        };
+        // Build history on the destination before moving cells out of the source.
+        // Snapshot sharing keeps the old history untouched during preparation.
+        resized.scrollback = self.scrollback.clone();
+        let main_cells = if self.is_alternate() {
+            &self.inactive_cells
+        } else {
+            &self.cells
+        };
+        for row in main_cells[..shift * self.columns].chunks(self.columns) {
+            resized.scrollback.push(row);
+        }
         resized.cursor_visible = self.cursor_visible;
         resized.cursor_shape = self.cursor_shape;
         resized.insert_mode = self.insert_mode;
@@ -279,21 +299,23 @@ impl Screen {
         resized.character_sets = self.character_sets;
         let retained_columns = self.columns.min(columns);
         resized.tab_stops[..retained_columns].copy_from_slice(&self.tab_stops[..retained_columns]);
-        let clamp = |saved: SavedCursor| SavedCursor {
-            row: saved.row.min(rows - 1),
+        let clamp = |saved: SavedCursor, shift: usize| SavedCursor {
+            row: saved.row.saturating_sub(shift).min(rows - 1),
             column: saved.column.min(columns - 1),
             wrap_pending: false,
             ..saved
         };
-        resized.saved_cursor = self.saved_cursor.map(clamp);
-        resized.inactive_saved_cursor = self.inactive_saved_cursor.map(clamp);
+        resized.saved_cursor = self.saved_cursor.map(|saved| clamp(saved, active_shift));
+        resized.inactive_saved_cursor = self
+            .inactive_saved_cursor
+            .map(|saved| clamp(saved, inactive_shift));
         resized.style = self.style;
         resized.cells.fill(self.blank());
-        resized.row = self.row.min(rows - 1);
+        resized.row = self.row.saturating_sub(active_shift).min(rows - 1);
         resized.column = self.column.min(columns - 1);
         if let Some(saved) = self.saved_main_cursor {
             resized.saved_main_cursor = Some(SavedCursor {
-                row: saved.row.min(rows - 1),
+                row: saved.row.saturating_sub(inactive_shift).min(rows - 1),
                 column: saved.column.min(columns - 1),
                 wrap_pending: false,
                 ..saved
@@ -306,14 +328,18 @@ impl Screen {
                 ..Cell::default()
             });
         }
-        Self::move_overlap(&mut self.cells, self.columns, &mut resized.cells, columns);
         Self::move_overlap(
-            &mut self.inactive_cells,
+            &mut self.cells[active_shift * self.columns..],
+            self.columns,
+            &mut resized.cells,
+            columns,
+        );
+        Self::move_overlap(
+            &mut self.inactive_cells[inactive_shift * self.columns..],
             self.columns,
             &mut resized.inactive_cells,
             columns,
         );
-        resized.scrollback = std::mem::take(&mut self.scrollback);
         *self = resized;
         Ok(())
     }

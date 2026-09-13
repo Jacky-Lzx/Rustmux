@@ -1460,3 +1460,29 @@ try:
     s.finish(128 + signal.SIGTERM)
 finally:
     s.close()
+
+# Unzooming a vertically split pane retains its prompt and archives departed rows.
+s = Session()
+try:
+    s.expect(b"RUSTMUX_READY> ")
+    s.send(b'\x02"\x02z')
+    s.expect(b"RUSTMUX_READY>")
+    s.send(b"stty -echo; printf '\\033[2J\\033[H'; i=0; while [ $i -lt 20 ]; do printf 'RESIZE_HIST_%02d\\n' $i; i=$((i+1)); done\n")
+    s.expect(b"RESIZE_HIST_19")
+    s.send(b"\x02z")
+    end = time.monotonic() + 2
+    # Wait for the restored separator, not a frame from before the shortcut.
+    while not any(b"\xe2\x94\x80" in row for row in s.last_rows):
+        s.read()
+        assert time.monotonic() < end, s.last_rows
+    assert any(b"RESIZE_HIST_19" in row for row in s.last_rows)
+    assert not any(b"RESIZE_HIST_00" in row for row in s.last_rows)
+    s.send(b"\x02[g")
+    s.expect(b"RESIZE_HIST_00")
+    assert b"History " in s.last_rows[0]
+    s.send(b"qprintf '\\n%s%s\\n' RESIZE_PROMPT_ OK\n")
+    s.expect(b"RESIZE_PROMPT_OK")
+    os.kill(s.app_pid, signal.SIGTERM)
+    s.finish(128 + signal.SIGTERM)
+finally:
+    s.close()

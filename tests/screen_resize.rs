@@ -41,16 +41,26 @@ fn grow_preserves_cells_styles_and_combining_suffixes() {
 }
 
 #[test]
-fn shrink_discards_bottom_and_right_without_reflow_or_resurrection() {
+fn shrink_keeps_cursor_row_and_archives_top_without_width_reflow() {
     let mut screen = screen(3, 4, "abcdefghijkl");
     screen.resize(2, 2).unwrap();
-    assert_eq!(text(&screen, 0), "ab");
-    assert_eq!(text(&screen, 1), "ef");
+    assert_eq!(text(&screen, 0), "ef");
+    assert_eq!(text(&screen, 1), "ij");
     assert_eq!(screen.cursor(), (1, 1));
+    assert_eq!(screen.history_len(), 1);
+    assert_eq!(
+        screen
+            .history_row(0)
+            .unwrap()
+            .iter()
+            .map(|c| c.character)
+            .collect::<String>(),
+        "abcd"
+    );
     assert!(!screen.wrap_pending());
     screen.resize(3, 4).unwrap();
-    assert_eq!(text(&screen, 0), "ab  ");
-    assert_eq!(text(&screen, 1), "ef  ");
+    assert_eq!(text(&screen, 0), "ef  ");
+    assert_eq!(text(&screen, 1), "ij  ");
     assert_eq!(text(&screen, 2), "    ");
 }
 
@@ -112,4 +122,62 @@ fn unchanged_or_invalid_sizes_preserve_all_state() {
     screen.leave_alternate();
     assert!(screen.wrap_pending());
     assert_eq!(text(&screen, 0), "MAIN");
+}
+
+#[test]
+fn height_shrink_archives_styled_rows_and_translates_saved_primary_cursor() {
+    let mut screen = screen(4, 5, "\x1b[31m中e\u{301}\r\nBBBB\r\nCCCC\x1b7\r\nDDDD");
+    let first = screen.row(0).unwrap().to_vec();
+    let second = screen.row(1).unwrap().to_vec();
+    let snapshot = screen.clone();
+    screen.resize(2, 5).unwrap();
+    assert_eq!(screen.history_row(0), Some(first.as_slice()));
+    assert_eq!(screen.history_row(1), Some(second.as_slice()));
+    assert_eq!(text(&screen, 0), "CCCC ");
+    assert_eq!(text(&screen, 1), "DDDD ");
+    assert_eq!(screen.cursor(), (1, 4));
+    Parser::new().advance(&mut screen, b"\x1b8");
+    assert_eq!(screen.cursor(), (0, 4));
+    assert_eq!(snapshot.history_len(), 0);
+    assert_eq!(snapshot.row(0), Some(first.as_slice()));
+    screen.resize(4, 5).unwrap();
+    assert_eq!(screen.history_len(), 2);
+    assert_eq!(text(&screen, 2), "     "); // Growth does not pull history back yet.
+}
+
+#[test]
+fn resize_archives_inactive_primary_but_never_alternate_rows() {
+    let mut screen = screen(
+        4,
+        4,
+        "AAAA\r\nBBBB\r\nCCCC\x1b7\r\nDDDD\x1b[?1049h\x1b[HALT\x1b[4;1H",
+    );
+    screen.resize(2, 4).unwrap();
+    assert!(screen.is_alternate());
+    assert_eq!(text(&screen, 0), "ALT ");
+    assert_eq!(screen.history_len(), 2);
+    screen.leave_alternate();
+    assert_eq!(text(&screen, 0), "CCCC");
+    assert_eq!(text(&screen, 1), "DDDD");
+    assert_eq!(screen.cursor(), (1, 3));
+    Parser::new().advance(&mut screen, b"\x1b8");
+    assert_eq!(screen.cursor(), (0, 3));
+}
+
+#[test]
+fn cursor_already_visible_keeps_origin_and_repeated_shrink_does_not_duplicate_history() {
+    let mut screen = screen(4, 4, "AAAA\r\nBBBB\r\nCCCC\r\nDDDD\x1b[H");
+    screen.resize(2, 4).unwrap();
+    assert_eq!(text(&screen, 0), "AAAA");
+    assert_eq!(text(&screen, 1), "BBBB");
+    assert_eq!(screen.history_len(), 0);
+    screen.position(1, 0);
+    screen.resize(1, 4).unwrap();
+    assert_eq!(text(&screen, 0), "BBBB");
+    assert_eq!(screen.history_len(), 1);
+    let before = screen.clone();
+    screen.resize(1, 4).unwrap();
+    assert_eq!(screen, before);
+    assert!(screen.resize(0, 4).is_err());
+    assert_eq!(screen, before);
 }

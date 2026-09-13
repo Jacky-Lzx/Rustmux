@@ -31,10 +31,11 @@ operations that allocate without a fallible return value.
 ## Resize and reset
 
 Resize preserves existing history at its original row widths. Rejected resize
-leaves history unchanged. It does not yet capture rows or columns removed by
-shrinking the visible grid, pull old rows back into a growing grid, or reflow text.
-Thus this step does not fix zoom/unzoom clipping. Physical rows do not yet record
-soft-wrap boundaries needed for logical-line reflow.
+leaves history unchanged. Height shrink archives departing top rows when moving
+the primary grid upward to keep its cursor visible; see [Screen Resize](screen-resize.md).
+Right-edge and remaining bottom clipping are not recorded. Growth does not pull
+history back into the grid, and text is not reflowed. Physical rows do not yet
+record soft-wrap boundaries needed for logical-line reflow.
 
 `clear_history()` discards history without changing grids, cursor or terminal
 modes. RIS clears history with the screen reset; DECSTR and normal display erasure
