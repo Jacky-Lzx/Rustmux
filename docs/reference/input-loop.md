@@ -29,7 +29,7 @@ accumulating frames. Reads are at most 8 KiB. Writes retain unsent tails and ret
 Interrupted/WouldBlock on later iterations.
 
 Changed screen state is painted at a target minimum spacing of 6 ms after the
-previous frame was generated. Frames redraw changed rows, with full repaint on
+previous frame was generated. Frames redraw changed cell spans or whole rows, with full repaint on
 startup or resize. Idle screens are not redrawn. [Synchronized output](synchronized-output.md)
 defers new frames until the batch ends or its bounded wait expires. Poll waits at most
 50 ms for signal/exit checks, shortened when a frame is due. This is scheduling,
@@ -87,7 +87,7 @@ not revoke its terminal before attributes can be checked. All termios settings
 are compared except the kernel-maintained PENDIN transient state.
 
 Tests decode completed renderer frames into rows independently of the Rust parser,
-retaining rows omitted by incremental frames.
+retaining cells omitted by incremental frames.
 The burst test checks the final marker after 200 KB is consumed, not retention of
 all scrolled text.
 

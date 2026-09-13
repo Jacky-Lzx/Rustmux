@@ -5,7 +5,7 @@ the active screen. The caller supplies any `std::io::Write`, such as a byte
 buffer. The renderer borrows the model without changing it and does not flush.
 The CLI uses `Renderer::render` with a bounded frame queue in its event loop.
 This stateful API compares rows with the last successfully queued frame and
-paints only changed rows; `render` remains the standalone full-frame API.
+paints changed cell spans; `render` remains the standalone full-frame API.
 Renderer remembers the last queued focus-reporting and mouse modes and synchronizes them only
 on the first frame or a change. The standalone `render` function always includes
 that synchronization. See [Focus Reporting](focus-reporting.md). A Renderer is
@@ -45,13 +45,26 @@ render into a buffer and queue its bytes rather than restarting rendering after
 a partial write. Short writes and Interrupted are handled by Write's write_all
 path. The renderer does not retry WouldBlock or flush.
 
-## Changed-row rendering
+## Changed-cell rendering
 
 Renderer keeps a copy of the last active grid, comparing complete cells including
-style, width and combining suffixes. A changed row is replaced in full, including
-blank cells; identical rows emit no drawing commands. Cursor position, shape,
+style, width and combining suffixes. Identical rows emit no drawing commands.
+Within a changed row, contiguous differing cells form spans. Span boundaries
+expand to include complete old and new wide glyphs, and overlapping/touching
+spans merge. This ensures replacement of both halves and never starts output on
+a wide trailing placeholder. Blank cells and changed combining suffixes are
+written explicitly. Cursor position, shape,
 visibility and supported input modes are still synchronized even when no rows
-change. This is row-level comparison, not a per-cell damage tracker.
+change. The model still uses full-grid comparison, not per-cell dirty flags.
+
+For each changed row, Renderer encodes the span candidate and counts the bytes
+of a whole-row candidate, including CUP, SGR, UTF-8 and combining suffixes from
+the current output style. It chooses spans only when strictly smaller; ties use
+the whole row. A completely changed row goes straight to whole-row output.
+This is a per-row decision, not a globally optimal frame plan; unchanged gaps
+are not separately optimized or merged by distance. Fragmented changes can
+therefore fall back to a whole row even if another merged-span plan could be
+smaller. Style state is updated according to the selected candidate.
 
 First render and dimension changes repaint every row. The CLI calls
 `Renderer::invalidate` after valid resize notifications, including unchanged
@@ -68,6 +81,9 @@ inactive-grid snapshot is retained by Renderer.
 The CLI keeps the frame size cap and scheduling described in
 [Input and Rendering Loop](input-loop.md), including synchronized-output pauses.
 It does not send terminal scroll commands or guarantee physical atomic display.
+Range metadata and candidate bytes are temporary and limited to one row at a
+time. They add allocation/planning work; byte reduction is not a guarantee of
+lower CPU time. See the [measured comparison](rendering-performance.md).
 
 ## Verification
 
@@ -83,3 +99,9 @@ resize, invalidation and recovery after partial output. In a 24x80 fixture,
 one changed row emits less than one fifth of the full-frame bytes. The PTY suite
 retains unchanged rows when decoding partial frames and checks that a real CLI
 one-row update leaves another row intact without re-emitting it.
+
+`cargo test --test cell_render` verifies exact span positioning, separated edits,
+whole-row fallback, old/new wide-glyph overlap, combining suffixes, style-only
+changes, blank erasure and 600 deterministic edits replayed after every frame.
+The PTY decoder tracks cell columns (including the CJK/combining fixtures) and
+retains untouched cells within each row.

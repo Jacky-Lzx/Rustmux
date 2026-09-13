@@ -1,4 +1,4 @@
-//! Full-frame and changed-row ANSI output. No event loop or output queue here.
+//! Full-frame and changed-cell ANSI output. No event loop or output queue here.
 
 use std::io::{self, Write};
 
@@ -18,7 +18,7 @@ pub fn render(screen: &Screen, output: &mut impl Write) -> io::Result<()> {
     render_frame(screen, output, true, true, None)
 }
 
-/// Changed-row rendering for an ordered output stream. Each successful frame must
+/// Changed-cell rendering for an ordered output stream. Each successful frame must
 /// be delivered completely before the next; create a fresh Renderer after losing
 /// or discarding output, or call invalidate. Avoid re-enabling focus reports on ordinary redraws,
 /// since an outer terminal may report its current focus when enabled.
@@ -128,22 +128,32 @@ fn render_frame(
         if previous.is_some_and(|cached| cached[row].as_slice() == cells) {
             continue;
         }
-        // Explicit CUP avoids newline-induced scrolling, including at bottom-right.
-        write!(output, "\x1b[{};1H", row + 1)?;
-        for cell in cells {
-            if cell.width == 0 {
+        if let Some(cached) = previous {
+            let ranges = changed_ranges(&cached[row], cells);
+            // A whole changed row needs no alternative plan or temporary output.
+            if ranges.len() == 1 && ranges[0] == (0..cells.len()) {
+                write_run(output, row, 0, cells, &mut style)?;
                 continue;
             }
-            if cell.style != style {
-                write_style(output, cell.style)?;
-                style = cell.style;
+            let mut partial = Vec::new();
+            let mut partial_style = style;
+            for range in ranges {
+                write_run(
+                    &mut partial,
+                    row,
+                    range.start,
+                    &cells[range],
+                    &mut partial_style,
+                )?;
             }
-            let mut bytes = [0; 4];
-            output.write_all(cell.character.encode_utf8(&mut bytes).as_bytes())?;
-            for character in &cell.combining {
-                output.write_all(character.encode_utf8(&mut bytes).as_bytes())?;
+            // Include positioning, SGR and UTF-8 bytes, not just changed-cell count.
+            if partial.len() < row_cost(row, cells, style)? {
+                output.write_all(&partial)?;
+                style = partial_style;
+                continue;
             }
         }
+        write_run(output, row, 0, cells, &mut style)?;
     }
     let (row, column) = screen.cursor();
     // CUP also cancels physical delayed wrap; logical pending wrap stays in Screen.
@@ -153,6 +163,90 @@ fn render_frame(
     } else {
         b"\x1b[?25l"
     })
+}
+
+// Expand both old and new wide glyphs before merging overlapping ranges. A
+// replacement must erase the old trailing cell and never begin on a placeholder.
+fn changed_ranges(old: &[Cell], cells: &[Cell]) -> Vec<std::ops::Range<usize>> {
+    let mut ranges: Vec<std::ops::Range<usize>> = Vec::new();
+    let mut column = 0;
+    while column < cells.len() {
+        if old[column] == cells[column] {
+            column += 1;
+            continue;
+        }
+        let mut start = column;
+        while column < cells.len() && old[column] != cells[column] {
+            column += 1;
+        }
+        while start > 0 && (old[start].width == 0 || cells[start].width == 0) {
+            start -= 1;
+        }
+        while column < cells.len() && (old[column].width == 0 || cells[column].width == 0) {
+            column += 1;
+        }
+        if let Some(last) = ranges.last_mut().filter(|last| last.end >= start) {
+            last.end = column;
+        } else {
+            ranges.push(start..column);
+        }
+    }
+    ranges
+}
+
+fn write_run(
+    output: &mut impl Write,
+    row: usize,
+    column: usize,
+    cells: &[Cell],
+    style: &mut Style,
+) -> io::Result<()> {
+    // CUP cancels delayed wrap and positions each span independently.
+    write!(output, "\x1b[{};{}H", row + 1, column + 1)?;
+    for cell in cells {
+        if cell.width == 0 {
+            continue;
+        }
+        if cell.style != *style {
+            write_style(output, cell.style)?;
+            *style = cell.style;
+        }
+        let mut bytes = [0; 4];
+        output.write_all(cell.character.encode_utf8(&mut bytes).as_bytes())?;
+        for character in &cell.combining {
+            output.write_all(character.encode_utf8(&mut bytes).as_bytes())?;
+        }
+    }
+    Ok(())
+}
+
+#[derive(Default)]
+struct ByteCount(usize);
+impl Write for ByteCount {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0 += bytes.len();
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn row_cost(row: usize, cells: &[Cell], mut style: Style) -> io::Result<usize> {
+    let mut count = ByteCount::default();
+    write!(&mut count, "\x1b[{};1H", row + 1)?;
+    for cell in cells {
+        if cell.width == 0 {
+            continue;
+        }
+        if cell.style != style {
+            write_style(&mut count, cell.style)?;
+            style = cell.style;
+        }
+        count.0 += cell.character.len_utf8();
+        count.0 += cell.combining.iter().map(|c| c.len_utf8()).sum::<usize>();
+    }
+    Ok(count.0)
 }
 
 fn write_style(output: &mut impl Write, style: Style) -> io::Result<()> {
@@ -182,5 +276,37 @@ fn write_color(output: &mut impl Write, color: Color, selector: u8) -> io::Resul
         Color::Default => Ok(()), // The leading reset already selects default colors.
         Color::Indexed(index) => write!(output, ";{selector};5;{index}"),
         Color::Rgb(red, green, blue) => write!(output, ";{selector};2;{red};{green};{blue}"),
+    }
+}
+
+#[cfg(test)]
+mod cost_tests {
+    use super::*;
+    use crate::parser::Parser;
+
+    #[test]
+    fn row_cost_matches_encoded_bytes_including_styles_and_unicode() {
+        let mut screen = Screen::new(1, 20).unwrap();
+        Parser::new().advance(
+            &mut screen,
+            "中e\u{301}\x1b[1;38;2;7;8;9mX\x1b[0mY".as_bytes(),
+        );
+        for initial in [
+            Style::default(),
+            Style {
+                bold: true,
+                ..Style::default()
+            },
+        ] {
+            for row in [0, 9, 999] {
+                let mut bytes = Vec::new();
+                let mut style = initial;
+                write_run(&mut bytes, row, 0, screen.row(0).unwrap(), &mut style).unwrap();
+                assert_eq!(
+                    row_cost(row, screen.row(0).unwrap(), initial).unwrap(),
+                    bytes.len()
+                );
+            }
+        }
     }
 }

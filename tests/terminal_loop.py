@@ -12,6 +12,7 @@ import subprocess
 import sys
 import termios
 import time
+import unicodedata
 
 if sys.argv[1] == "--supervisor":
     # Keep the outer session leader alive while inspecting restored termios.
@@ -74,18 +75,37 @@ class Session:
                     if b"\x1b[?25l" not in frame:
                         continue
                     self.last_frame = frame
-                    # Each drawing CUP starts a complete replacement row. The final
-                    # CUP only positions the cursor; unchanged rows retain their contents.
+                    # Drawing CUPs replace cell spans. The final CUP only positions
+                    # the cursor; retain all untouched cells and rows.
                     positions = list(re.finditer(rb"\x1b\[([0-9]+);([0-9]+)H", frame))
                     height = struct.unpack("HHHH", fcntl.ioctl(self.slave, termios.TIOCGWINSZ, b"\0" * 8))[0]
                     height = height or len(self.last_rows)
                     rows = (self.last_rows + [b""] * height)[:height]
                     for pos, following in zip(positions, positions[1:]):
                         row = int(pos.group(1)) - 1
-                        assert pos.group(2) == b"1", "drawing must replace a whole row"
                         if row < height:
+                            def cells(text):
+                                result = []
+                                for character in text.decode("utf-8"):
+                                    if unicodedata.combining(character):
+                                        index = len(result) - 1
+                                        while index >= 0 and result[index] is None:
+                                            index -= 1
+                                        if index >= 0:
+                                            result[index] += character
+                                    else:
+                                        result.append(character)
+                                        if unicodedata.east_asian_width(character) in ("W", "F"):
+                                            result.append(None)
+                                return result
+                            column = int(pos.group(2)) - 1
                             payload = frame[pos.end():following.start()]
-                            rows[row] = re.sub(rb"\x1b\[[0-9;]*m", b"", payload).rstrip(b" ")
+                            replacement = cells(re.sub(rb"\x1b\[[0-9;]*m", b"", payload))
+                            previous = cells(rows[row])
+                            length = column + len(replacement)
+                            previous += [" "] * max(0, length - len(previous))
+                            previous[column:length] = replacement
+                            rows[row] = "".join(c for c in previous if c is not None).rstrip(" ").encode()
                     self.last_rows = rows
                     self.frames.append(self.last_rows)
                     self.frames = self.frames[-64:]
@@ -741,7 +761,7 @@ try:
     assert s.last_rows[0] == b"UNCHANGED_ROW"
     assert b"\x1b[1;1H" not in s.last_frame
     assert b"\x1b[2;1H" in s.last_frame
-    assert len(s.last_frame) < 400
+    assert len(s.last_frame) < 100
     s.send(b"x")
     s.finish(0)
 finally:
