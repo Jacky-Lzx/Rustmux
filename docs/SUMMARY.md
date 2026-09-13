@@ -24,3 +24,4 @@
 - [Character Sets](reference/character-sets.md)
 - [Terminal Reset](reference/terminal-reset.md)
 - [Soft Terminal Reset](reference/soft-reset.md)
+- [Bracketed Paste](reference/bracketed-paste.md)

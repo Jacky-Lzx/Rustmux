@@ -68,6 +68,7 @@ pub struct Screen {
     inactive_saved_cursor: Option<SavedCursor>,
     cursor_visible: bool,
     insert_mode: bool,
+    bracketed_paste: bool,
     tab_stops: Vec<bool>,
     scroll_region: (usize, usize),
     inactive_scroll_region: (usize, usize),
@@ -113,6 +114,7 @@ impl Screen {
             inactive_saved_cursor: None,
             cursor_visible: true,
             insert_mode: false,
+            bracketed_paste: false,
             tab_stops,
             scroll_region: (0, rows - 1),
             inactive_scroll_region: (0, rows - 1),
@@ -136,6 +138,7 @@ impl Screen {
         self.inactive_saved_cursor = None;
         self.cursor_visible = true;
         self.insert_mode = false;
+        self.bracketed_paste = false;
         for (column, stop) in self.tab_stops.iter_mut().enumerate() {
             *stop = column != 0 && column % DEFAULT_TAB_WIDTH == 0;
         }
@@ -188,6 +191,7 @@ impl Screen {
         let mut resized = Self::new(rows, columns)?;
         resized.cursor_visible = self.cursor_visible;
         resized.insert_mode = self.insert_mode;
+        resized.bracketed_paste = self.bracketed_paste;
         resized.origin_mode = self.origin_mode;
         resized.auto_wrap = self.auto_wrap;
         resized.character_sets = self.character_sets;
@@ -297,6 +301,15 @@ impl Screen {
     /// Visibility is a global terminal mode, independent of saved cursor state.
     pub fn set_cursor_visible(&mut self, visible: bool) {
         self.cursor_visible = visible;
+    }
+
+    pub fn bracketed_paste(&self) -> bool {
+        self.bracketed_paste
+    }
+
+    /// A global input mode, independent of saved cursor state and soft reset.
+    pub fn set_bracketed_paste(&mut self, enabled: bool) {
+        self.bracketed_paste = enabled;
     }
 
     pub fn insert_mode(&self) -> bool {

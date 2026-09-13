@@ -15,6 +15,13 @@ use crate::style::{Color, Style};
 /// cleanup or redraw. For nonblocking output, render into a buffer and queue it.
 pub fn render(screen: &Screen, output: &mut impl Write) -> io::Result<()> {
     output.write_all(b"\x1b[?25l\x1b[0m")?;
+    // The single active pane determines how the outer terminal encodes paste.
+    // Input forwarding preserves the resulting start/end markers unchanged.
+    output.write_all(if screen.bracketed_paste() {
+        b"\x1b[?2004h"
+    } else {
+        b"\x1b[?2004l"
+    })?;
     let mut style = Style::default();
     for row in 0..screen.dimensions().0 {
         // Explicit CUP avoids newline-induced scrolling, including at bottom-right.

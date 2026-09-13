@@ -345,6 +345,44 @@ try:
 finally:
     s.close()
 
+# Paste markers and multiline UTF-8 payload travel unchanged to the child.
+paste_probe = r"""
+import os, select, time, tty
+tty.setraw(0)
+def receive(expected):
+    data = bytearray()
+    end = time.monotonic() + 6
+    while len(data) < len(expected):
+        assert time.monotonic() < end, repr(data)
+        if select.select([0], [], [], 0.1)[0]:
+            data.extend(os.read(0, len(expected) - len(data)))
+    assert data == expected, repr(data)
+os.write(1, b"\x1b[?2004h\x1b[2J\x1b[HPASTE_READY")
+receive("\x1b[200~中文\nsecond line\x1b[201~".encode())
+os.write(1, b"\x1b[?2004l\x1b[HPASTE_PASSED")
+receive(b"continue")
+os.write(1, b"\x1b[?2004h\x1b[HPASTE_EXIT")
+receive(b"exit")
+"""
+s = Session()
+try:
+    s.expect(b"RUSTMUX_READY> ")
+    s.send(("exec python3 -c " + shlex.quote(paste_probe) + "\n").encode())
+    s.expect(b"\r\nPASTE_READY\r\n")
+    assert b"\x1b[?2004h" in s.last_frame
+    s.send(b"\x1b[20")
+    s.send("0~中文\nsecond line\x1b[201~".encode())
+    s.expect(b"\r\nPASTE_PASSED\r\n")
+    assert b"\x1b[?2004l" in s.last_frame
+    s.send(b"continue")
+    s.expect(b"PASTE_EXIT")
+    assert b"\x1b[?2004h" in s.last_frame
+    s.send(b"exit")
+    s.finish(0)
+    assert s.output.rfind(b"\x1b[?2004l") > s.output.rfind(b"\x1b[?2004h")
+finally:
+    s.close()
+
 # A model-allocation limit error during resize must restore the terminal too.
 s = Session()
 try:
