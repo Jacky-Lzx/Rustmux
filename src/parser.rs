@@ -482,6 +482,8 @@ impl Parser {
             return;
         }
         match command {
+            b's' if parameters.values[0].is_none() => screen.save_cursor(),
+            b'u' if parameters.values[0].is_none() => screen.restore_cursor(),
             b'c' if first == 0 => reply(PRIMARY_DA),
             b'n' => match first {
                 5 => reply(b"\x1b[0n"),
