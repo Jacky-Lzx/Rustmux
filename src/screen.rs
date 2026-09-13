@@ -126,6 +126,30 @@ impl Screen {
         })
     }
 
+    /// RIS: restore initial model state at the current size without allocating.
+    /// Both grids and saved cursors are cleared; the active grid becomes main.
+    pub fn reset(&mut self) {
+        self.cells.fill(Cell::default());
+        self.inactive_cells.fill(Cell::default());
+        self.saved_main_cursor = None;
+        self.saved_cursor = None;
+        self.inactive_saved_cursor = None;
+        self.cursor_visible = true;
+        self.insert_mode = false;
+        for (column, stop) in self.tab_stops.iter_mut().enumerate() {
+            *stop = column != 0 && column % DEFAULT_TAB_WIDTH == 0;
+        }
+        self.scroll_region = (0, self.rows - 1);
+        self.inactive_scroll_region = (0, self.rows - 1);
+        self.style = Style::default();
+        self.row = 0;
+        self.column = 0;
+        self.wrap_pending = false;
+        self.origin_mode = false;
+        self.auto_wrap = true;
+        self.character_sets = CharacterSets::default();
+    }
+
     /// Resize both grids, preserving the top-left overlap without text reflow.
     /// New cells use each grid's writing background; clipped content is discarded.
     /// Invalid dimensions or allocation failure leave the entire model unchanged.

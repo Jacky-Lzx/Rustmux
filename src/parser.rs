@@ -198,6 +198,11 @@ impl Parser {
                 State::Ground
             }
             State::Escape => match byte {
+                b'c' => {
+                    screen.reset();
+                    *self = Self::new();
+                    State::Ground
+                }
                 b'(' | b')' => State::DesignateCharacterSet { g1: byte == b')' },
                 b'H' => {
                     screen.set_tab_stop(true);

@@ -283,6 +283,15 @@ try:
     assert s.last_rows[:2] == ["┌──┐".encode(), "│q".encode()], s.last_rows
     s.send(b"\n")
     s.expect(b"RUSTMUX_READY> ")
+
+    s.send(b"stty -echo; printf '\\033[?1049h\\033[31;44m"
+           b"\\033[?25l\\033[4h\\033[3g\\033(0lqqk"
+           b"\\033cRESET_DONE'; read answer; stty echo; printf '\\033[2;1H'\n")
+    s.expect(b"\r\nRESET_DONE\r\n")
+    assert s.last_rows[0] == b"RESET_DONE" and not any(s.last_rows[1:]), s.last_rows
+    assert s.last_frame.endswith(b"\x1b[?25h"), s.last_frame
+    s.send(b"\n")
+    s.expect(b"RUSTMUX_READY> ")
     s.send(b"exit\n")
     s.finish(0)
 finally:

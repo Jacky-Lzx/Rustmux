@@ -22,6 +22,7 @@ CSI below means the two bytes ESC followed by `[`. The command subset follows
 
 | Sequence | Effect |
 | --- | --- |
+| ESC c (RIS) | [Reset the terminal model](terminal-reset.md) at its current dimensions |
 | CSI n A / B / C / D | Move up / down / right / left; omitted or zero count means one |
 | CSI row ; column H / f | Position relative to the active origin using one-based coordinates; omitted or zero values mean one |
 | CSI 5 n / 6 n | Reply with status / cursor position; see [Terminal Status Replies](status-replies.md) |
