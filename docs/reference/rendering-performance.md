@@ -103,3 +103,24 @@ of the savings in the scattered and scrolling fixtures; these are not evidence
 that cell spans compress fully changed rows. These single runs are illustrative,
 not repeated statistical comparisons. They support keeping automatic byte-cost
 selection as the default and deferring a user-facing granularity setting.
+
+## Bridging unchanged gaps
+
+A follow-up comparison uses `7d522cc` as the separate-span baseline and the
+same updated `examples/render_bench.rs` on both versions. The new `nearby` case
+changes columns 50 and 54 on row 12: rewriting the three unchanged cells saves
+one CUP command. The 24x120 grid, 4,000 alternations and five repetitions remain
+unchanged. These are encoded frame bytes, not encrypted SSH traffic.
+
+| Case | Separate spans bytes/frame | Gap bridging bytes/frame |
+| --- | ---: | ---: |
+| single | 57 | 57 |
+| nearby | 66 | 61 |
+| status | 76 | 76 |
+| scattered | 176 | 173 |
+| scroll | 3088 | 3088 |
+
+The scattered case now bridges short gaps and omits the unchanged row suffix
+rather than falling back to a whole row. CPU measurements varied with system
+load; this small comparison establishes byte savings, not a CPU speedup. The SSH
+results above remain measurements of the earlier candidate, not of gap bridging.

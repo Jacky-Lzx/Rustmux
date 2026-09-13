@@ -21,9 +21,12 @@ fn main() {
     for col in (1..=120).step_by(4) {
         Parser::new().advance(&mut scattered, format!("\x1b[12;{col}HX").as_bytes());
     }
+    let mut nearby = before.clone();
+    Parser::new().advance(&mut nearby, b"\x1b[12;50HX\x1b[12;54HY");
     let scrolling = base(1);
     for (name, after) in [
         ("single", single),
+        ("nearby", nearby),
         ("status", status),
         ("scattered", scattered),
         ("scroll", scrolling),

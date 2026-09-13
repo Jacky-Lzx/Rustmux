@@ -89,3 +89,42 @@ fn deterministic_edit_stream_matches_full_model_after_every_frame() {
         assert_eq!(screen.cursor(), replay.cursor());
     }
 }
+
+#[test]
+fn short_gaps_are_rewritten_as_one_span() {
+    let bytes = changes(&"a".repeat(80), "\x1b[1;2HX\x1b[1;5HY\x1b[1;8HZ", 80);
+    assert!(bytes.windows(13).any(|w| w == b"\x1b[1;2HXaaYaaZ"));
+    assert!(!bytes.windows(6).any(|w| w == b"\x1b[1;5H"));
+    assert!(!bytes.windows(6).any(|w| w == b"\x1b[1;8H"));
+}
+
+#[test]
+fn equal_cost_gap_keeps_separate_spans() {
+    let bytes = changes(&"a".repeat(80), "\x1b[1;2HX\x1b[1;9HY", 80);
+    assert!(bytes.windows(7).any(|w| w == b"\x1b[1;2HX"));
+    assert!(bytes.windows(7).any(|w| w == b"\x1b[1;9HY"));
+    assert!(!bytes.windows(8).any(|w| w == b"XaaaaaaY"));
+}
+
+#[test]
+fn short_but_expensive_styled_gap_is_not_rewritten() {
+    let before = format!("{}\x1b[1;3H\x1b[38;2;10;20;30ma\x1b[0m", "a".repeat(80));
+    let bytes = changes(&before, "\x1b[1;2HX\x1b[1;4HY", 80);
+    assert!(bytes.windows(7).any(|w| w == b"\x1b[1;4HY"));
+    assert!(!bytes.windows(8).any(|w| w == b"10;20;30"));
+}
+
+#[test]
+fn wide_and_combining_gaps_preserve_complete_glyphs() {
+    for (before, after, expected) in [
+        ("a中a", "\x1b[1;1HX\x1b[1;4HY", "X中Y"),
+        ("ae\u{301}a", "\x1b[1;1HX\x1b[1;3HY", "Xe\u{301}Y"),
+    ] {
+        let bytes = changes(before, after, 80);
+        assert!(
+            bytes
+                .windows(expected.len())
+                .any(|w| w == expected.as_bytes())
+        );
+    }
+}

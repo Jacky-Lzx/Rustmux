@@ -61,10 +61,18 @@ For each changed row, Renderer encodes the span candidate and counts the bytes
 of a whole-row candidate, including CUP, SGR, UTF-8 and combining suffixes from
 the current output style. It chooses spans only when strictly smaller; ties use
 the whole row. A completely changed row goes straight to whole-row output.
-This is a per-row decision, not a globally optimal frame plan; unchanged gaps
-are not separately optimized or merged by distance. Fragmented changes can
-therefore fall back to a whole row even if another merged-span plan could be
-smaller. Style state is updated according to the selected candidate.
+Before comparing against the whole row, each unchanged gap is considered for
+bridging: compare rewriting its complete cells and switching to the next span's
+first style against CUP plus switching directly to that style. Bridge only when
+strictly cheaper; ties retain separate spans. Both alternatives reach the same
+next cell with the same style, so the rest of that span has identical cost.
+This includes UTF-8, combining suffixes and SGR transitions, rather than using a
+fixed gap-length threshold. For example, three unchanged ASCII letters may cost
+less than another cursor move, while one differently colored cell may cost more.
+The spans already end/start at complete glyph boundaries, so bridging cannot
+split a wide character. Each gap is counted once, keeping planning linear in the
+row width. This remains a per-row decision, not a globally optimal frame plan.
+Style state is updated according to the selected candidate.
 
 First render and dimension changes repaint every row. The CLI calls
 `Renderer::invalidate` after valid resize notifications, including unchanged
@@ -105,3 +113,6 @@ whole-row fallback, old/new wide-glyph overlap, combining suffixes, style-only
 changes, blank erasure and 600 deterministic edits replayed after every frame.
 The PTY decoder tracks cell columns (including the CJK/combining fixtures) and
 retains untouched cells within each row.
+
+Gap-bridging tests also cover chains of short gaps, equal-cost separation,
+expensive RGB transitions, and unchanged wide/combining glyphs inside a gap.

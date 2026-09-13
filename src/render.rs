@@ -137,7 +137,20 @@ fn render_frame(
             }
             let mut partial = Vec::new();
             let mut partial_style = style;
+            let mut previous_end = None;
             for range in ranges {
+                if let Some(end) = previous_end {
+                    let gap = &cells[end..range.start];
+                    if bridge_cost(gap, cells[range.start].style, partial_style)?
+                        < restart_cost(row, range.start, cells[range.start].style, partial_style)?
+                    {
+                        write_cells(&mut partial, gap, &mut partial_style)?;
+                        write_cells(&mut partial, &cells[range.clone()], &mut partial_style)?;
+                        previous_end = Some(range.end);
+                        continue;
+                    }
+                }
+                previous_end = Some(range.end);
                 write_run(
                     &mut partial,
                     row,
@@ -203,6 +216,10 @@ fn write_run(
 ) -> io::Result<()> {
     // CUP cancels delayed wrap and positions each span independently.
     write!(output, "\x1b[{};{}H", row + 1, column + 1)?;
+    write_cells(output, cells, style)
+}
+
+fn write_cells(output: &mut impl Write, cells: &[Cell], style: &mut Style) -> io::Result<()> {
     for cell in cells {
         if cell.width == 0 {
             continue;
@@ -235,17 +252,44 @@ impl Write for ByteCount {
 fn row_cost(row: usize, cells: &[Cell], mut style: Style) -> io::Result<usize> {
     let mut count = ByteCount::default();
     write!(&mut count, "\x1b[{};1H", row + 1)?;
+    count_cells(&mut count, cells, &mut style)?;
+    Ok(count.0)
+}
+
+fn count_cells(count: &mut ByteCount, cells: &[Cell], style: &mut Style) -> io::Result<()> {
     for cell in cells {
         if cell.width == 0 {
             continue;
         }
-        if cell.style != style {
-            write_style(&mut count, cell.style)?;
-            style = cell.style;
-        }
+        count_style(count, cell.style, style)?;
         count.0 += cell.character.len_utf8();
         count.0 += cell.combining.iter().map(|c| c.len_utf8()).sum::<usize>();
     }
+    Ok(())
+}
+
+fn count_style(count: &mut ByteCount, next: Style, style: &mut Style) -> io::Result<()> {
+    if next != *style {
+        write_style(count, next)?;
+        *style = next;
+    }
+    Ok(())
+}
+
+// Both alternatives finish at the next span's first style. Its glyph and the
+// rest of the span therefore have identical costs and need not be counted.
+// Wide-glyph boundaries have already been expanded by changed_ranges.
+fn bridge_cost(gap: &[Cell], next: Style, mut style: Style) -> io::Result<usize> {
+    let mut count = ByteCount::default();
+    count_cells(&mut count, gap, &mut style)?;
+    count_style(&mut count, next, &mut style)?;
+    Ok(count.0)
+}
+
+fn restart_cost(row: usize, column: usize, next: Style, mut style: Style) -> io::Result<usize> {
+    let mut count = ByteCount::default();
+    write!(&mut count, "\x1b[{};{}H", row + 1, column + 1)?;
+    count_style(&mut count, next, &mut style)?;
     Ok(count.0)
 }
 
