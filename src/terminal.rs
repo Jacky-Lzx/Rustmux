@@ -307,6 +307,8 @@ enum WindowKey {
     History,
     FocusPane(Direction),
     ResizePane(Direction),
+    SwapPaneNext,
+    SwapPanePrevious,
 }
 
 #[derive(Default)]
@@ -447,6 +449,8 @@ impl WindowInput {
                 b'>' => output.push(WindowKey::MoveRight),
                 b'%' => output.push(WindowKey::Split(SplitAxis::Columns)),
                 b'"' => output.push(WindowKey::Split(SplitAxis::Rows)),
+                b'{' => output.push(WindowKey::SwapPanePrevious),
+                b'}' => output.push(WindowKey::SwapPaneNext),
                 b'o' => output.push(WindowKey::NextPane),
                 b'z' => output.push(WindowKey::ToggleZoom),
                 b'[' => output.push(WindowKey::History),
@@ -830,6 +834,19 @@ fn forward(
                                     to_terminal.push_back(7);
                                 }
                             }
+                        }
+                    }
+                    WindowKey::SwapPaneNext | WindowKey::SwapPanePrevious => {
+                        let panes = windows.active_mut().unwrap().content_mut();
+                        let changed = if action == WindowKey::SwapPaneNext {
+                            panes.swap_active_next()
+                        } else {
+                            panes.swap_active_previous()
+                        };
+                        if changed {
+                            panes.synchronize_sizes()?;
+                            renderer.invalidate();
+                            force_redraw = true;
                         }
                     }
                     WindowKey::ResizePane(direction) => {
@@ -1374,6 +1391,28 @@ mod window_input_tests {
         pasted.extend_from_slice(b"\x1b[201~");
         assert_eq!(
             decode(&pasted),
+            pasted
+                .iter()
+                .copied()
+                .map(WindowKey::Byte)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn swap_shortcuts_are_local_only_outside_bracketed_paste() {
+        assert_eq!(
+            decode(b"{}\x02{\x02}"),
+            vec![
+                WindowKey::Byte(b'{'),
+                WindowKey::Byte(b'}'),
+                WindowKey::SwapPanePrevious,
+                WindowKey::SwapPaneNext,
+            ]
+        );
+        let pasted = b"\x1b[200~\x02{\x02}\x1b[201~";
+        assert_eq!(
+            decode(pasted),
             pasted
                 .iter()
                 .copied()

@@ -179,6 +179,19 @@ impl Node {
         }
     }
 
+    // Exchange leaf identities, leaving split axes, ratios and rectangles intact.
+    fn exchange(&mut self, a: PaneId, b: PaneId) {
+        match self {
+            Self::Pane(id) if *id == a => *id = b,
+            Self::Pane(id) if *id == b => *id = a,
+            Self::Pane(_) => {}
+            Self::Split { first, second, .. } => {
+                first.exchange(a, b);
+                second.exchange(a, b);
+            }
+        }
+    }
+
     fn contains(&self, target: PaneId) -> bool {
         match self {
             Self::Pane(id) => *id == target,
@@ -374,6 +387,32 @@ impl Layout {
             .map(|(_, id)| id)?;
         self.active = target;
         Some(target)
+    }
+
+    /// Exchange the active pane with its traversal successor, wrapping at the end.
+    /// Focus follows the same pane identity. Single-pane and zoomed layouts are no-ops.
+    pub fn swap_active_next(&mut self) -> bool {
+        self.swap_active(false)
+    }
+
+    /// Exchange with the traversal predecessor, wrapping at the beginning.
+    pub fn swap_active_previous(&mut self) -> bool {
+        self.swap_active(true)
+    }
+
+    fn swap_active(&mut self, backwards: bool) -> bool {
+        if self.count == 1 || self.zoomed {
+            return false;
+        }
+        let panes = self.tiled_geometry().panes;
+        let index = panes.iter().position(|(id, _)| *id == self.active).unwrap();
+        let target = if backwards {
+            (index + self.count - 1) % self.count
+        } else {
+            (index + 1) % self.count
+        };
+        self.root.exchange(self.active, panes[target].0);
+        true
     }
 
     /// Move the nearest ancestor separator on the requested axis by one cell.

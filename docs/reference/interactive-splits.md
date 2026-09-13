@@ -87,6 +87,25 @@ own input handling.
 The nested-PTY test checks child-observed width and height changes, preserved shell
 variables, reverse movement, zoom no-op and terminal restoration after termination.
 
+## Swapping pane positions
+
+Ctrl-B `{` swaps the active pane with the previous pane in layout traversal
+order; Ctrl-B `}` swaps it with the next. Both wrap at the ends. Layout order
+visits left before right and top before bottom recursively, and can differ from
+creation order. Focus follows the original pane into its new position. Use `o`
+when you only want to switch focus without moving panes.
+
+Separators and saved split ratios stay in place. Each pane retains its shell,
+screen/history, parser state and pending input; only its assigned rectangle
+changes. Different-sized destinations invoke the normal screen/PTY resize path,
+so retained text remains subject to existing reflow and history limits. No shell
+is restarted. Single-pane and zoomed windows ignore swapping. History browsing
+and other prompts consume their own input; bracketed paste does not invoke swaps.
+
+The nested-PTY suite checks unequal widths, both swap directions, input following
+the same shell, process identity and variables, resulting on-screen placement,
+child-observed dimensions, subsequent pane exit and terminal restoration.
+
 ## Limits and verification
 
 There are at most 64 panes per window and 16 windows. The physical frame, including

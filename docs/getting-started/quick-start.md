@@ -37,7 +37,9 @@ The new pane is selected. Ctrl-B followed by lowercase `h/j/k/l` selects the pan
 to the left/down/up/right; `o` cycles through all panes. Directional selection
 stops at the boundary. Ctrl-B followed by `z` enlarges the active pane to the
 content area; repeat to restore the split view. Focus shortcuts work while zoomed. Ctrl-B followed by Ctrl-h/j/k/l moves the
-nearest separator left/down/up/right by one cell; this is disabled while zoomed. See [Interactive Splits](../reference/interactive-splits.md).
+nearest separator left/down/up/right by one cell. Ctrl-B `{` / `}` swaps the active
+pane with the previous/next layout position, wrapping at the edges and keeping
+focus on the same shell. Resizing and swapping are disabled while zoomed. See [Interactive Splits](../reference/interactive-splits.md).
 
 The CLI now parses shell output and renders its own screen model. Window changes
 resize both model grids and the PTY in every window. The bar reserves one row;

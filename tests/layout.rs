@@ -603,3 +603,68 @@ fn manual_resize_is_noop_for_single_pane_and_safe_at_maximum_dimension() {
     layout.resize(u16::MAX, u16::MAX).unwrap();
     assert_eq!(layout.geometry().panes[0].1.columns, 32768);
 }
+
+#[test]
+fn swapping_moves_identities_without_changing_slots_ratios_or_focus() {
+    let mut layout = Layout::new(11, 21).unwrap();
+    let left = layout.active();
+    let top_right = layout.split_active(SplitAxis::Columns).unwrap();
+    let bottom_right = layout.split_active(SplitAxis::Rows).unwrap();
+    layout.resize_active(Direction::Right);
+    layout.resize_active(Direction::Down);
+    let before = layout.clone();
+    let geometry = layout.geometry();
+    assert!(layout.swap_active_next());
+    let swapped = layout.geometry();
+    assert_eq!(
+        swapped.panes.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+        vec![bottom_right, top_right, left]
+    );
+    assert_eq!(swapped.separators, geometry.separators);
+    assert_eq!(
+        swapped
+            .panes
+            .iter()
+            .map(|(_, rect)| *rect)
+            .collect::<Vec<_>>(),
+        geometry
+            .panes
+            .iter()
+            .map(|(_, rect)| *rect)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(layout.active(), bottom_right);
+    assert_partition(&layout);
+    assert!(layout.swap_active_previous());
+    assert_eq!(layout, before);
+    layout.resize(21, 41).unwrap();
+    let mut grown = before;
+    grown.resize(21, 41).unwrap();
+    assert_eq!(layout, grown);
+}
+
+#[test]
+fn swap_boundaries_zoom_and_later_close_preserve_valid_identity() {
+    let mut layout = Layout::new(5, 9).unwrap();
+    let before = layout.clone();
+    assert!(!layout.swap_active_next());
+    assert!(!layout.swap_active_previous());
+    assert_eq!(layout, before);
+    let first = layout.active();
+    let second = layout.split_active(SplitAxis::Columns).unwrap();
+    layout.toggle_zoom();
+    let zoomed = layout.clone();
+    assert!(!layout.swap_active_next());
+    assert!(!layout.swap_active_previous());
+    assert_eq!(layout, zoomed);
+    layout.toggle_zoom();
+    layout.select(first).unwrap();
+    assert!(layout.swap_active_previous());
+    assert_eq!(layout.geometry().panes[1].0, first);
+    assert_eq!(layout.active(), first);
+    layout.close(second).unwrap();
+    assert_eq!(layout.active(), first);
+    let new = layout.split_active(SplitAxis::Rows).unwrap();
+    assert_ne!(new, second);
+    assert_partition(&layout);
+}

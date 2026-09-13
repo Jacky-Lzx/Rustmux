@@ -40,7 +40,6 @@ IDs, tree structure and active pane. Geometry is recomputed from the current siz
 manual split ratios are retained, while text reflow remains a screen-model decision. The CLI currently exits with terminal cleanup if the outer terminal becomes
 too small for an existing layout.
 
-The model does not yet support pane swapping.
 The pane container coordinates PTY/model resizing. Ordinary allocation failure may abort as with
 standard Rust collection allocation; logical validation failures are atomic.
 
@@ -65,6 +64,22 @@ using integer floor division, then clamps to both subtree minima. Temporary
 clamps do not overwrite the ratio, so returning to the original outer dimensions
 restores the manual position. New child splits start at one half; existing split
 ratios survive splitting, sibling promotion, and zoom/unzoom.
+
+## Swapping pane positions
+
+`swap_active_next()` and `swap_active_previous()` exchange the active leaf's
+identity with its successor or predecessor in tiled layout traversal order.
+The traversal visits the first subtree before the second (left before right,
+top before bottom), rather than pane creation order. Both directions wrap at
+an edge. A single pane or a zoomed layout returns `false` without mutation.
+
+A successful swap returns `true` and leaves the active ID unchanged: focus
+follows that pane into its new rectangle. Only two leaf IDs change position;
+split axes, ratios, separator coordinates, and minimum dimensions stay fixed.
+`PaneSet` keeps content objects, creation order and ID associations intact.
+Closing, splitting, directional focus and cycling subsequently use the new
+layout order. The CLI synchronizes sizes after swapping; different rectangles
+can cause ordinary screen reflow and history eviction under existing limits.
 
 ## Closing a pane
 
@@ -155,3 +170,7 @@ ties, no-op boundaries, diagonal rejection, zoom, resize/close and content ident
 Manual resize tests cover exact one-cell movement, ratio restoration after size
 clamping, nested axis selection, minimum-size no-ops, unchanged focus, zoom,
 maximum `u16` dimensions and nonoverlapping partitions across repeated edits.
+
+Swap tests cover unequal nested rectangles, wraparound, exact inverse swaps,
+unchanged ratios/focus, no-op single-pane/zoom cases, later close/split operations,
+and ownership/drop behavior for non-Clone contents.

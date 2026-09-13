@@ -1559,3 +1559,35 @@ try:
     s.finish(128 + signal.SIGTERM)
 finally:
     s.close()
+
+# Swaps move live pane identities and focus, including across unequal rectangles.
+s = Session()
+try:
+    s.expect(b"RUSTMUX_READY> ")
+    s.send(b"stty -echo; swap_token=LEFT; swap_pid=$$; printf 'LEFT_%s\\n' READY\n")
+    s.expect(b"LEFT_READY")
+    s.send(b"\x02%")
+    s.expect(b"RUSTMUX_READY>")
+    s.send(b"stty -echo; swap_token=RIGHT; swap_pid=$$; printf 'RIGHT_%s\\n' READY\n")
+    s.expect(b"RIGHT_READY")
+    # Wrap the last pane into the first slot; same-batch input stays with RIGHT.
+    s.send(b"\x02}test \"$swap_pid\" = \"$$\" && printf '%s_' \"$swap_token\"; stty size\n")
+    s.expect(b"RIGHT_23 39")
+    assert any(b"RIGHT_23 39" in row[:39] for row in s.last_rows[1:])
+    s.send(b"\x02{test \"$swap_pid\" = \"$$\" && printf '%s_BACK_' \"$swap_token\"; stty size\n")
+    s.expect(b"RIGHT_BACK_23 40")
+    # Focus LEFT by geometry: its shell and variables survived both exchanges.
+    s.send(b"\x02htest \"$swap_pid\" = \"$$\" && printf '%s_STILL_' \"$swap_token\"; stty size\n")
+    s.expect(b"LEFT_STILL_23 39")
+    s.send(b"exit 0\n")
+    # Wait until removal is rendered before sending input to the surviving shell.
+    end = time.monotonic() + 3
+    while any("│".encode() in row for row in s.last_rows[1:]):
+        s.read()
+        assert time.monotonic() < end, s.last_rows
+    s.send(b"printf '%s_SURVIVES_' \"$swap_token\"; stty size\n")
+    s.expect(b"RIGHT_SURVIVES_23 80")
+    s.send(b"exit 0\n")
+    s.finish(0)
+finally:
+    s.close()

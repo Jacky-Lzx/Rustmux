@@ -27,7 +27,7 @@ impl<T> PaneSet<T> {
         &self.layout
     }
 
-    /// Creation order, which can differ from layout traversal order after splitting.
+    /// Creation order, which can differ from layout traversal order after splitting or swapping.
     pub fn iter(&self) -> impl ExactSizeIterator<Item = (PaneId, &T)> {
         self.entries.iter().map(|(id, content)| (*id, content))
     }
@@ -72,6 +72,16 @@ impl<T> PaneSet<T> {
     /// Adjust geometry without replacing contents; synchronize PTY sizes separately.
     pub fn resize_active(&mut self, direction: Direction) -> bool {
         self.layout.resize_active(direction)
+    }
+
+    /// Move the active identity to the next layout slot without replacing contents.
+    pub fn swap_active_next(&mut self) -> bool {
+        self.layout.swap_active_next()
+    }
+
+    /// Move the active identity to the previous layout slot without replacing contents.
+    pub fn swap_active_previous(&mut self) -> bool {
+        self.layout.swap_active_previous()
     }
 
     pub fn toggle_zoom(&mut self) -> bool {

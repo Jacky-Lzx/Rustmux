@@ -144,3 +144,45 @@ fn hidden_contents_remain_mutable_and_geometry_operations_preserve_them() {
     assert_eq!(panes.get(second).unwrap(), &[2, 5]);
     assert_membership(&panes);
 }
+
+#[test]
+fn swaps_keep_nonclone_contents_and_creation_order_until_explicit_close() {
+    let drops = Rc::new(RefCell::new(Vec::new()));
+    let mut panes = PaneSet::new(
+        7,
+        15,
+        Content {
+            value: 1,
+            drops: drops.clone(),
+        },
+    )
+    .unwrap();
+    let first = panes.layout().active();
+    let second = panes
+        .split_with(SplitAxis::Columns, |_, _| {
+            Ok(Content {
+                value: 2,
+                drops: drops.clone(),
+            })
+        })
+        .unwrap();
+    let original = panes.layout().clone();
+    assert!(panes.swap_active_next());
+    assert_eq!(panes.layout().geometry().panes[0].0, second);
+    assert_eq!(panes.layout().active(), second);
+    assert_eq!(panes.active().value, 2);
+    assert_eq!(panes.get(first).unwrap().value, 1);
+    assert_eq!(
+        panes.iter().map(|(id, _)| id).collect::<Vec<_>>(),
+        vec![first, second]
+    );
+    assert_membership(&panes);
+    assert!(drops.borrow().is_empty());
+    assert!(panes.swap_active_previous());
+    assert_eq!(panes.layout(), &original);
+    drop(panes.close(first).unwrap());
+    assert_eq!(*drops.borrow(), vec![1]);
+    assert_eq!(panes.active().value, 2);
+    drop(panes);
+    assert_eq!(*drops.borrow(), vec![1, 2]);
+}
