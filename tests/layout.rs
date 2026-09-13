@@ -322,3 +322,92 @@ fn closing_at_capacity_allows_another_split_without_reusing_ids() {
     assert_eq!(layout.geometry().panes.len(), MAX_PANES);
     assert_partition(&layout);
 }
+
+#[test]
+fn zoom_is_a_reversible_view_and_selection_can_reach_hidden_panes() {
+    let mut layout = Layout::new(9, 13).unwrap();
+    let single = layout.clone();
+    assert!(!layout.toggle_zoom());
+    assert_eq!(layout, single);
+    let first = layout.active();
+    layout.split_active(SplitAxis::Columns).unwrap();
+    layout.split_active(SplitAxis::Rows).unwrap();
+    let before = layout.clone();
+    let tiled = layout.geometry();
+    assert!(layout.toggle_zoom());
+    assert!(layout.is_zoomed());
+    assert_eq!(layout.tiled_geometry(), tiled);
+    assert_eq!(
+        layout.geometry().panes,
+        vec![(
+            layout.active(),
+            Rect {
+                row: 0,
+                column: 0,
+                rows: 9,
+                columns: 13,
+            }
+        )]
+    );
+    assert_partition(&layout);
+    assert!(!layout.toggle_zoom());
+    assert_eq!(layout, before);
+    assert!(layout.toggle_zoom());
+    layout.select(first).unwrap();
+    assert!(layout.is_zoomed());
+    assert_eq!(layout.geometry().panes[0].0, first);
+    assert_eq!(layout.tiled_geometry(), tiled);
+    layout.toggle_zoom();
+    assert_eq!(layout.geometry(), tiled);
+}
+
+#[test]
+fn zoom_resize_preserves_tree_and_requires_space_for_restoration() {
+    let mut layout = Layout::new(9, 13).unwrap();
+    layout.split_active(SplitAxis::Columns).unwrap();
+    layout.split_active(SplitAxis::Rows).unwrap();
+    let mut unzoomed = layout.clone();
+    layout.toggle_zoom();
+    let before = layout.clone();
+    assert!(layout.resize(1, 1).is_err());
+    assert_eq!(layout, before);
+    for (rows, columns) in [(3, 3), (7, 19), (20, 30)] {
+        layout.resize(rows, columns).unwrap();
+        unzoomed.resize(rows, columns).unwrap();
+        assert!(layout.is_zoomed());
+        assert_eq!(layout.tiled_geometry(), unzoomed.geometry());
+        assert_partition(&layout);
+    }
+    layout.toggle_zoom();
+    assert_eq!(layout, unzoomed);
+}
+
+#[test]
+fn structural_changes_exit_zoom_only_after_success() {
+    let mut layout = Layout::new(3, 3).unwrap();
+    let first = layout.active();
+    let second = layout.split_active(SplitAxis::Columns).unwrap();
+    layout.toggle_zoom();
+    let before = layout.clone();
+    // The full-area zoom is wide enough, but the actual tiled leaf is only one column.
+    assert!(layout.split_active(SplitAxis::Columns).is_err());
+    assert_eq!(layout, before);
+    let third = layout.split_active(SplitAxis::Rows).unwrap();
+    assert!(!layout.is_zoomed());
+    assert_eq!(layout.active(), third);
+    assert_eq!(layout.geometry().panes.len(), 3);
+    assert_partition(&layout);
+    layout.toggle_zoom();
+    assert_eq!(layout.close(first).unwrap(), third); // A hidden pane can close.
+    assert!(!layout.is_zoomed());
+    assert_partition(&layout);
+    layout.toggle_zoom();
+    let before = layout.clone();
+    assert!(layout.close(first).is_err());
+    assert!(layout.select(first).is_err());
+    assert_eq!(layout, before);
+    assert_eq!(layout.close(third).unwrap(), second);
+    assert!(!layout.is_zoomed());
+    assert!(!layout.toggle_zoom());
+    assert_partition(&layout);
+}

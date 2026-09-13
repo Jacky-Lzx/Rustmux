@@ -20,7 +20,7 @@ needs at least one cell in each dimension, so the active rectangle must span at
 least three cells along the split axis. Pane IDs are stable within a layout and
 independent of coordinates; `select(id)` changes focus without changing geometry.
 
-`geometry()` returns panes in first-subtree/second-subtree traversal order plus
+`tiled_geometry()` returns panes in first-subtree/second-subtree traversal order plus
 separator rectangles. Together they cover the content area exactly, with no
 overlap. The layout contains at most 64 panes, bounding recursion and geometry
 storage. Failed splits do not consume IDs or change focus or the tree.
@@ -39,7 +39,7 @@ IDs, tree structure and active pane. Geometry is recomputed from the current siz
 there are no stored user ratios or text reflow decisions here. The caller must
 later decide how to handle outer terminals too small for an existing layout.
 
-The model does not yet support zooming panes, directional selection,
+The model does not yet support directional selection,
 manual separator adjustment, pane swapping, or PTY/model resize coordination.
 Those remain subsequent steps. Ordinary allocation failure may abort as with
 standard Rust collection allocation; logical validation failures are atomic.
@@ -64,6 +64,29 @@ This operation changes geometry only: it does not close a PTY, discard input,
 reap a process or resize screen models. Those remain the caller's responsibility
 when interactive splitting is connected.
 
+## Zooming the active pane
+
+`toggle_zoom()` toggles a full-content-area view and returns the new zoom state;
+`is_zoomed()` reads it. A single-pane layout stays unzoomed. Zoom does not replace
+or resize the split tree: `geometry()` returns only the active pane, filling the
+content area without separators, while `tiled_geometry()` still returns all
+underlying pane rectangles. Unzooming restores those rectangles and stable IDs.
+
+Selecting another pane while zoomed keeps zoom enabled and shows that pane instead.
+Selection and structural operations use the full tree, including hidden panes.
+Successful splits and closes exit zoom. Failed operations preserve both the tree
+and zoom state. In particular, splitting checks the active pane's tiled dimensions,
+not the larger zoomed rectangle. Closing a hidden pane preserves focus but also
+returns to the full split view.
+
+Resize keeps zoom enabled and recomputes both views for the new dimensions. It
+still requires enough space for the underlying split tree, so unzooming can always
+succeed. A too-small resize leaves dimensions and zoom state unchanged. The future
+CLI must define its fallback for terminals smaller than this minimum.
+
+This remains a geometry-only feature. There is no CLI zoom shortcut yet; PTY sizing,
+rendering and input routing for visible versus hidden panes are not connected.
+
 ## Verification
 
 `cargo test --test layout` checks exact nested geometry, complete nonoverlapping
@@ -75,3 +98,6 @@ behavior is unchanged because this module has not been wired into the event loop
 Pane-close tests cover sibling-subtree promotion, all active/removed combinations
 in a nested tree, full nonoverlapping coverage after removal and minimum-size
 resize, stale IDs, final-pane rejection and capacity recovery without ID reuse.
+
+Zoom tests check exact restoration, hidden-pane selection, resize and minimum-size
+rejection, single-pane behavior, and successful/failed structural operations.

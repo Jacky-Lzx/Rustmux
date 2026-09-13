@@ -153,6 +153,7 @@ pub struct Layout {
     active: PaneId,
     next_id: u64,
     count: usize,
+    zoomed: bool,
 }
 
 impl Layout {
@@ -167,6 +168,7 @@ impl Layout {
             active: PaneId(0),
             next_id: 1,
             count: 1,
+            zoomed: false,
         })
     }
 
@@ -182,7 +184,39 @@ impl Layout {
         self.root.minimum()
     }
 
+    pub fn is_zoomed(&self) -> bool {
+        self.zoomed
+    }
+
+    /// Toggle the active pane's full-area view, returning the new zoom state.
+    /// A single-pane layout remains unzoomed because it already fills the area.
+    pub fn toggle_zoom(&mut self) -> bool {
+        self.zoomed = self.count > 1 && !self.zoomed;
+        self.zoomed
+    }
+
+    /// Visible panes and separators. Zoom shows only the active pane without separators.
     pub fn geometry(&self) -> Geometry {
+        if self.zoomed {
+            Geometry {
+                panes: vec![(
+                    self.active,
+                    Rect {
+                        row: 0,
+                        column: 0,
+                        rows: self.rows,
+                        columns: self.columns,
+                    },
+                )],
+                separators: Vec::new(),
+            }
+        } else {
+            self.tiled_geometry()
+        }
+    }
+
+    /// Full underlying split geometry, including panes hidden by zoom.
+    pub fn tiled_geometry(&self) -> Geometry {
         let mut geometry = Geometry {
             panes: Vec::with_capacity(self.count),
             separators: Vec::with_capacity(self.count - 1),
@@ -200,7 +234,12 @@ impl Layout {
     }
 
     pub fn select(&mut self, id: PaneId) -> io::Result<()> {
-        if !self.geometry().panes.iter().any(|(pane, _)| *pane == id) {
+        if !self
+            .tiled_geometry()
+            .panes
+            .iter()
+            .any(|(pane, _)| *pane == id)
+        {
             return Err(io::Error::new(io::ErrorKind::NotFound, "unknown pane ID"));
         }
         self.active = id;
@@ -214,7 +253,7 @@ impl Layout {
             return Err(invalid("pane limit reached"));
         }
         let rect = self
-            .geometry()
+            .tiled_geometry()
             .panes
             .into_iter()
             .find(|(id, _)| *id == self.active)
@@ -237,6 +276,7 @@ impl Layout {
         self.active = id;
         self.next_id = next;
         self.count += 1;
+        self.zoomed = false;
         Ok(id)
     }
 
@@ -245,7 +285,7 @@ impl Layout {
     /// the end. Closing an inactive pane preserves focus. The last pane cannot be
     /// removed: the caller must close its owning window instead.
     pub fn close(&mut self, id: PaneId) -> io::Result<PaneId> {
-        let panes = self.geometry().panes;
+        let panes = self.tiled_geometry().panes;
         let index = panes
             .iter()
             .position(|(pane, _)| *pane == id)
@@ -264,6 +304,7 @@ impl Layout {
         let removed = self.root.remove(id);
         debug_assert!(removed);
         self.count -= 1;
+        self.zoomed = false;
         self.active = next_active;
         Ok(self.active)
     }
