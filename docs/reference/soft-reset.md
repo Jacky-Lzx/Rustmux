@@ -8,6 +8,7 @@ moving the current cursor. It is distinct from [RIS](terminal-reset.md).
 | Visible cells and their stored styles | Preserved in both grids |
 | Current cursor coordinates and active grid | Preserved |
 | Cursor visibility | Enabled |
+| Cursor shape | Blinking block |
 | Insert, origin, application cursor key and keypad modes | Disabled |
 | Automatic wrapping | Enabled (Rustmux default, following XTerm) |
 | Pending wrap | Cleared |
@@ -41,7 +42,8 @@ the running child remain unchanged. Parsing continues after the command.
 Only the parameterless CSI ! p form is accepted. Parameters, private prefixes,
 additional intermediates or other final bytes are ignored. C0 controls retain
 their existing immediate behavior inside the sequence; CAN/SUB cancel it.
-This adds only the DECSTR intermediate form, not general CSI intermediate support.
+The supported intermediate forms are DECSTR and [DECSCUSR](cursor-shape.md);
+other CSI intermediate commands remain unsupported.
 
 Run `cargo test --test soft_reset`. Fixtures cover mode restoration, cell and
 cursor preservation, custom tabs, saved cursor defaults, alternate-screen

@@ -36,6 +36,8 @@ pub fn render(screen: &Screen, output: &mut impl Write) -> io::Result<()> {
     } else {
         b"\x1b>"
     })?;
+    // Set shape while hidden; the frame ending restores requested visibility.
+    write!(output, "\x1b[{} q", screen.cursor_shape() as u8)?;
     let mut style = Style::default();
     for row in 0..screen.dimensions().0 {
         // Explicit CUP avoids newline-induced scrolling, including at bottom-right.

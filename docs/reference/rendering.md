@@ -11,7 +11,8 @@ The frame hides the cursor, resets attributes and synchronizes the outer
 terminal’s [bracketed paste mode](bracketed-paste.md) and
 [application cursor keys](application-cursor.md) and
 [application keypad](application-keypad.md), then positions explicitly
-at the start of each row. All cells, including spaces, are drawn to remove stale
+at the start of each row. It also emits the [cursor shape](cursor-shape.md)
+while the cursor is hidden. All cells, including spaces, are drawn to remove stale
 content. Wide trailing placeholders are skipped; leaders and their stored
 zero-width suffixes are encoded once as UTF-8. Style changes start with SGR reset,
 then encode the enabled attributes and indexed/RGB colors. Adjacent equal styles

@@ -27,3 +27,4 @@
 - [Bracketed Paste](reference/bracketed-paste.md)
 - [Application Cursor Keys](reference/application-cursor.md)
 - [Application Keypad](reference/application-keypad.md)
+- [Cursor Shape](reference/cursor-shape.md)

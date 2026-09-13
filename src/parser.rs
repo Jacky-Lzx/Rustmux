@@ -5,7 +5,7 @@
 /// plus CSI, separator and final byte fit in this conservative bound.
 pub const MAX_REPLY_BYTES: usize = 4 + 2 * (usize::BITS as usize / 3 + 1);
 
-use crate::screen::{EraseMode, Screen};
+use crate::screen::{CursorShape, EraseMode, Screen};
 
 #[derive(Debug, Default, Clone, Copy)]
 enum State {
@@ -34,6 +34,7 @@ struct Parameters {
     invalid: bool,
     private: bool,
     soft_reset: bool,
+    cursor_shape: bool,
 }
 
 impl Parameters {
@@ -270,7 +271,12 @@ impl Parser {
                 } else {
                     if !parameters.invalid {
                         match byte {
-                            _ if parameters.soft_reset => parameters.invalid = true,
+                            _ if parameters.soft_reset || parameters.cursor_shape => {
+                                parameters.invalid = true
+                            }
+                            b' ' if !parameters.private && parameters.index == 0 => {
+                                parameters.cursor_shape = true
+                            }
                             b'!' if !parameters.private
                                 && parameters.index == 0
                                 && parameters.values[0].is_none() =>
@@ -316,6 +322,21 @@ impl Parser {
         command: u8,
         reply: &mut impl FnMut(&[u8]),
     ) {
+        if parameters.cursor_shape {
+            if command == b'q' {
+                let shape = match parameters.values[0].unwrap_or(0) {
+                    0 | 1 => CursorShape::BlinkingBlock,
+                    2 => CursorShape::SteadyBlock,
+                    3 => CursorShape::BlinkingUnderline,
+                    4 => CursorShape::SteadyUnderline,
+                    5 => CursorShape::BlinkingBar,
+                    6 => CursorShape::SteadyBar,
+                    _ => return,
+                };
+                screen.set_cursor_shape(shape);
+            }
+            return;
+        }
         if parameters.soft_reset {
             if command == b'p' {
                 screen.soft_reset();

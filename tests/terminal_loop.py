@@ -469,6 +469,47 @@ for terminate in (False, True):
     finally:
         s.close()
 
+# Synchronize each shape with a child handshake so frames cannot be coalesced.
+shape_probe = r"""
+import os, select, tty
+tty.setraw(0)
+for code in (1, 2, 3, 4, 5, 6):
+    os.write(1, ("\x1b[?25l\x1b[%d q\x1b[2J\x1b[HSHAPE_%d" % (code, code)).encode())
+    assert select.select([0], [], [], 6)[0]
+    assert os.read(0, 1) == b"x"
+os.write(1, b"\x1b[!p\x1b[2J\x1b[HSHAPE_RESET")
+assert select.select([0], [], [], 6)[0]
+assert os.read(0, 1) == b"x"
+os.write(1, b"\x1b[6 q\x1b[2J\x1b[HSHAPE_EXIT")
+assert select.select([0], [], [], 6)[0]
+assert os.read(0, 1) == b"x"
+"""
+for terminate in (False, True):
+    s = Session()
+    try:
+        s.expect(b"RUSTMUX_READY> ")
+        s.send(("exec python3 -c " + shlex.quote(shape_probe) + "\n").encode())
+        for code in range(1, 7):
+            s.expect(("\r\nSHAPE_%d\r\n" % code).encode())
+            assert ("\x1b[%d q" % code).encode() in s.last_frame
+            assert s.last_frame.endswith(b"\x1b[?25l")
+            s.send(b"x")
+        s.expect(b"\r\nSHAPE_RESET\r\n")
+        assert b"\x1b[1 q" in s.last_frame
+        assert s.last_frame.endswith(b"\x1b[?25h")
+        s.send(b"x")
+        s.expect(b"\r\nSHAPE_EXIT\r\n")
+        assert b"\x1b[6 q" in s.last_frame
+        if terminate:
+            os.kill(s.app_pid, signal.SIGTERM)
+            s.finish(128 + signal.SIGTERM)
+        else:
+            s.send(b"x")
+            s.finish(0)
+        assert s.output.rfind(b"\x1b[0 q") > s.output.rfind(b"\x1b[6 q")
+    finally:
+        s.close()
+
 # A model-allocation limit error during resize must restore the terminal too.
 s = Session()
 try:

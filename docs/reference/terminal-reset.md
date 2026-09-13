@@ -43,3 +43,5 @@ Device-attribute replies and terminal capability queries remain future work. Har
 
 RIS also disables bracketed paste, application cursor keys and application keypad. The next rendered
 frame synchronizes these input modes with the outer terminal.
+
+RIS restores the global cursor shape to a blinking block.

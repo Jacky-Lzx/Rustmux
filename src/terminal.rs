@@ -34,6 +34,7 @@ const FRAME_INTERVAL: Duration = Duration::from_millis(6);
 // ?1049h saves the cursor and switches to a cleared alternate screen buffer.
 const ENTER: &[u8] = b"\x1b[?1049h";
 // Reset common display modes on exit, in sequence:
+// CSI 0 SP q: reset cursor shape (the space is part of DECSCUSR).
 // ESC >: restore numeric keypad encoding (disable application keypad).
 // ?1l: restore normal cursor-key encoding (disable application cursor keys).
 // ?2004l: disable bracketed paste (the markers around pasted input).
@@ -47,7 +48,7 @@ const ENTER: &[u8] = b"\x1b[?1049h";
 // These are baseline resets, not a snapshot of the previous display modes.
 // Raw mode and other termios attributes are restored separately.
 const LEAVE: &[u8] =
-    b"\x1b>\x1b[?1l\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[0m\x1b[?25h\x1b[?1049l";
+    b"\x1b[0 q\x1b>\x1b[?1l\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[0m\x1b[?25h\x1b[?1049l";
 
 /// Run on the controlling terminal during single-threaded program startup.
 /// Returns the shell exit code, or 128 + signal for termination by signal.
