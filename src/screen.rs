@@ -1178,15 +1178,21 @@ impl Screen {
     }
 
     /// Blank part or all of the grid, including the cursor cell, without homing.
-    /// Retained history is unchanged; visible continuation flags are cleared.
+    /// Retained history and continuation links outside the erased rows are unchanged.
     pub fn erase_display(&mut self, mode: EraseMode) {
-        self.continued.fill(false);
         let cursor = self.row * self.columns + self.column;
         let range = match mode {
             EraseMode::ToEnd => cursor..self.cells.len(),
             EraseMode::ToStart => 0..cursor + 1,
             EraseMode::All => 0..self.cells.len(),
         };
+        // A continuation belongs to the boundary before its row. Sever links
+        // into and out of erased rows, preserving unrelated wrapped output (for
+        // example, above a prompt that clears the rest of the screen with ED).
+        let first_row = range.start / self.columns;
+        let after_last_row = (range.end - 1) / self.columns + 1;
+        let flags_end = (after_last_row + 1).min(self.rows);
+        self.continued[first_row..flags_end].fill(false);
         self.clear_range(range);
         self.wrap_pending = false;
     }

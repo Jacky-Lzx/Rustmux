@@ -24,7 +24,9 @@ consumer must treat the start of available data as a boundary.
 
 Partial scrolling and line insertion/deletion break links at changed boundaries.
 Character insertion/deletion/erasure and line erasure sever links into and out of
-the edited row; display erasure clears visible flags. Printing in insert mode
+the edited row. Display erasure severs links into and out of the erased rows,
+while preserving links between untouched rows. In particular, clearing below a
+prompt does not prevent earlier wrapped output from rejoining when widened. Printing in insert mode
 preserves the incoming continuation established by automatic wrapping.
 Cursor movement alone does not rewrite metadata. Flags describe physical-row
 provenance rather than the application's intent after arbitrary cursor editing.

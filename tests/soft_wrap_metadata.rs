@@ -81,3 +81,23 @@ fn insertion_mode_does_not_erase_new_autowrap_provenance() {
     feed(&mut screen, "\x1b[4habc");
     assert_eq!(screen.row_continued(1), Some(true));
 }
+
+#[test]
+fn display_erasure_only_severs_connections_at_affected_rows() {
+    for (erase, expected) in [
+        ("\x1b[J", [false, true, false, false, false]),
+        ("\x1b[1J", [false, false, false, false, true]),
+        ("\x1b[2J", [false; 5]),
+    ] {
+        let mut screen = Screen::new(5, 2).unwrap();
+        feed(&mut screen, "abcdefghi\x1b[3;2H");
+        feed(&mut screen, erase);
+        for (row, flag) in expected.into_iter().enumerate() {
+            assert_eq!(
+                screen.row_continued(row),
+                Some(flag),
+                "{erase:?}, row {row}"
+            );
+        }
+    }
+}

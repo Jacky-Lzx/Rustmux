@@ -116,3 +116,25 @@ fn one_column_replaces_wide_glyph_and_limits_history_after_expansion() {
     assert!(screen.resize(2, 0).is_err());
     assert_eq!(screen, before);
 }
+
+#[test]
+fn clearing_below_wrapped_output_preserves_width_round_trip() {
+    let mut screen = Screen::new(6, 8).unwrap();
+    feed(&mut screen, "abcdefgh\r\n");
+    for width in [4, 8, 2, 8] {
+        screen.resize(6, width).unwrap();
+        // Shell prompt redraw: erase from the following blank line to the end.
+        feed(&mut screen, "\x1b[J");
+    }
+    assert_eq!(screen.row_used_columns(0), Some(8));
+    assert_eq!(
+        screen
+            .row(0)
+            .unwrap()
+            .iter()
+            .map(|cell| cell.character)
+            .collect::<String>(),
+        "abcdefgh"
+    );
+    assert_eq!(screen.row_used_columns(1), Some(0));
+}
