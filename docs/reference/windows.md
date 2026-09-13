@@ -12,7 +12,7 @@ row as a temporary input prompt.
 - `WindowId` is stable within its originating collection, independent of the
   window's position and name. IDs start at zero and are never reused, even after
   all windows have been closed. They are not cross-collection or persistent IDs.
-- `select` focuses an ID. `select_next` and `select_previous` wrap in creation
+- `select` focuses an ID. `select_next` and `select_previous` wrap in current display
   order. An empty collection returns `None`; a single window remains selected.
 - Renaming preserves identity, order, contents and focus. Names are opaque
   metadata: empty and duplicate names are allowed. A future UI must handle
@@ -110,6 +110,7 @@ paths. These states now drive multi-window polling.
 | Ctrl-B, then p | Select the previous window, wrapping |
 | Ctrl-B, then l | Return to the last active window |
 | Ctrl-B, then & | Confirm closing the active window |
+| Ctrl-B, then < / > | Move the active window left / right one position |
 | Ctrl-B, then 1–9 | Select the window at that one-based position |
 | Ctrl-B, then 0 | Select window 10 |
 | Ctrl-B, then , | Rename the active window |
@@ -279,3 +280,23 @@ the confirmation remains open follows the normal exit path.
 Tests cover cancellation, background output, resize, pasted-newline protection,
 direct-child reclamation, retained survivor shell state, discarded trailing
 input, last-window restoration and natural exit during confirmation.
+
+## Reordering windows
+
+Ctrl-B followed by `<` or `>` swaps the active window with its left or right
+neighbor. Moving past either edge is a no-op; it does not wrap. The active shell,
+stable ID, name, contents and last-window record are preserved. Numeric shortcuts
+and next/previous selection follow the resulting display order, as does the
+successor/predecessor rule when a window closes. New windows still append at the
+right edge. These changes last only for the current process; there is no saved
+window order across launches.
+
+Reordering schedules a bar redraw through the normal frame cadence. It does not
+invalidate the child display or interrupt its synchronized-output transaction;
+bar updates can therefore wait for that transaction to finish or time out.
+Inside an editor the keys are text, and bracketed-paste payload is passed through.
+
+Model tests cover both edges, empty/single-window collections, content ownership,
+last-window history, cyclic focus and removal after reordering. The nested PTY
+suite checks displayed names/positions and actual shell state while moving,
+selecting by number, returning to the last window and closing a moved window.

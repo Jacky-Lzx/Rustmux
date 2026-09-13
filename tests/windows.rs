@@ -158,3 +158,42 @@ fn last_window_handles_cyclic_selection_and_automatic_close_fallback() {
     windows.create("new".into(), ()).unwrap();
     assert_eq!(windows.select_last(), None);
 }
+
+#[test]
+fn reordering_preserves_identity_contents_history_and_uses_current_order() {
+    let mut windows = Windows::default();
+    assert!(!windows.move_active_left());
+    assert!(!windows.move_active_right());
+    let a = windows.create("a".into(), Box::new(1)).unwrap();
+    assert!(!windows.move_active_left());
+    assert!(!windows.move_active_right());
+    let b = windows.create("b".into(), Box::new(2)).unwrap();
+    let c = windows.create("c".into(), Box::new(3)).unwrap();
+    let content = windows.get(c).unwrap().content().as_ref() as *const i32;
+    assert!(windows.move_active_left());
+    assert_eq!(
+        windows.iter().map(|w| w.id()).collect::<Vec<_>>(),
+        vec![a, c, b]
+    );
+    assert_eq!(windows.active().unwrap().id(), c);
+    assert_eq!(
+        windows.active().unwrap().content().as_ref() as *const i32,
+        content
+    );
+    assert_eq!(windows.select_last(), Some(b));
+    assert_eq!(windows.select_last(), Some(c));
+    assert!(windows.move_active_right());
+    assert!(!windows.move_active_right());
+    assert_eq!(windows.select_next(), Some(a));
+    assert_eq!(windows.select_previous(), Some(c));
+    assert!(windows.move_active_left());
+    assert!(windows.move_active_left());
+    assert!(!windows.move_active_left());
+    assert_eq!(
+        windows.iter().map(|w| w.id()).collect::<Vec<_>>(),
+        vec![c, a, b]
+    );
+    windows.close(c).unwrap();
+    assert_eq!(windows.active().unwrap().id(), a);
+    assert_eq!(windows.get(b).unwrap().name(), "b");
+}

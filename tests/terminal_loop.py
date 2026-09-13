@@ -875,7 +875,7 @@ prefix_probe = r"""
 import os, select, time, tty
 tty.setraw(0)
 os.write(1, b"\x1b[?2004h\x1b[2J\x1b[HPREFIX_READY")
-expected = b"\x02n\x02z\x1b[200~paste\x02c\x02n\x02p\x021\x020\x02l\x02&\x1b[201~"
+expected = b"\x02n\x02z\x1b[200~paste\x02c\x02n\x02p\x021\x020\x02l\x02&\x02<\x02>\x1b[201~"
 data = bytearray()
 end = time.monotonic() + 5
 while len(data) < len(expected):
@@ -894,7 +894,7 @@ try:
         s.send(("exec python3 " + shlex.quote(source.name) + "\n").encode())
         s.expect(b"PREFIX_READY")
         s.send(b"\x02\x02n\x02z\x1b[20")
-        s.send(b"0~paste\x02c\x02n\x02p\x021\x020\x02l\x02&\x1b[201~")
+        s.send(b"0~paste\x02c\x02n\x02p\x021\x020\x02l\x02&\x02<\x02>\x1b[201~")
         s.finish(0)
         assert any(b"PREFIX_PASSED" in row for row in s.last_rows)
 finally:
@@ -1209,5 +1209,39 @@ try:
     s.send(b"sleep 0.2; exit 7\n\x02&")
     s.expect(b"Close window? Type yes:")
     s.finish(7)
+finally:
+    s.close()
+
+# Moving windows changes displayed positions, not shells or last-window identity.
+s = Session()
+try:
+    s.expect(b"RUSTMUX_READY> ")
+    for name in ("A", "B", "C"):
+        if name != "A":
+            s.send(b"\x02c")
+            s.expect(b"RUSTMUX_READY> ")
+        s.send(("WIN=%s\n" % name).encode())
+        s.expect(b"RUSTMUX_READY> ")
+        s.send(("\x02,\x15%s\r" % name).encode())
+        expect_bar(s, ("*%d:%s" % (ord(name) - ord("A") + 1, name)).encode())
+    s.send(b"\x02<printf '\\nMOVED:%s\\n' $WIN\n")
+    s.expect(b"MOVED:C")
+    expect_bar(s, b"1:A  *2:C  3:B")
+    s.send(b"\x02lprintf '\\nLAST:%s\\n' $WIN\n")
+    s.expect(b"LAST:B")
+    expect_bar(s, b"*3:B")
+    s.send(b"\x022\x02>\x02>printf '\\nRIGHT:%s\\n' $WIN\n")
+    s.expect(b"RIGHT:C")
+    expect_bar(s, b"1:A  2:B  *3:C")
+    s.send(b"\x02<\x02<\x02<printf '\\nLEFT:%s\\n' $WIN\n")
+    s.expect(b"LEFT:C")
+    expect_bar(s, b"*1:C  2:A  3:B")
+    s.send(b"exit 0\n")
+    expect_bar(s, b"*1:A  2:B")
+    s.send(b"\x02lprintf '\\nSURVIVING:%s\\n' $WIN\n")
+    s.expect(b"SURVIVING:B")
+    expect_bar(s, b"*2:B")
+    os.kill(s.app_pid, signal.SIGTERM)
+    s.finish(128 + signal.SIGTERM)
 finally:
     s.close()

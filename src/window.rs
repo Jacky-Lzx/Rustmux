@@ -41,7 +41,7 @@ impl<T> Window<T> {
     }
 }
 
-/// Owns window contents in creation order; no Clone bound or process operations.
+/// Owns window contents in display order; no Clone bound or process operations.
 /// Empty collections have no focus. New windows become active. Closing the active
 /// window selects its successor, or its predecessor when removing the last entry.
 #[derive(Debug)]
@@ -149,6 +149,28 @@ impl<T> Windows<T> {
             self.last_active = self.active().map(|window| window.id());
             self.active = index;
         }
+    }
+
+    /// Move the active window one position left without changing its identity or history.
+    /// Returns false for an empty collection or when already at the left edge.
+    pub fn move_active_left(&mut self) -> bool {
+        if self.active == 0 {
+            return false;
+        }
+        self.entries.swap(self.active, self.active - 1);
+        self.active -= 1;
+        true
+    }
+
+    /// Move the active window one position right, stopping at the right edge.
+    /// Window contents, focus identity and last-window history remain attached.
+    pub fn move_active_right(&mut self) -> bool {
+        if self.active + 1 >= self.entries.len() {
+            return false;
+        }
+        self.entries.swap(self.active, self.active + 1);
+        self.active += 1;
+        true
     }
 
     /// Names are opaque metadata, including empty or duplicate names. A UI must

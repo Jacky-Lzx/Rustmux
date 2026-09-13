@@ -296,6 +296,8 @@ enum WindowKey {
     Select(usize),
     Last,
     Close,
+    MoveLeft,
+    MoveRight,
 }
 
 #[derive(Default)]
@@ -416,6 +418,8 @@ impl WindowInput {
                 b'p' => output.push(WindowKey::Previous),
                 b'l' => output.push(WindowKey::Last),
                 b'&' => output.push(WindowKey::Close),
+                b'<' => output.push(WindowKey::MoveLeft),
+                b'>' => output.push(WindowKey::MoveRight),
                 b',' => output.push(WindowKey::Rename),
                 b'1'..=b'9' => output.push(WindowKey::Select(usize::from(byte - b'1'))),
                 b'0' => output.push(WindowKey::Select(9)),
@@ -673,6 +677,12 @@ fn forward(
                         if let Some(id) = target {
                             windows.select(id)?;
                         }
+                    }
+                    WindowKey::MoveLeft => {
+                        bar_dirty |= windows.move_active_left();
+                    }
+                    WindowKey::MoveRight => {
+                        bar_dirty |= windows.move_active_right();
                     }
                     WindowKey::Last => {
                         windows.select_last();
@@ -1064,7 +1074,7 @@ mod window_input_tests {
     #[test]
     fn prefix_commands_literal_prefix_and_unknown_keys() {
         assert_eq!(
-            decode(b"a\x02c\x02n\x02p\x02l\x02&\x02\x02\x02z"),
+            decode(b"a\x02c\x02n\x02p\x02l\x02&\x02<\x02>\x02\x02\x02z"),
             vec![
                 WindowKey::Byte(b'a'),
                 WindowKey::Create,
@@ -1072,6 +1082,8 @@ mod window_input_tests {
                 WindowKey::Previous,
                 WindowKey::Last,
                 WindowKey::Close,
+                WindowKey::MoveLeft,
+                WindowKey::MoveRight,
                 WindowKey::Byte(2),
                 WindowKey::Byte(2),
                 WindowKey::Byte(b'z')
@@ -1095,7 +1107,8 @@ mod window_input_tests {
 
     #[test]
     fn bracketed_paste_and_utf8_are_forwarded_byte_for_byte() {
-        let bytes = "\x1b[200~中文\x02c\x02n\x02p\x021\x020\x02l\x02&\x02\x02\x1b[201~".as_bytes();
+        let bytes = "\x1b[200~中文\x02c\x02n\x02p\x021\x020\x02l\x02&\x02<\x02>\x02\x02\x1b[201~"
+            .as_bytes();
         assert_eq!(
             decode(bytes),
             bytes
