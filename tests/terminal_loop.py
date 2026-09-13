@@ -129,7 +129,7 @@ class Session:
                     if target in rows:
                         return True
                 elif target == b"RUSTMUX_READY> ":
-                    nonempty = [row for row in (rows[:-1] if len(rows) > 1 else rows) if row]
+                    nonempty = [row for row in (rows[1:] if len(rows) > 1 else rows) if row]
                     if nonempty and nonempty[-1].endswith(target.rstrip()):
                         return True
                 elif any(target in row for row in rows):
@@ -247,10 +247,10 @@ try:
            b"\\033[4;1HTHREE\\033[5;1HFOOTER\\033[2;4r\\033[4;1H\\nSCROLLED'; "
            b"read answer; printf '\\033[2;1H\\033MREVERSED'; read answer; stty echo; printf '\\033[r\\033[6;1H'\n")
     s.expect(b"\r\nSCROLLED\r\n")
-    assert s.last_rows[:5] == [b"HEADER", b"TWO", b"THREE", b"SCROLLED", b"FOOTER"], s.last_rows
+    assert s.last_rows[1:6] == [b"HEADER", b"TWO", b"THREE", b"SCROLLED", b"FOOTER"], s.last_rows
     s.send(b"\n")
     s.expect(b"\r\nREVERSED\r\n")
-    assert s.last_rows[:5] == [b"HEADER", b"REVERSED", b"TWO", b"THREE", b"FOOTER"], s.last_rows
+    assert s.last_rows[1:6] == [b"HEADER", b"REVERSED", b"TWO", b"THREE", b"FOOTER"], s.last_rows
     s.send(b"\n")
     s.expect(b"RUSTMUX_READY> ")
 
@@ -266,7 +266,7 @@ try:
                b"\\033[6;1HLINE_EDIT_DONE'; read answer; "
                b"stty echo; printf '\\033[r\\033[6;1H'\n")
         s.expect(b"\r\nLINE_EDIT_DONE\r\n")
-        assert s.last_rows[:5] == expected, (command, s.last_rows)
+        assert s.last_rows[1:6] == expected, (command, s.last_rows)
         s.send(b"\n")
         s.expect(b"RUSTMUX_READY> ")
 
@@ -276,7 +276,7 @@ try:
                b"\\033[2;1HCHAR_EDIT_DONE'; read answer; "
                b"stty echo; printf '\\033[2;1H'\n")
         s.expect(b"\r\nCHAR_EDIT_DONE\r\n")
-        assert s.last_rows[0] == expected, (command, s.last_rows)
+        assert s.last_rows[1] == expected, (command, s.last_rows)
         s.send(b"\n")
         s.expect(b"RUSTMUX_READY> ")
 
@@ -285,7 +285,7 @@ try:
            b"\\033[6;1HORIGIN_DONE'; read answer; "
            b"stty echo; printf '\\033[r\\033[6;1H'\n")
     s.expect(b"\r\nORIGIN_DONE\r\n")
-    assert s.last_rows[:3] == [b"ABS", b"ORIGIN", b"   COLUMN"], s.last_rows
+    assert s.last_rows[1:4] == [b"ABS", b"ORIGIN", b"   COLUMN"], s.last_rows
     s.send(b"\n")
     s.expect(b"RUSTMUX_READY> ")
 
@@ -294,7 +294,7 @@ try:
            b"\\033[2;1HINSERT_DONE'; read answer; "
            b"stty echo; printf '\\033[2;1H'\n")
     s.expect(b"\r\nINSERT_DONE\r\n")
-    assert s.last_rows[0] == b"abXYZdefgh", s.last_rows
+    assert s.last_rows[1] == b"abXYZdefgh", s.last_rows
     s.send(b"\n")
     s.expect(b"RUSTMUX_READY> ")
 
@@ -302,7 +302,7 @@ try:
            b"\\033[?7lBC\\033[?7hD\\033[3;1HWRAP_DONE'; read answer; "
            b"stty echo; printf '\\033[3;1H'\n")
     s.expect(b"\r\nWRAP_DONE\r\n")
-    assert s.last_rows[:2] == [b"A" + b" " * 78 + b"C", b"D"], s.last_rows
+    assert s.last_rows[1:3] == [b"A" + b" " * 78 + b"C", b"D"], s.last_rows
     s.send(b"\n")
     s.expect(b"RUSTMUX_READY> ")
 
@@ -311,7 +311,7 @@ try:
            b"\\033[2;1HTABS_DONE'; read answer; "
            b"stty echo; printf '\\033[2;1H'\n")
     s.expect(b"\r\nTABS_DONE\r\n")
-    assert s.last_rows[0] == b"   A       C", s.last_rows
+    assert s.last_rows[1] == b"   A       C", s.last_rows
     s.send(b"\n")
     s.expect(b"RUSTMUX_READY> ")
 
@@ -320,7 +320,7 @@ try:
            b"\\033[3;1HCHARSET_DONE'; read answer; "
            b"stty echo; printf '\\033[3;1H'\n")
     s.expect(b"\r\nCHARSET_DONE\r\n")
-    assert s.last_rows[:2] == ["┌──┐".encode(), "│q".encode()], s.last_rows
+    assert s.last_rows[1:3] == ["┌──┐".encode(), "│q".encode()], s.last_rows
     s.send(b"\n")
     s.expect(b"RUSTMUX_READY> ")
 
@@ -328,7 +328,7 @@ try:
            b"\\033[?25l\\033[4h\\033[3g\\033(0lqqk"
            b"\\033cRESET_DONE'; read answer; stty echo; printf '\\033[2;1H'\n")
     s.expect(b"\r\nRESET_DONE\r\n")
-    assert s.last_rows[0] == b"RESET_DONE" and not any(s.last_rows[1:-1]), s.last_rows
+    assert s.last_rows[1] == b"RESET_DONE" and not any(s.last_rows[2:]), s.last_rows
     assert s.last_frame.endswith(b"\x1b[?25h"), s.last_frame
     s.send(b"\n")
     s.expect(b"RUSTMUX_READY> ")
@@ -338,7 +338,7 @@ try:
            b"\\033[2;1HSOFT_RESET_DONE'; read answer; "
            b"stty echo; printf '\\033[3;1H'\n")
     s.expect(b"\r\nSOFT_RESET_DONE\r\n")
-    assert s.last_rows[0] == b"KEPTq", s.last_rows
+    assert s.last_rows[1] == b"KEPTq", s.last_rows
     assert s.last_frame.endswith(b"\x1b[?25h"), s.last_frame
     s.send(b"\n")
     s.expect(b"RUSTMUX_READY> ")
@@ -635,7 +635,7 @@ for terminate in (False, True):
     finally:
         s.close()
 
-# Single-pane coordinates and event bytes are forwarded without translation.
+# Physical mouse rows are translated past the top bar; other event fields are preserved.
 mouse_probe = r"""
 import os, select, time, tty
 tty.setraw(0)
@@ -648,10 +648,10 @@ def receive(expected):
             data.extend(os.read(0, len(expected) - len(data)))
     assert data == expected, repr(data)
 for mode, encoding, payload in [
-    (1000, 1006, b"\x1b[<0;10;5M\x1b[<0;10;5m"),
-    (1002, 1006, b"\x1b[<32;11;6M\x1b[<0;11;6m"),
-    (1003, 1006, b"\x1b[<35;12;7M\x1b[<64;12;7M\x1b[<65;12;7M"),
-    (1000, 0, b"\x1b[M *%\x1b[M#*%"),
+    (1000, 1006, b"\x1b[<0;10;4M\x1b[<0;10;4m"),
+    (1002, 1006, b"\x1b[<32;11;5M\x1b[<0;11;5m"),
+    (1003, 1006, b"\x1b[<35;12;6M\x1b[<64;12;6M\x1b[<65;12;6M"),
+    (1000, 0, b"\x1b[M *$\x1b[M#*$"),
 ]:
     os.write(1, ("\x1b[?%dh\x1b[?1006%s\x1b[2J\x1b[HMOUSE_%d_%d" % (mode, 'h' if encoding else 'l', mode, encoding)).encode())
     receive(payload)
@@ -772,9 +772,10 @@ try:
     s.expect(b"\r\nOLD\r\n")
     s.send(b"x")
     s.expect(b"\r\nNEW\r\n")
-    assert s.last_rows[0] == b"UNCHANGED_ROW"
+    assert s.last_rows[1] == b"UNCHANGED_ROW"
     assert b"\x1b[1;1H" not in s.last_frame
-    assert b"\x1b[2;1H" in s.last_frame
+    assert b"\x1b[2;1H" not in s.last_frame
+    assert b"\x1b[3;1H" in s.last_frame
     assert len(s.last_frame) < 100
     s.send(b"x")
     s.finish(0)
@@ -1004,13 +1005,13 @@ try:
     while not any(b"WORK_DONE" in row for row in s.last_rows):
         s.read()
         assert time.monotonic() < end, s.last_rows
-    assert s.last_rows[-1].startswith("Rename: 中文e".encode())
+    assert s.last_rows[0].startswith("Rename: 中文e".encode())
     s.send(b"\r")
     s.send(b"\x02,")
     s.expect("Rename: 中文e".encode())
     s.send(b"\x15discard\x1b")
     end = time.monotonic() + 3
-    while s.last_rows[-1].startswith(b"Rename:"):
+    while s.last_rows[0].startswith(b"Rename:"):
         s.read()
         assert time.monotonic() < end, s.last_rows
     s.send(b"\x02,")
@@ -1044,7 +1045,7 @@ finally:
 # Persistent bar reflects creation, focus, rename and removal without hiding content.
 def expect_bar(session, marker):
     end = time.monotonic() + 3
-    while not session.last_rows or marker not in session.last_rows[-1]:
+    while not session.last_rows or marker not in session.last_rows[0]:
         session.read()
         assert time.monotonic() < end, session.last_rows
 
@@ -1054,8 +1055,8 @@ try:
     expect_bar(s, b"*1:shell")
     s.send(b"printf '\\033[23;1H%s%s' LAST_ CONTENT\n")
     s.expect(b"LAST_CONTENT")
-    assert b"LAST_CONTENT" in s.last_rows[22]
-    assert b"*1:shell" in s.last_rows[23]
+    assert b"LAST_CONTENT" in s.last_rows[23]
+    assert b"*1:shell" in s.last_rows[0]
     s.send(b"\x02c")
     s.expect(b"RUSTMUX_READY> ")
     expect_bar(s, b"*2:shell")
@@ -1063,12 +1064,12 @@ try:
     expect_bar(s, "*2:中文".encode())
     s.send(b"\x02p")
     expect_bar(s, b"*1:shell")
-    assert "2:中文".encode() in s.last_rows[-1]
+    assert "2:中文".encode() in s.last_rows[0]
     s.send(b"\x02n")
     expect_bar(s, "*2:中文".encode())
     s.send(b"exit 0\n")
     expect_bar(s, b"*1:shell")
-    assert "中文".encode() not in s.last_rows[-1]
+    assert "中文".encode() not in s.last_rows[0]
     fcntl.ioctl(s.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 1, 80, 0, 0))
     s.read(0.1)
     s.send(b"printf '\\033[2J\\033[H%s%s' ONE_ ROW\n")
@@ -1085,7 +1086,7 @@ bar_mouse = r"""
 import os, select, time, tty
 tty.setraw(0)
 os.write(1, b"\x1b[?1000;1006h\x1b[2J\x1b[HBAR_MOUSE_READY")
-expected = b"\x1b[<0;2;23mx"
+expected = b"\x1b[<0;2;1m\x1b[<0;2;23Mx"
 data = bytearray()
 end = time.monotonic() + 4
 while len(data) < len(expected):
@@ -1103,7 +1104,7 @@ try:
         source.flush()
         s.send(("exec python3 " + shlex.quote(source.name) + "\n").encode())
         s.expect(b"BAR_MOUSE_READY")
-        s.send(b"\x1b[<0;2;24M\x1b[<0;2;24mx")
+        s.send(b"\x1b[<0;2;1M\x1b[<0;2;1m\x1b[<0;2;24Mx")
         s.finish(0)
         assert any(b"BAR_MOUSE_OK" in row for row in s.last_rows)
 finally:

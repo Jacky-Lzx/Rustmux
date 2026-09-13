@@ -25,7 +25,7 @@ Use Ctrl-B followed by `c` to create a window, `n` for the next window and `p`
 for the previous one. Ctrl-B twice sends a literal Ctrl-B to the child. Background
 shells continue running. See [Windows](../reference/windows.md#interactive-controls)
 for limits and input behavior. Ctrl-B followed by `,` opens the name editor:
-Enter saves, Esc cancels, and Ctrl-U clears the existing name. The bottom bar shows the saved name and highlights the active window.
+Enter saves, Esc cancels, and Ctrl-U clears the existing name. The top bar shows the saved name and highlights the active window.
 
 The CLI now parses shell output and renders its own screen model. Window changes
 resize both model grids and the PTY in every window. The bar reserves one row;

@@ -22,9 +22,12 @@ clearing old tracking and selecting encoding before enabling the new mode.
 Ordinary redraws do not toggle tracking. The existing exit cleanup disables all
 supported tracking modes and SGR encoding on normal exit and handled signals.
 
-The outer terminal generates events. The input loop forwards bytes unchanged;
-there is no coordinate parsing, filtering or translation because the pane fills
-the outer terminal. SGR uses CSI < button ; column ; row M for presses/motion,
+The outer terminal generates events. The input loop translates complete SGR and
+legacy reports by subtracting the reserved top window-bar row. Events on the bar
+are filtered, with releases clamped to the first child row to finish drags. With
+a one-row terminal the bar is hidden and coordinates are unchanged. See
+[Window bar and content area](windows.md#window-bar-and-content-area).
+SGR uses CSI < button ; column ; row M for presses/motion,
 and final m for release; coordinates are one-based. Without SGR, the legacy
 CSI M format and its coordinate limitations apply. See
 [XTerm mouse tracking](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h2-Mouse-Tracking).

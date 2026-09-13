@@ -291,6 +291,15 @@ impl Screen {
         Ok(())
     }
 
+    /// Reserve a top row on a disposable render copy, shifting active cells and cursor.
+    /// This is display composition, not a terminal resize operation for the child.
+    pub(crate) fn prepend_display_row(&mut self) -> io::Result<()> {
+        self.resize(self.rows + 1, self.columns)?;
+        self.cells.rotate_right(self.columns);
+        self.row += 1;
+        Ok(())
+    }
+
     fn move_overlap(source: &mut [Cell], old_columns: usize, target: &mut [Cell], columns: usize) {
         for (old_row, new_row) in source
             .chunks_mut(old_columns)

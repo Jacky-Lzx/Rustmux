@@ -303,6 +303,7 @@ struct WindowInput {
     mouse: Vec<u8>,
     mouse_since: Option<Instant>,
     pane_height: usize,
+    pane_top: usize,
     mouse_enabled: bool,
 }
 
@@ -352,20 +353,27 @@ impl WindowInput {
             _ => None,
         };
         let mut bytes = self.take_mouse();
-        if row.is_some_and(|row| row > self.pane_height) {
-            // Releases must still end a drag that began inside the child grid.
-            if bytes.starts_with(b"\x1b[<") && bytes.last() == Some(&b'm') {
+        if let Some(row) = row {
+            let release = (bytes.starts_with(b"\x1b[<") && bytes.last() == Some(&b'm'))
+                || (bytes.starts_with(b"\x1b[M")
+                    && bytes[3]
+                        .checked_sub(32)
+                        .is_some_and(|button| button & 0x63 == 3));
+            let child_row = row.saturating_sub(self.pane_top);
+            if (child_row == 0 || child_row > self.pane_height) && !release {
+                return;
+            }
+            // Translate physical rows to child coordinates. A release over chrome
+            // still ends a drag at the nearest content edge.
+            let child_row = child_row.clamp(1, self.pane_height.max(1));
+            if bytes.starts_with(b"\x1b[<") {
+                let terminator = *bytes.last().unwrap();
                 let separator = bytes.iter().rposition(|&byte| byte == b';').unwrap();
                 bytes.truncate(separator + 1);
-                bytes.extend_from_slice(format!("{}m", self.pane_height).as_bytes());
-            } else if bytes.starts_with(b"\x1b[M")
-                && bytes[3]
-                    .checked_sub(32)
-                    .is_some_and(|button| button & 0x63 == 3)
-            {
-                bytes[5] = 32 + self.pane_height.min(MAX_LEGACY_MOUSE_COORDINATE) as u8;
+                bytes.extend_from_slice(child_row.to_string().as_bytes());
+                bytes.push(terminator);
             } else {
-                return;
+                bytes[5] = 32 + child_row.min(MAX_LEGACY_MOUSE_COORDINATE) as u8;
             }
         }
         for byte in bytes {
@@ -593,6 +601,7 @@ fn forward(
                 break;
             }
             keys.pane_height = pane.screen().dimensions().0;
+            keys.pane_top = usize::from(outer_rows > 1);
             keys.mouse_enabled =
                 pane.screen().mouse_tracking() != crate::screen::MouseTracking::Off;
             actions.clear();
@@ -1035,17 +1044,41 @@ mod window_input_tests {
         assert_eq!(keys.take_mouse(), vec![27]);
     }
     #[test]
+    fn hidden_bar_keeps_one_row_mouse_coordinates() {
+        let mut keys = WindowInput {
+            pane_height: 1,
+            pane_top: 0,
+            mouse_enabled: true,
+            ..WindowInput::default()
+        };
+        let bytes = b"\x1b[<0;2;1M\x1b[<0;2;1m\x1b[M !!\x1b[M#!!";
+        let mut output = Vec::new();
+        for &byte in bytes {
+            keys.feed(byte, &mut output);
+        }
+        assert_eq!(
+            output,
+            bytes
+                .iter()
+                .copied()
+                .map(WindowKey::Byte)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
     fn bar_mouse_presses_are_ignored_but_releases_finish_child_drags() {
         let mut keys = WindowInput {
             pane_height: 23,
+            pane_top: 1,
             mouse_enabled: true,
             ..WindowInput::default()
         };
         let mut output = Vec::new();
-        for &byte in b"\x1b[<0;2;24M\x1b[<0;2;24m\x1b[<0;2;23M\x1b[M !8\x1b[M#!8" {
+        for &byte in b"\x1b[<0;2;1M\x1b[<0;2;1m\x1b[<0;2;24M\x1b[M !!\x1b[M#!!\x1b[M !8" {
             keys.feed(byte, &mut output);
         }
-        let expected = b"\x1b[<0;2;23m\x1b[<0;2;23M\x1b[M#!7";
+        let expected = b"\x1b[<0;2;1m\x1b[<0;2;23M\x1b[M#!!\x1b[M !7";
         assert_eq!(
             output,
             expected

@@ -208,15 +208,15 @@ mod tests {
             let saved = original.clone();
             let overlay = RenamePrompt::new("very long 中文e\u{301}").overlay(&original);
             assert_eq!(original, saved);
-            assert_eq!(overlay.row(0), original.row(0));
+            assert_eq!(overlay.row(2), original.row(2));
             assert_eq!(overlay.row(1), original.row(1));
-            assert_eq!(overlay.cursor().0, 2);
+            assert_eq!(overlay.cursor().0, 0);
             assert!(overlay.cursor().1 < columns);
             assert!(!overlay.wrap_pending());
             assert!(overlay.bracketed_paste());
             assert_eq!(overlay.mouse_tracking(), MouseTracking::Off);
             if columns >= 8 {
-                let label: String = overlay.row(2).unwrap()[..7]
+                let label: String = overlay.row(0).unwrap()[..7]
                     .iter()
                     .map(|cell| cell.character)
                     .collect();

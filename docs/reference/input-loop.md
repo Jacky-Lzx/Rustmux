@@ -69,7 +69,7 @@ process, with exclusive terminal ownership and single-threaded startup.
 ## Window size changes
 
 SIGWINCH sets a separate atomic flag, so resize events cannot overwrite termination
-signals. The event loop reads the latest outer-terminal size, reserves the bottom bar row
+signals. The event loop reads the latest outer-terminal size, reserves the top bar row
 (unless only one row is available), resizes both model grids in every pane,
 and calls PtyShell::resize;
 TIOCSWINSZ updates the inner PTY and lets the kernel notify its foreground process

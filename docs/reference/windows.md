@@ -2,7 +2,7 @@
 
 The CLI supports multiple terminal windows, each with one shell and its own
 content screen. `window::Windows<T>` owns their ordered collection and stable identities.
-A bottom window bar shows names and focus. This is partial H05: split layouts
+A top window bar shows names and focus. This is partial H05: split layouts
 and persistent sessions are not implemented. Window renaming uses the same bar
 row as a temporary input prompt.
 
@@ -155,7 +155,7 @@ of the remaining H05 UI features or of all full-screen application behavior.
 
 ## Renaming a window
 
-Ctrl-B followed by `,` opens `Rename: <current name>` on the bottom row. Type to
+Ctrl-B followed by `,` opens `Rename: <current name>` on the top row. Type to
 append, use Backspace to remove the last Unicode scalar, or Ctrl-U to clear.
 Enter saves; Esc, Ctrl-C or Ctrl-G cancel. Empty names are allowed. Names are
 limited to 128 UTF-8 bytes; excess text, malformed UTF-8 and control characters
@@ -176,7 +176,7 @@ character-set/style/input modes for editing, and never overwrites the child's gr
 or cursor. When the outer terminal has only one row, it temporarily covers that
 row because no dedicated bar fits. Background
 output and query replies continue while editing, and resize relocates the prompt
-to the new bottom row. The original pane's display and input modes are restored
+at the top row. The original pane's display and input modes are restored
 when editing ends. Exiting the active child cancels the prompt before final output
 and focus fallback. Saved names are immediately visible in the window bar.
 
@@ -186,16 +186,16 @@ isolation, and real CLI save/cancel/reopen with continued child output and resiz
 
 ## Window bar and content area
 
-The bottom row is reserved for window labels. The PTY and both screen grids use
+The top row is reserved for window labels. The PTY and both screen grids use
 `max(1, outer rows - 1)` rows, with the full terminal width. A terminal with only
 one row hides the bar and retains one content row. Resizing updates every pane;
 the outer 65,536-cell limit still includes the reserved row.
 
 Labels show a one-based position and name, for example `1:shell` and `*2:editor`.
-The star and blue background identify the active window; other labels use a dark
-gray background. The rename prompt uses the same blue style. Colors use standard
-indexed terminal colors, so their exact appearance depends on the terminal's
-palette. New windows default to the name `shell`.
+The bar uses [Catppuccin Mocha](https://catppuccin.com/palette/) with explicit RGB
+colors: inactive labels use Subtext0 (`#a6adc8`) on Mantle (`#181825`); the active
+window and rename prompt use Base (`#1e1e2e`) on Blue (`#89b4fa`).
+The star also identifies the active window. New windows default to the name `shell`.
 
 Each label is clipped to 24 display columns, excluding control characters and
 without splitting a wide glyph. If labels do not fit, the visible starting window
@@ -204,15 +204,18 @@ mouse-scroll actions on the bar yet. On extremely narrow terminals the visible
 label may consist only of its highlighted prefix.
 
 The renderer receives a composed copy of the active child screen plus the bar;
-child cells, cursor and input modes are preserved. The copy adds allocation and
+child cells and cursor are shifted down one physical row; the child model and
+input modes are preserved. The copy adds allocation and
 grid-copy work to CLI rendering; prior encoding-only benchmark results do not
 measure that cost. Unchanged composed cells still benefit from incremental output.
 Closing an inactive window also schedules a redraw so labels and positions
 update, respecting any synchronized-output hold on the active child.
 
-When the child enables mouse reporting, complete SGR and classic X10 reports below
-the content area are intercepted. Press, wheel and motion reports there are
-ignored. Release reports are clamped to the last content row so a drag can end.
+When the child enables mouse reporting, complete SGR and classic X10 reports are translated
+from physical rows to child rows by subtracting the top bar height. Press, wheel
+and motion reports outside the content area are ignored. Release reports are
+clamped to the nearest content row so a drag can end. In a one-row terminal,
+coordinates remain unchanged because the bar is hidden.
 Candidate reports use at most 64 buffered bytes; incomplete candidates are
 released after a 30ms minimum delay, subject to the event loop's polling and
 backpressure. Extremely delayed/split malformed reports may therefore be forwarded

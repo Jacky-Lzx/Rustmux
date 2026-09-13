@@ -1,4 +1,4 @@
-//! Bottom-row window chrome, composed separately from child terminal state.
+//! Top-row window chrome, composed separately from child terminal state.
 use crate::{
     screen::{EraseMode, Screen},
     style::{Color, Style},
@@ -14,9 +14,14 @@ pub(crate) fn pane_rows(outer_rows: u16) -> u16 {
 }
 
 pub(crate) fn bar_style(active: bool) -> Style {
+    // Catppuccin Mocha: explicit RGB keeps chrome independent of indexed palettes.
+    const BASE: Color = Color::Rgb(0x1e, 0x1e, 0x2e);
+    const MANTLE: Color = Color::Rgb(0x18, 0x18, 0x25);
+    const SUBTEXT0: Color = Color::Rgb(0xa6, 0xad, 0xc8);
+    const BLUE: Color = Color::Rgb(0x89, 0xb4, 0xfa);
     Style {
-        foreground: Color::Indexed(if active { 15 } else { 7 }),
-        background: Color::Indexed(if active { 4 } else { 8 }),
+        foreground: if active { BASE } else { SUBTEXT0 },
+        background: if active { BLUE } else { MANTLE },
         bold: active,
         ..Style::default()
     }
@@ -24,14 +29,13 @@ pub(crate) fn bar_style(active: bool) -> Style {
 
 /// Set up the UI row on a clone, never on the child's actual grid.
 pub(crate) fn prepare_row(screen: &mut Screen, style: Style) {
-    let (rows, _) = screen.dimensions();
     screen.set_origin_mode(false);
     screen.set_insert_mode(false);
     screen.set_auto_wrap(false);
     screen.designate_character_set(false, false);
     screen.select_character_set(false);
     screen.set_style(style);
-    screen.position(rows - 1, 0);
+    screen.position(0, 0);
     screen.erase_line(EraseMode::All);
 }
 
@@ -63,7 +67,7 @@ pub(crate) fn compose(
         return Ok(screen);
     }
     let (_, columns) = screen.dimensions();
-    screen.resize(usize::from(outer_rows), columns)?;
+    screen.prepend_display_row()?;
     screen.save_cursor();
     prepare_row(&mut screen, bar_style(false));
     let labels: Vec<_> = names
@@ -117,13 +121,13 @@ mod tests {
         let view = compose(&child, 4, &["first".into(), "中文".into()], 1).unwrap();
         assert_eq!(child, before);
         for row in 0..3 {
-            assert_eq!(view.row(row), child.row(row));
+            assert_eq!(view.row(row + 1), child.row(row));
         }
-        assert_eq!(view.cursor(), child.cursor());
+        assert_eq!(view.cursor(), (child.cursor().0 + 1, child.cursor().1));
         assert_eq!(view.bracketed_paste(), child.bracketed_paste());
         assert_eq!(view.cursor_shape(), child.cursor_shape());
         let bar: String = view
-            .row(3)
+            .row(0)
             .unwrap()
             .iter()
             .filter(|c| c.width != 0)
@@ -144,7 +148,7 @@ mod tests {
                 1,
             )
             .unwrap();
-            let row = view.row(1).unwrap();
+            let row = view.row(0).unwrap();
             assert_eq!(row[0].style, bar_style(true));
             for (index, cell) in row.iter().enumerate() {
                 if cell.width == 2 {
