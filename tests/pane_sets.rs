@@ -186,3 +186,61 @@ fn swaps_keep_nonclone_contents_and_creation_order_until_explicit_close() {
     drop(panes);
     assert_eq!(*drops.borrow(), vec![1, 2]);
 }
+
+#[test]
+fn breaking_pane_into_window_moves_content_and_preserves_source_geometry() {
+    use rustmux::window::Windows;
+    let drops = Rc::new(RefCell::new(Vec::new()));
+    let mut panes = PaneSet::new(
+        7,
+        15,
+        Content {
+            value: 1,
+            drops: drops.clone(),
+        },
+    )
+    .unwrap();
+    let first = panes.layout().active();
+    panes
+        .split_with(SplitAxis::Columns, |_, _| {
+            Ok(Content {
+                value: 2,
+                drops: drops.clone(),
+            })
+        })
+        .unwrap();
+    panes
+        .split_with(SplitAxis::Rows, |_, _| {
+            Ok(Content {
+                value: 3,
+                drops: drops.clone(),
+            })
+        })
+        .unwrap();
+    panes.resize_active(Direction::Right);
+    let mut expected = panes.layout().clone();
+    expected.close(expected.active()).unwrap();
+    panes.toggle_zoom();
+    let mut windows = Windows::default();
+    let source = windows.create("work".into(), panes).unwrap();
+    let destination = windows.break_active_pane().unwrap().unwrap();
+    let remaining = windows.get(source).unwrap().content();
+    assert_eq!(remaining.layout(), &expected);
+    assert_eq!(remaining.get(first).unwrap().value, 1);
+    let moved = windows.get(destination).unwrap();
+    assert_eq!(moved.name(), "work");
+    assert_eq!(moved.content().active().value, 3);
+    assert_eq!(moved.content().iter().len(), 1);
+    assert_eq!(moved.content().layout().dimensions(), (7, 15));
+    assert!(!moved.content().layout().is_zoomed());
+    assert_eq!(windows.active().unwrap().id(), destination);
+    assert!(windows.break_active_pane().unwrap().is_none());
+    assert_eq!(windows.iter().len(), 2);
+    windows.select_last();
+    assert_eq!(windows.active().unwrap().id(), source);
+    assert!(drops.borrow().is_empty());
+    drop(windows);
+    let mut actual = drops.borrow().clone();
+    actual.sort();
+    assert_eq!(actual, vec![1, 2, 3]);
+}

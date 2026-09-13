@@ -40,6 +40,8 @@ content area; repeat to restore the split view. Focus shortcuts work while zoome
 nearest separator left/down/up/right by one cell. Ctrl-B `{` / `}` swaps the active
 pane with the previous/next layout position, wrapping at the edges and keeping
 focus on the same shell. Resizing and swapping are disabled while zoomed.
+Ctrl-B `!` moves the active pane into a new window without restarting its shell
+or foreground program; Ctrl-B Tab returns to the source window.
 Ctrl-B `x` asks to hide the active pane and stop its foreground job: type `yes`
 and Enter to confirm, or Esc to cancel. Ctrl-B `z` restores the last hidden pane
 with its original shell; only one closed pane is retained. Unsaved work in the

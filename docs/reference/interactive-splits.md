@@ -106,6 +106,33 @@ The nested-PTY suite checks unequal widths, both swap directions, input followin
 the same shell, process identity and variables, resulting on-screen placement,
 child-observed dimensions, subsequent pane exit and terminal restoration.
 
+## Move a pane into its own window
+
+Ctrl-B `!` moves the active pane into a new window appended to the window bar.
+The new window inherits the source window's name and becomes active; Ctrl-B Tab
+returns to the source window. A single-pane window is unchanged. At the 16-window
+limit the operation is rejected with a best-effort bell.
+
+The existing pane object moves intact: its shell and foreground jobs keep running,
+and its parser, screen/history and pending input follow it. Pane IDs are local to
+a window, so the destination assigns its own initial pane ID. The source promotes
+the removed pane's sibling subtree, preserves the remaining ratios and exits zoom.
+The destination is unzoomed and fills its new window. Both windows' PTY/model sizes
+are synchronized through the usual resize/reflow path; moved programs receive
+SIGWINCH when dimensions change. Already queued output frames finish normally.
+
+Window identity and destination storage are prepared before source ownership is
+changed. Validation/allocation errors leave both collections unchanged; later PTY
+synchronization errors follow normal terminal cleanup. This action does not consume
+or replace the close-undo slot and never stops the moved foreground job.
+History mode and prompts consume their own keys; bracketed paste cannot invoke it.
+
+Unit tests cover non-Clone ownership, source geometry, zoom exit, focus/last-window
+selection, name inheritance, single-pane no-op and exhausted window IDs. A real
+PTY test moves an interactive foreground program, checks its unchanged PID and new
+width, retained screen content, source/moved shell variables and subsequent exits.
+Moving into an existing window is not implemented yet.
+
 ## Close and undo
 
 Ctrl-B `x` opens `Close pane? Type yes:`. Type exactly lowercase `yes` and

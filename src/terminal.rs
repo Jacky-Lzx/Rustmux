@@ -307,6 +307,7 @@ enum WindowKey {
     MoveRight,
     Split(SplitAxis),
     NextPane,
+    BreakPane,
     ToggleZoom,
     UndoClose,
     History,
@@ -457,6 +458,7 @@ impl WindowInput {
                 b'"' => output.push(WindowKey::Split(SplitAxis::Rows)),
                 b'{' => output.push(WindowKey::SwapPanePrevious),
                 b'}' => output.push(WindowKey::SwapPaneNext),
+                b'!' => output.push(WindowKey::BreakPane),
                 b'o' => output.push(WindowKey::NextPane),
                 b'Z' => output.push(WindowKey::ToggleZoom),
                 b'z' => output.push(WindowKey::UndoClose),
@@ -950,6 +952,33 @@ fn forward(
                             panes.synchronize_sizes()?;
                             renderer.invalidate();
                             force_redraw = true;
+                        }
+                    }
+                    WindowKey::BreakPane => {
+                        if windows.iter().len() == MAX_WINDOWS {
+                            if to_terminal.is_empty() {
+                                to_terminal.push_back(7);
+                            }
+                            continue;
+                        }
+                        let source = windows.active().unwrap().id();
+                        match windows.break_active_pane() {
+                            Ok(Some(_)) => {
+                                windows
+                                    .get_mut(source)
+                                    .unwrap()
+                                    .content_mut()
+                                    .synchronize_sizes()?;
+                                bar_dirty = true;
+                                renderer.invalidate();
+                                force_redraw = true;
+                            }
+                            Ok(None) => {}
+                            Err(_) => {
+                                if to_terminal.is_empty() {
+                                    to_terminal.push_back(7);
+                                }
+                            }
                         }
                     }
                     WindowKey::NextPane => {
@@ -1542,6 +1571,23 @@ mod window_input_tests {
             vec![WindowKey::UndoClose, WindowKey::ToggleZoom]
         );
         let bytes = b"\x1b[200~\x02z\x02Z\x1b[201~";
+        assert_eq!(
+            decode(bytes),
+            bytes
+                .iter()
+                .copied()
+                .map(WindowKey::Byte)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn break_pane_shortcut_requires_prefix_and_respects_paste() {
+        assert_eq!(
+            decode(b"!\x02!"),
+            vec![WindowKey::Byte(b'!'), WindowKey::BreakPane]
+        );
+        let bytes = b"\x1b[200~\x02!\x1b[201~";
         assert_eq!(
             decode(bytes),
             bytes

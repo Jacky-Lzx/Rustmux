@@ -143,3 +143,14 @@ Ctrl-B `Z` toggles zoom of the selected pane.
 The full existing nested-PTY suite is the regression check for this integration,
 including window creation and selection, background replies, modes, resize,
 rename/close prompts, final output, exit codes and direct-child reclamation.
+
+## Move into a new window
+
+`Windows<PaneSet<T>>::break_active_pane()` transfers the active content into a
+new single-pane window, without requiring `T: Clone`. It reserves both destination
+containers and checks the next window identity before removing anything. Empty
+collections and single-pane sources return `Ok(None)`. Success returns the new
+window ID, selects it and remembers the source for last-window navigation. Its
+name is copied from the source. Source layout removal preserves surviving leaf
+IDs and promotes the sibling subtree; destination pane IDs are collection-local.
+The operation performs no process I/O; the CLI then synchronizes both sets.

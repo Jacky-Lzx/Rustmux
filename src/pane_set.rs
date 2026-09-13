@@ -141,6 +141,20 @@ impl<T> PaneSet<T> {
         Ok(())
     }
 
+    /// Prepare destination storage before removing the active pane from this set.
+    pub(crate) fn detach_active(&mut self) -> io::Result<Option<Self>> {
+        if self.entries.len() == 1 {
+            return Ok(None);
+        }
+        let (rows, columns) = self.layout.dimensions();
+        let layout = Layout::new(rows, columns)?;
+        let mut entries = Vec::new();
+        entries.try_reserve(1).map_err(io::Error::other)?;
+        let content = self.close(self.layout.active())?;
+        entries.push((layout.active(), content));
+        Ok(Some(Self { layout, entries }))
+    }
+
     pub(crate) fn into_single(mut self) -> T {
         assert_eq!(self.entries.len(), 1);
         self.entries.pop().unwrap().1

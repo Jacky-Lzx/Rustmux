@@ -1743,3 +1743,46 @@ with tempfile.TemporaryDirectory() as directory:
         s.finish(0)
     finally:
         s.close()
+
+# Break a pane into a new window without interrupting its foreground program.
+with tempfile.TemporaryDirectory() as directory:
+    record = os.path.join(directory, "moving-job.pid")
+    s = Session()
+    try:
+        s.expect(b"RUSTMUX_READY>")
+        s.send(b"stty -echo; KEEP=source; printf 'SOURCE_%s\\n' READY\n")
+        s.expect(b"SOURCE_READY")
+        s.send(b"\x02%")
+        s.expect(b"RUSTMUX_READY>")
+        s.send(b"stty -echo; KEEP=moved; printf 'HISTORY_%s\\n' MOVED\n")
+        s.expect(b"HISTORY_MOVED")
+        script = ("import os; open(" + repr(record) + ", 'w').write(str(os.getpid())); "
+                  "print('JOB_READY', flush=True); "
+                  "exec('while input() != \"quit\": print(\"JOB:%s:%s\" % "
+                  "(os.getpid(), os.get_terminal_size().columns), flush=True)')")
+        s.send(("python3 -c " + shlex.quote(script) + "\n").encode())
+        s.expect(b"JOB_READY")
+        with open(record) as source:
+            moving_pid = int(source.read())
+        s.send(b"report\n")
+        s.expect(("JOB:%s:40" % moving_pid).encode())
+        s.send(b"\x02!report\n")
+        s.expect(("JOB:%s:80" % moving_pid).encode())
+        expect_bar(s, b"*2:shell")
+        assert any(b"HISTORY_MOVED" in row for row in s.last_rows[1:])
+        os.kill(moving_pid, 0)
+        s.send(b"\x02\tprintf '\\nKEEP:%s_' $KEEP; stty size\n")
+        s.expect(b"KEEP:source_23 80")
+        expect_bar(s, b"*1:shell")
+        s.send(b"\x02\treport\n")
+        s.expect(("JOB:%s:80" % moving_pid).encode())
+        s.send(b"quit\n")
+        s.expect(b"RUSTMUX_READY>")
+        s.send(b"printf '\\nKEEP:%s\\n' $KEEP\n")
+        s.expect(b"KEEP:moved")
+        s.send(b"exit 0\n")
+        expect_bar(s, b"*1:shell")
+        s.send(b"exit 0\n")
+        s.finish(0)
+    finally:
+        s.close()

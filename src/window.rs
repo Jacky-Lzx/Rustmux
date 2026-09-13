@@ -219,6 +219,39 @@ impl<T> Windows<T> {
     }
 }
 
+impl<T> Windows<crate::pane_set::PaneSet<T>> {
+    /// Move the active pane into a new trailing window without cloning contents.
+    /// Empty/single-pane sources are no-ops. Reserve storage and validate window
+    /// identity before taking ownership; reported errors preserve both collections.
+    /// The new window inherits the source name and becomes active.
+    pub fn break_active_pane(&mut self) -> io::Result<Option<WindowId>> {
+        let Some(source) = self.active() else {
+            return Ok(None);
+        };
+        if source.content().iter().len() == 1 {
+            return Ok(None);
+        }
+        let source_id = source.id();
+        let name = source.name().to_owned();
+        let value = self
+            .next_id
+            .ok_or_else(|| io::Error::other("window IDs exhausted"))?;
+        self.entries.try_reserve(1).map_err(io::Error::other)?;
+        let content = self
+            .active_mut()
+            .unwrap()
+            .content_mut()
+            .detach_active()?
+            .unwrap();
+        let id = WindowId(value);
+        self.entries.push(Window { id, name, content });
+        self.next_id = value.checked_add(1);
+        self.last_active = Some(source_id);
+        self.active = self.entries.len() - 1;
+        Ok(Some(id))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -234,5 +267,22 @@ mod tests {
         assert!(windows.create(String::new(), 2).is_err());
         assert_eq!(windows.active().unwrap().id(), last);
         assert_eq!(windows.iter().len(), 1);
+    }
+    #[test]
+    fn failed_break_does_not_detach_a_pane_or_consume_identity() {
+        use crate::{layout::SplitAxis, pane_set::PaneSet};
+        let mut panes = PaneSet::new(3, 7, "first").unwrap();
+        panes
+            .split_with(SplitAxis::Columns, |_, _| Ok("second"))
+            .unwrap();
+        let before = panes.layout().clone();
+        let mut windows = Windows::default();
+        let id = windows.create("source".into(), panes).unwrap();
+        windows.next_id = None;
+        assert!(windows.break_active_pane().is_err());
+        assert_eq!(windows.iter().len(), 1);
+        assert_eq!(windows.active().unwrap().id(), id);
+        assert_eq!(windows.active().unwrap().content().layout(), &before);
+        assert_eq!(*windows.active().unwrap().content().active(), "second");
     }
 }
