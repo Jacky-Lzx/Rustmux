@@ -23,3 +23,4 @@
 - [Terminal Status Replies](reference/status-replies.md)
 - [Character Sets](reference/character-sets.md)
 - [Terminal Reset](reference/terminal-reset.md)
+- [Soft Terminal Reset](reference/soft-reset.md)

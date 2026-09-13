@@ -33,6 +33,7 @@ struct Parameters {
     subparameter: [bool; 32],
     invalid: bool,
     private: bool,
+    soft_reset: bool,
 }
 
 impl Parameters {
@@ -265,6 +266,13 @@ impl Parser {
                 } else {
                     if !parameters.invalid {
                         match byte {
+                            _ if parameters.soft_reset => parameters.invalid = true,
+                            b'!' if !parameters.private
+                                && parameters.index == 0
+                                && parameters.values[0].is_none() =>
+                            {
+                                parameters.soft_reset = true
+                            }
                             b'0'..=b'9' => {
                                 let value = parameters.values[parameters.index]
                                     .unwrap_or(0)
@@ -304,6 +312,12 @@ impl Parser {
         command: u8,
         reply: &mut impl FnMut(&[u8]),
     ) {
+        if parameters.soft_reset {
+            if command == b'p' {
+                screen.soft_reset();
+            }
+            return;
+        }
         if parameters.private {
             if !parameters.subparameter.contains(&true) && matches!(command, b'h' | b'l') {
                 for mode in &parameters.values[..=parameters.index] {

@@ -38,5 +38,5 @@ input, every chunk boundary, immediate query responses and renderer replay.
 A real CLI PTY test resets from an alternate graphics screen and then returns
 to an interactive shell prompt.
 
-Soft reset (DECSTR), device-attribute replies and terminal capability queries
-remain future work. Hardware-terminal power-on behavior is outside this model.
+[Soft reset (DECSTR)](soft-reset.md) restores modes without erasing text.
+Device-attribute replies and terminal capability queries remain future work. Hardware-terminal power-on behavior is outside this model.

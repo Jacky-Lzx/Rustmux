@@ -150,6 +150,30 @@ impl Screen {
         self.character_sets = CharacterSets::default();
     }
 
+    /// DECSTR: reset supported modes while retaining cells, cursor coordinates,
+    /// active grid and tab stops. Autowrap follows the XTerm default (enabled).
+    pub fn soft_reset(&mut self) {
+        self.cursor_visible = true;
+        self.insert_mode = false;
+        self.scroll_region = (0, self.rows - 1);
+        self.style = Style::default();
+        self.wrap_pending = false;
+        self.origin_mode = false;
+        self.auto_wrap = true;
+        self.character_sets = CharacterSets::default();
+        // Unlike RIS, DECSTR establishes a home-position save slot for the
+        // current grid and preserves the inactive grid and mode-1049 snapshot.
+        self.saved_cursor = Some(SavedCursor {
+            row: 0,
+            column: 0,
+            style: self.style,
+            wrap_pending: false,
+            origin_mode: false,
+            auto_wrap: true,
+            character_sets: self.character_sets,
+        });
+    }
+
     /// Resize both grids, preserving the top-left overlap without text reflow.
     /// New cells use each grid's writing background; clipped content is discarded.
     /// Invalid dimensions or allocation failure leave the entire model unchanged.

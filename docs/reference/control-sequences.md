@@ -22,6 +22,7 @@ CSI below means the two bytes ESC followed by `[`. The command subset follows
 
 | Sequence | Effect |
 | --- | --- |
+| CSI ! p (DECSTR) | [Soft reset](soft-reset.md): restore modes while retaining text and cursor position |
 | ESC c (RIS) | [Reset the terminal model](terminal-reset.md) at its current dimensions |
 | CSI n A / B / C / D | Move up / down / right / left; omitted or zero count means one |
 | CSI row ; column H / f | Position relative to the active origin using one-based coordinates; omitted or zero values mean one |
@@ -57,7 +58,7 @@ it. CAN and SUB cancel a sequence; a new ESC restarts ESC/CSI parsing.
 
 ## Unsupported input and limits
 
-Unknown CSI commands, unsupported private commands, intermediate bytes, non-SGR colon subparameters,
+Unknown CSI commands, unsupported private commands, unsupported intermediate bytes, non-SGR colon subparameters,
 extra parameters and numeric overflow cause the command to be ignored through
 its final byte. At most 32 optional usize parameters are stored. Cursor positioning still accepts
 at most two; one-parameter commands reject extra parameters. Parser storage is constant regardless of

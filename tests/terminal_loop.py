@@ -292,6 +292,16 @@ try:
     assert s.last_frame.endswith(b"\x1b[?25h"), s.last_frame
     s.send(b"\n")
     s.expect(b"RUSTMUX_READY> ")
+
+    s.send(b"stty -echo; printf '\\033[2J\\033[H\\033[31;44mKEPT"
+           b"\\033[?25l\\033[4h\\033(0\\033[!pq"
+           b"\\033[2;1HSOFT_RESET_DONE'; read answer; "
+           b"stty echo; printf '\\033[3;1H'\n")
+    s.expect(b"\r\nSOFT_RESET_DONE\r\n")
+    assert s.last_rows[0] == b"KEPTq", s.last_rows
+    assert s.last_frame.endswith(b"\x1b[?25h"), s.last_frame
+    s.send(b"\n")
+    s.expect(b"RUSTMUX_READY> ")
     s.send(b"exit\n")
     s.finish(0)
 finally:
