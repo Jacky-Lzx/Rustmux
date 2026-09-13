@@ -44,5 +44,5 @@ byte by byte, checking custom/default stops, clearing, boundary counts, invalid
 commands, wide cells, origin mode, alternate sharing, resize and one-cell grids.
 The real CLI PTY test checks custom alignment and backward tabulation.
 
-Tab-stop reset extensions, horizontal margins and terminal queries remain
+Tab-stop reset extensions, horizontal margins and queries beyond standard DSR remain
 outside this subset.

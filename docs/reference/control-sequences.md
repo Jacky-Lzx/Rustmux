@@ -24,6 +24,7 @@ CSI below means the two bytes ESC followed by `[`. The command subset follows
 | --- | --- |
 | CSI n A / B / C / D | Move up / down / right / left; omitted or zero count means one |
 | CSI row ; column H / f | Position relative to the active origin using one-based coordinates; omitted or zero values mean one |
+| CSI 5 n / 6 n | Reply with status / cursor position; see [Terminal Status Replies](status-replies.md) |
 | CSI n J | Erase display: 0 cursor through end, 1 start through cursor, 2 whole grid |
 | CSI parameters m | Set text attributes and colors; see [Text Styles](text-styles.md) |
 | CSI 4 h / l | Enable / disable [insert mode](insert-mode.md) |
@@ -65,7 +66,7 @@ interpreted or buffered; an unterminated string continues to discard input until
 its terminator or cancellation. Other unsupported controls are ignored.
 UTF-8 decoding and replacement are
 described in [UTF-8 and Character Width](unicode.md). There is no 8-bit C1 command
-support or terminal replies yet. Cursor visibility and ESC 7/8 are described in [Cursor State](cursor.md).
+support. Standard DSR replies are described in [Terminal Status Replies](status-replies.md). Cursor visibility and ESC 7/8 are described in [Cursor State](cursor.md).
 Mode 1049 is described in
 [Alternate Screen](alternate-screen.md).
 

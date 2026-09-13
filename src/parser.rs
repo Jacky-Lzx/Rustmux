@@ -1,5 +1,10 @@
 //! Incremental UTF-8/CSI parsing for the CLI screen model.
 
+/// Maximum reply bytes per consumed input byte, including a final byte that
+/// completes a query begun in an earlier chunk. Two decimal usize coordinates
+/// plus CSI, separator and final byte fit in this conservative bound.
+pub const MAX_REPLY_BYTES: usize = 4 + 2 * (usize::BITS as usize / 3 + 1);
+
 use crate::screen::{EraseMode, Screen};
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -82,9 +87,22 @@ impl Parser {
         Self::default()
     }
 
+    /// Parse for display only, discarding terminal replies.
     pub fn advance(&mut self, screen: &mut Screen, bytes: &[u8]) {
+        self.advance_with_replies(screen, bytes, &mut |_| {});
+    }
+
+    /// Deliver replies synchronously in stream order, without storing them.
+    /// The caller must queue or consume each reply. At most MAX_REPLY_BYTES
+    /// reply bytes are emitted for each input byte, including split queries.
+    pub fn advance_with_replies(
+        &mut self,
+        screen: &mut Screen,
+        bytes: &[u8],
+        reply: &mut impl FnMut(&[u8]),
+    ) {
         for &byte in bytes {
-            self.byte(screen, byte);
+            self.byte(screen, byte, reply);
         }
     }
 
@@ -98,7 +116,7 @@ impl Parser {
         self.state = State::Ground;
     }
 
-    fn text_byte(&mut self, screen: &mut Screen, byte: u8) {
+    fn text_byte(&mut self, screen: &mut Screen, byte: u8, reply: &mut impl FnMut(&[u8])) {
         self.utf8[self.utf8_len] = byte;
         self.utf8_len += 1;
         match std::str::from_utf8(&self.utf8[..self.utf8_len]) {
@@ -115,16 +133,16 @@ impl Parser {
                     // Reprocess bytes after the invalid prefix: an ESC or ASCII
                     // character here must retain its ordinary meaning.
                     for &byte in &pending[invalid_len..length] {
-                        self.byte(screen, byte);
+                        self.byte(screen, byte, reply);
                     }
                 }
             }
         }
     }
 
-    fn byte(&mut self, screen: &mut Screen, byte: u8) {
+    fn byte(&mut self, screen: &mut Screen, byte: u8, reply: &mut impl FnMut(&[u8])) {
         if self.utf8_len != 0 {
-            self.text_byte(screen, byte);
+            self.text_byte(screen, byte, reply);
             return;
         }
         // CAN and SUB cancel any incomplete sequence, including strings.
@@ -168,7 +186,7 @@ impl Parser {
                 if byte.is_ascii() {
                     screen.print(char::from(byte));
                 } else {
-                    self.text_byte(screen, byte);
+                    self.text_byte(screen, byte, reply);
                 }
                 State::Ground
             }
@@ -218,7 +236,7 @@ impl Parser {
                 let parameters = &mut self.parameters;
                 if (0x40..=0x7e).contains(&byte) {
                     if !parameters.invalid {
-                        Self::dispatch(screen, parameters, byte);
+                        Self::dispatch(screen, parameters, byte, reply);
                     }
                     State::Ground
                 } else {
@@ -257,7 +275,12 @@ impl Parser {
         };
     }
 
-    fn dispatch(screen: &mut Screen, parameters: &Parameters, command: u8) {
+    fn dispatch(
+        screen: &mut Screen,
+        parameters: &Parameters,
+        command: u8,
+        reply: &mut impl FnMut(&[u8]),
+    ) {
         if parameters.private {
             if !parameters.subparameter.contains(&true) && matches!(command, b'h' | b'l') {
                 for mode in &parameters.values[..=parameters.index] {
@@ -323,6 +346,21 @@ impl Parser {
             return;
         }
         match command {
+            b'n' => match first {
+                5 => reply(b"\x1b[0n"),
+                6 => {
+                    let (row, column) = screen.cursor();
+                    let row = if screen.origin_mode() {
+                        row - screen.scroll_region().0
+                    } else {
+                        row
+                    };
+                    let response = format!("\x1b[{};{}R", row + 1, column + 1);
+                    debug_assert!(response.len() <= MAX_REPLY_BYTES);
+                    reply(response.as_bytes());
+                }
+                _ => {}
+            },
             b'A' => screen.move_up(first.max(1)),
             b'B' => screen.move_down(first.max(1)),
             b'C' => screen.move_right(first.max(1)),

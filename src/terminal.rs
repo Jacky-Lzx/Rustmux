@@ -18,6 +18,7 @@ use nix::poll::{PollFd, PollFlags, poll};
 use nix::sys::termios::{self, SetArg, Termios};
 use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGWINCH};
 
+use crate::parser::MAX_REPLY_BYTES;
 use crate::pty::PtyShell;
 use crate::{parser::Parser, render::render, screen::Screen};
 
@@ -306,7 +307,14 @@ fn forward(
         }
         // Backpressure reaches the child: don't accumulate frames or consume
         // unbounded child output while the previous frame is still being sent.
-        if !eof && to_terminal.is_empty() {
+        // Reserve worst-case reply space before reading child output. A single
+        // byte can finish a query retained from a previous read.
+        let reply_read_limit = if status.is_some() {
+            8192 // No live child to receive replies; drain its final output.
+        } else {
+            (LIMIT - to_shell.len()) / MAX_REPLY_BYTES
+        };
+        if !eof && to_terminal.is_empty() && reply_read_limit != 0 {
             inner_events |= PollFlags::POLLIN;
         }
         if status.is_none() && !eof && !to_shell.is_empty() {
@@ -360,10 +368,16 @@ fn forward(
         if !eof && inner_events.contains(PollFlags::POLLIN) {
             if readable {
                 let mut bytes = [0; 8192];
-                match shell.read(&mut bytes) {
+                let read_limit = bytes.len().min(reply_read_limit);
+                match shell.read(&mut bytes[..read_limit]) {
                     Ok(0) => eof = true,
                     Ok(n) => {
-                        parser.advance(&mut screen, &bytes[..n]);
+                        parser.advance_with_replies(&mut screen, &bytes[..n], &mut |reply| {
+                            if status.is_none() {
+                                to_shell.extend(reply);
+                            }
+                        });
+                        debug_assert!(to_shell.len() <= LIMIT);
                         dirty = true;
                     }
                     Err(e)

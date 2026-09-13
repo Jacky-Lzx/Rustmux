@@ -48,5 +48,5 @@ The real CLI PTY test also checks a fixed header/footer through LF and RI.
 
 [Line Editing](line-editing.md) adds IL/DL and explicit SU/SD scrolling.
 [Character Editing](character-editing.md) adds ICH/DCH/ECH; horizontal margins
-and terminal replies remain future work. This step does not claim complete
+and replies beyond standard DSR remain future work. This step does not claim complete
 Neovim compatibility.

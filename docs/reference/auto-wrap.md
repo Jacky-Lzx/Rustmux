@@ -45,4 +45,4 @@ resize state and malformed commands. A real CLI PTY fixture verifies last-column
 overwrite followed by wrapping after re-enabling.
 
 [Tab Stops](tab-stops.md) adds configurable horizontal stops.
-Horizontal margins and terminal queries remain future work.
+Horizontal margins and queries beyond standard DSR remain future work.

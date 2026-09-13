@@ -5,6 +5,7 @@ import json
 import os
 import re
 import select
+import shlex
 import signal
 import struct
 import subprocess
@@ -274,6 +275,44 @@ try:
     s.send(b"\n")
     s.expect(b"RUSTMUX_READY> ")
     s.send(b"exit\n")
+    s.finish(0)
+finally:
+    s.close()
+
+
+# Query replies must reach the child, including a burst larger than the queue.
+probe = r"""
+import os, select, threading, time, tty
+tty.setraw(0)
+def receive(expected):
+    data = bytearray()
+    end = time.monotonic() + 6
+    while len(data) < len(expected):
+        assert time.monotonic() < end, (len(data), len(expected))
+        if select.select([0], [], [], 0.1)[0]:
+            data.extend(os.read(0, len(expected) - len(data)))
+    assert data == expected, repr(data[:80])
+os.write(1, b"\x1b[2;3H\x1b[5n\x1b[6n")
+receive(b"\x1b[0n\x1b[2;3R")
+os.write(1, b"\x1b[3;10r\x1b[?6h\x1b[2;4H\x1b[6n")
+receive(b"\x1b[2;4R")
+def flood():
+    data = b"\x1b[5n" * 20000
+    while data:
+        data = data[os.write(1, data):]
+writer = threading.Thread(target=flood)
+writer.start()
+time.sleep(0.1)
+receive(b"\x1b[0n" * 20000)
+writer.join(timeout=2)
+assert not writer.is_alive()
+os.write(1, b"\x1b[?6l\x1b[r\x1b[2J\x1b[HREPLIES_OK")
+"""
+s = Session()
+try:
+    s.expect(b"RUSTMUX_READY> ")
+    s.send(("exec python3 -c " + shlex.quote(probe) + "\n").encode())
+    s.expect(b"\r\nREPLIES_OK\r\n")
     s.finish(0)
 finally:
     s.close()

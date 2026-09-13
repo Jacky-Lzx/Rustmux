@@ -49,4 +49,4 @@ insertion to replacement and verifies the final visible row.
 
 [Automatic Wrap Mode](auto-wrap.md) controls edge wrapping independently of IRM.
 [Tab Stops](tab-stops.md) adds configurable horizontal stops.
-Horizontal margins and terminal queries remain future work. Full Neovim compatibility is not yet claimed.
+Horizontal margins and queries beyond standard DSR remain future work. Full Neovim compatibility is not yet claimed.

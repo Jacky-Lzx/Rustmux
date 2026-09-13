@@ -93,7 +93,10 @@ are required. Local validation is on macOS; Linux results require the CI run.
 
 ## Current compatibility
 
-The CLI now depends on our parser's supported subset. Terminal queries, mouse modes and full emoji shaping are not implemented. Programs requiring
+The CLI now depends on our parser's supported subset. Queries beyond standard DSR, mouse modes and full emoji shaping are not implemented. Programs requiring
 those features may display incorrectly or wait for an unsupported terminal reply.
 Full-screen editor compatibility is not yet an acceptance claim. There is no
 split layout or persistent session support.
+
+[Terminal Status Replies](status-replies.md) describes DSR responses and how
+reply capacity participates in PTY read backpressure.
