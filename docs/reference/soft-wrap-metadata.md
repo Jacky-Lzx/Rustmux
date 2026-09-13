@@ -37,9 +37,9 @@ joining a clipped row to the next row based on obsolete geometry.
 ## Scope and validation
 
 Visible output and shortcuts are unchanged. Width shrink can still lose right-edge
-content. Full reflow also needs rules for meaningful trailing spaces, wide-glyph
-padding, logical-line cursor mapping and bounded history growth; those are later
-steps and must not be inferred from this flag alone.
+content. [Row extents](line-extents.md) now distinguish meaningful trailing spaces from
+wide-glyph padding. Full reflow still needs logical-line reconstruction, cursor
+mapping and bounded history growth; these must not be inferred from this flag alone.
 
 `cargo test --test soft_wrap_metadata` checks delayed and wide-character wrapping,
 explicit line feeds, disabled wrap, single-row scrolling, history and height round

@@ -1,3 +1,4 @@
+mod common;
 use rustmux::{
     parser::Parser,
     render::{Renderer, render},
@@ -81,7 +82,7 @@ fn renderer_replays_state_and_only_resynchronizes_changes() {
         let screen = parsed(input);
         let mut bytes = Vec::new();
         render(&screen, &mut bytes).unwrap();
-        assert_eq!(parsed(&bytes), screen);
+        common::assert_rendered_screen_eq(&parsed(&bytes), &screen);
         bytes.clear();
         renderer.render(&screen, &mut bytes).unwrap();
         assert!(bytes.windows(8).any(|w| w == b"\x1b[?1000l"));

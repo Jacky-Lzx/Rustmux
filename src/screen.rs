@@ -98,6 +98,8 @@ pub struct Screen {
     scrollback: Scrollback,
     continued: Vec<bool>,
     inactive_continued: Vec<bool>,
+    used: Vec<usize>,
+    inactive_used: Vec<usize>,
     saved_main_cursor: Option<SavedCursor>,
     saved_cursor: Option<SavedCursor>,
     inactive_saved_cursor: Option<SavedCursor>,
@@ -144,6 +146,16 @@ impl Screen {
         self.scrollback.continued(row)
     }
 
+    /// Meaningful columns in a row, including explicitly written trailing spaces.
+    pub fn row_used_columns(&self, row: usize) -> Option<usize> {
+        self.used.get(row).copied()
+    }
+
+    /// Meaningful columns in a retained physical row at its original width.
+    pub fn history_row_used_columns(&self, row: usize) -> Option<usize> {
+        self.scrollback.used(row)
+    }
+
     /// Discard primary-screen history without changing either visible grid or modes.
     pub fn clear_history(&mut self) {
         self.scrollback = Scrollback::default();
@@ -181,7 +193,17 @@ impl Screen {
             .try_reserve_exact(rows)
             .map_err(io::Error::other)?;
         inactive_continued.resize(rows, false);
+        let mut used = Vec::new();
+        used.try_reserve_exact(rows).map_err(io::Error::other)?;
+        used.resize(rows, 0);
+        let mut inactive_used = Vec::new();
+        inactive_used
+            .try_reserve_exact(rows)
+            .map_err(io::Error::other)?;
+        inactive_used.resize(rows, 0);
         Ok(Self {
+            used,
+            inactive_used,
             continued,
             inactive_continued,
             rows,
@@ -223,6 +245,8 @@ impl Screen {
         self.clear_history();
         self.continued.fill(false);
         self.inactive_continued.fill(false);
+        self.used.fill(0);
+        self.inactive_used.fill(0);
         self.saved_main_cursor = None;
         self.saved_cursor = None;
         self.inactive_saved_cursor = None;
@@ -336,11 +360,18 @@ impl Screen {
         } else {
             &self.continued
         };
+        let main_used = if self.is_alternate() {
+            &self.inactive_used
+        } else {
+            &self.used
+        };
         for (index, row) in main_cells[..shift * self.columns]
             .chunks(self.columns)
             .enumerate()
         {
-            resized.scrollback.push(row, main_continued[index]);
+            resized
+                .scrollback
+                .push(row, main_continued[index], main_used[index]);
         }
         resized.cursor_visible = self.cursor_visible;
         resized.cursor_shape = self.cursor_shape;
@@ -371,6 +402,9 @@ impl Screen {
             .map(|saved| clamp(saved, inactive_shift, inactive_restore));
         resized.style = self.style;
         resized.cells.fill(self.blank());
+        if self.blank().style != Style::default() {
+            resized.used.fill(columns);
+        }
         resized.row = (self.row.saturating_sub(active_shift) + active_restore).min(rows - 1);
         resized.column = self.column.min(columns - 1);
         if let Some(saved) = self.saved_main_cursor {
@@ -380,6 +414,9 @@ impl Screen {
                 wrap_pending: false,
                 ..saved
             });
+            if saved.style.background != crate::style::Color::Default {
+                resized.inactive_used.fill(columns);
+            }
             resized.inactive_cells.fill(Cell {
                 style: Style {
                     background: saved.style.background,
@@ -390,7 +427,11 @@ impl Screen {
         }
         let mut mixed_history_widths = false;
         for row in (0..restore).rev() {
-            let (cells, continued) = resized
+            let crate::scrollback::HistoryRow {
+                cells,
+                continued,
+                used,
+            } = resized
                 .scrollback
                 .pop_newest()
                 .expect("restorable history row");
@@ -401,6 +442,21 @@ impl Screen {
                 } else {
                     resized.continued[row] = continued;
                 }
+            }
+            let restored_used = Self::clipped_used(&cells, used, columns);
+            if self.is_alternate() {
+                resized.inactive_used[row] =
+                    if cells.len() < columns && resized.inactive_used[row] == columns {
+                        columns
+                    } else {
+                        restored_used
+                    };
+            } else {
+                resized.used[row] = if cells.len() < columns && resized.used[row] == columns {
+                    columns
+                } else {
+                    restored_used
+                };
             }
             let destination = if self.is_alternate() {
                 &mut resized.inactive_cells
@@ -413,6 +469,35 @@ impl Screen {
                 }
                 destination[row * columns + column] = cell.clone();
             }
+        }
+        for (offset, cells) in self.cells[active_shift * self.columns..]
+            .chunks(self.columns)
+            .take(rows - active_restore)
+            .enumerate()
+        {
+            let used = Self::clipped_used(cells, self.used[active_shift + offset], columns);
+            resized.used[active_restore + offset] =
+                if columns > self.columns && self.blank().style != Style::default() {
+                    columns
+                } else {
+                    used
+                };
+        }
+        for (offset, cells) in self.inactive_cells[inactive_shift * self.columns..]
+            .chunks(self.columns)
+            .take(rows - inactive_restore)
+            .enumerate()
+        {
+            let used =
+                Self::clipped_used(cells, self.inactive_used[inactive_shift + offset], columns);
+            let padded = self
+                .saved_main_cursor
+                .is_some_and(|saved| saved.style.background != crate::style::Color::Default);
+            resized.inactive_used[inactive_restore + offset] = if columns > self.columns && padded {
+                columns
+            } else {
+                used
+            };
         }
         Self::move_overlap(
             &mut self.cells[active_shift * self.columns..],
@@ -453,6 +538,8 @@ impl Screen {
     pub(crate) fn prepend_display_row(&mut self) -> io::Result<()> {
         self.resize_display(self.rows + 1, self.columns)?;
         self.cells.rotate_right(self.columns);
+        self.used.rotate_right(1);
+        self.used[0] = 0;
         self.continued.rotate_right(1);
         self.continued[0] = false;
         self.row += 1;
@@ -477,6 +564,14 @@ impl Screen {
         self.row = row;
         self.column = column;
         self.wrap_pending = false;
+    }
+
+    fn clipped_used(cells: &[Cell], used: usize, columns: usize) -> usize {
+        let mut end = used.min(columns);
+        if end == columns && end > 0 && cells.get(end - 1).is_some_and(|cell| cell.width == 2) {
+            end -= 1;
+        }
+        end
     }
 
     fn move_overlap(source: &mut [Cell], old_columns: usize, target: &mut [Cell], columns: usize) {
@@ -516,9 +611,15 @@ impl Screen {
         });
         std::mem::swap(&mut self.cells, &mut self.inactive_cells);
         std::mem::swap(&mut self.continued, &mut self.inactive_continued);
+        std::mem::swap(&mut self.used, &mut self.inactive_used);
         std::mem::swap(&mut self.scroll_region, &mut self.inactive_scroll_region);
         std::mem::swap(&mut self.saved_cursor, &mut self.inactive_saved_cursor);
         let blank = self.blank();
+        self.used.fill(if blank.style == Style::default() {
+            0
+        } else {
+            self.columns
+        });
         self.cells.fill(blank);
         self.continued.fill(false);
         self.wrap_pending = false;
@@ -532,11 +633,13 @@ impl Screen {
         };
         std::mem::swap(&mut self.cells, &mut self.inactive_cells);
         std::mem::swap(&mut self.continued, &mut self.inactive_continued);
+        std::mem::swap(&mut self.used, &mut self.inactive_used);
         std::mem::swap(&mut self.scroll_region, &mut self.inactive_scroll_region);
         std::mem::swap(&mut self.saved_cursor, &mut self.inactive_saved_cursor);
         // Release discarded combining suffixes; the next visit starts blank.
         self.inactive_cells.fill(Cell::default());
         self.inactive_continued.fill(false);
+        self.inactive_used.fill(0);
         self.inactive_saved_cursor = None;
         self.inactive_scroll_region = (0, self.rows - 1);
         self.apply_saved_cursor(saved);
@@ -789,6 +892,8 @@ impl Screen {
             }
             if self.cells[index].combining.len() < MAX_COMBINING_SCALARS {
                 self.cells[index].combining.push(character);
+                self.used[self.row] = self.used[self.row]
+                    .max(index % self.columns + usize::from(self.cells[index].width));
             }
             return;
         }
@@ -802,6 +907,7 @@ impl Screen {
             if !self.wrap_pending {
                 let start = self.row * self.columns + self.column;
                 self.clear_range(start..(self.row + 1) * self.columns);
+                self.used[self.row] = self.used[self.row].min(self.column);
             }
             self.column = 0;
             self.advance_line(true);
@@ -832,6 +938,7 @@ impl Screen {
                 ..Cell::default()
             };
         }
+        self.used[self.row] = self.used[self.row].max(self.column + width);
         if self.column + width == self.columns {
             self.column = self.columns - 1;
             self.wrap_pending = true;
@@ -849,6 +956,15 @@ impl Screen {
             range.end += 1;
         }
         let blank = self.blank();
+        for row in range.start / self.columns..=(range.end - 1) / self.columns {
+            let start = range.start.saturating_sub(row * self.columns);
+            let end = (range.end - row * self.columns).min(self.columns);
+            if blank.style != Style::default() {
+                self.used[row] = self.used[row].max(end);
+            } else if end >= self.used[row] {
+                self.used[row] = self.used[row].min(start);
+            }
+        }
         self.cells[range].fill(blank);
     }
 
@@ -974,6 +1090,15 @@ impl Screen {
             self.clear_range(retained_end - 1..retained_end);
         }
         let blank = self.blank();
+        let used = self.used[self.row];
+        self.used[self.row] = if used > self.column {
+            (used + count).min(self.columns)
+        } else {
+            used
+        };
+        if blank.style != Style::default() {
+            self.used[self.row] = self.used[self.row].max(self.column + count);
+        }
         self.cells[start..end].rotate_right(count);
         self.cells[start..start + count].fill(blank);
         self.wrap_pending = false;
@@ -992,8 +1117,18 @@ impl Screen {
         }
         let start = self.row * self.columns + self.column;
         let end = (self.row + 1) * self.columns;
+        let used = self.used[self.row];
         self.clear_range(start..start + count);
         let blank = self.blank();
+        self.used[self.row] = if blank.style != Style::default() {
+            self.columns
+        } else if used <= self.column {
+            used
+        } else if used <= self.column + count {
+            self.used[self.row].min(self.column)
+        } else {
+            used - count
+        };
         self.cells[start..end].rotate_left(count);
         self.cells[end - count..end].fill(blank);
         self.wrap_pending = false;
@@ -1091,7 +1226,8 @@ impl Screen {
                     .chunks(self.columns)
                     .enumerate()
                 {
-                    self.scrollback.push(row, self.continued[index]);
+                    self.scrollback
+                        .push(row, self.continued[index], self.used[index]);
                 }
             }
             self.shift_rows(self.scroll_region.0, self.scroll_region.1, count, false);
@@ -1112,6 +1248,18 @@ impl Screen {
     fn shift_rows(&mut self, top: usize, bottom: usize, count: usize, down: bool) {
         let lines = count.min(bottom - top + 1);
         let amount = lines * self.columns;
+        let blank_used = if self.blank().style == Style::default() {
+            0
+        } else {
+            self.columns
+        };
+        if down {
+            self.used[top..=bottom].rotate_right(lines);
+            self.used[top..top + lines].fill(blank_used);
+        } else {
+            self.used[top..=bottom].rotate_left(lines);
+            self.used[bottom + 1 - lines..=bottom].fill(blank_used);
+        }
         if down {
             self.continued[top..=bottom].rotate_right(lines);
             self.continued[top..top + lines].fill(false);

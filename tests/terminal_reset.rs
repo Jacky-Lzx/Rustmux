@@ -1,3 +1,4 @@
+mod common;
 use rustmux::{parser::Parser, render::render, screen::Screen};
 
 // Exercise every persisted family of screen state before resetting.
@@ -86,5 +87,5 @@ fn queries_and_renderer_observe_reset_state_immediately() {
     render(&screen, &mut frame).unwrap();
     let mut replay = Screen::new(4, 16).unwrap();
     Parser::new().advance(&mut replay, &frame);
-    assert_eq!(replay, screen);
+    common::assert_rendered_screen_eq(&replay, &screen);
 }

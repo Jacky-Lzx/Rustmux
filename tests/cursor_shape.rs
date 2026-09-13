@@ -1,3 +1,4 @@
+mod common;
 use rustmux::{
     parser::Parser,
     render::render,
@@ -91,6 +92,6 @@ fn frames_emit_shape_even_when_hidden_and_replay_without_mutation() {
         assert_eq!(screen, before);
         let mut replay = Screen::new(3, 8).unwrap();
         Parser::new().advance(&mut replay, &bytes);
-        assert_eq!(screen, replay);
+        common::assert_rendered_screen_eq(&replay, &screen);
     }
 }

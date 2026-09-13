@@ -5,6 +5,7 @@ retained physical rows, and `history_row(index)` returns a read-only cell slice
 in oldest-to-newest order. Invalid indices return `None`. Rows preserve their
 original width, spaces, colors, wide-character pairs and combining suffixes.
 Each pane has its own screen, so history is isolated between panes and windows.
+Rows also retain [meaningful extents](line-extents.md) separately from their physical width.
 
 Full-height upward scrolling on the primary screen captures the departing rows.
 This includes LF/IND, automatic wrapping and explicit CSI S. Scroll counts are

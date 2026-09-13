@@ -1,3 +1,4 @@
+mod common;
 use rustmux::{parser::Parser, render::render, screen::Screen};
 
 fn parsed(input: &[u8]) -> Screen {
@@ -63,6 +64,6 @@ fn rendering_synchronizes_mode_without_mutating_model() {
         assert_eq!(screen, before);
         let mut replay = Screen::new(2, 5).unwrap();
         Parser::new().advance(&mut replay, &output);
-        assert_eq!(replay, screen);
+        common::assert_rendered_screen_eq(&replay, &screen);
     }
 }
