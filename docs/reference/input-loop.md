@@ -70,8 +70,8 @@ process, with exclusive terminal ownership and single-threaded startup.
 
 SIGWINCH sets a separate atomic flag, so resize events cannot overwrite termination
 signals. The event loop reads the latest outer-terminal size, reserves the top bar row
-(unless only one row is available), resizes both model grids in every pane,
-and calls PtyShell::resize;
+(unless only one row is available), prepares both model grids for every pane,
+then updates each live PTY and commits its prepared screen;
 TIOCSWINSZ updates the inner PTY and lets the kernel notify its foreground process
 group. No terminal operations run in the signal handler. Coalesced events use the
 latest size, including an initial recheck after handler registration to close the
@@ -125,3 +125,8 @@ synchronized-output start time, EOF observation time and cached child status.
 The event loop retains one physical-terminal frame queue and render deadline.
 This keeps pending bytes and lifecycle state with their originating child across
 focus changes. Background panes continue to receive polling time.
+
+Screen preparation happens before any PTY size changes. A commit error exits via
+normal restoration; already completed PTY updates are not rolled back. See
+[prepared pane resizing](pane-ownership.md#preparing-and-committing-a-real-pane-resize)
+for ownership, allocation and failure behavior.

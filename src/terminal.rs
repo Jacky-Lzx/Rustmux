@@ -505,6 +505,27 @@ fn forward(
         } else {
             None
         };
+        // Observe exits before preparing resizes, so dead panes need no PTY ioctl.
+        for window in windows.iter_mut() {
+            let (shell, _, _, state) = window.content_mut().parts_mut();
+            if state.status.is_none() {
+                state.status = shell.try_wait()?;
+            }
+        }
+        if let Some(size) = resize {
+            // Allocate every destination screen before changing any live PTY size.
+            let prepared = windows
+                .iter_mut()
+                .map(|window| {
+                    window
+                        .content_mut()
+                        .prepare_resize(pane_rows(size.ws_row), size.ws_col)
+                })
+                .collect::<io::Result<Vec<_>>>()?;
+            for resize in prepared {
+                resize.commit()?;
+            }
+        }
         let names: Vec<_> = windows
             .iter()
             .map(|window| window.name().to_owned())
@@ -517,22 +538,7 @@ fn forward(
         let mut finished = Vec::new();
         for window in windows.iter_mut() {
             let id = window.id();
-            let (shell, _, screen, state) = window.content_mut().parts_mut();
-            if state.status.is_none() {
-                state.status = shell.try_wait()?;
-            }
-            if let Some(size) = resize {
-                screen.resize(
-                    usize::from(pane_rows(size.ws_row)),
-                    usize::from(size.ws_col),
-                )?;
-                screen.set_synchronized_output(false);
-                state.synchronized_since = None;
-                if state.status.is_none() && !state.eof {
-                    shell.resize(pane_rows(size.ws_row), size.ws_col)?;
-                }
-                state.dirty = true;
-            }
+            let (_, _, screen, state) = window.content_mut().parts_mut();
             let paused = synchronized_pause(
                 screen,
                 &mut state.synchronized_since,

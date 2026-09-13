@@ -49,6 +49,35 @@ container, a higher layer must coordinate screen allocation, PTY sizing, renderi
 and input routing for the resulting geometry. This collection is not a transaction
 covering those external operations and does not itself start or terminate processes.
 
+## Preparing and committing a real pane resize
+
+`Pane::prepare_resize(rows, columns)` validates dimensions and prepares resized
+screen grids without touching the live pane or PTY. The returned
+`PreparedPaneResize` exclusively borrows the pane: output cannot be parsed into
+it between preparation and commit, preventing an old screen snapshot from
+replacing newer output. Dropping the preparation cancels it without changing
+screen, parser, I/O metadata or PTY size. Same-size preparation avoids cloning
+the screen; changed sizes temporarily retain both old and prepared grids.
+Reported validation/allocation errors preserve the pane; standard cloning
+allocation failure can still abort as with other Rust collections.
+
+`commit()` resizes a live PTY first and then installs the prepared screen. A PTY
+error leaves this pane's model and I/O metadata untouched. Known EOF or cached
+child exit skips the ioctl and updates only the model. A successful commit clears
+the synchronized-output hold and schedules redraw, including for same-size
+notifications. Parser state and queued input/replies remain attached to the pane.
+Callers must keep EOF/exit observations current, as the CLI does.
+
+The CLI now prepares all window screens before issuing any resize ioctl, then
+commits them sequentially. A preparation error changes no pane or PTY. A later
+PTY error may follow earlier successful commits; the CLI returns the error,
+restores the outer terminal and cleans up its children. It does not attempt to
+undo PTY changes or SIGWINCH already observed by applications. This is per-pane
+commit consistency, not an all-or-nothing operating-system transaction.
+
+This API supplies the resize primitive for later multi-pane integration. PaneSet
+layout changes and PTY sizing are not yet coordinated as a single operation.
+
 ## Verification
 
 `cargo test --test pane_sets` covers rejected splits without factory execution,
@@ -57,3 +86,8 @@ geometry changes without content mutation, and non-Clone ownership transfer.
 Drop-counting fixtures check that failed operations do not destroy live contents,
 close defers cleanup to the caller, and collection destruction releases survivors.
 These are ownership/model tests, not interactive multi-PTY acceptance tests.
+
+`cargo test --test panes` also checks preparation cancellation, rejected sizes,
+real child-observed dimensions after commit, pending parser input, same-size
+hold release, PTY failure without model mutation, and model-only resize after EOF.
+The full nested-PTY suite exercises the CLI's revised multi-window resize path.

@@ -119,4 +119,42 @@ fn real_windows_keep_processes_and_terminal_state_isolated() {
     until(pane, |p| text(p).starts_with("STILL_ALIVE"));
     assert_eq!(pane.shell().id(), b_pid);
     pane.shell_mut().terminate().unwrap();
+    prepared_resizes_preserve_state_and_update_the_real_pty();
+}
+
+fn prepared_resizes_preserve_state_and_update_the_real_pty() {
+    let mut pane = Pane::spawn("/bin/sh", 12, 40).unwrap();
+    until(&mut pane, |p| !text(p).trim().is_empty());
+    pane.process_output(b"\x1b[2J\x1b[Hkept\x1b[?2026h", &mut |_| {});
+    let before = pane.screen().clone();
+    assert!(pane.prepare_resize(0, 40).is_err());
+    assert!(pane.prepare_resize(257, 256).is_err());
+    drop(pane.prepare_resize(8, 30).unwrap());
+    assert_eq!(pane.screen(), &before);
+    pane.shell_mut()
+        .write_all(b"stty -echo; printf '\\033[2J\\033[HOLD:'; stty size\n")
+        .unwrap();
+    until(&mut pane, |p| text(p).contains("OLD:12 40"));
+    // An incomplete parser sequence must survive screen preparation and commit.
+    pane.process_output(b"\x1b[2J\x1b[Hkept\x1b[?2026h\xe4\xb8", &mut |_| {});
+    pane.prepare_resize(8, 30).unwrap().commit().unwrap();
+    assert_eq!(pane.screen().dimensions(), (8, 30));
+    assert!(!pane.screen().synchronized_output());
+    pane.process_output(b"\xad", &mut |_| {});
+    assert!(text(&pane).starts_with("kept中"));
+    pane.shell_mut()
+        .write_all(b"printf '\\033[2J\\033[HNEW:'; stty size\n")
+        .unwrap();
+    until(&mut pane, |p| text(p).contains("NEW:8 30"));
+    pane.process_output(b"\x1b[?2026h", &mut |_| {});
+    pane.prepare_resize(8, 30).unwrap().commit().unwrap();
+    assert!(!pane.screen().synchronized_output());
+    pane.process_output(b"\x1b[?2026h", &mut |_| {});
+    pane.shell_mut().terminate().unwrap();
+    let before = pane.screen().clone();
+    assert!(pane.prepare_resize(6, 20).unwrap().commit().is_err());
+    assert_eq!(pane.screen(), &before); // Closed master must not commit prepared cells.
+    pane.finish_output();
+    pane.prepare_resize(6, 20).unwrap().commit().unwrap(); // Known EOF skips ioctl.
+    assert_eq!(pane.screen().dimensions(), (6, 20));
 }

@@ -19,6 +19,41 @@ pub struct Pane {
     io: PaneIo,
 }
 
+/// Prepared screen storage with exclusive access to its originating pane.
+/// Dropping without commit leaves the pane and PTY untouched. Holding this borrow
+/// prevents output from making the prepared screen stale before it is committed.
+#[must_use = "commit the prepared resize or drop it to cancel"]
+pub struct PreparedPaneResize<'a> {
+    pane: &'a mut Pane,
+    screen: Option<Screen>,
+    rows: u16,
+    columns: u16,
+}
+
+impl PreparedPaneResize<'_> {
+    /// Update the live PTY first, then install the already prepared screen.
+    /// A PTY error leaves this pane's screen and I/O metadata unchanged.
+    /// Already observed EOF or exit needs only the model update.
+    pub fn commit(self) -> io::Result<()> {
+        let Self {
+            pane,
+            screen,
+            rows,
+            columns,
+        } = self;
+        if pane.io.status.is_none() && !pane.io.eof {
+            pane.shell.resize(rows, columns)?;
+        }
+        if let Some(screen) = screen {
+            pane.screen = screen;
+        }
+        pane.screen.set_synchronized_output(false);
+        pane.io.synchronized_since = None;
+        pane.io.dirty = true;
+        Ok(())
+    }
+}
+
 /// State that must follow the child when focus changes. The physical terminal's
 /// output queue, renderer cache and frame cadence remain shared by the event loop.
 #[derive(Debug)]
@@ -94,6 +129,35 @@ impl Pane {
     /// caller responsibilities. Direct resize must also update the screen.
     pub fn shell_mut(&mut self) -> &mut PtyShell {
         &mut self.shell
+    }
+
+    /// Validate dimensions and prepare resized grids before issuing any PTY ioctl.
+    /// Same-size requests avoid copying screen cells. A commit still releases any
+    /// synchronized-output hold and schedules redraw, as a terminal resize does.
+    pub fn prepare_resize(
+        &mut self,
+        rows: u16,
+        columns: u16,
+    ) -> io::Result<PreparedPaneResize<'_>> {
+        if rows == 0 || columns == 0 || usize::from(rows) * usize::from(columns) > MAX_CELLS {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid pane dimensions",
+            ));
+        }
+        let screen = if self.screen.dimensions() == (usize::from(rows), usize::from(columns)) {
+            None
+        } else {
+            let mut screen = self.screen.clone();
+            screen.resize(usize::from(rows), usize::from(columns))?;
+            Some(screen)
+        };
+        Ok(PreparedPaneResize {
+            pane: self,
+            screen,
+            rows,
+            columns,
+        })
     }
 
     pub fn screen(&self) -> &Screen {
