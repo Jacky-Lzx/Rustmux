@@ -54,8 +54,8 @@ These are model tests, not interactive multi-window or process-preservation test
 
 ## Per-window terminal contents
 
-`pane::Pane` now supplies concrete contents for `Windows<Pane>`: one `PtyShell`,
-one incremental `Parser` and one `Screen`. The CLI uses this same container. `Pane::spawn` validates the grid (at most 65,536 cells),
+`pane::Pane` supplies one `PtyShell`, incremental `Parser` and `Screen`. The CLI
+now owns `Windows<PaneSet<Pane>>`, with exactly one pane per set for this stage. `Pane::spawn` validates the grid (at most 65,536 cells),
 allocates it before spawning, and sets the PTY master nonblocking. Failure after
 spawning drops the owned shell, closing the master and reclaiming the direct child.
 Follow the existing single-threaded spawning requirement of `PtyShell`.

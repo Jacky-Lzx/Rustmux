@@ -3,8 +3,8 @@
 `pane_set::PaneSet<T>` owns a `Layout` and exactly one `T` per pane ID. It is the
 bridge between split geometry and future per-window terminal contents. `T` need
 not implement `Clone`; it can hold the existing `Pane` with its PTY, parser,
-screen and I/O state. The CLI still uses one `Pane` per window and has not yet
-adopted this collection. Interactive splitting remains unavailable.
+screen and I/O state. The CLI now owns `Windows<PaneSet<Pane>>`, creating exactly
+one pane in each set. Interactive splitting remains unavailable.
 
 ## Access and focus
 
@@ -45,8 +45,8 @@ transfer it elsewhere. Dropping the collection drops all remaining values once.
 Selection and zoom delegate to the layout. `resize` changes only geometry; it
 does not resize PTYs or screens. Likewise a split or close changes rectangles of
 existing panes without mutating their content values. The concrete `PaneSet<Pane>::synchronize_sizes` operation below applies resulting
-geometry to screens and PTYs. Before the CLI uses this container, it must also
-coordinate rendering, input routing and failure cleanup. This collection is not a transaction
+geometry to screens and PTYs. The CLI now routes its single-pane windows through the container; multi-pane
+render scheduling, input routing and failure cleanup still need integration. This collection is not a transaction
 covering those external operations and does not itself start or terminate processes.
 
 ## Preparing and committing a real pane resize
@@ -101,8 +101,9 @@ may already have resized their children. The caller must stop using the set and
 clean up on such errors, rather than render an inconsistent frame. There is no
 rollback of PTY changes or SIGWINCH received by child applications.
 
-This completes the sizing connection for the standalone collection. The CLI has
-not yet adopted PaneSet, so interactive splitting is still unavailable.
+This supplies the sizing connection for the collection. The CLI currently owns
+one-pane sets and retains its batch preparation across all windows, including
+same-size SIGWINCH handling. Interactive splitting is still unavailable.
 
 ## Verification
 
@@ -122,3 +123,23 @@ The real-pane test also uses two shells to check child-observed sizes after spli
 zoom, zoom-target change, outer resize, unzoom and close; stable PIDs, unchanged-size
 hold preservation, content-area limit rejection and model resizing after exit are
 covered. This verifies the collection API, not interactive CLI split shortcuts.
+
+## CLI collection integration
+
+The CLI constructs one-pane sets for startup and new windows. Keyboard queues are
+accessed through the selected set's active content. PTY polling records both
+`WindowId` and `PaneId`, since pane IDs are local to each set and often have the
+same numeric value in different windows. Returned readiness events therefore
+resolve the owning window first, then its pane, preserving per-child queues and
+parser state.
+
+Frames now pass through `pane_view::compose`, followed by top window-bar and prompt
+composition. Closing a window releases its owned set; explicit close terminates
+its owned direct children before removing it. The current final-output, focus and
+synchronized-output scheduling still assume exactly one pane per CLI window.
+The constructor enforces that scope, with a debug assertion in rendering; no
+split, pane-focus or zoom shortcut is enabled by this migration.
+
+The full existing nested-PTY suite is the regression check for this integration,
+including window creation and selection, background replies, modes, resize,
+rename/close prompts, final output, exit codes and direct-child reclamation.

@@ -20,6 +20,8 @@ use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGWINCH};
 use crate::pane::{INPUT_LIMIT as LIMIT, MAX_CELLS, Pane};
 use crate::{
     chrome::{compose, pane_rows},
+    pane_set::PaneSet,
+    pane_view,
     prompt::{EditResult, PromptKind, WindowPrompt},
     render::Renderer,
     screen::Screen,
@@ -87,7 +89,7 @@ pub fn run(shell_path: &OsStr) -> io::Result<u8> {
     let mut windows = Windows::default();
     windows.create(
         "shell".into(),
-        Pane::spawn(shell_path, pane_rows(size.ws_row), size.ws_col)?,
+        spawn_window(shell_path, pane_rows(size.ws_row), size.ws_col)?,
     )?;
     let signals = Signals::install()?;
     let mut terminal = Terminal::enter(file)?;
@@ -437,9 +439,13 @@ impl WindowInput {
     }
 }
 
+fn spawn_window(shell: &OsStr, rows: u16, columns: u16) -> io::Result<PaneSet<Pane>> {
+    PaneSet::new(rows, columns, Pane::spawn(shell, rows, columns)?)
+}
+
 fn forward(
     terminal: &mut File,
-    windows: &mut Windows<Pane>,
+    windows: &mut Windows<PaneSet<Pane>>,
     signals: &Signals,
     shell_path: &OsStr,
     mut outer_rows: u16,
@@ -467,12 +473,9 @@ fn forward(
                     // run() restores the outer terminal before dropping the last shell.
                     return Ok(0);
                 }
-                windows
-                    .get_mut(id)
-                    .unwrap()
-                    .content_mut()
-                    .shell_mut()
-                    .terminate()?;
+                for (_, pane) in windows.get_mut(id).unwrap().content_mut().iter_mut() {
+                    pane.shell_mut().terminate()?;
+                }
                 drop(windows.close(id)?);
                 input.clear();
                 keys = WindowInput::default();
@@ -507,20 +510,25 @@ fn forward(
         };
         // Observe exits before preparing resizes, so dead panes need no PTY ioctl.
         for window in windows.iter_mut() {
-            let (shell, _, _, state) = window.content_mut().parts_mut();
-            if state.status.is_none() {
-                state.status = shell.try_wait()?;
+            for (_, pane) in window.content_mut().iter_mut() {
+                let (shell, _, _, state) = pane.parts_mut();
+                if state.status.is_none() {
+                    state.status = shell.try_wait()?;
+                }
             }
         }
         if let Some(size) = resize {
-            // Allocate every destination screen before changing any live PTY size.
+            for window in windows.iter_mut() {
+                window
+                    .content_mut()
+                    .resize(pane_rows(size.ws_row), size.ws_col)?;
+            }
+            // CLI windows still contain one pane. Preserve notification behavior,
+            // including same-size hold release, while preparing all panes first.
             let prepared = windows
                 .iter_mut()
-                .map(|window| {
-                    window
-                        .content_mut()
-                        .prepare_resize(pane_rows(size.ws_row), size.ws_col)
-                })
+                .flat_map(|window| window.content_mut().iter_mut())
+                .map(|(_, pane)| pane.prepare_resize(pane_rows(size.ws_row), size.ws_col))
                 .collect::<io::Result<Vec<_>>>()?;
             for resize in prepared {
                 resize.commit()?;
@@ -538,39 +546,49 @@ fn forward(
         let mut finished = Vec::new();
         for window in windows.iter_mut() {
             let id = window.id();
-            let (_, _, screen, state) = window.content_mut().parts_mut();
-            let paused = synchronized_pause(
-                screen,
-                &mut state.synchronized_since,
-                Instant::now(),
-                state.eof,
-            );
+            let panes = window.content_mut();
+            // Multi-pane lifecycle and synchronized-frame scheduling are a later step.
+            debug_assert_eq!(panes.iter().len(), 1);
+            let (paused, eof, dirty) = {
+                let (_, _, screen, state) = panes.active_mut().parts_mut();
+                let paused = synchronized_pause(
+                    screen,
+                    &mut state.synchronized_since,
+                    Instant::now(),
+                    state.eof,
+                );
+                (paused, state.eof, state.dirty)
+            };
             if id == active {
-                if state.eof && prompt.is_some() {
+                if eof && prompt.is_some() {
                     prompt = None;
                     renderer.invalidate();
                     force_redraw = true;
                 }
                 active_paused = paused;
                 if close_requested.is_none()
-                    && (state.dirty || force_redraw || bar_dirty)
+                    && (dirty || force_redraw || bar_dirty)
                     && (!paused || force_redraw)
                     && to_terminal.is_empty()
-                    && (state.eof || force_redraw || Instant::now() >= next_frame)
+                    && (eof || force_redraw || Instant::now() >= next_frame)
                 {
-                    let view = compose(screen, outer_rows, &names, active_index)?;
+                    let screens: Vec<_> =
+                        panes.iter().map(|(id, pane)| (id, pane.screen())).collect();
+                    let content = pane_view::compose(panes.layout(), &screens)?;
+                    let view = compose(&content, outer_rows, &names, active_index)?;
                     if let Some(prompt) = &prompt {
                         renderer
                             .render(&prompt.overlay(&view), &mut FrameWriter(&mut to_terminal))?;
                     } else {
                         renderer.render(&view, &mut FrameWriter(&mut to_terminal))?;
                     }
-                    state.dirty = false;
+                    panes.active_mut().parts_mut().3.dirty = false;
                     bar_dirty = false;
                     force_redraw = false;
                     next_frame = Instant::now() + FRAME_INTERVAL;
                 }
             }
+            let state = panes.active().io();
             if state.eof {
                 if let Some(status) = state.status {
                     if id != active || (!state.dirty && to_terminal.is_empty()) {
@@ -609,7 +627,7 @@ fn forward(
         }
         // A lone Escape or incomplete report must not remain held indefinitely.
         if prompt.is_none() && keys.mouse_expired() {
-            let pane = windows.active_mut().unwrap().content_mut();
+            let pane = windows.active_mut().unwrap().content_mut().active_mut();
             let (_, _, _, state) = pane.parts_mut();
             if state.accepts_input() && state.to_shell.len() <= LIMIT - 64 {
                 state.to_shell.extend(keys.take_mouse());
@@ -646,7 +664,7 @@ fn forward(
                 force_redraw = true;
                 continue;
             }
-            let pane = windows.active().unwrap().content();
+            let pane = windows.active().unwrap().content().active();
             if !pane.io().accepts_input() || pane.io().to_shell.len() > LIMIT - 64 {
                 break;
             }
@@ -663,6 +681,7 @@ fn forward(
                         .active_mut()
                         .unwrap()
                         .content_mut()
+                        .active_mut()
                         .parts_mut()
                         .3
                         .to_shell
@@ -707,8 +726,8 @@ fn forward(
                             continue;
                         }
                         let (rows, columns) =
-                            windows.active().unwrap().content().screen().dimensions();
-                        match Pane::spawn(shell_path, rows as u16, columns as u16) {
+                            windows.active().unwrap().content().layout().dimensions();
+                        match spawn_window(shell_path, rows, columns) {
                             Ok(pane) => {
                                 windows.create("shell".into(), pane)?;
                             }
@@ -731,7 +750,7 @@ fn forward(
             continue;
         }
         let active = windows.active().unwrap().id();
-        let active_io = windows.active().unwrap().content().io();
+        let active_io = windows.active().unwrap().content().active().io();
         let mut outer_events = PollFlags::empty();
         if input.len() < LIMIT {
             outer_events |= PollFlags::POLLIN;
@@ -752,24 +771,25 @@ fn forward(
         let (outer, events) = {
             let mut fds = vec![PollFd::new(terminal.as_fd(), outer_events)];
             for window in windows.iter() {
-                let pane = window.content();
-                let state = pane.io();
-                let mut flags = PollFlags::empty();
-                // Background grids do not produce physical frames; keep draining them.
-                if state.reply_read_limit() != 0
-                    && (window.id() != active || to_terminal.is_empty())
-                {
-                    flags |= PollFlags::POLLIN;
-                }
-                if !state.eof && state.status.is_none() && !state.to_shell.is_empty() {
-                    flags |= PollFlags::POLLOUT;
-                }
-                if !flags.is_empty() {
-                    interests.push((window.id(), flags));
-                    fds.push(PollFd::new(
-                        pane.shell().master_fd().expect("live PTY"),
-                        flags,
-                    ));
+                for (pane_id, pane) in window.content().iter() {
+                    let state = pane.io();
+                    let mut flags = PollFlags::empty();
+                    if state.reply_read_limit() != 0
+                        && (window.id() != active || to_terminal.is_empty())
+                    {
+                        flags |= PollFlags::POLLIN;
+                    }
+                    if !state.eof && state.status.is_none() && !state.to_shell.is_empty() {
+                        flags |= PollFlags::POLLOUT;
+                    }
+                    if !flags.is_empty() {
+                        // Pane IDs are collection-local; retain the owning window ID too.
+                        interests.push((window.id(), pane_id, flags));
+                        fds.push(PollFd::new(
+                            pane.shell().master_fd().expect("live PTY"),
+                            flags,
+                        ));
+                    }
                 }
             }
             match poll(&mut fds, timeout) {
@@ -796,15 +816,20 @@ fn forward(
         }
         // One bounded read/write per pane per iteration prevents a busy background
         // process from starving the other panes, keyboard or signal handling.
-        for ((id, inner_events), inner) in interests.into_iter().zip(events) {
+        for ((id, pane_id, inner_events), inner) in interests.into_iter().zip(events) {
             if inner.contains(PollFlags::POLLNVAL) {
                 return Err(io::Error::new(
                     io::ErrorKind::BrokenPipe,
                     "invalid PTY descriptor",
                 ));
             }
-            let (shell, parser, screen, state) =
-                windows.get_mut(id).unwrap().content_mut().parts_mut();
+            let (shell, parser, screen, state) = windows
+                .get_mut(id)
+                .unwrap()
+                .content_mut()
+                .get_mut(pane_id)
+                .expect("polled pane exists")
+                .parts_mut();
             let reply_read_limit = state.reply_read_limit();
             let readable =
                 inner.intersects(PollFlags::POLLIN | PollFlags::POLLHUP | PollFlags::POLLERR);

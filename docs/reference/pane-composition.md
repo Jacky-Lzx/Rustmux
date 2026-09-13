@@ -1,8 +1,9 @@
 # Composing Pane Screens
 
 `pane_view::compose(layout, screens)` builds a content-area `Screen` for the
-existing renderer. This is a building block for interactive splitting; the CLI
-still uses one pane per window and does not yet call this compositor.
+existing renderer. The CLI now calls it for its one-pane window collections,
+then composes the top window bar and optional prompt. Multiple-pane input is
+covered by compositor tests; interactive splitting is not yet enabled.
 
 Supply `(PaneId, &Screen)` pairs in any order. Every visible pane must have a
 screen exactly matching its rectangle from `layout.geometry()`. Missing visible
@@ -23,9 +24,9 @@ wrap is cleared only on the disposable composed view; the original pane is
 untouched. As with the existing window-bar composition, this view is for rendering,
 not a replacement parser model.
 
-Coordinates exclude the top window bar. A future CLI path must compose this view
-with that bar, route input to the active pane, translate mouse coordinates, and
-honor per-pane synchronized-output holds. This function does not perform those
+Coordinates exclude the top window bar. The CLI adds that bar and routes input
+to its single active pane. Multiple-pane mouse coordinates and synchronized-output
+scheduling still need integration. This function does not perform those
 operations, resize PTYs/screens, allocate new processes, or flush terminal output.
 The total physical frame including the bar must also obey the CLI cell limit.
 Composition clones the active screen and copies visible cells each time; it adds

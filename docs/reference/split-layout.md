@@ -3,8 +3,8 @@
 `layout::Layout` is the first part of H06: a binary tree of pane rectangles.
 It does not own PTYs, screen models or input queues. The
 [PaneSet container](pane-ownership.md) connects its leaves to owned content values.
-Neither is yet connected to
-the CLI. Interactive windows still contain one shell each. This is not a claim
+The CLI now uses the container and layout for one-pane windows.
+Interactive windows still contain one shell each. This is not a claim
 that interactive splitting or H06 acceptance is complete.
 
 ## Coordinates and splitting
@@ -118,8 +118,8 @@ policy for later interactive splitting and is not H07 acceptance.
 `cargo test --test layout` checks exact nested geometry, complete nonoverlapping
 coverage across many sizes, asymmetric subtree minima, stable IDs/focus, failed
 operations, the pane cap and maximum coordinate dimensions. A unit test checks
-unknown selection and ID exhaustion without mutation. Existing window and CLI
-behavior is unchanged because this module has not been wired into the event loop.
+unknown selection and ID exhaustion without mutation. Existing CLI behavior is retained by the one-pane collection integration;
+interactive split operations are still disabled.
 
 Pane-close tests cover sibling-subtree promotion, all active/removed combinations
 in a nested tree, full nonoverlapping coverage after removal and minimum-size
