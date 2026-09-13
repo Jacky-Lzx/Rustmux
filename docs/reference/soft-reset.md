@@ -16,7 +16,7 @@ moving the current cursor. It is distinct from [RIS](terminal-reset.md).
 | G0/G1 and invocation | ASCII, G0 |
 | Active scrolling region | Full height |
 | Current grid's saved cursor | Home, default style and saved modes |
-| Tab stops and bracketed paste mode | Preserved |
+| Tab stops, bracketed paste and focus reporting modes | Preserved |
 
 The [DEC manual](https://vt100.net/docs/vt510-rm/DECSTR.html) specifies that
 autowrap is disabled by soft reset. Rustmux follows

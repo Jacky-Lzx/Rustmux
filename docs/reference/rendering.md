@@ -3,7 +3,11 @@
 `rustmux::render::render(&screen, &mut output)` writes a complete ANSI frame for
 the active screen. The caller supplies any `std::io::Write`, such as a byte
 buffer. The renderer borrows the model without changing it and does not flush.
-The CLI renders into a bounded frame queue in its event loop.
+The CLI uses `Renderer::render` with a bounded frame queue in its event loop.
+Renderer remembers the last queued focus-reporting mode and synchronizes it only
+on the first frame or a change. The standalone `render` function always includes
+that synchronization. See [Focus Reporting](focus-reporting.md). A Renderer is
+specific to one ordered output stream; recreate it if queued output is discarded.
 
 ## Output
 

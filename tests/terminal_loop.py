@@ -510,6 +510,54 @@ for terminate in (False, True):
     finally:
         s.close()
 
+# Focus events are input; output-side CSI I still means forward tabulation.
+focus_probe = r"""
+import os, select, time, tty
+tty.setraw(0)
+def receive(expected):
+    data = bytearray()
+    end = time.monotonic() + 6
+    while len(data) < len(expected):
+        assert time.monotonic() < end, repr(data)
+        if select.select([0], [], [], 0.1)[0]:
+            data.extend(os.read(0, len(expected) - len(data)))
+    assert data == expected, repr(data)
+os.write(1, b"\x1b[?1004h\x1b[2J\x1b[HFOCUS_READY")
+receive(b"\x1b[I\x1b[O\x1b[I")
+os.write(1, b"\x1b[2J\x1b[HFOCUS_REDRAW")
+receive(b"x")
+os.write(1, b"\x1b[?1004l\x1b[2J\x1b[HFOCUS_DISABLED")
+receive(b"x")
+os.write(1, b"\x1b[?1004h\x1b[2J\x1b[HFOCUS_EXIT")
+receive(b"x")
+"""
+for terminate in (False, True):
+    s = Session()
+    try:
+        s.expect(b"RUSTMUX_READY> ")
+        s.send(("exec python3 -c " + shlex.quote(focus_probe) + "\n").encode())
+        s.expect(b"\r\nFOCUS_READY\r\n")
+        assert b"\x1b[?1004h" in s.last_frame
+        s.send(b"\x1b[")
+        s.send(b"I\x1b[O\x1b[I")
+        s.expect(b"\r\nFOCUS_REDRAW\r\n")
+        assert b"\x1b[?1004" not in s.last_frame
+        s.send(b"x")
+        s.expect(b"\r\nFOCUS_DISABLED\r\n")
+        assert b"\x1b[?1004l" in s.last_frame
+        s.send(b"x")
+        s.expect(b"\r\nFOCUS_EXIT\r\n")
+        assert b"\x1b[?1004h" in s.last_frame
+        if terminate:
+            os.kill(s.app_pid, signal.SIGTERM)
+            s.finish(128 + signal.SIGTERM)
+        else:
+            s.send(b"x")
+            s.finish(0)
+        assert s.output.rfind(b"\x1b[?1004l") > s.output.rfind(b"\x1b[?1004h")
+    finally:
+        s.close()
+
 # A model-allocation limit error during resize must restore the terminal too.
 s = Session()
 try:

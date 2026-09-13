@@ -15,6 +15,32 @@ use crate::style::{Color, Style};
 /// It does not flush. Errors may leave a partial frame; the caller must handle
 /// cleanup or redraw. For nonblocking output, render into a buffer and queue it.
 pub fn render(screen: &Screen, output: &mut impl Write) -> io::Result<()> {
+    render_frame(screen, output, true)
+}
+
+/// Stateful rendering for an ordered output stream. Each successful frame must
+/// be delivered completely before the next; create a fresh Renderer after losing
+/// or discarding output. Avoid re-enabling focus reports on ordinary redraws,
+/// since an outer terminal may report its current focus when enabled.
+#[derive(Default)]
+pub struct Renderer {
+    focus_reporting: Option<bool>,
+}
+
+impl Renderer {
+    pub fn render(&mut self, screen: &Screen, output: &mut impl Write) -> io::Result<()> {
+        let synchronize = self.focus_reporting != Some(screen.focus_reporting());
+        render_frame(screen, output, synchronize)?;
+        self.focus_reporting = Some(screen.focus_reporting());
+        Ok(())
+    }
+}
+
+fn render_frame(
+    screen: &Screen,
+    output: &mut impl Write,
+    synchronize_focus: bool,
+) -> io::Result<()> {
     output.write_all(b"\x1b[?25l\x1b[0m")?;
     // The single active pane determines how the outer terminal encodes paste.
     // Input forwarding preserves the resulting start/end markers unchanged.
@@ -38,6 +64,13 @@ pub fn render(screen: &Screen, output: &mut impl Write) -> io::Result<()> {
     })?;
     // Set shape while hidden; the frame ending restores requested visibility.
     write!(output, "\x1b[{} q", screen.cursor_shape() as u8)?;
+    if synchronize_focus {
+        output.write_all(if screen.focus_reporting() {
+            b"\x1b[?1004h"
+        } else {
+            b"\x1b[?1004l"
+        })?;
+    }
     let mut style = Style::default();
     for row in 0..screen.dimensions().0 {
         // Explicit CUP avoids newline-induced scrolling, including at bottom-right.

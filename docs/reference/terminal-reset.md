@@ -45,3 +45,5 @@ RIS also disables bracketed paste, application cursor keys and application keypa
 frame synchronizes these input modes with the outer terminal.
 
 RIS restores the global cursor shape to a blinking block.
+
+RIS disables focus event reporting.

@@ -20,7 +20,7 @@ use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGWINCH};
 
 use crate::parser::MAX_REPLY_BYTES;
 use crate::pty::PtyShell;
-use crate::{parser::Parser, render::render, screen::Screen};
+use crate::{parser::Parser, render::Renderer, screen::Screen};
 
 // Bound pending keyboard input to 64 KiB; output retains at most one frame.
 const LIMIT: usize = 64 * 1024;
@@ -41,6 +41,7 @@ const ENTER: &[u8] = b"\x1b[?1049h";
 // ?1000l: disable basic mouse button reporting.
 // ?1002l: disable mouse motion reporting while a button is held.
 // ?1003l: disable reporting of all mouse motion.
+// ?1004l: disable focus-in/focus-out event reporting.
 // ?1006l: disable SGR mouse report encoding.
 // 0m: reset text attributes, including colors and bold.
 // ?25h: show the cursor.
@@ -48,7 +49,7 @@ const ENTER: &[u8] = b"\x1b[?1049h";
 // These are baseline resets, not a snapshot of the previous display modes.
 // Raw mode and other termios attributes are restored separately.
 const LEAVE: &[u8] =
-    b"\x1b[0 q\x1b>\x1b[?1l\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[0m\x1b[?25h\x1b[?1049l";
+    b"\x1b[0 q\x1b>\x1b[?1l\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1004l\x1b[?1006l\x1b[0m\x1b[?25h\x1b[?1049l";
 
 /// Run on the controlling terminal during single-threaded program startup.
 /// Returns the shell exit code, or 128 + signal for termination by signal.
@@ -253,6 +254,7 @@ fn forward(
     mut screen: Screen,
 ) -> io::Result<u8> {
     let mut parser = Parser::new();
+    let mut renderer = Renderer::default();
     let mut to_shell = VecDeque::new();
     let mut to_terminal = VecDeque::new();
     let mut dirty = true;
@@ -280,7 +282,7 @@ fn forward(
             }
         }
         if dirty && to_terminal.is_empty() && (eof || Instant::now() >= next_frame) {
-            render(&screen, &mut FrameWriter(&mut to_terminal))?;
+            renderer.render(&screen, &mut FrameWriter(&mut to_terminal))?;
             dirty = false;
             next_frame = Instant::now() + FRAME_INTERVAL;
         }

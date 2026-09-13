@@ -355,6 +355,9 @@ impl Parser {
                     if *mode == Some(1) {
                         screen.set_application_cursor_keys(command == b'h');
                     }
+                    if *mode == Some(1004) {
+                        screen.set_focus_reporting(command == b'h');
+                    }
                     if *mode == Some(2004) {
                         screen.set_bracketed_paste(command == b'h');
                     }
