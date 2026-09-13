@@ -300,6 +300,26 @@ impl Screen {
         Ok(())
     }
 
+    // Display-only assembly helpers. The compositor validates all rectangles before
+    // calling these; direct cell copies preserve styles, wide cells and suffixes.
+    pub(crate) fn copy_display_cells(&mut self, source: &Screen, row: usize, column: usize) {
+        for offset in 0..source.rows {
+            let start = (row + offset) * self.columns + column;
+            self.cells[start..start + source.columns]
+                .clone_from_slice(source.row(offset).expect("source row exists"));
+        }
+    }
+
+    pub(crate) fn set_display_cell(&mut self, row: usize, column: usize, cell: Cell) {
+        self.cells[row * self.columns + column] = cell;
+    }
+
+    pub(crate) fn set_display_cursor(&mut self, row: usize, column: usize) {
+        self.row = row;
+        self.column = column;
+        self.wrap_pending = false;
+    }
+
     fn move_overlap(source: &mut [Cell], old_columns: usize, target: &mut [Cell], columns: usize) {
         for (old_row, new_row) in source
             .chunks_mut(old_columns)
