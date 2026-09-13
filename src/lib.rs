@@ -3,8 +3,8 @@
 mod chrome;
 pub mod pane;
 pub mod parser;
+mod prompt;
 pub mod pty;
-mod rename;
 pub mod render;
 pub mod screen;
 pub mod style;

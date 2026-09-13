@@ -1,4 +1,4 @@
-//! Bounded, append-only window-name editor and temporary screen overlay.
+//! Bounded text prompts for window renaming and explicit close confirmation.
 
 use crate::{
     chrome::{bar_style, prepare_row},
@@ -17,7 +17,14 @@ pub(crate) enum EditResult {
     Cancel,
 }
 
-pub(crate) struct RenamePrompt {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PromptKind {
+    Rename,
+    Close,
+}
+
+pub(crate) struct WindowPrompt {
+    pub kind: PromptKind,
     pub text: String,
     utf8: Vec<u8>,
     escape: Vec<u8>,
@@ -25,9 +32,23 @@ pub(crate) struct RenamePrompt {
     paste: bool,
 }
 
-impl RenamePrompt {
+impl WindowPrompt {
+    pub fn close() -> Self {
+        let mut prompt = Self::new("");
+        prompt.kind = PromptKind::Close;
+        prompt
+    }
+
+    fn label(&self) -> &'static str {
+        match self.kind {
+            PromptKind::Rename => "Rename: ",
+            PromptKind::Close => "Close window? Type yes: ",
+        }
+    }
+
     pub fn new(name: &str) -> Self {
         let mut prompt = Self {
+            kind: PromptKind::Rename,
             text: String::new(),
             utf8: Vec::new(),
             escape: Vec::new(),
@@ -125,10 +146,10 @@ impl RenamePrompt {
         let (_, columns) = screen.dimensions();
         prepare_row(&mut screen, bar_style(true));
         let mut remaining = columns.saturating_sub(1); // Reserve the visible cursor cell.
-        for character in "Rename: ".chars().take(remaining) {
+        for character in self.label().chars().take(remaining) {
             screen.print(character);
         }
-        remaining = remaining.saturating_sub("Rename: ".len());
+        remaining = remaining.saturating_sub(self.label().len());
         let mut start = self.text.len();
         for (index, character) in self.text.char_indices().rev() {
             let width = character.width().unwrap_or(0);
@@ -161,7 +182,7 @@ mod tests {
     use super::*;
     use crate::parser::Parser;
 
-    fn type_bytes(prompt: &mut RenamePrompt, bytes: &[u8]) {
+    fn type_bytes(prompt: &mut WindowPrompt, bytes: &[u8]) {
         for &byte in bytes {
             assert_eq!(prompt.feed(byte, Instant::now()), EditResult::Continue);
         }
@@ -169,7 +190,7 @@ mod tests {
 
     #[test]
     fn unicode_backspace_clear_limit_and_invalid_input() {
-        let mut prompt = RenamePrompt::new("old");
+        let mut prompt = WindowPrompt::new("old");
         type_bytes(&mut prompt, "\x15中文e\u{301}".as_bytes());
         type_bytes(&mut prompt, &[127]);
         assert_eq!(prompt.text, "中文e");
@@ -185,7 +206,7 @@ mod tests {
 
     #[test]
     fn pasted_controls_do_not_commit_cancel_or_invoke_shortcuts() {
-        let mut prompt = RenamePrompt::new("");
+        let mut prompt = WindowPrompt::new("");
         type_bytes(
             &mut prompt,
             "\x1b[200~中文\x02c\n\x03\x15b\x1b[201~".as_bytes(),
@@ -197,7 +218,26 @@ mod tests {
         prompt.feed(27, now);
         assert!(!prompt.cancel_due(now));
         assert!(prompt.cancel_due(now + ESCAPE_DELAY));
-        assert_eq!(RenamePrompt::new("").feed(3, now), EditResult::Cancel);
+        assert_eq!(WindowPrompt::new("").feed(3, now), EditResult::Cancel);
+    }
+
+    #[test]
+    fn close_prompt_requires_enter_outside_paste_and_fits_small_screens() {
+        let mut prompt = WindowPrompt::close();
+        assert_eq!(prompt.kind, PromptKind::Close);
+        for byte in b"\x1b[200~yes\r\n\x1b[201~" {
+            assert_eq!(prompt.feed(*byte, Instant::now()), EditResult::Continue);
+        }
+        assert_eq!(prompt.text, "yes");
+        assert_eq!(prompt.feed(b'\r', Instant::now()), EditResult::Save);
+        for columns in [1, 8, 24, 40] {
+            let screen = Screen::new(2, columns).unwrap();
+            let view = prompt.overlay(&screen);
+            assert_eq!(view.row(1), screen.row(1));
+            assert_eq!(view.cursor().0, 0);
+            assert!(view.cursor().1 < columns);
+            assert!(!view.wrap_pending());
+        }
     }
 
     #[test]
@@ -206,7 +246,7 @@ mod tests {
             let mut original = Screen::new(3, columns).unwrap();
             Parser::new().advance(&mut original, b"abc\x1b[2;3r\x1b[?6h\x1b(0\x1b[?1003h");
             let saved = original.clone();
-            let overlay = RenamePrompt::new("very long 中文e\u{301}").overlay(&original);
+            let overlay = WindowPrompt::new("very long 中文e\u{301}").overlay(&original);
             assert_eq!(original, saved);
             assert_eq!(overlay.row(2), original.row(2));
             assert_eq!(overlay.row(1), original.row(1));

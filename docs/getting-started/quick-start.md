@@ -27,7 +27,9 @@ for the previous one. Ctrl-B followed by `1`–`9` selects that window number;
 repeat it to toggle between two windows. Ctrl-B twice sends a literal Ctrl-B to the child. Background
 shells continue running. See [Windows](../reference/windows.md#interactive-controls)
 for limits and input behavior. Ctrl-B followed by `,` opens the name editor:
-Enter saves, Esc cancels, and Ctrl-U clears the existing name. The top bar shows the saved name and highlights the active window.
+Enter saves, Esc cancels, and Ctrl-U clears the existing name.
+Ctrl-B followed by `&` asks to close the active window: type `yes` and Enter to
+force close, or Esc to cancel. Unsaved work in that window can be lost. The top bar shows the saved name and highlights the active window.
 
 The CLI now parses shell output and renders its own screen model. Window changes
 resize both model grids and the PTY in every window. The bar reserves one row;

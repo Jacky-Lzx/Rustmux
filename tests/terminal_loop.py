@@ -875,7 +875,7 @@ prefix_probe = r"""
 import os, select, time, tty
 tty.setraw(0)
 os.write(1, b"\x1b[?2004h\x1b[2J\x1b[HPREFIX_READY")
-expected = b"\x02n\x02z\x1b[200~paste\x02c\x02n\x02p\x021\x020\x02l\x1b[201~"
+expected = b"\x02n\x02z\x1b[200~paste\x02c\x02n\x02p\x021\x020\x02l\x02&\x1b[201~"
 data = bytearray()
 end = time.monotonic() + 5
 while len(data) < len(expected):
@@ -894,7 +894,7 @@ try:
         s.send(("exec python3 " + shlex.quote(source.name) + "\n").encode())
         s.expect(b"PREFIX_READY")
         s.send(b"\x02\x02n\x02z\x1b[20")
-        s.send(b"0~paste\x02c\x02n\x02p\x021\x020\x02l\x1b[201~")
+        s.send(b"0~paste\x02c\x02n\x02p\x021\x020\x02l\x02&\x1b[201~")
         s.finish(0)
         assert any(b"PREFIX_PASSED" in row for row in s.last_rows)
 finally:
@@ -1146,5 +1146,68 @@ try:
     s.expect(b"FIRST:2")
     os.kill(s.app_pid, signal.SIGTERM)
     s.finish(128 + signal.SIGTERM)
+finally:
+    s.close()
+
+# Explicit close: cancel, bracketed-paste confirmation, survivor input and child cleanup.
+with tempfile.TemporaryDirectory() as directory:
+    record = os.path.join(directory, "closing.pid")
+    s = Session()
+    try:
+        s.expect(b"RUSTMUX_READY> ")
+        s.send(b"KEEP=survivor\n")
+        s.expect(b"RUSTMUX_READY> ")
+        s.send(b"\x02c")
+        s.expect(b"RUSTMUX_READY> ")
+        s.send(("echo $$ > " + shlex.quote(record) + "\n").encode())
+        s.expect(b"RUSTMUX_READY> ")
+        end = time.monotonic() + 3
+        while not os.path.exists(record):
+            s.read()
+            assert time.monotonic() < end
+        with open(record) as source:
+            closing_pid = int(source.read())
+        for answer in (b"\r", b"no\r", b"yes\x07", b"yes\x03", b"yes\x1b"):
+            s.send(b"\x02&")
+            s.expect(b"Close window? Type yes:")
+            s.send(answer)
+            end = time.monotonic() + 3
+            while s.last_rows[0].startswith(b"Close window?"):
+                s.read()
+                assert time.monotonic() < end, s.last_rows
+            os.kill(closing_pid, 0)
+            expect_bar(s, b"*2:shell")
+        s.send(b"sleep 0.2; printf '\\033[2J\\033[H%s%s\\n' CLOSE_ BACKGROUND\n")
+        s.send(b"\x02&")
+        s.expect(b"Close window? Type yes:")
+        s.expect(b"CLOSE_BACKGROUND")
+        fcntl.ioctl(s.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 18, 60, 0, 0))
+        s.send(b"\x1b[200~yes\r\n\x1b[201~")
+        s.expect(b"Close window? Type yes: yes")
+        os.kill(closing_pid, 0) # Pasted newline must not confirm.
+        s.send(b"\rLEAK=1\n")
+        expect_bar(s, b"*1:shell")
+        try:
+            os.kill(closing_pid, 0)
+        except ProcessLookupError:
+            pass
+        else:
+            raise AssertionError("closed direct child still alive")
+        s.send(b"printf '\\nSURVIVOR:%s:%s\\n' $KEEP ${LEAK-unset}\n")
+        s.expect(b"SURVIVOR:survivor:unset")
+        s.send(b"\x02&")
+        s.expect(b"Close window? Type yes:")
+        s.send(b"yes\r")
+        s.finish(0)
+    finally:
+        s.close()
+
+# Natural child exit while confirming retains its normal exit status.
+s = Session()
+try:
+    s.expect(b"RUSTMUX_READY> ")
+    s.send(b"sleep 0.2; exit 7\n\x02&")
+    s.expect(b"Close window? Type yes:")
+    s.finish(7)
 finally:
     s.close()

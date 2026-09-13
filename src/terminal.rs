@@ -20,7 +20,7 @@ use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGWINCH};
 use crate::pane::{INPUT_LIMIT as LIMIT, MAX_CELLS, Pane};
 use crate::{
     chrome::{compose, pane_rows},
-    rename::{EditResult, RenamePrompt},
+    prompt::{EditResult, PromptKind, WindowPrompt},
     render::Renderer,
     screen::Screen,
     window::Windows,
@@ -295,6 +295,7 @@ enum WindowKey {
     Rename,
     Select(usize),
     Last,
+    Close,
 }
 
 #[derive(Default)]
@@ -414,6 +415,7 @@ impl WindowInput {
                 b'n' => output.push(WindowKey::Next),
                 b'p' => output.push(WindowKey::Previous),
                 b'l' => output.push(WindowKey::Last),
+                b'&' => output.push(WindowKey::Close),
                 b',' => output.push(WindowKey::Rename),
                 b'1'..=b'9' => output.push(WindowKey::Select(usize::from(byte - b'1'))),
                 b'0' => output.push(WindowKey::Select(9)),
@@ -446,17 +448,41 @@ fn forward(
     let mut next_frame = Instant::now();
     let mut force_redraw = true;
     let mut bar_dirty = false;
-    let mut rename: Option<RenamePrompt> = None;
+    let mut prompt: Option<WindowPrompt> = None;
+    let mut close_requested = None;
     loop {
         let received = signals.pending.load(Ordering::Relaxed);
         if received != 0 {
             return Ok((128 + received) as u8);
         }
-        if rename
+        if close_requested.is_some() && to_terminal.is_empty() {
+            let id = close_requested.take().unwrap();
+            // Finish the already encoded physical frame before changing ownership.
+            if windows.get(id).is_some() {
+                if windows.iter().len() == 1 {
+                    // run() restores the outer terminal before dropping the last shell.
+                    return Ok(0);
+                }
+                windows
+                    .get_mut(id)
+                    .unwrap()
+                    .content_mut()
+                    .shell_mut()
+                    .terminate()?;
+                drop(windows.close(id)?);
+                input.clear();
+                keys = WindowInput::default();
+                prompt = None;
+                renderer.invalidate();
+                force_redraw = true;
+                continue;
+            }
+        }
+        if prompt
             .as_ref()
             .is_some_and(|prompt| prompt.cancel_due(Instant::now()))
         {
-            rename = None;
+            prompt = None;
             renderer.invalidate();
             force_redraw = true;
         }
@@ -510,19 +536,20 @@ fn forward(
                 state.eof,
             );
             if id == active {
-                if state.eof && rename.is_some() {
-                    rename = None;
+                if state.eof && prompt.is_some() {
+                    prompt = None;
                     renderer.invalidate();
                     force_redraw = true;
                 }
                 active_paused = paused;
-                if (state.dirty || force_redraw || bar_dirty)
+                if close_requested.is_none()
+                    && (state.dirty || force_redraw || bar_dirty)
                     && (!paused || force_redraw)
                     && to_terminal.is_empty()
                     && (state.eof || force_redraw || Instant::now() >= next_frame)
                 {
                     let view = compose(screen, outer_rows, &names, active_index)?;
-                    if let Some(prompt) = &rename {
+                    if let Some(prompt) = &prompt {
                         renderer
                             .render(&prompt.overlay(&view), &mut FrameWriter(&mut to_terminal))?;
                     } else {
@@ -563,7 +590,7 @@ fn forward(
                     // Do not deliver pending keystrokes from a dead window to its successor.
                     input.clear();
                     keys = WindowInput::default();
-                    rename = None;
+                    prompt = None;
                     renderer.invalidate();
                     force_redraw = true;
                 }
@@ -571,7 +598,7 @@ fn forward(
             continue;
         }
         // A lone Escape or incomplete report must not remain held indefinitely.
-        if rename.is_none() && keys.mouse_expired() {
+        if prompt.is_none() && keys.mouse_expired() {
             let pane = windows.active_mut().unwrap().content_mut();
             let (_, _, _, state) = pane.parts_mut();
             if state.accepts_input() && state.to_shell.len() <= LIMIT - 64 {
@@ -580,19 +607,27 @@ fn forward(
         }
         // Decode in input order. Bytes preceding a switch remain queued for the
         // old child; following bytes target the newly selected one.
-        while !input.is_empty() {
-            if let Some(prompt) = &mut rename {
-                let result = prompt.feed(input.pop_front().unwrap(), Instant::now());
+        while close_requested.is_none() && !input.is_empty() {
+            if let Some(editor) = &mut prompt {
+                let result = editor.feed(input.pop_front().unwrap(), Instant::now());
                 match result {
                     EditResult::Save => {
-                        let name = prompt.text.clone();
-                        windows.rename(windows.active().unwrap().id(), name)?;
-                        rename = None;
+                        match editor.kind {
+                            PromptKind::Rename => {
+                                let name = editor.text.clone();
+                                windows.rename(windows.active().unwrap().id(), name)?;
+                            }
+                            PromptKind::Close if editor.text == "yes" => {
+                                close_requested = Some(windows.active().unwrap().id());
+                            }
+                            PromptKind::Close => {}
+                        }
+                        prompt = None;
                         keys = WindowInput::default();
                         renderer.invalidate();
                     }
                     EditResult::Cancel => {
-                        rename = None;
+                        prompt = None;
                         keys = WindowInput::default();
                         renderer.invalidate();
                     }
@@ -622,8 +657,13 @@ fn forward(
                         .3
                         .to_shell
                         .push_back(byte),
+                    WindowKey::Close => {
+                        prompt = Some(WindowPrompt::close());
+                        renderer.invalidate();
+                        force_redraw = true;
+                    }
                     WindowKey::Rename => {
-                        rename = Some(RenamePrompt::new(windows.active().unwrap().name()));
+                        prompt = Some(WindowPrompt::new(windows.active().unwrap().name()));
                         renderer.invalidate();
                         force_redraw = true;
                     }
@@ -671,7 +711,7 @@ fn forward(
             }
         }
         // A changed focus needs a frame before returning to a blocking poll.
-        if force_redraw && to_terminal.is_empty() {
+        if (force_redraw || close_requested.is_some()) && to_terminal.is_empty() {
             continue;
         }
         let active = windows.active().unwrap().id();
@@ -1024,13 +1064,14 @@ mod window_input_tests {
     #[test]
     fn prefix_commands_literal_prefix_and_unknown_keys() {
         assert_eq!(
-            decode(b"a\x02c\x02n\x02p\x02l\x02\x02\x02z"),
+            decode(b"a\x02c\x02n\x02p\x02l\x02&\x02\x02\x02z"),
             vec![
                 WindowKey::Byte(b'a'),
                 WindowKey::Create,
                 WindowKey::Next,
                 WindowKey::Previous,
                 WindowKey::Last,
+                WindowKey::Close,
                 WindowKey::Byte(2),
                 WindowKey::Byte(2),
                 WindowKey::Byte(b'z')
@@ -1054,7 +1095,7 @@ mod window_input_tests {
 
     #[test]
     fn bracketed_paste_and_utf8_are_forwarded_byte_for_byte() {
-        let bytes = "\x1b[200~中文\x02c\x02n\x02p\x021\x020\x02l\x02\x02\x1b[201~".as_bytes();
+        let bytes = "\x1b[200~中文\x02c\x02n\x02p\x021\x020\x02l\x02&\x02\x02\x1b[201~".as_bytes();
         assert_eq!(
             decode(bytes),
             bytes

@@ -109,6 +109,7 @@ paths. These states now drive multi-window polling.
 | Ctrl-B, then n | Select the next window, wrapping |
 | Ctrl-B, then p | Select the previous window, wrapping |
 | Ctrl-B, then l | Return to the last active window |
+| Ctrl-B, then & | Confirm closing the active window |
 | Ctrl-B, then 1–9 | Select the window at that one-based position |
 | Ctrl-B, then 0 | Select window 10 |
 | Ctrl-B, then , | Rename the active window |
@@ -254,3 +255,27 @@ Model tests cover identity, toggling, cyclic selection, no-op selection, renamin
 and removal. The nested PTY test switches between windows 1 and 10 and checks that
 commands reach the original shells and the bar follows focus. Bracketed paste
 containing Ctrl-B followed by `l` remains child input.
+
+## Closing a window explicitly
+
+Ctrl-B followed by `&` opens `Close window? Type yes:` in the top bar using the
+same bounded text editor as renaming. Type exactly lowercase `yes` and press
+Enter to close. Empty input, any other answer, Esc, Ctrl-C or Ctrl-G cancel.
+Pasted newlines do not confirm; Enter must arrive outside bracketed paste.
+The confirmation is for the active window; switching shortcuts are not executed
+while the editor is open. Output, terminal replies and resize continue normally.
+
+Confirmation waits for any already encoded physical frame to finish. Rustmux
+then closes the PTY, forcibly stops the direct shell if needed and reaps it,
+using the existing `PtyShell::terminate` behavior. This can lose unsaved work;
+it is not a graceful application exit and does not guarantee termination of all
+detached descendants. Unread child output and pending input are discarded.
+The successor is selected, or the predecessor if the closed window was last in
+order; other windows keep running. Closing the only window restores the outer
+terminal before child cleanup and exits Rustmux with status 0. Normal shell
+exit still drains output and returns its own status. A child that exits while
+the confirmation remains open follows the normal exit path.
+
+Tests cover cancellation, background output, resize, pasted-newline protection,
+direct-child reclamation, retained survivor shell state, discarded trailing
+input, last-window restoration and natural exit during confirmation.
