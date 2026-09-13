@@ -138,6 +138,11 @@ mode changes and resets replayed into a screen, and failure at every byte bounda
 of a mode-changing frame followed by full synchronization.
 
 The window rename prompt renders a temporary screen clone through the same
-Renderer. It covers the bottom row without changing the child model. Entering
+Renderer. It replaces the reserved window-bar row without changing the child model. Entering
 and leaving the prompt invalidates the renderer so display modes are synchronized
 with the editor or the active child respectively.
+
+The CLI composes a reserved bottom window-bar row below the child grid. Its
+physical frame dimensions include that row, while each PTY receives the reduced
+content height. The standalone renderer API still paints exactly its supplied
+grid and does not add UI rows. See [Windows](windows.md#window-bar-and-content-area).

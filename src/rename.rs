@@ -1,8 +1,8 @@
 //! Bounded, append-only window-name editor and temporary screen overlay.
 
 use crate::{
-    screen::{CursorShape, EraseMode, MouseTracking, Screen},
-    style::Style,
+    chrome::{bar_style, prepare_row},
+    screen::{CursorShape, MouseTracking, Screen},
 };
 use std::time::{Duration, Instant};
 use unicode_width::UnicodeWidthChar;
@@ -122,18 +122,8 @@ impl RenamePrompt {
 
     pub fn overlay(&self, original: &Screen) -> Screen {
         let mut screen = original.clone();
-        let (rows, columns) = screen.dimensions();
-        screen.set_origin_mode(false);
-        screen.set_insert_mode(false);
-        screen.set_auto_wrap(false);
-        screen.designate_character_set(false, false);
-        screen.select_character_set(false);
-        screen.set_style(Style {
-            inverse: true,
-            ..Style::default()
-        });
-        screen.position(rows - 1, 0);
-        screen.erase_line(EraseMode::All);
+        let (_, columns) = screen.dimensions();
+        prepare_row(&mut screen, bar_style(true));
         let mut remaining = columns.saturating_sub(1); // Reserve the visible cursor cell.
         for character in "Rename: ".chars().take(remaining) {
             screen.print(character);

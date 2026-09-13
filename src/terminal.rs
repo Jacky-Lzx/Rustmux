@@ -19,6 +19,7 @@ use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGWINCH};
 
 use crate::pane::{INPUT_LIMIT as LIMIT, MAX_CELLS, Pane};
 use crate::{
+    chrome::{compose, pane_rows},
     rename::{EditResult, RenamePrompt},
     render::Renderer,
     screen::Screen,
@@ -27,6 +28,8 @@ use crate::{
 
 // Bound pending keyboard input to 64 KiB; output retains at most one frame.
 const POLL_TIMEOUT_MILLIS: u16 = 50;
+const MAX_LEGACY_MOUSE_COORDINATE: usize = 223;
+const MAX_MOUSE_SEQUENCE_BYTES: usize = 64;
 const MAX_FRAME: usize = 16 * 1024 * 1024;
 const SYNC_TIMEOUT: Duration = Duration::from_secs(1);
 const FRAME_INTERVAL: Duration = Duration::from_millis(6);
@@ -83,12 +86,18 @@ pub fn run(shell_path: &OsStr) -> io::Result<u8> {
     check_size(size.ws_row, size.ws_col)?;
     let mut windows = Windows::default();
     windows.create(
-        "1".into(),
-        Pane::spawn(shell_path, size.ws_row, size.ws_col)?,
+        "shell".into(),
+        Pane::spawn(shell_path, pane_rows(size.ws_row), size.ws_col)?,
     )?;
     let signals = Signals::install()?;
     let mut terminal = Terminal::enter(file)?;
-    let result = forward(&mut terminal.file, &mut windows, &signals, shell_path);
+    let result = forward(
+        &mut terminal.file,
+        &mut windows,
+        &signals,
+        shell_path,
+        size.ws_row,
+    );
     // Restore the user's terminal before potentially blocking child cleanup.
     let restored = terminal.restore();
     drop(windows);
@@ -291,10 +300,90 @@ struct WindowInput {
     prefix: bool,
     paste: bool,
     tail: VecDeque<u8>,
+    mouse: Vec<u8>,
+    mouse_since: Option<Instant>,
+    pane_height: usize,
+    mouse_enabled: bool,
 }
 
 impl WindowInput {
+    // Hold only candidate mouse reports. Escape alone is released after 30ms;
+    // completed non-mouse sequences are forwarded as soon as they are known.
     fn feed(&mut self, byte: u8, output: &mut Vec<WindowKey>) {
+        if self.paste
+            || (self.mouse.is_empty() && (!self.mouse_enabled || byte != 27 || self.prefix))
+        {
+            self.plain(byte, output);
+            return;
+        }
+        self.mouse_since.get_or_insert_with(Instant::now);
+        self.mouse.push(byte);
+        let len = self.mouse.len();
+        let pending = match self.mouse.as_slice() {
+            [27] | [27, b'['] => true,
+            [27, b'[', b'M', ..] => len < 6,
+            [27, b'[', b'<', rest @ ..] => {
+                rest.last().is_none_or(|b| !matches!(b, b'M' | b'm'))
+                    && len < MAX_MOUSE_SEQUENCE_BYTES
+            }
+            _ => false,
+        };
+        if pending {
+            return;
+        }
+        let row = match self.mouse.as_slice() {
+            [27, b'[', b'M', _, _, row] => row.checked_sub(32).map(usize::from),
+            [27, b'[', b'<', rest @ ..] if matches!(rest.last(), Some(b'M' | b'm')) => {
+                std::str::from_utf8(&rest[..rest.len() - 1])
+                    .ok()
+                    .and_then(|text| {
+                        let parts: Vec<_> = text.split(';').collect();
+                        if parts.len() == 3
+                            && parts
+                                .iter()
+                                .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+                        {
+                            parts[2].parse::<usize>().ok()
+                        } else {
+                            None
+                        }
+                    })
+            }
+            _ => None,
+        };
+        let mut bytes = self.take_mouse();
+        if row.is_some_and(|row| row > self.pane_height) {
+            // Releases must still end a drag that began inside the child grid.
+            if bytes.starts_with(b"\x1b[<") && bytes.last() == Some(&b'm') {
+                let separator = bytes.iter().rposition(|&byte| byte == b';').unwrap();
+                bytes.truncate(separator + 1);
+                bytes.extend_from_slice(format!("{}m", self.pane_height).as_bytes());
+            } else if bytes.starts_with(b"\x1b[M")
+                && bytes[3]
+                    .checked_sub(32)
+                    .is_some_and(|button| button & 0x63 == 3)
+            {
+                bytes[5] = 32 + self.pane_height.min(MAX_LEGACY_MOUSE_COORDINATE) as u8;
+            } else {
+                return;
+            }
+        }
+        for byte in bytes {
+            self.plain(byte, output);
+        }
+    }
+
+    fn mouse_expired(&self) -> bool {
+        self.mouse_since
+            .is_some_and(|start| start.elapsed() >= Duration::from_millis(30))
+    }
+
+    fn take_mouse(&mut self) -> Vec<u8> {
+        self.mouse_since = None;
+        std::mem::take(&mut self.mouse)
+    }
+
+    fn plain(&mut self, byte: u8, output: &mut Vec<WindowKey>) {
         self.tail.push_back(byte);
         if self.tail.len() > 6 {
             self.tail.pop_front();
@@ -334,6 +423,7 @@ fn forward(
     windows: &mut Windows<Pane>,
     signals: &Signals,
     shell_path: &OsStr,
+    mut outer_rows: u16,
 ) -> io::Result<u8> {
     let mut renderer = Renderer::default();
     let mut to_terminal = VecDeque::new();
@@ -342,6 +432,7 @@ fn forward(
     let mut actions = Vec::new();
     let mut next_frame = Instant::now();
     let mut force_redraw = true;
+    let mut bar_dirty = false;
     let mut rename: Option<RenamePrompt> = None;
     loop {
         let received = signals.pending.load(Ordering::Relaxed);
@@ -361,6 +452,7 @@ fn forward(
             let size = window_size(terminal)?;
             if size.ws_row != 0 && size.ws_col != 0 {
                 check_size(size.ws_row, size.ws_col)?;
+                outer_rows = size.ws_row;
                 renderer.invalidate();
                 force_redraw = true;
                 Some(size)
@@ -370,6 +462,14 @@ fn forward(
         } else {
             None
         };
+        let names: Vec<_> = windows
+            .iter()
+            .map(|window| window.name().to_owned())
+            .collect();
+        let active_index = windows
+            .iter()
+            .position(|window| window.id() == active)
+            .unwrap();
         let mut active_paused = false;
         let mut finished = Vec::new();
         for window in windows.iter_mut() {
@@ -379,11 +479,14 @@ fn forward(
                 state.status = shell.try_wait()?;
             }
             if let Some(size) = resize {
-                screen.resize(usize::from(size.ws_row), usize::from(size.ws_col))?;
+                screen.resize(
+                    usize::from(pane_rows(size.ws_row)),
+                    usize::from(size.ws_col),
+                )?;
                 screen.set_synchronized_output(false);
                 state.synchronized_since = None;
                 if state.status.is_none() && !state.eof {
-                    shell.resize(size.ws_row, size.ws_col)?;
+                    shell.resize(pane_rows(size.ws_row), size.ws_col)?;
                 }
                 state.dirty = true;
             }
@@ -400,18 +503,20 @@ fn forward(
                     force_redraw = true;
                 }
                 active_paused = paused;
-                if (state.dirty || force_redraw)
+                if (state.dirty || force_redraw || bar_dirty)
                     && (!paused || force_redraw)
                     && to_terminal.is_empty()
                     && (state.eof || force_redraw || Instant::now() >= next_frame)
                 {
+                    let view = compose(screen, outer_rows, &names, active_index)?;
                     if let Some(prompt) = &rename {
                         renderer
-                            .render(&prompt.overlay(screen), &mut FrameWriter(&mut to_terminal))?;
+                            .render(&prompt.overlay(&view), &mut FrameWriter(&mut to_terminal))?;
                     } else {
-                        renderer.render(screen, &mut FrameWriter(&mut to_terminal))?;
+                        renderer.render(&view, &mut FrameWriter(&mut to_terminal))?;
                     }
                     state.dirty = false;
+                    bar_dirty = false;
                     force_redraw = false;
                     next_frame = Instant::now() + FRAME_INTERVAL;
                 }
@@ -433,6 +538,8 @@ fn forward(
             }
         }
         if !finished.is_empty() {
+            // Label-only updates must not expose a paused child transaction.
+            bar_dirty = true;
             for (id, code) in finished {
                 if windows.iter().len() == 1 {
                     return Ok(code);
@@ -449,6 +556,14 @@ fn forward(
                 }
             }
             continue;
+        }
+        // A lone Escape or incomplete report must not remain held indefinitely.
+        if rename.is_none() && keys.mouse_expired() {
+            let pane = windows.active_mut().unwrap().content_mut();
+            let (_, _, _, state) = pane.parts_mut();
+            if state.accepts_input() && state.to_shell.len() <= LIMIT - 64 {
+                state.to_shell.extend(keys.take_mouse());
+            }
         }
         // Decode in input order. Bytes preceding a switch remain queued for the
         // old child; following bytes target the newly selected one.
@@ -474,9 +589,12 @@ fn forward(
                 continue;
             }
             let pane = windows.active().unwrap().content();
-            if !pane.io().accepts_input() || pane.io().to_shell.len() > LIMIT - 2 {
+            if !pane.io().accepts_input() || pane.io().to_shell.len() > LIMIT - 64 {
                 break;
             }
+            keys.pane_height = pane.screen().dimensions().0;
+            keys.mouse_enabled =
+                pane.screen().mouse_tracking() != crate::screen::MouseTracking::Off;
             actions.clear();
             keys.feed(input.pop_front().unwrap(), &mut actions);
             for action in actions.drain(..) {
@@ -541,7 +659,8 @@ fn forward(
         if !to_terminal.is_empty() {
             outer_events |= PollFlags::POLLOUT;
         }
-        let timeout = if active_io.dirty && !active_paused && to_terminal.is_empty() {
+        let timeout = if (active_io.dirty || bar_dirty) && !active_paused && to_terminal.is_empty()
+        {
             next_frame
                 .saturating_duration_since(Instant::now())
                 .as_millis()
@@ -908,6 +1027,33 @@ mod window_input_tests {
         let mut input = bytes.to_vec();
         input.extend(b"\x02c");
         assert_eq!(decode(&input).last(), Some(&WindowKey::Create));
+        let mut keys = WindowInput {
+            mouse_enabled: true,
+            ..WindowInput::default()
+        };
+        keys.feed(27, &mut Vec::new());
+        assert_eq!(keys.take_mouse(), vec![27]);
+    }
+    #[test]
+    fn bar_mouse_presses_are_ignored_but_releases_finish_child_drags() {
+        let mut keys = WindowInput {
+            pane_height: 23,
+            mouse_enabled: true,
+            ..WindowInput::default()
+        };
+        let mut output = Vec::new();
+        for &byte in b"\x1b[<0;2;24M\x1b[<0;2;24m\x1b[<0;2;23M\x1b[M !8\x1b[M#!8" {
+            keys.feed(byte, &mut output);
+        }
+        let expected = b"\x1b[<0;2;23m\x1b[<0;2;23M\x1b[M#!7";
+        assert_eq!(
+            output,
+            expected
+                .iter()
+                .copied()
+                .map(WindowKey::Byte)
+                .collect::<Vec<_>>()
+        );
         assert_eq!(decode(b"\x1b"), vec![WindowKey::Byte(27)]);
     }
 }

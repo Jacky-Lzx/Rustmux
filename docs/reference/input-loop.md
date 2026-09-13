@@ -7,7 +7,8 @@ This describes H02 input, H03 rendering integration and H04 resize handling. Rea
 ## Scope and data flow
 
 The CLI selects an executable from RUSTMUX_SHELL, SHELL or /bin/sh and starts
-PtyShell with the initial outer-terminal dimensions. It requires terminal stdin
+PtyShell with the content dimensions (one fewer row for the window bar,
+with a minimum of one row). It requires terminal stdin
 and stdout pointing to the same device. It opens that actual device separately:
 this avoids modifying the parent's shared file status flags, and avoids polling
 macOS's /dev/tty indirection. No shell command string is interpolated at startup.
@@ -68,7 +69,8 @@ process, with exclusive terminal ownership and single-threaded startup.
 ## Window size changes
 
 SIGWINCH sets a separate atomic flag, so resize events cannot overwrite termination
-signals. The event loop reads the latest outer-terminal size, resizes both model grids,
+signals. The event loop reads the latest outer-terminal size, reserves the bottom bar row
+(unless only one row is available), resizes both model grids in every pane,
 and calls PtyShell::resize;
 TIOCSWINSZ updates the inner PTY and lets the kernel notify its foreground process
 group. No terminal operations run in the signal handler. Coalesced events use the

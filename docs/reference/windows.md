@@ -1,9 +1,10 @@
 # Windows
 
-The CLI supports multiple terminal windows, each with one shell and a full-size
-screen. `window::Windows<T>` owns their ordered collection and stable identities.
-This is partial H05: there is no window bar, split layout or persistent session
-yet. Window renaming is available through a temporary input prompt.
+The CLI supports multiple terminal windows, each with one shell and its own
+content screen. `window::Windows<T>` owns their ordered collection and stable identities.
+A bottom window bar shows names and focus. This is partial H05: split layouts
+and persistent sessions are not implemented. Window renaming uses the same bar
+row as a temporary input prompt.
 
 ## Identity and focus
 
@@ -112,8 +113,9 @@ paths. These states now drive multi-window polling.
 | `exit` in the shell | Close that window after draining its final output |
 
 An unrecognized prefix combination forwards both bytes unchanged. A prefix can
-span separate reads and waits for the following byte without a timeout. Ordinary
-Escape and UTF-8 bytes are forwarded immediately. Bracketed paste markers and
+span separate reads and waits for the following byte without a timeout. Ordinary UTF-8 bytes are forwarded immediately. When mouse reporting is enabled,
+Escape may be held briefly to recognize a mouse report; see the window-bar rules
+below. Bracketed paste markers and
 payload are forwarded unchanged, including Ctrl-B combinations inside the paste.
 Unbracketed pasted text is indistinguishable from typing and follows the same
 shortcut rules. Key bindings are fixed for this initial integration.
@@ -121,8 +123,7 @@ shortcut rules. Key bindings are fixed for this initial integration.
 There are at most 16 windows. New shells use the originally selected executable
 and Rustmux's startup working directory; active-shell cwd inheritance is not yet
 implemented. A failed creation or the window limit preserves existing windows
-and focus, with a best-effort bell when the output queue is empty. No error dialog
-or status bar is provided yet.
+and focus, with a best-effort bell when the output queue is empty. No creation-error dialog is provided yet.
 
 Each iteration performs at most one bounded read/write per ready pane. Inactive
 windows keep parsing output and replying to terminal queries without rendering
@@ -170,14 +171,54 @@ poll interval. Escape-prefixed sequences are consumed without executing them.
 
 The prompt shows the tail of long names without splitting wide characters and
 reserves a cursor cell. On extremely narrow terminals even the label is clipped.
-It uses a temporary screen clone, resets the clone's character-set/style/input
-modes for editing, and never overwrites the child's grid or cursor. Background
+It replaces the window-bar row in a temporary screen clone, resets the clone's
+character-set/style/input modes for editing, and never overwrites the child's grid
+or cursor. When the outer terminal has only one row, it temporarily covers that
+row because no dedicated bar fits. Background
 output and query replies continue while editing, and resize relocates the prompt
 to the new bottom row. The original pane's display and input modes are restored
 when editing ends. Exiting the active child cancels the prompt before final output
-and focus fallback. Names remain per-window metadata; a persistent window bar is
-not yet implemented.
+and focus fallback. Saved names are immediately visible in the window bar.
 
 Tests exercise Unicode and combining input, byte limits, invalid/control input,
 paste boundaries, escape handling, narrow grids, DEC graphics/origin-mode
 isolation, and real CLI save/cancel/reopen with continued child output and resize.
+
+## Window bar and content area
+
+The bottom row is reserved for window labels. The PTY and both screen grids use
+`max(1, outer rows - 1)` rows, with the full terminal width. A terminal with only
+one row hides the bar and retains one content row. Resizing updates every pane;
+the outer 65,536-cell limit still includes the reserved row.
+
+Labels show a one-based position and name, for example `1:shell` and `*2:editor`.
+The star and blue background identify the active window; other labels use a dark
+gray background. The rename prompt uses the same blue style. Colors use standard
+indexed terminal colors, so their exact appearance depends on the terminal's
+palette. New windows default to the name `shell`.
+
+Each label is clipped to 24 display columns, excluding control characters and
+without splitting a wide glyph. If labels do not fit, the visible starting window
+advances enough to keep the active label in view. There are no click-to-select or
+mouse-scroll actions on the bar yet. On extremely narrow terminals the visible
+label may consist only of its highlighted prefix.
+
+The renderer receives a composed copy of the active child screen plus the bar;
+child cells, cursor and input modes are preserved. The copy adds allocation and
+grid-copy work to CLI rendering; prior encoding-only benchmark results do not
+measure that cost. Unchanged composed cells still benefit from incremental output.
+Closing an inactive window also schedules a redraw so labels and positions
+update, respecting any synchronized-output hold on the active child.
+
+When the child enables mouse reporting, complete SGR and classic X10 reports below
+the content area are intercepted. Press, wheel and motion reports there are
+ignored. Release reports are clamped to the last content row so a drag can end.
+Candidate reports use at most 64 buffered bytes; incomplete candidates are
+released after a 30ms minimum delay, subject to the event loop's polling and
+backpressure. Extremely delayed/split malformed reports may therefore be forwarded
+unfiltered. Paste payload is never mouse-filtered. Without mouse reporting,
+ordinary Escape remains immediate.
+
+Tests cover bar styles/labels, active-label visibility, Unicode clipping,
+child-state preservation, actual PTY sizes, rename/save visibility, removal,
+one-row fallback and mouse interception in a real CLI process.

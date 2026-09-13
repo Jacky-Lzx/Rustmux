@@ -129,7 +129,7 @@ class Session:
                     if target in rows:
                         return True
                 elif target == b"RUSTMUX_READY> ":
-                    nonempty = [row for row in rows if row]
+                    nonempty = [row for row in (rows[:-1] if len(rows) > 1 else rows) if row]
                     if nonempty and nonempty[-1].endswith(target.rstrip()):
                         return True
                 elif any(target in row for row in rows):
@@ -204,14 +204,14 @@ try:
     s.expect(b"\r\nWATCH_READY\r\n")
     for rows, columns in [(40, 120), (18, 60), (55, 150)]:
         fcntl.ioctl(s.slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, columns, 0, 0))
-        s.expect(f"SIZE:{rows}:{columns}\r\n".encode())
+        s.expect(f"SIZE:{max(1, rows - 1)}:{columns}\r\n".encode())
     # Invalid transient dimensions must not terminate Rustmux or reach the child.
     fcntl.ioctl(s.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 0, 0, 0, 0))
     s.read(0.15)
     assert b"SIZE:0:0" not in s.output
     assert s.child.poll() is None
     fcntl.ioctl(s.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
-    s.expect(b"SIZE:24:80\r\n")
+    s.expect(b"SIZE:23:80\r\n")
     s.send(b"\x03")
     s.expect(b"RUSTMUX_READY> ")
     # Output larger than the grid must still be parsed through the final marker.
@@ -328,7 +328,7 @@ try:
            b"\\033[?25l\\033[4h\\033[3g\\033(0lqqk"
            b"\\033cRESET_DONE'; read answer; stty echo; printf '\\033[2;1H'\n")
     s.expect(b"\r\nRESET_DONE\r\n")
-    assert s.last_rows[0] == b"RESET_DONE" and not any(s.last_rows[1:]), s.last_rows
+    assert s.last_rows[0] == b"RESET_DONE" and not any(s.last_rows[1:-1]), s.last_rows
     assert s.last_frame.endswith(b"\x1b[?25h"), s.last_frame
     s.send(b"\n")
     s.expect(b"RUSTMUX_READY> ")
@@ -857,7 +857,7 @@ try:
     s.expect(b"BACK_A")
     assert s.private_modes[2004]
     s.send(b"printf '\\n%s:%s:%s\\n' RETAINED $WIN \"$(stty size)\"\n")
-    s.expect(b"RETAINED:A:40 100")
+    s.expect(b"RETAINED:A:39 100")
     s.send(b"\x02n")
     s.expect(b"WINDOW_B:unset")
     assert not s.private_modes[2004]
@@ -997,7 +997,7 @@ try:
     s.expect(b"RUSTMUX_READY> ")
     s.send(b"sleep 0.2; printf '\\033[2J\\033[H%s%s\\n' WORK _DONE\n")
     s.send(b"\x02,")
-    s.expect(b"Rename: 1")
+    s.expect(b"Rename: shell")
     s.send("\x15中文e\u0301\x7f".encode())
     s.expect("Rename: 中文e".encode())
     end = time.monotonic() + 3
@@ -1034,9 +1034,77 @@ try:
     s.expect(b"RUSTMUX_READY> ")
     s.send(b"sleep 0.2; printf '\\033[2J\\033[H%s%s\\n' EDITOR_ EXIT; exit 7\n")
     s.send(b"\x02,")
-    s.expect(b"Rename: 1")
+    s.expect(b"Rename: shell")
     s.finish(7)
     assert any(b"EDITOR_EXIT" in row for row in s.last_rows)
     assert not any(row.startswith(b"Rename:") for row in s.last_rows)
+finally:
+    s.close()
+
+# Persistent bar reflects creation, focus, rename and removal without hiding content.
+def expect_bar(session, marker):
+    end = time.monotonic() + 3
+    while not session.last_rows or marker not in session.last_rows[-1]:
+        session.read()
+        assert time.monotonic() < end, session.last_rows
+
+s = Session()
+try:
+    s.expect(b"RUSTMUX_READY> ")
+    expect_bar(s, b"*1:shell")
+    s.send(b"printf '\\033[23;1H%s%s' LAST_ CONTENT\n")
+    s.expect(b"LAST_CONTENT")
+    assert b"LAST_CONTENT" in s.last_rows[22]
+    assert b"*1:shell" in s.last_rows[23]
+    s.send(b"\x02c")
+    s.expect(b"RUSTMUX_READY> ")
+    expect_bar(s, b"*2:shell")
+    s.send("\x02,\x15中文\r".encode())
+    expect_bar(s, "*2:中文".encode())
+    s.send(b"\x02p")
+    expect_bar(s, b"*1:shell")
+    assert "2:中文".encode() in s.last_rows[-1]
+    s.send(b"\x02n")
+    expect_bar(s, "*2:中文".encode())
+    s.send(b"exit 0\n")
+    expect_bar(s, b"*1:shell")
+    assert "中文".encode() not in s.last_rows[-1]
+    fcntl.ioctl(s.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 1, 80, 0, 0))
+    s.read(0.1)
+    s.send(b"printf '\\033[2J\\033[H%s%s' ONE_ ROW\n")
+    s.expect(b"ONE_ROW")
+    assert len(s.last_rows) == 1 and b"*1:shell" not in s.last_rows[0]
+    fcntl.ioctl(s.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 4, 80, 0, 0))
+    expect_bar(s, b"*1:shell")
+    s.send(b"exit 0\n")
+    s.finish(0)
+finally:
+    s.close()
+
+bar_mouse = r"""
+import os, select, time, tty
+tty.setraw(0)
+os.write(1, b"\x1b[?1000;1006h\x1b[2J\x1b[HBAR_MOUSE_READY")
+expected = b"\x1b[<0;2;23mx"
+data = bytearray()
+end = time.monotonic() + 4
+while len(data) < len(expected):
+    assert time.monotonic() < end, repr(data)
+    if select.select([0], [], [], 0.1)[0]:
+        data.extend(os.read(0, len(expected) - len(data)))
+assert data == expected, repr(data)
+os.write(1, b"\x1b[2J\x1b[HBAR_MOUSE_OK")
+"""
+s = Session()
+try:
+    s.expect(b"RUSTMUX_READY> ")
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py") as source:
+        source.write(bar_mouse)
+        source.flush()
+        s.send(("exec python3 " + shlex.quote(source.name) + "\n").encode())
+        s.expect(b"BAR_MOUSE_READY")
+        s.send(b"\x1b[<0;2;24M\x1b[<0;2;24mx")
+        s.finish(0)
+        assert any(b"BAR_MOUSE_OK" in row for row in s.last_rows)
 finally:
     s.close()
