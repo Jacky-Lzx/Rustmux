@@ -34,3 +34,5 @@
 - [Synchronized Output](reference/synchronized-output.md)
 - [Device Attributes](reference/device-attributes.md)
 - [Rendering Measurements](reference/rendering-performance.md)
+
+- [Window Model](reference/windows.md)
