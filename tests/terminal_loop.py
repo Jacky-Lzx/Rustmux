@@ -875,7 +875,7 @@ prefix_probe = r"""
 import os, select, time, tty
 tty.setraw(0)
 os.write(1, b"\x1b[?2004h\x1b[2J\x1b[HPREFIX_READY")
-expected = b"\x02n\x02z\x1b[200~paste\x02c\x02n\x02p\x021\x020\x02\t\x02&\x02<\x02>\x1b[201~"
+expected = b"\x02n\x02q\x1b[200~paste\x02c\x02n\x02p\x021\x020\x02\t\x02&\x02<\x02>\x1b[201~"
 data = bytearray()
 end = time.monotonic() + 5
 while len(data) < len(expected):
@@ -893,7 +893,7 @@ try:
         source.flush()
         s.send(("exec python3 " + shlex.quote(source.name) + "\n").encode())
         s.expect(b"PREFIX_READY")
-        s.send(b"\x02\x02n\x02z\x1b[20")
+        s.send(b"\x02\x02n\x02q\x1b[20")
         s.send(b"0~paste\x02c\x02n\x02p\x021\x020\x02\t\x02&\x02<\x02>\x1b[201~")
         s.finish(0)
         assert any(b"PREFIX_PASSED" in row for row in s.last_rows)
@@ -1328,5 +1328,86 @@ try:
         s.expect(b"SPLIT_MOUSE_OK")
     os.kill(s.app_pid, signal.SIGTERM)
     s.finish(128 + signal.SIGTERM)
+finally:
+    s.close()
+
+# Zoom resizes only its target; changing targets preserves shells and restores tiling.
+s = Session()
+try:
+    s.expect(b"RUSTMUX_READY> ")
+    s.send(b"stty -echo; VAR=A; printf '\\033[2J\\033[H%s%s\\n' ZOOM _BASE\n")
+    s.expect(b"ZOOM_BASE")
+    s.send(b"\x02%")
+    s.expect(b"RUSTMUX_READY>")
+    s.send(b"stty -echo; VAR=B; printf '\\033[2J\\033[H%s%s\\n' ZOOM _RIGHT\n")
+    s.expect(b"ZOOM_RIGHT")
+    s.send(b"\x02zprintf '\\033[2J\\033[HZOOM:%s:%s\\n' $VAR \"$(stty size)\"\n")
+    s.expect(b"ZOOM:B:23 80")
+    assert not any(b"ZOOM_BASE" in row for row in s.last_rows)
+    s.send(b"\x02hprintf '\\033[2J\\033[HTARGET:%s:%s\\n' $VAR \"$(stty size)\"\n")
+    s.expect(b"TARGET:A:23 80")
+    assert not any(b"ZOOM:B" in row for row in s.last_rows)
+    fcntl.ioctl(s.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
+    s.read(0.1)
+    s.send(b"printf '\\033[2J\\033[HZOOM_RESIZE:%s:%s\\n' $VAR \"$(stty size)\"\n")
+    s.expect(b"ZOOM_RESIZE:A:29 100")
+    s.send(b"\x02oprintf '\\033[2J\\033[HCYCLE_ZOOM:%s:%s\\n' $VAR \"$(stty size)\"\n")
+    s.expect(b"CYCLE_ZOOM:B:29 100")
+    s.send(b"\x02zprintf '\\033[2J\\033[HTILED:%s:%s\\n' $VAR \"$(stty size)\"\n")
+    s.expect(b"TILED:B:29 50")
+    assert any(b"ZOOM_RESIZE:A" in row for row in s.last_rows)
+    s.send(b"\x02hprintf '\\033[2J\\033[HRESTORED_ZOOM:%s:%s\\n' $VAR \"$(stty size)\"\n")
+    s.expect(b"RESTORED_ZOOM:A:29 49")
+    s.send(b"\x02zexit 0\n")
+    end = time.monotonic() + 3
+    while any(b"RESTORED_ZOOM:A" in row for row in s.last_rows):
+        s.read()
+        assert time.monotonic() < end, s.last_rows
+    s.send(b"printf '\\033[2J\\033[HZOOM_SURVIVOR:%s:%s\\n' $VAR \"$(stty size)\"; exit 8\n")
+    s.finish(8)
+    assert any(b"ZOOM_SURVIVOR:B:29 100" in row for row in s.last_rows)
+finally:
+    s.close()
+
+# Zoomed mouse coordinates have no tiled column offset.
+s = Session()
+try:
+    s.expect(b"RUSTMUX_READY> ")
+    s.send(b"stty -echo; printf '\\033[2J\\033[H%s%s\\n' BASE _READY\n")
+    s.expect(b"BASE_READY")
+    s.send(b"\x02%\x02z")
+    s.expect(b"RUSTMUX_READY>")
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py") as source:
+        source.write(split_mouse)
+        source.flush()
+        s.send(("python3 " + shlex.quote(source.name) + "\n").encode())
+        s.expect(b"SPLIT_MOUSE_READY")
+        s.send(b'\x1b[<0;2;3M\x1b[<0;1;1M\x1b[<0;1;1m\x1b[M !#x')
+        s.expect(b"SPLIT_MOUSE_OK")
+    os.kill(s.app_pid, signal.SIGTERM)
+    s.finish(128 + signal.SIGTERM)
+finally:
+    s.close()
+
+
+# Hidden panes still answer queries and retain output while another pane is zoomed.
+s = Session()
+try:
+    s.expect(b"RUSTMUX_READY> ")
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py") as source:
+        source.write(background_query)
+        source.flush()
+        s.send(("exec python3 " + shlex.quote(source.name) + "\n").encode())
+        s.expect(b"QUERY_WAIT")
+        s.send(b"\x02%\x02z")
+        s.expect(b"RUSTMUX_READY> ")
+        s.read(0.5)
+        assert not any(b"QUERY_BG_OK" in row for row in s.last_rows)
+        s.send(b"\x02h")
+        s.expect(b"QUERY_BG_OK")
+        s.send(b"x")
+        s.expect(b"RUSTMUX_READY> ")
+        s.send(b"exit 0\n")
+        s.finish(0)
 finally:
     s.close()

@@ -303,6 +303,7 @@ enum WindowKey {
     MoveRight,
     Split(SplitAxis),
     NextPane,
+    ToggleZoom,
     FocusPane(Direction),
 }
 
@@ -445,6 +446,7 @@ impl WindowInput {
                 b'%' => output.push(WindowKey::Split(SplitAxis::Columns)),
                 b'"' => output.push(WindowKey::Split(SplitAxis::Rows)),
                 b'o' => output.push(WindowKey::NextPane),
+                b'z' => output.push(WindowKey::ToggleZoom),
                 b'h' => output.push(WindowKey::FocusPane(Direction::Left)),
                 b'j' => output.push(WindowKey::FocusPane(Direction::Down)),
                 b'k' => output.push(WindowKey::FocusPane(Direction::Up)),
@@ -553,10 +555,13 @@ fn forward(
             let sizes: Vec<_> = windows
                 .iter()
                 .map(|window| {
-                    (
-                        window.id(),
-                        window.content().layout().tiled_geometry().panes,
-                    )
+                    let layout = window.content().layout();
+                    let mut sizes = layout.tiled_geometry().panes;
+                    if layout.is_zoomed() {
+                        let visible = layout.geometry().panes[0];
+                        *sizes.iter_mut().find(|(id, _)| *id == visible.0).unwrap() = visible;
+                    }
+                    (window.id(), sizes)
                 })
                 .collect();
             // Prepare all destinations across all windows before changing any PTY.
@@ -585,19 +590,24 @@ fn forward(
         for window in windows.iter_mut() {
             let id = window.id();
             let panes = window.content_mut();
+            let zoomed = panes.layout().is_zoomed();
+            let focused = panes.layout().active();
             let mut paused = false;
             let mut eof = false;
             let mut dirty = false;
-            for (_, pane) in panes.iter_mut() {
+            for (pane_id, pane) in panes.iter_mut() {
                 let (_, _, screen, state) = pane.parts_mut();
-                paused |= synchronized_pause(
+                let pane_paused = synchronized_pause(
                     screen,
                     &mut state.synchronized_since,
                     Instant::now(),
                     state.eof,
                 );
-                eof |= state.eof;
-                dirty |= state.dirty;
+                if !zoomed || pane_id == focused {
+                    paused |= pane_paused;
+                    eof |= state.eof;
+                    dirty |= state.dirty;
+                }
             }
             if id == active {
                 if panes.active().io().eof && prompt.is_some() {
@@ -622,8 +632,10 @@ fn forward(
                     } else {
                         renderer.render(&view, &mut FrameWriter(&mut to_terminal))?;
                     }
-                    for (_, pane) in panes.iter_mut() {
-                        pane.parts_mut().3.dirty = false;
+                    for (pane_id, pane) in panes.iter_mut() {
+                        if !zoomed || pane_id == focused {
+                            pane.parts_mut().3.dirty = false;
+                        }
                     }
                     bar_dirty = false;
                     force_redraw = false;
@@ -634,7 +646,10 @@ fn forward(
                 let state = pane.io();
                 if state.eof {
                     if let Some(status) = state.status {
-                        if id != active || (!state.dirty && to_terminal.is_empty()) {
+                        if id != active
+                            || (zoomed && pane_id != focused)
+                            || (!state.dirty && to_terminal.is_empty())
+                        {
                             finished.push((id, pane_id, exit_code(status)));
                         }
                     } else if state
@@ -726,7 +741,7 @@ fn forward(
             let set = windows.active().unwrap().content();
             let rect = set
                 .layout()
-                .tiled_geometry()
+                .geometry()
                 .panes
                 .into_iter()
                 .find(|(id, _)| *id == set.layout().active())
@@ -765,6 +780,15 @@ fn forward(
                                     to_terminal.push_back(7);
                                 }
                             }
+                        }
+                    }
+                    WindowKey::ToggleZoom => {
+                        let panes = windows.active_mut().unwrap().content_mut();
+                        let was_zoomed = panes.layout().is_zoomed();
+                        if panes.toggle_zoom() != was_zoomed {
+                            panes.synchronize_sizes()?;
+                            renderer.invalidate();
+                            force_redraw = true;
                         }
                     }
                     WindowKey::NextPane => {
@@ -847,6 +871,11 @@ fn forward(
                     windows.active().unwrap().content().layout().active(),
                 ) != old
                 {
+                    windows
+                        .active_mut()
+                        .unwrap()
+                        .content_mut()
+                        .synchronize_sizes()?;
                     renderer.invalidate();
                     force_redraw = true;
                 }
@@ -857,12 +886,11 @@ fn forward(
             continue;
         }
         let active = windows.active().unwrap().id();
-        let active_dirty = windows
-            .active()
-            .unwrap()
-            .content()
-            .iter()
-            .any(|(_, pane)| pane.io().dirty);
+        let active_set = windows.active().unwrap().content();
+        let active_dirty = active_set.iter().any(|(id, pane)| {
+            (!active_set.layout().is_zoomed() || id == active_set.layout().active())
+                && pane.io().dirty
+        });
         let mut outer_events = PollFlags::empty();
         if input.len() < LIMIT {
             outer_events |= PollFlags::POLLIN;
@@ -1216,7 +1244,7 @@ mod window_input_tests {
     #[test]
     fn prefix_commands_literal_prefix_and_unknown_keys() {
         assert_eq!(
-            decode(b"a\x02c\x02n\x02p\x02\t\x02&\x02<\x02>\x02\x02\x02z"),
+            decode(b"a\x02c\x02n\x02p\x02\t\x02&\x02<\x02>\x02\x02\x02q"),
             vec![
                 WindowKey::Byte(b'a'),
                 WindowKey::Create,
@@ -1228,7 +1256,7 @@ mod window_input_tests {
                 WindowKey::MoveRight,
                 WindowKey::Byte(2),
                 WindowKey::Byte(2),
-                WindowKey::Byte(b'z')
+                WindowKey::Byte(b'q')
             ]
         );
     }
@@ -1236,11 +1264,12 @@ mod window_input_tests {
     #[test]
     fn split_and_pane_focus_shortcuts_are_decoded() {
         assert_eq!(
-            decode(b"\x02%\x02\"\x02o\x02h\x02j\x02k\x02l"),
+            decode(b"\x02%\x02\"\x02o\x02z\x02h\x02j\x02k\x02l"),
             vec![
                 WindowKey::Split(SplitAxis::Columns),
                 WindowKey::Split(SplitAxis::Rows),
                 WindowKey::NextPane,
+                WindowKey::ToggleZoom,
                 WindowKey::FocusPane(Direction::Left),
                 WindowKey::FocusPane(Direction::Down),
                 WindowKey::FocusPane(Direction::Up),
@@ -1265,7 +1294,7 @@ mod window_input_tests {
 
     #[test]
     fn bracketed_paste_and_utf8_are_forwarded_byte_for_byte() {
-        let bytes = "\x1b[200~中文\x02c\x02n\x02p\x021\x020\x02\t\x02&\x02<\x02>\x02%\x02o\x02h\x02j\x02k\x02l\x02\x02\x1b[201~"
+        let bytes = "\x1b[200~中文\x02c\x02n\x02p\x021\x020\x02\t\x02&\x02<\x02>\x02%\x02o\x02z\x02h\x02j\x02k\x02l\x02\x02\x1b[201~"
             .as_bytes();
         assert_eq!(
             decode(bytes),

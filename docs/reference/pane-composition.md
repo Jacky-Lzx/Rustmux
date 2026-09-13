@@ -25,7 +25,7 @@ not a replacement parser model.
 
 Coordinates exclude the top window bar. The CLI adds that bar and routes input
 to its active pane, translating both mouse coordinates. Normal composite updates
-wait for every pane to release its synchronized-output hold, subject to the
+wait for every visible pane to release its synchronized-output hold, subject to the
 existing timeout. Explicit focus/layout changes force a redraw. These policies
 belong to the event loop; this function does not resize PTYs/screens, allocate
 processes, or flush terminal output.

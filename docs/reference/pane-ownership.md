@@ -136,9 +136,9 @@ Frames now pass through `pane_view::compose`, followed by top window-bar and pro
 composition. Closing a window releases its owned set; explicit close terminates
 its owned direct children before removing it. Natural pane exit drains its final
 output, removes that leaf and resizes surviving panes; the last pane closes the
-window. Frames and synchronized-output scheduling include all panes in the active
+window. Frames and synchronized-output scheduling include visible panes in the active
 window. See [Interactive Splits](interactive-splits.md) for shortcuts and limits.
-There is no CLI zoom shortcut yet.
+Ctrl-B `z` toggles zoom of the selected pane.
 
 The full existing nested-PTY suite is the regression check for this integration,
 including window creation and selection, background replies, modes, resize,
