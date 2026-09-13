@@ -30,6 +30,12 @@ pub fn render(screen: &Screen, output: &mut impl Write) -> io::Result<()> {
     } else {
         b"\x1b[?1l"
     })?;
+    // Numeric keypad mode is separate from application cursor keys.
+    output.write_all(if screen.application_keypad() {
+        b"\x1b="
+    } else {
+        b"\x1b>"
+    })?;
     let mut style = Style::default();
     for row in 0..screen.dimensions().0 {
         // Explicit CUP avoids newline-induced scrolling, including at bottom-right.

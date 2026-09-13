@@ -70,6 +70,7 @@ pub struct Screen {
     insert_mode: bool,
     bracketed_paste: bool,
     application_cursor_keys: bool,
+    application_keypad: bool,
     tab_stops: Vec<bool>,
     scroll_region: (usize, usize),
     inactive_scroll_region: (usize, usize),
@@ -117,6 +118,7 @@ impl Screen {
             insert_mode: false,
             bracketed_paste: false,
             application_cursor_keys: false,
+            application_keypad: false,
             tab_stops,
             scroll_region: (0, rows - 1),
             inactive_scroll_region: (0, rows - 1),
@@ -141,6 +143,7 @@ impl Screen {
         self.cursor_visible = true;
         self.insert_mode = false;
         self.application_cursor_keys = false;
+        self.application_keypad = false;
         self.bracketed_paste = false;
         for (column, stop) in self.tab_stops.iter_mut().enumerate() {
             *stop = column != 0 && column % DEFAULT_TAB_WIDTH == 0;
@@ -162,6 +165,7 @@ impl Screen {
         self.cursor_visible = true;
         self.insert_mode = false;
         self.application_cursor_keys = false;
+        self.application_keypad = false;
         self.scroll_region = (0, self.rows - 1);
         self.style = Style::default();
         self.wrap_pending = false;
@@ -197,6 +201,7 @@ impl Screen {
         resized.insert_mode = self.insert_mode;
         resized.bracketed_paste = self.bracketed_paste;
         resized.application_cursor_keys = self.application_cursor_keys;
+        resized.application_keypad = self.application_keypad;
         resized.origin_mode = self.origin_mode;
         resized.auto_wrap = self.auto_wrap;
         resized.character_sets = self.character_sets;
@@ -306,6 +311,15 @@ impl Screen {
     /// Visibility is a global terminal mode, independent of saved cursor state.
     pub fn set_cursor_visible(&mut self, visible: bool) {
         self.cursor_visible = visible;
+    }
+
+    pub fn application_keypad(&self) -> bool {
+        self.application_keypad
+    }
+
+    /// Global keypad input state, independent of cursor-key mode and saved cursors.
+    pub fn set_application_keypad(&mut self, enabled: bool) {
+        self.application_keypad = enabled;
     }
 
     pub fn application_cursor_keys(&self) -> bool {

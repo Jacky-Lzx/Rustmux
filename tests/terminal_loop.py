@@ -426,6 +426,49 @@ for terminate in (False, True):
     finally:
         s.close()
 
+# Model keypad 0, 1, 9, decimal and Enter in numeric/application modes.
+keypad_probe = r"""
+import os, select, time, tty
+tty.setraw(0)
+def receive(expected):
+    data = bytearray()
+    end = time.monotonic() + 6
+    while len(data) < len(expected):
+        assert time.monotonic() < end, repr(data)
+        if select.select([0], [], [], 0.1)[0]:
+            data.extend(os.read(0, len(expected) - len(data)))
+    assert data == expected, repr(data)
+os.write(1, b"\x1b=\x1b[2J\x1b[HAPP_PAD")
+receive(b"\x1bOp\x1bOq\x1bOy\x1bOn\x1bOM")
+os.write(1, b"\x1b[!p\x1b[2J\x1b[HNORMAL_PAD")
+receive(b"019.\r")
+os.write(1, b"\x1b=\x1b[2J\x1b[HEXIT_PAD")
+receive(b"exit")
+"""
+for terminate in (False, True):
+    s = Session()
+    try:
+        s.expect(b"RUSTMUX_READY> ")
+        s.send(("exec python3 -c " + shlex.quote(keypad_probe) + "\n").encode())
+        s.expect(b"\r\nAPP_PAD\r\n")
+        assert b"\x1b=" in s.last_frame
+        if terminate:
+            os.kill(s.app_pid, signal.SIGTERM)
+            s.finish(128 + signal.SIGTERM)
+        else:
+            s.send(b"\x1bO")
+            s.send(b"p\x1bOq\x1bOy\x1bOn\x1bOM")
+            s.expect(b"\r\nNORMAL_PAD\r\n")
+            assert b"\x1b>" in s.last_frame
+            s.send(b"019.\r")
+            s.expect(b"\r\nEXIT_PAD\r\n")
+            assert b"\x1b=" in s.last_frame
+            s.send(b"exit")
+            s.finish(0)
+        assert s.output.rfind(b"\x1b>") > s.output.rfind(b"\x1b=")
+    finally:
+        s.close()
+
 # A model-allocation limit error during resize must restore the terminal too.
 s = Session()
 try:

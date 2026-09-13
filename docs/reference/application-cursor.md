@@ -13,7 +13,8 @@ For unmodified keys, XTerm uses these sequences:
 See [XTerm control sequences](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html).
 The outer terminal owns actual key encoding, including modifiers and any local
 keyboard configuration. Rustmux does not translate incoming CSI/SS3 sequences.
-Application numeric keypad modes (ESC = / ESC >) remain unsupported.
+[Application numeric keypad modes](application-keypad.md) (ESC = / ESC >)
+are tracked independently.
 
 ## State and synchronization
 

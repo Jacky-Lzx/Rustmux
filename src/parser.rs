@@ -199,6 +199,10 @@ impl Parser {
                 State::Ground
             }
             State::Escape => match byte {
+                b'=' | b'>' => {
+                    screen.set_application_keypad(byte == b'=');
+                    State::Ground
+                }
                 b'c' => {
                     screen.reset();
                     *self = Self::new();
