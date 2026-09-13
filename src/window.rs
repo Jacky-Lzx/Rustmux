@@ -49,6 +49,7 @@ pub struct Windows<T> {
     entries: Vec<Window<T>>,
     active: usize,
     next_id: Option<u64>,
+    last_active: Option<WindowId>,
 }
 
 impl<T> Default for Windows<T> {
@@ -57,6 +58,7 @@ impl<T> Default for Windows<T> {
             entries: Vec::new(),
             active: 0,
             next_id: Some(0),
+            last_active: None,
         }
     }
 }
@@ -69,6 +71,7 @@ impl<T> Windows<T> {
             .next_id
             .ok_or_else(|| io::Error::other("window IDs exhausted"))?;
         let id = WindowId(value);
+        self.last_active = self.active().map(|window| window.id());
         self.entries.push(Window { id, name, content });
         self.next_id = value.checked_add(1);
         self.active = self.entries.len() - 1;
@@ -101,7 +104,8 @@ impl<T> Windows<T> {
     }
 
     pub fn select(&mut self, id: WindowId) -> io::Result<()> {
-        self.active = self.index(id)?;
+        let index = self.index(id)?;
+        self.activate(index);
         Ok(())
     }
 
@@ -109,11 +113,12 @@ impl<T> Windows<T> {
         if self.entries.is_empty() {
             return None;
         }
-        self.active = if self.active + 1 == self.entries.len() {
+        let index = if self.active + 1 == self.entries.len() {
             0
         } else {
             self.active + 1
         };
+        self.activate(index);
         Some(self.entries[self.active].id)
     }
 
@@ -121,12 +126,29 @@ impl<T> Windows<T> {
         if self.entries.is_empty() {
             return None;
         }
-        self.active = if self.active == 0 {
+        let index = if self.active == 0 {
             self.entries.len() - 1
         } else {
             self.active - 1
         };
+        self.activate(index);
         Some(self.entries[self.active].id)
+    }
+
+    /// Switch to the last explicitly active window. Repeated calls toggle the pair.
+    /// No history (or a closed target) leaves focus unchanged and returns None.
+    pub fn select_last(&mut self) -> Option<WindowId> {
+        let id = self.last_active?;
+        let index = self.entries.iter().position(|window| window.id == id)?;
+        self.activate(index);
+        Some(id)
+    }
+
+    fn activate(&mut self, index: usize) {
+        if index != self.active {
+            self.last_active = self.active().map(|window| window.id());
+            self.active = index;
+        }
     }
 
     /// Names are opaque metadata, including empty or duplicate names. A UI must
@@ -146,6 +168,12 @@ impl<T> Windows<T> {
             self.active -= 1;
         } else if self.active == self.entries.len() {
             self.active = self.active.saturating_sub(1);
+        }
+        // Automatic focus fallback must not remember a dead or already active target.
+        if self.last_active == Some(id)
+            || self.last_active == self.active().map(|window| window.id())
+        {
+            self.last_active = None;
         }
         Ok(removed)
     }

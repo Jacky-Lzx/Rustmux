@@ -108,6 +108,7 @@ paths. These states now drive multi-window polling.
 | Ctrl-B, then c | Create a shell window and select it |
 | Ctrl-B, then n | Select the next window, wrapping |
 | Ctrl-B, then p | Select the previous window, wrapping |
+| Ctrl-B, then l | Return to the last active window |
 | Ctrl-B, then 1–9 | Select the window at that one-based position |
 | Ctrl-B, then 0 | Select window 10 |
 | Ctrl-B, then , | Rename the active window |
@@ -234,3 +235,22 @@ ordinary Escape remains immediate.
 Tests cover bar styles/labels, active-label visibility, Unicode clipping,
 child-state preservation, actual PTY sizes, rename/save visibility, removal,
 one-row fallback and mouse interception in a real CLI process.
+
+## Returning to the last window
+
+Ctrl-B followed by lowercase `l` returns to the last explicitly active window.
+Repeated use toggles between two windows. Creation, numeric selection and next/previous
+selection update this record when focus changes. Selecting the already active
+window, an invalid number or renaming leaves the record unchanged.
+
+The record uses a stable ID, so removing other windows and changing bar numbers
+cannot redirect it. Closing the recorded target clears it. Automatic focus
+fallback after an active window exits keeps the existing record only if it refers
+to another surviving window; it never records the closed window or the newly
+active fallback itself. Without a record the shortcut is consumed with no effect.
+This stores one previous window, not an unlimited navigation history.
+
+Model tests cover identity, toggling, cyclic selection, no-op selection, renaming
+and removal. The nested PTY test switches between windows 1 and 10 and checks that
+commands reach the original shells and the bar follows focus. Bracketed paste
+containing Ctrl-B followed by `l` remains child input.

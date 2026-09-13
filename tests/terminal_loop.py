@@ -875,7 +875,7 @@ prefix_probe = r"""
 import os, select, time, tty
 tty.setraw(0)
 os.write(1, b"\x1b[?2004h\x1b[2J\x1b[HPREFIX_READY")
-expected = b"\x02n\x02z\x1b[200~paste\x02c\x02n\x02p\x021\x020\x1b[201~"
+expected = b"\x02n\x02z\x1b[200~paste\x02c\x02n\x02p\x021\x020\x02l\x1b[201~"
 data = bytearray()
 end = time.monotonic() + 5
 while len(data) < len(expected):
@@ -894,7 +894,7 @@ try:
         s.send(("exec python3 " + shlex.quote(source.name) + "\n").encode())
         s.expect(b"PREFIX_READY")
         s.send(b"\x02\x02n\x02z\x1b[20")
-        s.send(b"0~paste\x02c\x02n\x02p\x021\x020\x1b[201~")
+        s.send(b"0~paste\x02c\x02n\x02p\x021\x020\x02l\x1b[201~")
         s.finish(0)
         assert any(b"PREFIX_PASSED" in row for row in s.last_rows)
 finally:
@@ -1126,6 +1126,12 @@ try:
     expect_bar(s, b"*1:shell")
     s.send(b"\x020printf '\\nSELECTED:%s\\n' $WIN\n")
     s.expect(b"SELECTED:10")
+    expect_bar(s, b"*10:shell")
+    s.send(b"\x02lprintf '\\nLAST:%s\\n' $WIN\n")
+    s.expect(b"LAST:1")
+    expect_bar(s, b"*1:shell")
+    s.send(b"\x02lprintf '\\nBACK:%s\\n' $WIN\n")
+    s.expect(b"BACK:10")
     expect_bar(s, b"*10:shell")
     s.send(b"\x021exit 0\n")
     s.expect(b"\r\nREADY_2\r\n")

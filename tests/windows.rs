@@ -117,3 +117,44 @@ fn close_returns_ownership_without_dropping_other_windows() {
     drop(windows);
     assert_eq!(drops.get(), 2);
 }
+
+#[test]
+fn last_window_tracks_identity_and_toggles_without_losing_history_on_noops() {
+    let mut windows = Windows::default();
+    assert_eq!(windows.select_last(), None);
+    let a = windows.create("a".into(), ()).unwrap();
+    assert_eq!(windows.select_last(), None);
+    let b = windows.create("b".into(), ()).unwrap();
+    let c = windows.create("c".into(), ()).unwrap();
+    windows.select(a).unwrap();
+    windows.select(a).unwrap();
+    windows.rename(c, "renamed".into()).unwrap();
+    windows.close(b).unwrap(); // Positions change; history still points to C.
+    assert_eq!(windows.select_last(), Some(c));
+    assert_eq!(windows.select_last(), Some(a));
+    assert!(windows.select(b).is_err());
+    assert_eq!(windows.select_last(), Some(c));
+    windows.close(a).unwrap(); // The remembered target is gone.
+    assert_eq!(windows.select_last(), None);
+    assert_eq!(windows.active().unwrap().id(), c);
+}
+
+#[test]
+fn last_window_handles_cyclic_selection_and_automatic_close_fallback() {
+    let mut windows = Windows::default();
+    let a = windows.create("a".into(), ()).unwrap();
+    let b = windows.create("b".into(), ()).unwrap();
+    let c = windows.create("c".into(), ()).unwrap();
+    windows.select_next(); // C -> A
+    assert_eq!(windows.select_last(), Some(c));
+    windows.select_previous(); // C -> B
+    assert_eq!(windows.select_last(), Some(c));
+    windows.close(c).unwrap(); // Automatic fallback is B, already the remembered target.
+    assert_eq!(windows.active().unwrap().id(), b);
+    assert_eq!(windows.select_last(), None);
+    windows.select(a).unwrap();
+    windows.close(a).unwrap();
+    windows.close(b).unwrap();
+    windows.create("new".into(), ()).unwrap();
+    assert_eq!(windows.select_last(), None);
+}

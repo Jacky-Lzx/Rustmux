@@ -294,6 +294,7 @@ enum WindowKey {
     Previous,
     Rename,
     Select(usize),
+    Last,
 }
 
 #[derive(Default)]
@@ -412,6 +413,7 @@ impl WindowInput {
                 b'c' => output.push(WindowKey::Create),
                 b'n' => output.push(WindowKey::Next),
                 b'p' => output.push(WindowKey::Previous),
+                b'l' => output.push(WindowKey::Last),
                 b',' => output.push(WindowKey::Rename),
                 b'1'..=b'9' => output.push(WindowKey::Select(usize::from(byte - b'1'))),
                 b'0' => output.push(WindowKey::Select(9)),
@@ -631,6 +633,9 @@ fn forward(
                         if let Some(id) = target {
                             windows.select(id)?;
                         }
+                    }
+                    WindowKey::Last => {
+                        windows.select_last();
                     }
                     WindowKey::Next => {
                         windows.select_next();
@@ -1019,12 +1024,13 @@ mod window_input_tests {
     #[test]
     fn prefix_commands_literal_prefix_and_unknown_keys() {
         assert_eq!(
-            decode(b"a\x02c\x02n\x02p\x02\x02\x02z"),
+            decode(b"a\x02c\x02n\x02p\x02l\x02\x02\x02z"),
             vec![
                 WindowKey::Byte(b'a'),
                 WindowKey::Create,
                 WindowKey::Next,
                 WindowKey::Previous,
+                WindowKey::Last,
                 WindowKey::Byte(2),
                 WindowKey::Byte(2),
                 WindowKey::Byte(b'z')
@@ -1048,7 +1054,7 @@ mod window_input_tests {
 
     #[test]
     fn bracketed_paste_and_utf8_are_forwarded_byte_for_byte() {
-        let bytes = "\x1b[200~中文\x02c\x02n\x02p\x021\x020\x02\x02\x1b[201~".as_bytes();
+        let bytes = "\x1b[200~中文\x02c\x02n\x02p\x021\x020\x02l\x02\x02\x1b[201~".as_bytes();
         assert_eq!(
             decode(bytes),
             bytes
