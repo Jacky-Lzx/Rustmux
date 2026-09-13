@@ -15,3 +15,4 @@
 - [Cursor State](reference/cursor.md)
 - [Scrolling Regions](reference/scrolling-regions.md)
 - [Line Editing](reference/line-editing.md)
+- [Character Editing](reference/character-editing.md)

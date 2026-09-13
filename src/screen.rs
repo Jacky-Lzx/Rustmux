@@ -416,6 +416,57 @@ impl Screen {
         self.move_to(self.row, self.column.saturating_add(count));
     }
 
+    /// Insert blank columns at the cursor, discarding content past the right edge.
+    /// Coordinates stay unchanged; zero count is a no-op.
+    pub fn insert_characters(&mut self, count: usize) {
+        let count = count.min(self.columns - self.column);
+        if count == 0 {
+            return;
+        }
+        let start = self.row * self.columns + self.column;
+        let end = (self.row + 1) * self.columns;
+        // Inserting inside a wide glyph splits it: clear both halves first.
+        if self.cells[start].width == 0 {
+            self.clear_range(start..start + 1);
+        }
+        // The last retained column cannot be the first half of a wide glyph.
+        let retained_end = end - count;
+        if retained_end > start && self.cells[retained_end - 1].width == 2 {
+            self.clear_range(retained_end - 1..retained_end);
+        }
+        let blank = self.blank();
+        self.cells[start..end].rotate_right(count);
+        self.cells[start..start + count].fill(blank);
+        self.wrap_pending = false;
+    }
+
+    /// Delete columns at the cursor and shift the remainder left within this row.
+    /// Split wide glyphs are blanked, but the shift still uses the requested columns.
+    pub fn delete_characters(&mut self, count: usize) {
+        let count = count.min(self.columns - self.column);
+        if count == 0 {
+            return;
+        }
+        let start = self.row * self.columns + self.column;
+        let end = (self.row + 1) * self.columns;
+        self.clear_range(start..start + count);
+        let blank = self.blank();
+        self.cells[start..end].rotate_left(count);
+        self.cells[end - count..end].fill(blank);
+        self.wrap_pending = false;
+    }
+
+    /// Blank columns without shifting text; touching half a wide glyph erases both.
+    pub fn erase_characters(&mut self, count: usize) {
+        let count = count.min(self.columns - self.column);
+        if count == 0 {
+            return;
+        }
+        let start = self.row * self.columns + self.column;
+        self.clear_range(start..start + count);
+        self.wrap_pending = false;
+    }
+
     /// Blank part or all of the current row, including the cursor cell.
     /// Cursor coordinates stay unchanged; delayed wrapping is cancelled.
     pub fn erase_line(&mut self, mode: EraseMode) {

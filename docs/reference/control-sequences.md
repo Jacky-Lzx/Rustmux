@@ -26,6 +26,7 @@ CSI below means the two bytes ESC followed by `[`. The command subset follows
 | CSI row ; column H / f | Position using one-based coordinates; omitted or zero values mean one |
 | CSI n J | Erase display: 0 cursor through end, 1 start through cursor, 2 whole grid |
 | CSI parameters m | Set text attributes and colors; see [Text Styles](text-styles.md) |
+| CSI n @ / P / X | Insert / delete / erase columns; see [Character Editing](character-editing.md) |
 | CSI n L / M | Insert / delete lines inside the region; see [Line Editing](line-editing.md) |
 | CSI n S / T | Scroll the region up / down without moving the cursor |
 | CSI top ; bottom r | Set vertical [scrolling margins](scrolling-regions.md) and home |

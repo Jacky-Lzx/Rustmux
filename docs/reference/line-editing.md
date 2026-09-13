@@ -39,5 +39,5 @@ byte-by-byte input, exact rows, counts, malformed commands, cursor and wrap,
 Unicode, alternate-screen isolation and one-cell grids. The real CLI PTY test
 checks all four commands with a fixed header and footer.
 
-Character insertion/deletion, origin mode, horizontal margins and terminal
-replies remain unsupported. Full Neovim compatibility is not yet claimed.
+[Character Editing](character-editing.md) adds ICH/DCH/ECH. Insert mode, origin
+mode, horizontal margins and terminal replies remain unsupported. Full Neovim compatibility is not yet claimed.

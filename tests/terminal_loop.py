@@ -228,6 +228,16 @@ try:
         assert s.last_rows[:5] == expected, (command, s.last_rows)
         s.send(b"\n")
         s.expect(b"RUSTMUX_READY> ")
+
+    for command, expected in [(b"@", b"ab cdefgh"), (b"P", b"abdefgh"), (b"X", b"ab defgh")]:
+        s.send(b"stty -echo; printf '\\033[r\\033[2J\\033[1;1Habcdefgh"
+               b"\\033[1;3H\\033[" + command +
+               b"\\033[2;1HCHAR_EDIT_DONE'; read answer; "
+               b"stty echo; printf '\\033[2;1H'\n")
+        s.expect(b"\r\nCHAR_EDIT_DONE\r\n")
+        assert s.last_rows[0] == expected, (command, s.last_rows)
+        s.send(b"\n")
+        s.expect(b"RUSTMUX_READY> ")
     s.send(b"exit\n")
     s.finish(0)
 finally:
