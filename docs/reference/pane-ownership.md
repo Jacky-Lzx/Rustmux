@@ -44,9 +44,9 @@ transfer it elsewhere. Dropping the collection drops all remaining values once.
 
 Selection and zoom delegate to the layout. `resize` changes only geometry; it
 does not resize PTYs or screens. Likewise a split or close changes rectangles of
-existing panes without mutating their content values. Before the CLI uses this
-container, a higher layer must coordinate screen allocation, PTY sizing, rendering
-and input routing for the resulting geometry. This collection is not a transaction
+existing panes without mutating their content values. The concrete `PaneSet<Pane>::synchronize_sizes` operation below applies resulting
+geometry to screens and PTYs. Before the CLI uses this container, it must also
+coordinate rendering, input routing and failure cleanup. This collection is not a transaction
 covering those external operations and does not itself start or terminate processes.
 
 ## Preparing and committing a real pane resize
@@ -75,8 +75,34 @@ restores the outer terminal and cleans up its children. It does not attempt to
 undo PTY changes or SIGWINCH already observed by applications. This is per-pane
 commit consistency, not an all-or-nothing operating-system transaction.
 
-This API supplies the resize primitive for later multi-pane integration. PaneSet
-layout changes and PTY sizing are not yet coordinated as a single operation.
+This API supplies the resize primitive used by `PaneSet<Pane>::synchronize_sizes`.
+Layout edits and PTY sizing remain separate operations.
+
+## Synchronizing a set of real panes
+
+After a layout edit, `PaneSet<Pane>::synchronize_sizes()` computes every pane's
+required terminal dimensions. Normally each pane uses its tiled rectangle. In
+zoom, the active pane uses the full content area and hidden panes keep their tiled
+sizes. Changing the zoomed target therefore shrinks the previous target and grows
+the new one. Closing a pane expands the surviving subtree's screens and terminals.
+
+The method checks the full content-area cell limit before touching panes, refreshes
+child exit observations, and prepares all changed screens before committing any
+PTY changes. Known exited/EOF panes receive model updates without ioctl. Panes
+whose model dimensions already match are skipped, so a no-op sync or ordinary
+focus change preserves their synchronized-output hold. The method assumes raw PTY
+access has not independently changed sizes behind the screen models.
+
+Call this after split, close, layout resize, or a focus/zoom change that affects
+visible sizes, and before rendering or routing input with the new geometry. It
+does not perform the layout edit itself or roll it back. If preparation fails,
+no screen/PTY dimensions have changed; if a later commit fails, earlier commits
+may already have resized their children. The caller must stop using the set and
+clean up on such errors, rather than render an inconsistent frame. There is no
+rollback of PTY changes or SIGWINCH received by child applications.
+
+This completes the sizing connection for the standalone collection. The CLI has
+not yet adopted PaneSet, so interactive splitting is still unavailable.
 
 ## Verification
 
@@ -91,3 +117,8 @@ These are ownership/model tests, not interactive multi-PTY acceptance tests.
 real child-observed dimensions after commit, pending parser input, same-size
 hold release, PTY failure without model mutation, and model-only resize after EOF.
 The full nested-PTY suite exercises the CLI's revised multi-window resize path.
+
+The real-pane test also uses two shells to check child-observed sizes after split,
+zoom, zoom-target change, outer resize, unzoom and close; stable PIDs, unchanged-size
+hold preservation, content-area limit rejection and model resizing after exit are
+covered. This verifies the collection API, not interactive CLI split shortcuts.

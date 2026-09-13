@@ -4,7 +4,7 @@ use nix::{
     sys::wait::{WaitPidFlag, waitpid},
     unistd::Pid,
 };
-use rustmux::{pane::Pane, window::Windows};
+use rustmux::{layout::SplitAxis, pane::Pane, pane_set::PaneSet, window::Windows};
 use std::{
     io::{Read, Write},
     thread,
@@ -120,6 +120,7 @@ fn real_windows_keep_processes_and_terminal_state_isolated() {
     assert_eq!(pane.shell().id(), b_pid);
     pane.shell_mut().terminate().unwrap();
     prepared_resizes_preserve_state_and_update_the_real_pty();
+    layout_sizes_reach_real_children_and_survive_zoom_and_close();
 }
 
 fn prepared_resizes_preserve_state_and_update_the_real_pty() {
@@ -157,4 +158,79 @@ fn prepared_resizes_preserve_state_and_update_the_real_pty() {
     pane.finish_output();
     pane.prepare_resize(6, 20).unwrap().commit().unwrap(); // Known EOF skips ioctl.
     assert_eq!(pane.screen().dimensions(), (6, 20));
+}
+
+fn expect_size(pane: &mut Pane, marker: &str, rows: u16, columns: u16) {
+    pane.shell_mut()
+        .write_all(format!("stty -echo; printf '\\033[2J\\033[H{marker}:'; stty size\n").as_bytes())
+        .unwrap();
+    until(pane, |p| {
+        text(p).contains(&format!("{marker}:{rows} {columns}"))
+    });
+    assert_eq!(
+        pane.screen().dimensions(),
+        (usize::from(rows), usize::from(columns))
+    );
+}
+
+fn layout_sizes_reach_real_children_and_survive_zoom_and_close() {
+    let mut panes = PaneSet::new(12, 41, Pane::spawn("/bin/sh", 12, 41).unwrap()).unwrap();
+    let first = panes.layout().active();
+    until(panes.active_mut(), |p| !text(p).trim().is_empty());
+    let first_pid = panes.active().shell().id();
+    let second = panes
+        .split_with(SplitAxis::Columns, |_, rect| {
+            Pane::spawn("/bin/sh", rect.rows, rect.columns)
+        })
+        .unwrap();
+    until(panes.active_mut(), |p| !text(p).trim().is_empty());
+    let second_pid = panes.active().shell().id();
+    panes.synchronize_sizes().unwrap();
+    expect_size(panes.get_mut(first).unwrap(), "SPLIT_A", 12, 20);
+    expect_size(panes.get_mut(second).unwrap(), "SPLIT_B", 12, 20);
+    panes
+        .get_mut(first)
+        .unwrap()
+        .process_output(b"\x1b[?2026h", &mut |_| {});
+    panes.select(first).unwrap();
+    panes.synchronize_sizes().unwrap();
+    assert!(panes.active().screen().synchronized_output()); // Focus alone isn't a resize.
+    panes.toggle_zoom();
+    panes.synchronize_sizes().unwrap();
+    expect_size(panes.get_mut(first).unwrap(), "ZOOM_A", 12, 41);
+    expect_size(panes.get_mut(second).unwrap(), "HIDDEN_B", 12, 20);
+    panes.select(second).unwrap();
+    panes.synchronize_sizes().unwrap();
+    expect_size(panes.get_mut(first).unwrap(), "HIDDEN_A", 12, 20);
+    expect_size(panes.get_mut(second).unwrap(), "ZOOM_B", 12, 41);
+    panes.resize(9, 31).unwrap();
+    panes.synchronize_sizes().unwrap();
+    expect_size(panes.get_mut(first).unwrap(), "RESIZE_A", 9, 15);
+    expect_size(panes.get_mut(second).unwrap(), "RESIZE_B", 9, 31);
+    panes.toggle_zoom();
+    panes.synchronize_sizes().unwrap();
+    expect_size(panes.get_mut(second).unwrap(), "UNZOOM_B", 9, 15);
+    // The geometry-only API permits this size; process synchronization rejects it
+    // before altering any owned screen or terminal.
+    panes.resize(257, 256).unwrap();
+    assert!(panes.synchronize_sizes().is_err());
+    assert_eq!(panes.get(first).unwrap().screen().dimensions(), (9, 15));
+    assert_eq!(panes.get(second).unwrap().screen().dimensions(), (9, 15));
+    panes.resize(9, 31).unwrap();
+    assert_eq!(panes.get(first).unwrap().shell().id(), first_pid);
+    assert_eq!(panes.get(second).unwrap().shell().id(), second_pid);
+    let removed = panes.close(first).unwrap();
+    panes.synchronize_sizes().unwrap();
+    expect_size(panes.active_mut(), "SURVIVOR", 9, 31);
+    assert_eq!(panes.active().shell().id(), second_pid);
+    drop(removed);
+    assert_eq!(
+        waitpid(Pid::from_raw(first_pid as i32), Some(WaitPidFlag::WNOHANG)),
+        Err(Errno::ECHILD)
+    );
+    // Exited panes still get model geometry without attempting to resize a closed PTY.
+    panes.active_mut().shell_mut().terminate().unwrap();
+    panes.resize(6, 21).unwrap();
+    panes.synchronize_sizes().unwrap();
+    assert_eq!(panes.active().screen().dimensions(), (6, 21));
 }

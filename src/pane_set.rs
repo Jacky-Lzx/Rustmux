@@ -117,3 +117,52 @@ impl<T> PaneSet<T> {
         Ok(self.entries.remove(index).1)
     }
 }
+
+impl PaneSet<crate::pane::Pane> {
+    /// Bring owned terminal screens and PTYs to the current layout's dimensions.
+    /// The zoomed active pane uses the full visible rectangle; hidden panes keep
+    /// their tiled sizes. Unchanged sizes are skipped, preserving output holds.
+    /// All changed screens are prepared before any PTY ioctl. Commit failures can
+    /// follow earlier commits: the caller must stop using this set and clean up,
+    /// rather than render a potentially inconsistent layout. Layout is not rolled back.
+    pub fn synchronize_sizes(&mut self) -> io::Result<()> {
+        let (rows, columns) = self.layout.dimensions();
+        if usize::from(rows) * usize::from(columns) > crate::pane::MAX_CELLS {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "pane layout exceeds cell limit",
+            ));
+        }
+        let mut sizes = self.layout.tiled_geometry().panes;
+        if self.layout.is_zoomed() {
+            let active = self.layout.active();
+            let (_, rect) = sizes
+                .iter_mut()
+                .find(|(id, _)| *id == active)
+                .expect("active pane exists");
+            rect.rows = rows;
+            rect.columns = columns;
+        }
+        // Refresh child status before preparing; an exited child needs no ioctl.
+        for (_, pane) in &mut self.entries {
+            let (shell, _, _, state) = pane.parts_mut();
+            if state.status.is_none() {
+                state.status = shell.try_wait()?;
+            }
+        }
+        let mut prepared = Vec::with_capacity(self.entries.len());
+        for (id, pane) in &mut self.entries {
+            let (_, rect) = sizes
+                .iter()
+                .find(|(candidate, _)| candidate == id)
+                .expect("every content has a layout leaf");
+            if pane.screen().dimensions() != (usize::from(rect.rows), usize::from(rect.columns)) {
+                prepared.push(pane.prepare_resize(rect.rows, rect.columns)?);
+            }
+        }
+        for resize in prepared {
+            resize.commit()?;
+        }
+        Ok(())
+    }
+}
