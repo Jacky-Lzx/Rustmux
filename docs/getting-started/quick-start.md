@@ -45,7 +45,8 @@ is hidden when only one row is available. Outer dimensions must fit within
 65,536 cells.
 Primary-screen rows scrolled out of the grid enter bounded
 [history storage](../reference/scrollback.md). Use Ctrl-B `[` to browse a frozen snapshot; `k/j` move, `g/G` jump, and `q`
-returns to live output. Height shrink keeps the primary cursor visible and archives
+returns to live output. In history mode, `/` opens literal search; Enter searches,
+`n/N` cycle matches, and Ctrl-C cancels query editing. Height shrink keeps the primary cursor visible and archives
 rows moved off the top. Growing restores the newest retained history above the
 current content. Width changes reflow primary text and retained history;
 alternate-screen applications retain the clipping policy. See

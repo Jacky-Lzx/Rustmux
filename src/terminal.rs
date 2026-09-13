@@ -650,7 +650,12 @@ fn forward(
                         && outer_rows > 1
                     {
                         crate::chrome::prepare_row(&mut view, crate::chrome::bar_style(true));
-                        for character in history.label().chars() {
+                        for character in crate::chrome::clipped(
+                            &history.label(view.dimensions().1),
+                            view.dimensions().1,
+                        )
+                        .chars()
+                        {
                             view.print(character);
                         }
                     }

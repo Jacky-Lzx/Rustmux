@@ -39,7 +39,7 @@ pub(crate) fn prepare_row(screen: &mut Screen, style: Style) {
     screen.erase_line(EraseMode::All);
 }
 
-fn clipped(text: &str, width: usize) -> String {
+pub(crate) fn clipped(text: &str, width: usize) -> String {
     let mut result = String::new();
     let mut used = 0;
     for character in text.chars().filter(|c| !c.is_control()) {
