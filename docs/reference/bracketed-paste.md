@@ -9,7 +9,8 @@ pasted text from individual keystrokes. See the
 ## State and data flow
 
 The mode starts disabled. The parser records the child's request in Screen;
-each rendered frame synchronizes the outer terminal's mode. Synchronization
+the renderer synchronizes the outer terminal's mode on first use, changes or
+cache invalidation. Synchronization
 therefore follows the existing frame scheduling and output queue. The input loop
 forwards markers and payload unchanged to the child PTY, including UTF-8 and
 newlines. It does not generate markers or interpret the pasted content.

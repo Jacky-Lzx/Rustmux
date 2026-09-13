@@ -6,8 +6,8 @@ For example, keypad 0, 1 and Enter can send ESC O p, ESC O q and ESC O M in
 application mode, instead of digits and carriage return. See
 [XTerm control sequences](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html).
 
-The parser stores this global input mode in Screen, initially disabled. Every
-rendered frame synchronizes it to the outer terminal. The input loop forwards
+The parser stores this global input mode in Screen, initially disabled. The renderer
+synchronizes it on first use, changes or cache invalidation. The input loop forwards
 resulting bytes unchanged; it does not infer keypad keys from ordinary digits.
 Actual encoding, modifiers and NumLock overrides remain the outer terminal's
 responsibility. Mode changes follow the existing frame schedule and output queue.

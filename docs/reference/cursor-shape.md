@@ -23,7 +23,8 @@ move the cursor, alter text styles or pending wrap, or show a hidden cursor.
 It is global across main/alternate grids and is not part of saved cursor state.
 Resize preserves it; Rustmux resets it to BlinkingBlock on RIS and DECSTR.
 
-Each frame emits the selected shape while the cursor is hidden, then restores
+The renderer emits the selected shape on first use, changes or cache invalidation
+while the cursor is hidden. Each frame restores
 its requested visibility at frame end. Blink timing and actual appearance are
 handled by the outer terminal; Rustmux does not schedule blink frames.
 Cleanup sends CSI 0 SP q on normal exit and handled signals. This is a baseline

@@ -18,8 +18,8 @@ are tracked independently.
 
 ## State and synchronization
 
-The parser records the mode in Screen, initially disabled. Every frame sends
-its value to the outer terminal; the raw input loop forwards resulting bytes
+The parser records the mode in Screen, initially disabled. The renderer sends
+its value on first use, changes or cache invalidation; the raw input loop forwards resulting bytes
 to the child. Mode synchronization follows normal frame scheduling and queued
 output, as with bracketed paste.
 

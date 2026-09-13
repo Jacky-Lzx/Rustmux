@@ -6,14 +6,15 @@ buffer. The renderer borrows the model without changing it and does not flush.
 The CLI uses `Renderer::render` with a bounded frame queue in its event loop.
 This stateful API compares rows with the last successfully queued frame and
 paints changed cell spans; `render` remains the standalone full-frame API.
-Renderer remembers the last queued focus-reporting and mouse modes and synchronizes them only
-on the first frame or a change. The standalone `render` function always includes
+Renderer remembers the last queued paste, cursor-key, keypad, cursor-shape,
+focus-reporting and mouse states. It synchronizes each only on the first frame,
+a change or cache invalidation. The standalone `render` function always includes
 that synchronization. See [Focus Reporting](focus-reporting.md). A Renderer is
 specific to one ordered output stream; recreate it if queued output is discarded.
 
 ## Output
 
-The frame hides the cursor, resets attributes and synchronizes the outer
+A standalone full frame hides the cursor, resets attributes and synchronizes the outer
 terminal’s [bracketed paste mode](bracketed-paste.md) and
 [application cursor keys](application-cursor.md) and
 [application keypad](application-keypad.md), then positions explicitly
@@ -116,3 +117,22 @@ retains untouched cells within each row.
 
 Gap-bridging tests also cover chains of short gaps, equal-cost separation,
 expensive RGB transitions, and unchanged wide/combining glyphs inside a gap.
+
+## Output mode cache
+
+Ordinary incremental frames omit unchanged mode commands. Text-only changes do
+not resend paste, keyboard or cursor-shape settings. Mode-only changes are still
+emitted even when all cells are identical. The cache advances only after the
+entire render call succeeds; every write error invalidates both grid and mode
+state. `invalidate()` forces complete synchronization on the next call. Merely
+changing Screen dimensions repaints the grid; the CLI also explicitly invalidates
+on resize. The standalone `render` function always synchronizes every mode.
+
+Cursor hiding, SGR resets and final cursor position/visibility remain in every
+frame. They provide the painting boundaries and are not treated as persistent
+modes. The renderer requires exclusive ownership of its ordered output stream;
+after external mode changes or lost output, invalidate it before drawing again.
+
+`cargo test --test render_modes` checks unchanged-frame bytes, text-only updates,
+mode changes and resets replayed into a screen, and failure at every byte boundary
+of a mode-changing frame followed by full synchronization.

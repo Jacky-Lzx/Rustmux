@@ -11,6 +11,7 @@ import struct
 import subprocess
 import sys
 import termios
+import tempfile
 import time
 import unicodedata
 
@@ -59,6 +60,7 @@ class Session:
         self.frames = []
         self.last_rows = []
         self.last_frame = b""
+        self.cursor_shape = None
 
     def read(self, seconds=0.05):
         if select.select([self.master], [], [], seconds)[0]:
@@ -75,6 +77,8 @@ class Session:
                     if b"\x1b[?25l" not in frame:
                         continue
                     self.last_frame = frame
+                    for shape in re.finditer(rb"\x1b\[([0-6]) q", frame):
+                        self.cursor_shape = int(shape.group(1))
                     # Drawing CUPs replace cell spans. The final CUP only positions
                     # the cursor; retain all untouched cells and rows.
                     positions = list(re.finditer(rb"\x1b\[([0-9]+);([0-9]+)H", frame))
@@ -156,6 +160,9 @@ class Session:
         assert report["restored"], report
 
     def close(self):
+        # Release the PTY before waiting; macOS can block exit on terminal drain.
+        os.close(self.master)
+        os.close(self.slave)
         if self.child.poll() is None:
             try:
                 os.kill(self.app_pid, signal.SIGTERM)
@@ -171,8 +178,6 @@ class Session:
                 self.child.kill()
                 self.child.wait()
         self.report.close()
-        os.close(self.master)
-        os.close(self.slave)
 
 s = Session()
 try:
@@ -402,9 +407,14 @@ os.write(1, b"\x1b[?6l\x1b[r\x1b[2J\x1b[HREPLIES_OK")
 s = Session()
 try:
     s.expect(b"RUSTMUX_READY> ")
-    s.send(("exec python3 -c " + shlex.quote(probe) + "\n").encode())
-    s.expect(b"\r\nREPLIES_OK\r\n")
-    s.finish(0)
+    # This large query fixture can overflow the shell's interactive line editor
+    # when pasted as source. Run a file so the test measures reply handling.
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py") as source:
+        source.write(probe)
+        source.flush()
+        s.send(("exec python3 " + shlex.quote(source.name) + "\n").encode())
+        s.expect(b"\r\nREPLIES_OK\r\n")
+        s.finish(0)
 finally:
     s.close()
 
@@ -554,15 +564,15 @@ for terminate in (False, True):
         s.send(("exec python3 -c " + shlex.quote(shape_probe) + "\n").encode())
         for code in range(1, 7):
             s.expect(("\r\nSHAPE_%d\r\n" % code).encode())
-            assert ("\x1b[%d q" % code).encode() in s.last_frame
+            assert s.cursor_shape == code
             assert s.last_frame.endswith(b"\x1b[?25l")
             s.send(b"x")
         s.expect(b"\r\nSHAPE_RESET\r\n")
-        assert b"\x1b[1 q" in s.last_frame
+        assert s.cursor_shape == 1
         assert s.last_frame.endswith(b"\x1b[?25h")
         s.send(b"x")
         s.expect(b"\r\nSHAPE_EXIT\r\n")
-        assert b"\x1b[6 q" in s.last_frame
+        assert s.cursor_shape == 6
         if terminate:
             os.kill(s.app_pid, signal.SIGTERM)
             s.finish(128 + signal.SIGTERM)

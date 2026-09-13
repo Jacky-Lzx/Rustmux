@@ -124,3 +124,22 @@ The scattered case now bridges short gaps and omits the unchanged row suffix
 rather than falling back to a whole row. CPU measurements varied with system
 load; this small comparison establishes byte savings, not a CPU speedup. The SSH
 results above remain measurements of the earlier candidate, not of gap bridging.
+
+## Caching unchanged output modes
+
+With paste, cursor-key, keypad and cursor-shape settings unchanged, incremental
+frames now omit their combined 20 bytes. Comparing against `b0f8dc9` with the
+same release-mode benchmark gives:
+
+| Case | Before bytes/frame | Mode cache bytes/frame |
+| --- | ---: | ---: |
+| single | 57 | 37 |
+| nearby | 61 | 41 |
+| status | 76 | 56 |
+| scattered | 173 | 153 |
+| scroll | 3088 | 3068 |
+
+These counts exclude the initial frame. A mode change still emits its setting,
+and invalidation resends every mode. Cursor hiding, SGR resets and final cursor
+restoration remain. These are deterministic encoded-byte savings; no new SSH
+latency claim or CPU speedup is inferred from them.

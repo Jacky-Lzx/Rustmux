@@ -109,3 +109,9 @@ reply capacity participates in PTY read backpressure.
 mode synchronization on changes.
 
 [Mouse Reporting](mouse-reporting.md) describes supported single-pane mouse modes.
+
+The PTY shape checks retain the last emitted cursor shape across frames, matching
+incremental mode synchronization. The large query fixture is executed from a
+temporary Python file rather than pasted through the shell's line editor. Failure
+cleanup closes outer PTY descriptors before waiting, avoiding a macOS terminal
+drain wait; successful restoration checks still happen before those closes.

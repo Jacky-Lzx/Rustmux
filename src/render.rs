@@ -2,7 +2,7 @@
 
 use std::io::{self, Write};
 
-use crate::screen::{MouseTracking, Screen};
+use crate::screen::{CursorShape, MouseTracking, Screen};
 use crate::style::{Cell, Color, Style};
 
 /// Draw the active grid from the top-left corner onto an equally sized terminal.
@@ -15,7 +15,7 @@ use crate::style::{Cell, Color, Style};
 /// It does not flush. Errors may leave a partial frame; the caller must handle
 /// cleanup or redraw. For nonblocking output, render into a buffer and queue it.
 pub fn render(screen: &Screen, output: &mut impl Write) -> io::Result<()> {
-    render_frame(screen, output, true, true, None)
+    render_frame(screen, output, None, None)
 }
 
 /// Changed-cell rendering for an ordered output stream. Each successful frame must
@@ -24,32 +24,47 @@ pub fn render(screen: &Screen, output: &mut impl Write) -> io::Result<()> {
 /// since an outer terminal may report its current focus when enabled.
 #[derive(Default)]
 pub struct Renderer {
-    focus_reporting: Option<bool>,
-    mouse: Option<(MouseTracking, bool)>,
+    modes: Option<OutputModes>,
     dimensions: Option<(usize, usize)>,
     rows: Vec<Vec<Cell>>,
+}
+
+// A successful frame establishes these outer-terminal modes. Cursor visibility
+// is deliberately not cached: each frame hides it while painting and restores it.
+#[derive(Clone, Copy)]
+struct OutputModes {
+    paste: bool,
+    cursor_keys: bool,
+    keypad: bool,
+    cursor_shape: CursorShape,
+    focus: bool,
+    mouse: (MouseTracking, bool),
+}
+
+impl OutputModes {
+    fn from_screen(screen: &Screen) -> Self {
+        Self {
+            paste: screen.bracketed_paste(),
+            cursor_keys: screen.application_cursor_keys(),
+            keypad: screen.application_keypad(),
+            cursor_shape: screen.cursor_shape(),
+            focus: screen.focus_reporting(),
+            mouse: (screen.mouse_tracking(), screen.sgr_mouse()),
+        }
+    }
 }
 
 impl Renderer {
     /// Force a complete repaint after external damage or discarded queued output.
     pub fn invalidate(&mut self) {
         self.dimensions = None;
-        self.focus_reporting = None;
-        self.mouse = None;
+        self.modes = None;
     }
 
     pub fn render(&mut self, screen: &Screen, output: &mut impl Write) -> io::Result<()> {
-        let synchronize = self.focus_reporting != Some(screen.focus_reporting());
-        let mouse = (screen.mouse_tracking(), screen.sgr_mouse());
         let previous =
             (self.dimensions == Some(screen.dimensions())).then_some(self.rows.as_slice());
-        if let Err(error) = render_frame(
-            screen,
-            output,
-            synchronize,
-            self.mouse != Some(mouse),
-            previous,
-        ) {
+        if let Err(error) = render_frame(screen, output, self.modes, previous) {
             // Partly written rows can no longer be compared against the old grid.
             self.invalidate();
             return Err(error);
@@ -66,8 +81,7 @@ impl Renderer {
             }
         }
         self.dimensions = Some(screen.dimensions());
-        self.mouse = Some(mouse);
-        self.focus_reporting = Some(screen.focus_reporting());
+        self.modes = Some(OutputModes::from_screen(screen));
         Ok(())
     }
 }
@@ -75,41 +89,50 @@ impl Renderer {
 fn render_frame(
     screen: &Screen,
     output: &mut impl Write,
-    synchronize_focus: bool,
-    synchronize_mouse: bool,
+    previous_modes: Option<OutputModes>,
     previous: Option<&[Vec<Cell>]>,
 ) -> io::Result<()> {
     output.write_all(b"\x1b[?25l\x1b[0m")?;
     // The single active pane determines how the outer terminal encodes paste.
     // Input forwarding preserves the resulting start/end markers unchanged.
-    output.write_all(if screen.bracketed_paste() {
-        b"\x1b[?2004h"
-    } else {
-        b"\x1b[?2004l"
-    })?;
+    if previous_modes.is_none_or(|modes| modes.paste != screen.bracketed_paste()) {
+        output.write_all(if screen.bracketed_paste() {
+            b"\x1b[?2004h"
+        } else {
+            b"\x1b[?2004l"
+        })?;
+    }
     // Let the outer terminal encode cursor keys for the child; the input loop
     // forwards those bytes without translating CSI/SS3 or modified keys.
-    output.write_all(if screen.application_cursor_keys() {
-        b"\x1b[?1h"
-    } else {
-        b"\x1b[?1l"
-    })?;
+    if previous_modes.is_none_or(|modes| modes.cursor_keys != screen.application_cursor_keys()) {
+        output.write_all(if screen.application_cursor_keys() {
+            b"\x1b[?1h"
+        } else {
+            b"\x1b[?1l"
+        })?;
+    }
     // Numeric keypad mode is separate from application cursor keys.
-    output.write_all(if screen.application_keypad() {
-        b"\x1b="
-    } else {
-        b"\x1b>"
-    })?;
+    if previous_modes.is_none_or(|modes| modes.keypad != screen.application_keypad()) {
+        output.write_all(if screen.application_keypad() {
+            b"\x1b="
+        } else {
+            b"\x1b>"
+        })?;
+    }
     // Set shape while hidden; the frame ending restores requested visibility.
-    write!(output, "\x1b[{} q", screen.cursor_shape() as u8)?;
-    if synchronize_focus {
+    if previous_modes.is_none_or(|modes| modes.cursor_shape != screen.cursor_shape()) {
+        write!(output, "\x1b[{} q", screen.cursor_shape() as u8)?;
+    }
+    if previous_modes.is_none_or(|modes| modes.focus != screen.focus_reporting()) {
         output.write_all(if screen.focus_reporting() {
             b"\x1b[?1004h"
         } else {
             b"\x1b[?1004l"
         })?;
     }
-    if synchronize_mouse {
+    if previous_modes
+        .is_none_or(|modes| modes.mouse != (screen.mouse_tracking(), screen.sgr_mouse()))
+    {
         // Clear old tracking before selecting the new exclusive mode. Set the
         // encoding first so the first new event uses the requested format.
         output.write_all(b"\x1b[?1000l\x1b[?1002l\x1b[?1003l")?;

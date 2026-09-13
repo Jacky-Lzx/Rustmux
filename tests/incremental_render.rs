@@ -78,7 +78,7 @@ fn resize_invalidation_and_failed_output_force_full_repaint() {
     renderer.invalidate();
     assert_eq!(frame(&mut renderer, &screen), full);
     Parser::new().advance(&mut screen, b"abc");
-    let mut short = [0u8; 38];
+    let mut short = [0u8; 12];
     assert!(renderer.render(&screen, &mut short.as_mut_slice()).is_err());
     // Even reverting to the old model must repaint after a partial write.
     Parser::new().advance(&mut screen, b"\x1b[2J\x1b[H");
