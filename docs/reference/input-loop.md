@@ -15,7 +15,8 @@ macOS's /dev/tty indirection. No shell command string is interpolated at startup
 The outer terminal enters raw mode so Ctrl-C and other input arrive as bytes.
 An alternate screen preserves the previous screen contents. Input is forwarded to
 the inner PTY unchanged, including [bracketed paste](bracketed-paste.md) markers
-when enabled by the child. Output follows `PTY -> Parser -> Screen -> render ->
+when enabled by the child. Frames also synchronize
+[application cursor key mode](application-cursor.md) with the outer terminal. Output follows `PTY -> Parser -> Screen -> render ->
 outer terminal`. The inner PTY's line discipline and shell handle editing and
 keyboard signals. The parser supports the documented control subset and standard
 eight-column tabs; unknown commands are ignored rather than passed through.

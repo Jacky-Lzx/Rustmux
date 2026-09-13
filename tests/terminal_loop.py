@@ -383,6 +383,49 @@ try:
 finally:
     s.close()
 
+# Model an outer terminal's unmodified cursor keys in each requested mode.
+cursor_probe = r"""
+import os, select, time, tty
+tty.setraw(0)
+def receive(expected):
+    data = bytearray()
+    end = time.monotonic() + 6
+    while len(data) < len(expected):
+        assert time.monotonic() < end, repr(data)
+        if select.select([0], [], [], 0.1)[0]:
+            data.extend(os.read(0, len(expected) - len(data)))
+    assert data == expected, repr(data)
+os.write(1, b"\x1b[?1h\x1b[2J\x1b[HAPP_KEYS")
+receive(b"\x1bOA\x1bOB\x1bOC\x1bOD\x1bOH\x1bOF")
+os.write(1, b"\x1b[!p\x1b[2J\x1b[HNORMAL_KEYS")
+receive(b"\x1b[A\x1b[B\x1b[C\x1b[D\x1b[H\x1b[F")
+os.write(1, b"\x1b[?1h\x1b[2J\x1b[HEXIT_KEYS")
+receive(b"exit")
+"""
+for terminate in (False, True):
+    s = Session()
+    try:
+        s.expect(b"RUSTMUX_READY> ")
+        s.send(("exec python3 -c " + shlex.quote(cursor_probe) + "\n").encode())
+        s.expect(b"\r\nAPP_KEYS\r\n")
+        assert b"\x1b[?1h" in s.last_frame
+        if terminate:
+            os.kill(s.app_pid, signal.SIGTERM)
+            s.finish(128 + signal.SIGTERM)
+        else:
+            s.send(b"\x1bO")
+            s.send(b"A\x1bOB\x1bOC\x1bOD\x1bOH\x1bOF")
+            s.expect(b"\r\nNORMAL_KEYS\r\n")
+            assert b"\x1b[?1l" in s.last_frame
+            s.send(b"\x1b[A\x1b[B\x1b[C\x1b[D\x1b[H\x1b[F")
+            s.expect(b"\r\nEXIT_KEYS\r\n")
+            assert b"\x1b[?1h" in s.last_frame
+            s.send(b"exit")
+            s.finish(0)
+        assert s.output.rfind(b"\x1b[?1l") > s.output.rfind(b"\x1b[?1h")
+    finally:
+        s.close()
+
 # A model-allocation limit error during resize must restore the terminal too.
 s = Session()
 try:

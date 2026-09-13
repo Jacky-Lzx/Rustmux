@@ -8,7 +8,8 @@ The CLI renders into a bounded frame queue in its event loop.
 ## Output
 
 The frame hides the cursor, resets attributes and synchronizes the outer
-terminal’s [bracketed paste mode](bracketed-paste.md), then positions explicitly
+terminal’s [bracketed paste mode](bracketed-paste.md) and
+[application cursor keys](application-cursor.md), then positions explicitly
 at the start of each row. All cells, including spaces, are drawn to remove stale
 content. Wide trailing placeholders are skipped; leaders and their stored
 zero-width suffixes are encoded once as UTF-8. Style changes start with SGR reset,

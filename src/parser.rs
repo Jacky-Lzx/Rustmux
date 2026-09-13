@@ -327,6 +327,9 @@ impl Parser {
                     if *mode == Some(7) {
                         screen.set_auto_wrap(command == b'h');
                     }
+                    if *mode == Some(1) {
+                        screen.set_application_cursor_keys(command == b'h');
+                    }
                     if *mode == Some(2004) {
                         screen.set_bracketed_paste(command == b'h');
                     }

@@ -40,3 +40,6 @@ to an interactive shell prompt.
 
 [Soft reset (DECSTR)](soft-reset.md) restores modes without erasing text.
 Device-attribute replies and terminal capability queries remain future work. Hardware-terminal power-on behavior is outside this model.
+
+RIS also disables bracketed paste and application cursor keys. The next rendered
+frame synchronizes these input modes with the outer terminal.

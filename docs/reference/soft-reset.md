@@ -8,7 +8,7 @@ moving the current cursor. It is distinct from [RIS](terminal-reset.md).
 | Visible cells and their stored styles | Preserved in both grids |
 | Current cursor coordinates and active grid | Preserved |
 | Cursor visibility | Enabled |
-| Insert and origin modes | Disabled |
+| Insert, origin and application cursor key modes | Disabled |
 | Automatic wrapping | Enabled (Rustmux default, following XTerm) |
 | Pending wrap | Cleared |
 | Current writing style | Default |

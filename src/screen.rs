@@ -69,6 +69,7 @@ pub struct Screen {
     cursor_visible: bool,
     insert_mode: bool,
     bracketed_paste: bool,
+    application_cursor_keys: bool,
     tab_stops: Vec<bool>,
     scroll_region: (usize, usize),
     inactive_scroll_region: (usize, usize),
@@ -115,6 +116,7 @@ impl Screen {
             cursor_visible: true,
             insert_mode: false,
             bracketed_paste: false,
+            application_cursor_keys: false,
             tab_stops,
             scroll_region: (0, rows - 1),
             inactive_scroll_region: (0, rows - 1),
@@ -138,6 +140,7 @@ impl Screen {
         self.inactive_saved_cursor = None;
         self.cursor_visible = true;
         self.insert_mode = false;
+        self.application_cursor_keys = false;
         self.bracketed_paste = false;
         for (column, stop) in self.tab_stops.iter_mut().enumerate() {
             *stop = column != 0 && column % DEFAULT_TAB_WIDTH == 0;
@@ -158,6 +161,7 @@ impl Screen {
     pub fn soft_reset(&mut self) {
         self.cursor_visible = true;
         self.insert_mode = false;
+        self.application_cursor_keys = false;
         self.scroll_region = (0, self.rows - 1);
         self.style = Style::default();
         self.wrap_pending = false;
@@ -192,6 +196,7 @@ impl Screen {
         resized.cursor_visible = self.cursor_visible;
         resized.insert_mode = self.insert_mode;
         resized.bracketed_paste = self.bracketed_paste;
+        resized.application_cursor_keys = self.application_cursor_keys;
         resized.origin_mode = self.origin_mode;
         resized.auto_wrap = self.auto_wrap;
         resized.character_sets = self.character_sets;
@@ -301,6 +306,15 @@ impl Screen {
     /// Visibility is a global terminal mode, independent of saved cursor state.
     pub fn set_cursor_visible(&mut self, visible: bool) {
         self.cursor_visible = visible;
+    }
+
+    pub fn application_cursor_keys(&self) -> bool {
+        self.application_cursor_keys
+    }
+
+    /// DECCKM is global input state, independent of either grid's saved cursor.
+    pub fn set_application_cursor_keys(&mut self, enabled: bool) {
+        self.application_cursor_keys = enabled;
     }
 
     pub fn bracketed_paste(&self) -> bool {

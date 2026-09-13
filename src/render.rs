@@ -10,7 +10,8 @@ use crate::style::{Color, Style};
 /// The caller owns terminal setup/restoration and must use normal origin mode,
 /// a full-screen scrolling region and compatible character-width rules. This
 /// writes a full frame, including blank cells, without switching screen buffers.
-/// On success attributes are reset; cursor position and visibility match the model.
+/// On success attributes are reset; cursor position, visibility and supported
+/// input modes match the model.
 /// It does not flush. Errors may leave a partial frame; the caller must handle
 /// cleanup or redraw. For nonblocking output, render into a buffer and queue it.
 pub fn render(screen: &Screen, output: &mut impl Write) -> io::Result<()> {
@@ -21,6 +22,13 @@ pub fn render(screen: &Screen, output: &mut impl Write) -> io::Result<()> {
         b"\x1b[?2004h"
     } else {
         b"\x1b[?2004l"
+    })?;
+    // Let the outer terminal encode cursor keys for the child; the input loop
+    // forwards those bytes without translating CSI/SS3 or modified keys.
+    output.write_all(if screen.application_cursor_keys() {
+        b"\x1b[?1h"
+    } else {
+        b"\x1b[?1l"
     })?;
     let mut style = Style::default();
     for row in 0..screen.dimensions().0 {
