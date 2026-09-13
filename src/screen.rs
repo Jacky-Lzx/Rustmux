@@ -4,6 +4,7 @@ use std::io;
 use unicode_width::UnicodeWidthChar;
 
 const MAX_COMBINING_SCALARS: usize = 16;
+const DEFAULT_TAB_WIDTH: usize = 8;
 
 use crate::style::{Cell, Style};
 
@@ -41,6 +42,7 @@ pub struct Screen {
     inactive_saved_cursor: Option<SavedCursor>,
     cursor_visible: bool,
     insert_mode: bool,
+    tab_stops: Vec<bool>,
     scroll_region: (usize, usize),
     inactive_scroll_region: (usize, usize),
     style: Style,
@@ -69,6 +71,11 @@ impl Screen {
             .try_reserve_exact(length)
             .map_err(io::Error::other)?;
         inactive_cells.resize(length, Cell::default());
+        let mut tab_stops = Vec::new();
+        tab_stops
+            .try_reserve_exact(columns)
+            .map_err(io::Error::other)?;
+        tab_stops.extend((0..columns).map(|column| column != 0 && column % DEFAULT_TAB_WIDTH == 0));
         Ok(Self {
             rows,
             columns,
@@ -79,6 +86,7 @@ impl Screen {
             inactive_saved_cursor: None,
             cursor_visible: true,
             insert_mode: false,
+            tab_stops,
             scroll_region: (0, rows - 1),
             inactive_scroll_region: (0, rows - 1),
             style: Style::default(),
@@ -106,6 +114,8 @@ impl Screen {
         resized.insert_mode = self.insert_mode;
         resized.origin_mode = self.origin_mode;
         resized.auto_wrap = self.auto_wrap;
+        let retained_columns = self.columns.min(columns);
+        resized.tab_stops[..retained_columns].copy_from_slice(&self.tab_stops[..retained_columns]);
         let clamp = |saved: SavedCursor| SavedCursor {
             row: saved.row.min(rows - 1),
             column: saved.column.min(columns - 1),
@@ -461,10 +471,43 @@ impl Screen {
         self.wrap_pending = false;
     }
 
-    /// Advance to the next conventional eight-column tab stop without erasing.
+    /// Advance to the next tab stop, or the right edge, without erasing or wrapping.
     pub fn tab(&mut self) {
-        let next = (self.column / 8).saturating_add(1).saturating_mul(8);
-        self.move_to(self.row, next);
+        self.tab_forward(1);
+    }
+
+    /// Set or clear the stop at the current column without changing cursor state.
+    pub fn set_tab_stop(&mut self, enabled: bool) {
+        self.tab_stops[self.column] = enabled;
+    }
+
+    pub fn clear_tab_stops(&mut self) {
+        self.tab_stops.fill(false);
+    }
+
+    /// Stop search is bounded by screen width even for enormous counts.
+    /// Zero counts are a no-op in the model; the parser handles protocol defaults.
+    pub fn tab_forward(&mut self, count: usize) {
+        if count == 0 {
+            return;
+        }
+        let column = (self.column + 1..self.columns)
+            .filter(|&column| self.tab_stops[column])
+            .nth(count - 1)
+            .unwrap_or(self.columns - 1);
+        self.move_to(self.row, column);
+    }
+
+    pub fn tab_backward(&mut self, count: usize) {
+        if count == 0 {
+            return;
+        }
+        let column = (0..self.column)
+            .rev()
+            .filter(|&column| self.tab_stops[column])
+            .nth(count - 1)
+            .unwrap_or(0);
+        self.move_to(self.row, column);
     }
 
     pub fn move_up(&mut self, count: usize) {

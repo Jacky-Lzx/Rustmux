@@ -43,7 +43,9 @@ unchanged. Movement clamps without scrolling; vertical relative movement respect
 cancel pending wrap. Screen methods use zero-based positions and `EraseMode`;
 the parser handles protocol defaults and one-based conversion.
 
-HT uses fixed eight-column tab stops without erasing or wrapping.
+HT uses configurable [tab stops](tab-stops.md), initially eight columns apart,
+without erasing or wrapping. ESC H sets a stop; CSI g clears current/all stops;
+CSI n I/Z moves forward/backward through stops.
 Printable ASCII and LF/CR/BS retain the screen model's existing behavior. Those
 three controls also execute inside an incomplete ESC/CSI sequence without ending
 it. CAN and SUB cancel a sequence; a new ESC restarts ESC/CSI parsing.

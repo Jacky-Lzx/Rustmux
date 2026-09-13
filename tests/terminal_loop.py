@@ -264,6 +264,15 @@ try:
     assert s.last_rows[:2] == [b"A" + b" " * 78 + b"C", b"D"], s.last_rows
     s.send(b"\n")
     s.expect(b"RUSTMUX_READY> ")
+
+    s.send(b"stty -echo; printf '\\033[2J\\033[3g\\033[4G\\033H"
+           b"\\033[12G\\033H\\033[H\\tA\\tB\\033[ZC"
+           b"\\033[2;1HTABS_DONE'; read answer; "
+           b"stty echo; printf '\\033[2;1H'\n")
+    s.expect(b"\r\nTABS_DONE\r\n")
+    assert s.last_rows[0] == b"   A       C", s.last_rows
+    s.send(b"\n")
+    s.expect(b"RUSTMUX_READY> ")
     s.send(b"exit\n")
     s.finish(0)
 finally:

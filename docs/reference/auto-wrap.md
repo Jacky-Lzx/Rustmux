@@ -44,4 +44,5 @@ re-enabling, Unicode, insert mode, region boundaries, saved cursor/alternate/
 resize state and malformed commands. A real CLI PTY fixture verifies last-column
 overwrite followed by wrapping after re-enabling.
 
-Custom tab stops, horizontal margins and terminal queries remain future work.
+[Tab Stops](tab-stops.md) adds configurable horizontal stops.
+Horizontal margins and terminal queries remain future work.

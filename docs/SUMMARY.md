@@ -19,3 +19,4 @@
 - [Origin Mode and Positioning](reference/origin-mode.md)
 - [Insert Mode](reference/insert-mode.md)
 - [Automatic Wrap Mode](reference/auto-wrap.md)
+- [Tab Stops](reference/tab-stops.md)

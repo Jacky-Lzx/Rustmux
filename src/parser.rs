@@ -173,6 +173,10 @@ impl Parser {
                 State::Ground
             }
             State::Escape => match byte {
+                b'H' => {
+                    screen.set_tab_stop(true);
+                    State::Ground
+                }
                 b'D' | b'E' => {
                     screen.line_feed();
                     if byte == b'E' {
@@ -333,6 +337,13 @@ impl Parser {
                 screen.move_up(first.max(1));
                 screen.move_to(screen.cursor().0, 0);
             }
+            b'I' => screen.tab_forward(first.max(1)),
+            b'Z' => screen.tab_backward(first.max(1)),
+            b'g' => match first {
+                0 => screen.set_tab_stop(false),
+                3 => screen.clear_tab_stops(),
+                _ => {}
+            },
             b'@' => screen.insert_characters(first.max(1)),
             b'P' => screen.delete_characters(first.max(1)),
             b'X' => screen.erase_characters(first.max(1)),
