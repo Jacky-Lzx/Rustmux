@@ -28,7 +28,7 @@ storage. Failed splits do not consume IDs or change focus or the tree.
 
 ## Resizing policy
 
-Each split prefers equal halves after reserving its separator, with an odd extra
+Each new split prefers equal halves after reserving its separator, with an odd extra
 cell going to the second subtree. The partition is clamped to the minimum sizes
 required by both subtrees. For example, a left subtree containing two side-by-side
 panes needs at least three columns, while a single right pane needs only one;
@@ -37,12 +37,34 @@ a five-column parent therefore assigns three columns, a separator, and one colum
 `minimum_size()` computes the full tree's requirements. A resize below that size
 returns an error and leaves the entire layout unchanged. Valid resizing preserves
 IDs, tree structure and active pane. Geometry is recomputed from the current size;
-there are no stored user ratios or text reflow decisions here. The CLI currently exits with terminal cleanup if the outer terminal becomes
+manual split ratios are retained, while text reflow remains a screen-model decision. The CLI currently exits with terminal cleanup if the outer terminal becomes
 too small for an existing layout.
 
-The model does not support manual separator adjustment or pane swapping.
+The model does not yet support pane swapping.
 The pane container coordinates PTY/model resizing. Ordinary allocation failure may abort as with
 standard Rust collection allocation; logical validation failures are atomic.
+
+## Manual separator movement
+
+`resize_active(Direction)` moves the nearest ancestor separator of the active
+pane on the requested axis by one cell. Left/right moves a column separator;
+up/down moves a row separator. The direction describes the separator's movement,
+not whether the active pane grows: moving right grows the first subtree and
+shrinks the second. A whole sibling subtree can change size, not just one leaf.
+
+The deepest matching split is chosen even when it has already reached a limit;
+there is no fallback to an outer separator. Both subtrees retain their recursive
+minimum dimensions. A minimum-size boundary, absent matching split, or zoom
+returns `false` and leaves the entire layout unchanged. Successful adjustment
+preserves focus and IDs and returns `true`. `PaneSet::resize_active` delegates to
+this geometry operation without replacing owned contents.
+
+A successful movement stores the first child's exact fraction of the available
+space, excluding the separator. Subsequent outer resizing scales that fraction
+using integer floor division, then clamps to both subtree minima. Temporary
+clamps do not overwrite the ratio, so returning to the original outer dimensions
+restores the manual position. New child splits start at one half; existing split
+ratios survive splitting, sibling promotion, and zoom/unzoom.
 
 ## Closing a pane
 
@@ -129,3 +151,7 @@ rejection, single-pane behavior, and successful/failed structural operations.
 
 Directional tests cover unequal nested panes, edge alignment across odd/even sizes in all four directions, distance/overlap preference, stable
 ties, no-op boundaries, diagonal rejection, zoom, resize/close and content identity.
+
+Manual resize tests cover exact one-cell movement, ratio restoration after size
+clamping, nested axis selection, minimum-size no-ops, unchanged focus, zoom,
+maximum `u16` dimensions and nonoverlapping partitions across repeated edits.

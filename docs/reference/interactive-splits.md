@@ -18,7 +18,7 @@ The former last-window binding `l` now means right-pane focus. Plain Tab still
 reaches the shell; these commands only apply after Ctrl-B. Bracketed paste payload
 is forwarded unchanged, including shortcut bytes.
 
-Splits share space approximately equally and reserve a one-cell separator.
+New splits share space approximately equally and reserve a one-cell separator.
 The [layout model](split-layout.md) describes odd sizes and nested minimum sizes.
 The CLI synchronizes each child PTY and screen with its rectangle after splitting,
 outer resize and pane removal. New windows use the full content area even when
@@ -64,6 +64,29 @@ The nested-PTY suite verifies zoomed dimensions, directional and cyclic target
 changes, outer resize, restoration of both pane sizes, exit while zoomed,
 zoomed mouse coordinates, and terminal-query replies from hidden panes.
 
+## Adjusting pane sizes
+
+Press Ctrl-B, then Ctrl-h/j/k/l to move the nearest left/right or top/bottom
+separator one cell left/down/up/right. Each step needs its own prefix. Plain
+lowercase Ctrl-B `h/j/k/l` continues to select panes. The resize keys are control
+characters, not uppercase letters: keep Ctrl held for the second key.
+
+The nearest ancestor split on the requested axis is adjusted. Direction moves
+its separator regardless of which side is active; moving right enlarges the left
+subtree and shrinks the right subtree. Nested sibling panes may resize together.
+Movement stops at the subtree minimum; it does not continue into an outer split.
+With no matching split or while zoomed, the shortcut is a no-op.
+
+Focus, shell processes, parser state and queued input are retained. The CLI
+synchronizes all affected PTYs and screen models before redrawing. Primary text
+uses the existing resize/reflow policy. Ratios are retained across outer resizing
+and zoom/unzoom. Bracketed paste passes the control bytes to the child rather
+than invoking these shortcuts; modal history browsing and prompts retain their
+own input handling.
+
+The nested-PTY test checks child-observed width and height changes, preserved shell
+variables, reverse movement, zoom no-op and terminal restoration after termination.
+
 ## Limits and verification
 
 There are at most 64 panes per window and 16 windows. The physical frame, including
@@ -73,8 +96,8 @@ with a best-effort bell. A later PTY resize/I/O error ends the CLI and restores
 the terminal; operating-system changes are not rolled back.
 
 Resizing the outer terminal below any window's layout minimum currently ends the
-CLI with terminal cleanup. There is no small-terminal placeholder,
-manual separator adjustment, or separate force-close-pane prompt yet.
+CLI with terminal cleanup. There is no small-terminal placeholder, mouse-drag
+resizing, or separate force-close-pane prompt yet.
 
 `cargo test` runs the nested-PTY suite. It checks nested splits, retained shell
 variables, child-observed dimensions, lowercase directional and cyclic focus,

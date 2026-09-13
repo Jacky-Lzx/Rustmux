@@ -306,6 +306,7 @@ enum WindowKey {
     ToggleZoom,
     History,
     FocusPane(Direction),
+    ResizePane(Direction),
 }
 
 #[derive(Default)]
@@ -449,6 +450,10 @@ impl WindowInput {
                 b'o' => output.push(WindowKey::NextPane),
                 b'z' => output.push(WindowKey::ToggleZoom),
                 b'[' => output.push(WindowKey::History),
+                8 => output.push(WindowKey::ResizePane(Direction::Left)),
+                10 => output.push(WindowKey::ResizePane(Direction::Down)),
+                11 => output.push(WindowKey::ResizePane(Direction::Up)),
+                12 => output.push(WindowKey::ResizePane(Direction::Right)),
                 b'h' => output.push(WindowKey::FocusPane(Direction::Left)),
                 b'j' => output.push(WindowKey::FocusPane(Direction::Down)),
                 b'k' => output.push(WindowKey::FocusPane(Direction::Up)),
@@ -825,6 +830,14 @@ fn forward(
                                     to_terminal.push_back(7);
                                 }
                             }
+                        }
+                    }
+                    WindowKey::ResizePane(direction) => {
+                        let panes = windows.active_mut().unwrap().content_mut();
+                        if panes.resize_active(direction) {
+                            panes.synchronize_sizes()?;
+                            renderer.invalidate();
+                            force_redraw = true;
                         }
                     }
                     WindowKey::History => {
@@ -1332,6 +1345,40 @@ mod window_input_tests {
                 WindowKey::FocusPane(Direction::Up),
                 WindowKey::FocusPane(Direction::Right),
             ]
+        );
+    }
+
+    #[test]
+    fn manual_resize_shortcuts_require_prefix_and_respect_paste() {
+        let keys = b"\x02\x08\x02\x0a\x02\x0b\x02\x0c";
+        assert_eq!(
+            decode(keys),
+            vec![
+                WindowKey::ResizePane(Direction::Left),
+                WindowKey::ResizePane(Direction::Down),
+                WindowKey::ResizePane(Direction::Up),
+                WindowKey::ResizePane(Direction::Right),
+            ]
+        );
+        let plain = b"\x08\x0a\x0b\x0c";
+        assert_eq!(
+            decode(plain),
+            plain
+                .iter()
+                .copied()
+                .map(WindowKey::Byte)
+                .collect::<Vec<_>>()
+        );
+        let mut pasted = b"\x1b[200~".to_vec();
+        pasted.extend_from_slice(keys);
+        pasted.extend_from_slice(b"\x1b[201~");
+        assert_eq!(
+            decode(&pasted),
+            pasted
+                .iter()
+                .copied()
+                .map(WindowKey::Byte)
+                .collect::<Vec<_>>()
         );
     }
 

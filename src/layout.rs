@@ -115,6 +115,8 @@ enum Node {
     Pane(PaneId),
     Split {
         axis: SplitAxis,
+        // Preferred first-child fraction of the space excluding the separator.
+        share: (u16, u16),
         first: Box<Node>,
         second: Box<Node>,
     },
@@ -128,6 +130,7 @@ impl Node {
                 axis,
                 first,
                 second,
+                ..
             } => {
                 let (ar, ac) = first.minimum();
                 let (br, bc) = second.minimum();
@@ -144,6 +147,7 @@ impl Node {
             Self::Pane(id) if *id == target => {
                 *self = Self::Split {
                     axis,
+                    share: (1, 2),
                     first: Box::new(Self::Pane(target)),
                     second: Box::new(Self::Pane(new)),
                 };
@@ -175,37 +179,64 @@ impl Node {
         }
     }
 
+    fn contains(&self, target: PaneId) -> bool {
+        match self {
+            Self::Pane(id) => *id == target,
+            Self::Split { first, second, .. } => first.contains(target) || second.contains(target),
+        }
+    }
+
+    // Some(false) means the nearest matching separator is already at its limit;
+    // do not fall through to an unrelated outer separator in that case.
+    fn adjust(&mut self, target: PaneId, rect: Rect, axis: SplitAxis, delta: i32) -> Option<bool> {
+        let Self::Split {
+            axis: split_axis,
+            share,
+            first,
+            second,
+        } = self
+        else {
+            return None;
+        };
+        let (a, b, _) = split_rects(*split_axis, *share, first.minimum(), second.minimum(), rect);
+        let result = if first.contains(target) {
+            first.adjust(target, a, axis, delta)
+        } else {
+            second.adjust(target, b, axis, delta)
+        };
+        if result.is_some() || *split_axis != axis {
+            return result;
+        }
+        let (extent, available, minimum, other_minimum) = match axis {
+            SplitAxis::Columns => (
+                a.columns,
+                rect.columns - 1,
+                first.minimum().1,
+                second.minimum().1,
+            ),
+            SplitAxis::Rows => (a.rows, rect.rows - 1, first.minimum().0, second.minimum().0),
+        };
+        let next = (i32::from(extent) + delta)
+            .clamp(i32::from(minimum), i32::from(available - other_minimum))
+            as u16;
+        if next == extent {
+            return Some(false);
+        }
+        *share = (next, available);
+        Some(true)
+    }
+
     fn place(&self, rect: Rect, geometry: &mut Geometry) {
         match self {
             Self::Pane(id) => geometry.panes.push((*id, rect)),
             Self::Split {
                 axis,
+                share,
                 first,
                 second,
             } => {
-                let (ar, ac) = first.minimum();
-                let (br, bc) = second.minimum();
-                let mut a = rect;
-                let mut b = rect;
-                let mut separator = rect;
-                match axis {
-                    SplitAxis::Columns => {
-                        let available = rect.columns - 1;
-                        a.columns = (available / 2).clamp(ac, available - bc);
-                        separator.column += a.columns;
-                        separator.columns = 1;
-                        b.column += a.columns + 1;
-                        b.columns = available - a.columns;
-                    }
-                    SplitAxis::Rows => {
-                        let available = rect.rows - 1;
-                        a.rows = (available / 2).clamp(ar, available - br);
-                        separator.row += a.rows;
-                        separator.rows = 1;
-                        b.row += a.rows + 1;
-                        b.rows = available - a.rows;
-                    }
-                }
+                let (a, b, separator) =
+                    split_rects(*axis, *share, first.minimum(), second.minimum(), rect);
                 geometry.separators.push(separator);
                 first.place(a, geometry);
                 second.place(b, geometry);
@@ -215,7 +246,7 @@ impl Node {
 }
 
 /// A nonempty split tree. New panes become active; resize preserves IDs and focus.
-/// Each leaf requires one cell in both dimensions. Splits prefer equal halves,
+/// Each leaf requires one cell in both dimensions. New splits prefer equal halves,
 /// assigning an odd spare cell to the second subtree, subject to subtree minima.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Layout {
@@ -345,6 +376,35 @@ impl Layout {
         Some(target)
     }
 
+    /// Move the nearest ancestor separator on the requested axis by one cell.
+    /// Directions describe separator movement, independently of which child is
+    /// active. Preserve focus and IDs. Zoom, no matching split or a minimum-size
+    /// boundary leaves the complete layout unchanged and returns false.
+    pub fn resize_active(&mut self, direction: Direction) -> bool {
+        if self.zoomed {
+            return false;
+        }
+        let (axis, delta) = match direction {
+            Direction::Left => (SplitAxis::Columns, -1),
+            Direction::Right => (SplitAxis::Columns, 1),
+            Direction::Up => (SplitAxis::Rows, -1),
+            Direction::Down => (SplitAxis::Rows, 1),
+        };
+        self.root
+            .adjust(
+                self.active,
+                Rect {
+                    row: 0,
+                    column: 0,
+                    rows: self.rows,
+                    columns: self.columns,
+                },
+                axis,
+                delta,
+            )
+            .unwrap_or(false)
+    }
+
     /// Split only if the active rectangle can contain two cells plus a separator.
     /// Rejected requests leave IDs, focus, dimensions and the entire tree unchanged.
     pub fn split_active(&mut self, axis: SplitAxis) -> io::Result<PaneId> {
@@ -418,6 +478,41 @@ impl Layout {
         self.columns = columns;
         Ok(())
     }
+}
+
+// Use integer fractions so manual positions return exactly when outer dimensions
+// return. Temporary minimum-size clamps do not overwrite the preferred ratio.
+fn split_rects(
+    axis: SplitAxis,
+    share: (u16, u16),
+    (ar, ac): (u16, u16),
+    (br, bc): (u16, u16),
+    rect: Rect,
+) -> (Rect, Rect, Rect) {
+    let mut a = rect;
+    let mut b = rect;
+    let mut separator = rect;
+    let first_extent =
+        |available: u16| (u32::from(available) * u32::from(share.0) / u32::from(share.1)) as u16;
+    match axis {
+        SplitAxis::Columns => {
+            let available = rect.columns - 1;
+            a.columns = first_extent(available).clamp(ac, available - bc);
+            separator.column += a.columns;
+            separator.columns = 1;
+            b.column += a.columns + 1;
+            b.columns = available - a.columns;
+        }
+        SplitAxis::Rows => {
+            let available = rect.rows - 1;
+            a.rows = first_extent(available).clamp(ar, available - br);
+            separator.row += a.rows;
+            separator.rows = 1;
+            b.row += a.rows + 1;
+            b.rows = available - a.rows;
+        }
+    }
+    (a, b, separator)
 }
 
 fn invalid(message: &str) -> io::Error {

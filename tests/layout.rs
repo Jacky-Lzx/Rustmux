@@ -501,3 +501,105 @@ fn directional_focus_prefers_aligned_edges_over_an_extra_cell() {
         }
     }
 }
+
+#[test]
+fn manual_resize_moves_separator_and_retains_ratio_across_outer_resize() {
+    let mut layout = Layout::new(7, 11).unwrap();
+    let left = layout.active();
+    let right = layout.split_active(SplitAxis::Columns).unwrap();
+    assert!(layout.resize_active(Direction::Right));
+    assert_eq!(layout.geometry().panes[0].1.columns, 6);
+    assert_eq!(layout.geometry().panes[1].1.columns, 4);
+    assert_eq!(layout.active(), right);
+    let original = layout.geometry();
+    layout.resize(7, 21).unwrap();
+    assert_eq!(layout.geometry().panes[0].1.columns, 12);
+    assert_eq!(layout.geometry().panes[1].1.columns, 8);
+    layout.resize(1, 3).unwrap();
+    assert_partition(&layout);
+    layout.resize(7, 11).unwrap();
+    assert_eq!(layout.geometry(), original);
+    layout.select(left).unwrap();
+    assert!(layout.resize_active(Direction::Left));
+    assert_eq!(layout.geometry().panes[0].1.columns, 5);
+    assert_eq!(layout.active(), left);
+}
+
+#[test]
+fn nearest_matching_separator_stops_at_minimum_without_moving_ancestor() {
+    let mut layout = Layout::new(9, 31).unwrap();
+    let left = layout.active();
+    layout.split_active(SplitAxis::Columns).unwrap();
+    layout.select(left).unwrap();
+    layout.split_active(SplitAxis::Columns).unwrap();
+    let outer = layout.geometry().separators[0];
+    assert!(layout.resize_active(Direction::Right));
+    assert_eq!(layout.geometry().panes[0].1.columns, 8);
+    assert_eq!(layout.geometry().separators[0], outer);
+    for _ in 0..30 {
+        layout.resize_active(Direction::Right);
+    }
+    assert_eq!(layout.geometry().panes[1].1.columns, 1);
+    let before = layout.clone();
+    assert!(!layout.resize_active(Direction::Right));
+    assert!(!layout.resize_active(Direction::Up));
+    assert_eq!(layout, before);
+    assert_eq!(layout.geometry().separators[0], outer);
+    assert_partition(&layout);
+}
+
+#[test]
+fn manual_resize_respects_nested_minima_and_zoom_and_preserves_partition() {
+    let mut layout = Layout::new(15, 31).unwrap();
+    let left = layout.active();
+    let right = layout.split_active(SplitAxis::Columns).unwrap();
+    layout.split_active(SplitAxis::Columns).unwrap();
+    layout.select(left).unwrap();
+    layout.split_active(SplitAxis::Rows).unwrap();
+    let focused = layout.active();
+    for direction in [
+        Direction::Left,
+        Direction::Down,
+        Direction::Right,
+        Direction::Up,
+    ] {
+        for _ in 0..40 {
+            layout.resize_active(direction);
+            assert_partition(&layout);
+            assert_eq!(layout.active(), focused);
+        }
+    }
+    assert!(layout.geometry().panes.iter().any(|(id, _)| *id == right));
+    layout.toggle_zoom();
+    let before = layout.clone();
+    for direction in [
+        Direction::Left,
+        Direction::Down,
+        Direction::Right,
+        Direction::Up,
+    ] {
+        assert!(!layout.resize_active(direction));
+        assert_eq!(layout, before);
+    }
+    layout.toggle_zoom();
+    for rows in 3..17 {
+        for columns in 5..35 {
+            layout.resize(rows, columns).unwrap();
+            assert_partition(&layout);
+        }
+    }
+}
+
+#[test]
+fn manual_resize_is_noop_for_single_pane_and_safe_at_maximum_dimension() {
+    let mut layout = Layout::new(u16::MAX, u16::MAX).unwrap();
+    let before = layout.clone();
+    assert!(!layout.resize_active(Direction::Left));
+    assert_eq!(layout, before);
+    layout.split_active(SplitAxis::Columns).unwrap();
+    assert!(layout.resize_active(Direction::Right));
+    assert_eq!(layout.geometry().panes[0].1.columns, 32768);
+    layout.resize(1, 3).unwrap();
+    layout.resize(u16::MAX, u16::MAX).unwrap();
+    assert_eq!(layout.geometry().panes[0].1.columns, 32768);
+}

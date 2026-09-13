@@ -69,6 +69,11 @@ impl<T> PaneSet<T> {
         self.layout.select_direction(direction)
     }
 
+    /// Adjust geometry without replacing contents; synchronize PTY sizes separately.
+    pub fn resize_active(&mut self, direction: Direction) -> bool {
+        self.layout.resize_active(direction)
+    }
+
     pub fn toggle_zoom(&mut self) -> bool {
         self.layout.toggle_zoom()
     }
