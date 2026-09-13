@@ -302,6 +302,7 @@ fn forward(
             if size.ws_row != 0 && size.ws_col != 0 {
                 check_size(size.ws_row, size.ws_col)?;
                 screen.resize(usize::from(size.ws_row), usize::from(size.ws_col))?;
+                renderer.invalidate();
                 // A resized outer grid cannot retain the old visual frame.
                 screen.set_synchronized_output(false);
                 synchronized_since = None;

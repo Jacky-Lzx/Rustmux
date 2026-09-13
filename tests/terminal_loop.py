@@ -65,7 +65,7 @@ class Session:
                 chunk = os.read(self.master, 65536)
                 self.output.extend(chunk)
                 self.frame_pending.extend(chunk)
-                # A full frame ends in cursor positioning plus its visibility mode. Decode rows
+                # A frame ends in cursor positioning plus its visibility mode. Decode rows
                 # payloads independently of the Rust parser; SGR does not occupy cells.
                 while (match := re.search(rb"\x1b\[[0-9]+;[0-9]+H\x1b\[\?25[hl]", self.frame_pending)):
                     end = match.end()
@@ -74,8 +74,19 @@ class Session:
                     if b"\x1b[?25l" not in frame:
                         continue
                     self.last_frame = frame
-                    payloads = re.split(rb"\x1b\[[0-9]+;[0-9]+H", frame)[1:-1]
-                    self.last_rows = [re.sub(rb"\x1b\[[0-9;]*m", b"", row).rstrip(b" ") for row in payloads]
+                    # Each drawing CUP starts a complete replacement row. The final
+                    # CUP only positions the cursor; unchanged rows retain their contents.
+                    positions = list(re.finditer(rb"\x1b\[([0-9]+);([0-9]+)H", frame))
+                    height = struct.unpack("HHHH", fcntl.ioctl(self.slave, termios.TIOCGWINSZ, b"\0" * 8))[0]
+                    height = height or len(self.last_rows)
+                    rows = (self.last_rows + [b""] * height)[:height]
+                    for pos, following in zip(positions, positions[1:]):
+                        row = int(pos.group(1)) - 1
+                        assert pos.group(2) == b"1", "drawing must replace a whole row"
+                        if row < height:
+                            payload = frame[pos.end():following.start()]
+                            rows[row] = re.sub(rb"\x1b\[[0-9;]*m", b"", payload).rstrip(b" ")
+                    self.last_rows = rows
                     self.frames.append(self.last_rows)
                     self.frames = self.frames[-64:]
             except OSError as error:
@@ -707,6 +718,32 @@ try:
     s.read(0.2)
     os.kill(s.app_pid, signal.SIGTERM)
     s.finish(128 + signal.SIGTERM)
+finally:
+    s.close()
+
+row_probe = r"""
+import os, select, tty
+tty.setraw(0)
+os.write(1, b"\x1b[2J\x1b[HUNCHANGED_ROW\x1b[2;1HOLD")
+assert select.select([0], [], [], 6)[0]
+assert os.read(0, 1) == b"x"
+os.write(1, b"\x1b[2;1HNEW")
+assert select.select([0], [], [], 6)[0]
+assert os.read(0, 1) == b"x"
+"""
+s = Session()
+try:
+    s.expect(b"RUSTMUX_READY> ")
+    s.send(("exec python3 -c " + shlex.quote(row_probe) + "\n").encode())
+    s.expect(b"\r\nOLD\r\n")
+    s.send(b"x")
+    s.expect(b"\r\nNEW\r\n")
+    assert s.last_rows[0] == b"UNCHANGED_ROW"
+    assert b"\x1b[1;1H" not in s.last_frame
+    assert b"\x1b[2;1H" in s.last_frame
+    assert len(s.last_frame) < 400
+    s.send(b"x")
+    s.finish(0)
 finally:
     s.close()
 

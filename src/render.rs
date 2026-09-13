@@ -1,9 +1,9 @@
-//! Full-frame ANSI output for a screen model. No event loop or output queue here.
+//! Full-frame and changed-row ANSI output. No event loop or output queue here.
 
 use std::io::{self, Write};
 
 use crate::screen::{MouseTracking, Screen};
-use crate::style::{Color, Style};
+use crate::style::{Cell, Color, Style};
 
 /// Draw the active grid from the top-left corner onto an equally sized terminal.
 ///
@@ -15,24 +15,57 @@ use crate::style::{Color, Style};
 /// It does not flush. Errors may leave a partial frame; the caller must handle
 /// cleanup or redraw. For nonblocking output, render into a buffer and queue it.
 pub fn render(screen: &Screen, output: &mut impl Write) -> io::Result<()> {
-    render_frame(screen, output, true, true)
+    render_frame(screen, output, true, true, None)
 }
 
-/// Stateful rendering for an ordered output stream. Each successful frame must
+/// Changed-row rendering for an ordered output stream. Each successful frame must
 /// be delivered completely before the next; create a fresh Renderer after losing
-/// or discarding output. Avoid re-enabling focus reports on ordinary redraws,
+/// or discarding output, or call invalidate. Avoid re-enabling focus reports on ordinary redraws,
 /// since an outer terminal may report its current focus when enabled.
 #[derive(Default)]
 pub struct Renderer {
     focus_reporting: Option<bool>,
     mouse: Option<(MouseTracking, bool)>,
+    dimensions: Option<(usize, usize)>,
+    rows: Vec<Vec<Cell>>,
 }
 
 impl Renderer {
+    /// Force a complete repaint after external damage or discarded queued output.
+    pub fn invalidate(&mut self) {
+        self.dimensions = None;
+        self.focus_reporting = None;
+        self.mouse = None;
+    }
+
     pub fn render(&mut self, screen: &Screen, output: &mut impl Write) -> io::Result<()> {
         let synchronize = self.focus_reporting != Some(screen.focus_reporting());
         let mouse = (screen.mouse_tracking(), screen.sgr_mouse());
-        render_frame(screen, output, synchronize, self.mouse != Some(mouse))?;
+        let previous =
+            (self.dimensions == Some(screen.dimensions())).then_some(self.rows.as_slice());
+        if let Err(error) = render_frame(
+            screen,
+            output,
+            synchronize,
+            self.mouse != Some(mouse),
+            previous,
+        ) {
+            // Partly written rows can no longer be compared against the old grid.
+            self.invalidate();
+            return Err(error);
+        }
+        if self.dimensions != Some(screen.dimensions()) {
+            self.rows.clear();
+        }
+        self.rows.resize_with(screen.dimensions().0, Vec::new);
+        for (index, cached) in self.rows.iter_mut().enumerate() {
+            let cells = screen.row(index).expect("row is in bounds");
+            if cached.as_slice() != cells {
+                cached.clear();
+                cached.extend_from_slice(cells);
+            }
+        }
+        self.dimensions = Some(screen.dimensions());
         self.mouse = Some(mouse);
         self.focus_reporting = Some(screen.focus_reporting());
         Ok(())
@@ -44,6 +77,7 @@ fn render_frame(
     output: &mut impl Write,
     synchronize_focus: bool,
     synchronize_mouse: bool,
+    previous: Option<&[Vec<Cell>]>,
 ) -> io::Result<()> {
     output.write_all(b"\x1b[?25l\x1b[0m")?;
     // The single active pane determines how the outer terminal encodes paste.
@@ -90,9 +124,13 @@ fn render_frame(
     }
     let mut style = Style::default();
     for row in 0..screen.dimensions().0 {
+        let cells = screen.row(row).expect("row is in bounds");
+        if previous.is_some_and(|cached| cached[row].as_slice() == cells) {
+            continue;
+        }
         // Explicit CUP avoids newline-induced scrolling, including at bottom-right.
         write!(output, "\x1b[{};1H", row + 1)?;
-        for cell in screen.row(row).expect("row is in bounds") {
+        for cell in cells {
             if cell.width == 0 {
                 continue;
             }

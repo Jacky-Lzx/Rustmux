@@ -22,14 +22,15 @@ keyboard signals. The parser supports the documented control subset and standard
 eight-column tabs; unknown commands are ignored rather than passed through.
 
 Both descriptors are nonblocking. Keyboard input has a 64 KiB queue. Output holds
-at most one full ANSI frame, capped at 16 MiB; grids are limited to 65,536 cells.
+at most one ANSI frame, capped at 16 MiB; grids are limited to 65,536 cells.
 These limits also apply on resize. A limit error follows normal terminal cleanup.
 Child output reads pause while a frame is pending, applying backpressure without
 accumulating frames. Reads are at most 8 KiB. Writes retain unsent tails and retry
 Interrupted/WouldBlock on later iterations.
 
 Changed screen state is painted at a target minimum spacing of 6 ms after the
-previous frame was generated. Idle screens are not redrawn. [Synchronized output](synchronized-output.md)
+previous frame was generated. Frames redraw changed rows, with full repaint on
+startup or resize. Idle screens are not redrawn. [Synchronized output](synchronized-output.md)
 defers new frames until the batch ends or its bounded wait expires. Poll waits at most
 50 ms for signal/exit checks, shortened when a frame is due. This is scheduling,
 not a hard real-time guarantee. The final frame bypasses the interval on EOF.
@@ -85,7 +86,8 @@ closing its PTY. A supervisor retains the outer controlling session so macOS doe
 not revoke its terminal before attributes can be checked. All termios settings
 are compared except the kernel-maintained PENDIN transient state.
 
-Tests decode complete renderer frames into rows independently of the Rust parser.
+Tests decode completed renderer frames into rows independently of the Rust parser,
+retaining rows omitted by incremental frames.
 The burst test checks the final marker after 200 KB is consumed, not retention of
 all scrolled text.
 
