@@ -238,6 +238,15 @@ try:
         assert s.last_rows[0] == expected, (command, s.last_rows)
         s.send(b"\n")
         s.expect(b"RUSTMUX_READY> ")
+
+    s.send(b"stty -echo; printf '\\033[2J\\033[2;4r\\033[?6h"
+           b"\\033[HORIGIN\\033[2d\\033[4GCOLUMN\\033[?6lABS"
+           b"\\033[6;1HORIGIN_DONE'; read answer; "
+           b"stty echo; printf '\\033[r\\033[6;1H'\n")
+    s.expect(b"\r\nORIGIN_DONE\r\n")
+    assert s.last_rows[:3] == [b"ABS", b"ORIGIN", b"   COLUMN"], s.last_rows
+    s.send(b"\n")
+    s.expect(b"RUSTMUX_READY> ")
     s.send(b"exit\n")
     s.finish(0)
 finally:

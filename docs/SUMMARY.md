@@ -16,3 +16,4 @@
 - [Scrolling Regions](reference/scrolling-regions.md)
 - [Line Editing](reference/line-editing.md)
 - [Character Editing](reference/character-editing.md)
+- [Origin Mode and Positioning](reference/origin-mode.md)

@@ -28,3 +28,6 @@ shape and blinking mode, standalone mode 1048 and ANSI CSI s/u are not supported
 `tests/cursor.rs` verifies position/style/wrap, slot replacement, alternate-screen
 isolation, resize and rendered visibility, with every two-chunk split. The real
 PTY test also drives cursor hide/show through the CLI. Run `cargo test --test cursor`.
+
+[Origin Mode](origin-mode.md) is also included in saved cursor state. Restoring
+a saved row clamps it against the current margins when that mode is enabled.

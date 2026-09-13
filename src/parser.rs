@@ -257,6 +257,9 @@ impl Parser {
         if parameters.private {
             if !parameters.subparameter.contains(&true) && matches!(command, b'h' | b'l') {
                 for mode in &parameters.values[..=parameters.index] {
+                    if *mode == Some(6) {
+                        screen.set_origin_mode(command == b'h');
+                    }
                     if *mode == Some(25) {
                         screen.set_cursor_visible(command == b'h');
                     }
@@ -298,7 +301,7 @@ impl Parser {
                 return;
             }
             // CUP/HVP are one-based; omitted and zero coordinates mean one.
-            screen.move_to(first.saturating_sub(1), second.saturating_sub(1));
+            screen.position(first.saturating_sub(1), second.saturating_sub(1));
             return;
         }
         if parameters.index != 0 {
@@ -309,6 +312,16 @@ impl Parser {
             b'B' => screen.move_down(first.max(1)),
             b'C' => screen.move_right(first.max(1)),
             b'D' => screen.move_left(first.max(1)),
+            b'G' | b'`' => screen.move_to(screen.cursor().0, first.saturating_sub(1)),
+            b'd' => screen.position_row(first.saturating_sub(1)),
+            b'E' => {
+                screen.move_down(first.max(1));
+                screen.move_to(screen.cursor().0, 0);
+            }
+            b'F' => {
+                screen.move_up(first.max(1));
+                screen.move_to(screen.cursor().0, 0);
+            }
             b'@' => screen.insert_characters(first.max(1)),
             b'P' => screen.delete_characters(first.max(1)),
             b'X' => screen.erase_characters(first.max(1)),

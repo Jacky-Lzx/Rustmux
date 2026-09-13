@@ -28,9 +28,9 @@ edge without scrolling.
 
 CUU/CUD stop at the relevant margin when approaching it from inside the region.
 Above the top margin CUU can reach row zero; below the bottom margin CUD can
-reach the last row. CUP/HVP still use absolute screen coordinates. Origin mode
-(DECOM) is not implemented. Setting margins homes to the screen's upper-left
-corner without erasing text or changing the writing style.
+reach the last row. [Origin Mode](origin-mode.md) optionally makes CUP/HVP
+relative to the region and constrains the cursor to it. Setting margins homes
+at the active origin without erasing text or changing the writing style.
 
 ## Alternate screen and resize
 

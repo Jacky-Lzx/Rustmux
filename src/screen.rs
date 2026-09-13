@@ -21,6 +21,7 @@ struct SavedCursor {
     column: usize,
     style: Style,
     wrap_pending: bool,
+    origin_mode: bool,
 }
 
 /// Screen state with zero-based coordinates and per-grid vertical scrolling margins.
@@ -44,6 +45,7 @@ pub struct Screen {
     row: usize,
     column: usize,
     wrap_pending: bool,
+    origin_mode: bool,
 }
 
 impl Screen {
@@ -79,6 +81,7 @@ impl Screen {
             row: 0,
             column: 0,
             wrap_pending: false,
+            origin_mode: false,
         })
     }
 
@@ -95,6 +98,7 @@ impl Screen {
         // Cell suffixes are moved, not cloned, so copying the overlap cannot allocate.
         let mut resized = Self::new(rows, columns)?;
         resized.cursor_visible = self.cursor_visible;
+        resized.origin_mode = self.origin_mode;
         let clamp = |saved: SavedCursor| SavedCursor {
             row: saved.row.min(rows - 1),
             column: saved.column.min(columns - 1),
@@ -164,6 +168,7 @@ impl Screen {
             column: self.column,
             style: self.style,
             wrap_pending: self.wrap_pending,
+            origin_mode: self.origin_mode,
         });
         std::mem::swap(&mut self.cells, &mut self.inactive_cells);
         std::mem::swap(&mut self.scroll_region, &mut self.inactive_scroll_region);
@@ -186,10 +191,7 @@ impl Screen {
         self.inactive_cells.fill(Cell::default());
         self.inactive_saved_cursor = None;
         self.inactive_scroll_region = (0, self.rows - 1);
-        self.row = saved.row;
-        self.column = saved.column;
-        self.style = saved.style;
-        self.wrap_pending = saved.wrap_pending;
+        self.apply_saved_cursor(saved);
     }
 
     pub fn cursor_visible(&self) -> bool {
@@ -208,6 +210,7 @@ impl Screen {
             column: self.column,
             style: self.style,
             wrap_pending: self.wrap_pending,
+            origin_mode: self.origin_mode,
         });
     }
 
@@ -215,11 +218,42 @@ impl Screen {
     /// Without a prior save, leave the current state unchanged.
     pub fn restore_cursor(&mut self) {
         if let Some(saved) = self.saved_cursor {
-            self.row = saved.row;
-            self.column = saved.column;
-            self.style = saved.style;
-            self.wrap_pending = saved.wrap_pending;
+            self.apply_saved_cursor(saved);
         }
+    }
+
+    fn apply_saved_cursor(&mut self, saved: SavedCursor) {
+        self.origin_mode = saved.origin_mode;
+        self.move_to(saved.row, saved.column);
+        self.style = saved.style;
+        // A changed margin can clamp the saved row. Do not restore delayed
+        // wrapping to a different physical cell.
+        self.wrap_pending = saved.wrap_pending && self.cursor() == (saved.row, saved.column);
+    }
+
+    pub fn origin_mode(&self) -> bool {
+        self.origin_mode
+    }
+
+    /// DECOM changes the coordinate origin and homes, even when set repeatedly.
+    pub fn set_origin_mode(&mut self, enabled: bool) {
+        self.origin_mode = enabled;
+        self.position(0, 0);
+    }
+
+    /// Address zero-based coordinates relative to the active protocol origin.
+    pub fn position(&mut self, row: usize, column: usize) {
+        let top = if self.origin_mode {
+            self.scroll_region.0
+        } else {
+            0
+        };
+        self.move_to(top.saturating_add(row), column);
+    }
+
+    /// Address a row relative to the origin while retaining the current column.
+    pub fn position_row(&mut self, row: usize) {
+        self.position(row, self.column);
     }
 
     pub fn dimensions(&self) -> (usize, usize) {
@@ -376,10 +410,14 @@ impl Screen {
         }
     }
 
-    /// Position the cursor using zero-based coordinates, clamped to the grid.
+    /// Position in physical zero-based coordinates, clamped to the active bounds.
     /// Explicit movement cancels delayed wrapping and never scrolls.
     pub fn move_to(&mut self, row: usize, column: usize) {
-        self.row = row.min(self.rows - 1);
+        self.row = if self.origin_mode {
+            row.clamp(self.scroll_region.0, self.scroll_region.1)
+        } else {
+            row.min(self.rows - 1)
+        };
         self.column = column.min(self.columns - 1);
         self.wrap_pending = false;
     }
@@ -500,7 +538,7 @@ impl Screen {
         self.scroll_region
     }
 
-    /// Set valid vertical margins and home the cursor (origin mode is unsupported).
+    /// Set valid vertical margins and home the cursor at the active origin.
     /// Reversed, single-row or out-of-bounds regions leave all state unchanged,
     /// except that a one-row screen accepts its full-height region.
     pub fn set_scroll_region(&mut self, top: usize, bottom: usize) {
@@ -508,7 +546,7 @@ impl Screen {
             return;
         }
         self.scroll_region = (top, bottom);
-        self.move_to(0, 0);
+        self.position(0, 0);
     }
 
     /// Insert blank rows at the cursor through the bottom margin.

@@ -93,7 +93,7 @@ are required. Local validation is on macOS; Linux results require the CI run.
 
 ## Current compatibility
 
-The CLI now depends on our parser's supported subset. Insert mode, origin mode,
+The CLI now depends on our parser's supported subset. Insert mode,
 terminal queries, custom tab stops, mouse modes and full emoji shaping are not implemented. Programs requiring
 those features may display incorrectly or wait for an unsupported terminal reply.
 Full-screen editor compatibility is not yet an acceptance claim. There is no
