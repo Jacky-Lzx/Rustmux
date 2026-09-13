@@ -14,3 +14,4 @@
 - [Basic Renderer](reference/rendering.md)
 - [Cursor State](reference/cursor.md)
 - [Scrolling Regions](reference/scrolling-regions.md)
+- [Line Editing](reference/line-editing.md)

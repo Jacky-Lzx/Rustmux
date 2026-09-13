@@ -46,6 +46,6 @@ scroll directions, wrapping, invalid input, chunk boundaries, Unicode cell
 integrity, renderer replay, alternate isolation and resize behavior.
 The real CLI PTY test also checks a fixed header/footer through LF and RI.
 
-Insert/delete lines and characters, explicit SU/SD scrolling, horizontal margins
-and terminal replies remain future work. This step does not claim complete
+[Line Editing](line-editing.md) adds IL/DL and explicit SU/SD scrolling.
+Character insertion/deletion, horizontal margins and terminal replies remain future work. This step does not claim complete
 Neovim compatibility.

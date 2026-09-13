@@ -309,6 +309,10 @@ impl Parser {
             b'B' => screen.move_down(first.max(1)),
             b'C' => screen.move_right(first.max(1)),
             b'D' => screen.move_left(first.max(1)),
+            b'L' => screen.insert_lines(first.max(1)),
+            b'M' => screen.delete_lines(first.max(1)),
+            b'S' => screen.scroll_up(first.max(1)),
+            b'T' => screen.scroll_down(first.max(1)),
             b'J' | b'K' => {
                 let mode = match first {
                     0 => EraseMode::ToEnd,

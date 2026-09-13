@@ -212,6 +212,22 @@ try:
     assert s.last_rows[:5] == [b"HEADER", b"REVERSED", b"TWO", b"THREE", b"FOOTER"], s.last_rows
     s.send(b"\n")
     s.expect(b"RUSTMUX_READY> ")
+
+    for command, expected in [
+        (b"L", [b"HEADER", b"ONE", b"", b"TWO", b"FOOTER"]),
+        (b"M", [b"HEADER", b"ONE", b"THREE", b"", b"FOOTER"]),
+        (b"S", [b"HEADER", b"TWO", b"THREE", b"", b"FOOTER"]),
+        (b"T", [b"HEADER", b"", b"ONE", b"TWO", b"FOOTER"]),
+    ]:
+        s.send(b"stty -echo; printf '\\033[2J\\033[1;1HHEADER\\033[2;1HONE"
+               b"\\033[3;1HTWO\\033[4;1HTHREE\\033[5;1HFOOTER"
+               b"\\033[2;4r\\033[3;2H\\033[" + command +
+               b"\\033[6;1HLINE_EDIT_DONE'; read answer; "
+               b"stty echo; printf '\\033[r\\033[6;1H'\n")
+        s.expect(b"\r\nLINE_EDIT_DONE\r\n")
+        assert s.last_rows[:5] == expected, (command, s.last_rows)
+        s.send(b"\n")
+        s.expect(b"RUSTMUX_READY> ")
     s.send(b"exit\n")
     s.finish(0)
 finally:

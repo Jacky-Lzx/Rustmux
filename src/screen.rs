@@ -460,16 +460,63 @@ impl Screen {
         self.move_to(0, 0);
     }
 
+    /// Insert blank rows at the cursor through the bottom margin.
+    /// Outside the region (or for zero count), leave all state unchanged.
+    pub fn insert_lines(&mut self, count: usize) {
+        if count == 0 || self.row < self.scroll_region.0 || self.row > self.scroll_region.1 {
+            return;
+        }
+        self.shift_rows(self.row, self.scroll_region.1, count, true);
+        self.move_to(self.row, 0);
+    }
+
+    /// Delete rows at the cursor, filling from the bottom with blank rows.
+    pub fn delete_lines(&mut self, count: usize) {
+        if count == 0 || self.row < self.scroll_region.0 || self.row > self.scroll_region.1 {
+            return;
+        }
+        self.shift_rows(self.row, self.scroll_region.1, count, false);
+        self.move_to(self.row, 0);
+    }
+
+    /// Scroll the entire region upward, retaining cursor coordinates.
+    pub fn scroll_up(&mut self, count: usize) {
+        if count != 0 {
+            self.shift_rows(self.scroll_region.0, self.scroll_region.1, count, false);
+            self.wrap_pending = false;
+        }
+    }
+
+    /// Scroll the entire region downward, retaining cursor coordinates.
+    pub fn scroll_down(&mut self, count: usize) {
+        if count != 0 {
+            self.shift_rows(self.scroll_region.0, self.scroll_region.1, count, true);
+            self.wrap_pending = false;
+        }
+    }
+
+    // Clamp before multiplication. Moving whole rows preserves wide-cell pairs
+    // and moves combining suffix allocations without cloning or allocating.
+    fn shift_rows(&mut self, top: usize, bottom: usize, count: usize, down: bool) {
+        let amount = count.min(bottom - top + 1) * self.columns;
+        let start = top * self.columns;
+        let end = (bottom + 1) * self.columns;
+        let blank = self.blank();
+        if down {
+            self.cells[start..end].rotate_right(amount);
+            self.cells[start..start + amount].fill(blank);
+        } else {
+            self.cells[start..end].rotate_left(amount);
+            self.cells[end - amount..end].fill(blank);
+        }
+    }
+
     /// LF/IND: preserve the column and scroll only when at the bottom margin.
     /// Outside the region, move toward the physical bottom without scrolling.
     pub fn line_feed(&mut self) {
         self.wrap_pending = false;
         if self.row == self.scroll_region.1 {
-            let start = self.scroll_region.0 * self.columns;
-            let end = (self.scroll_region.1 + 1) * self.columns;
-            let blank = self.blank();
-            self.cells[start..end].rotate_left(self.columns);
-            self.cells[end - self.columns..end].fill(blank);
+            self.scroll_up(1);
         } else {
             self.row = (self.row + 1).min(self.rows - 1);
         }
@@ -479,11 +526,7 @@ impl Screen {
     pub fn reverse_index(&mut self) {
         self.wrap_pending = false;
         if self.row == self.scroll_region.0 {
-            let start = self.scroll_region.0 * self.columns;
-            let end = (self.scroll_region.1 + 1) * self.columns;
-            let blank = self.blank();
-            self.cells[start..end].rotate_right(self.columns);
-            self.cells[start..start + self.columns].fill(blank);
+            self.scroll_down(1);
         } else {
             self.row = self.row.saturating_sub(1);
         }
