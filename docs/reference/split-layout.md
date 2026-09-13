@@ -1,7 +1,9 @@
 # Split Layout Model
 
 `layout::Layout` is the first part of H06: a binary tree of pane rectangles.
-It does not own PTYs, screen models or input queues and is not yet connected to
+It does not own PTYs, screen models or input queues. The
+[PaneSet container](pane-ownership.md) connects its leaves to owned content values.
+Neither is yet connected to
 the CLI. Interactive windows still contain one shell each. This is not a claim
 that interactive splitting or H06 acceptance is complete.
 

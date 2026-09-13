@@ -38,3 +38,4 @@
 - [Windows](reference/windows.md)
 
 - [Split Layout Model](reference/split-layout.md)
+- [Pane Contents and Layout Ownership](reference/pane-ownership.md)
