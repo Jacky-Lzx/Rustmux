@@ -9,7 +9,7 @@ pub const MAX_CELLS: usize = 65_536;
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct Scrollback {
-    rows: Arc<VecDeque<Arc<[Cell]>>>,
+    rows: Arc<VecDeque<(Arc<[Cell]>, bool)>>,
     cells: usize,
 }
 
@@ -19,16 +19,20 @@ impl Scrollback {
     }
 
     pub fn row(&self, index: usize) -> Option<&[Cell]> {
-        self.rows.get(index).map(AsRef::as_ref)
+        self.rows.get(index).map(|(cells, _)| cells.as_ref())
     }
 
-    pub fn pop_newest(&mut self) -> Option<Arc<[Cell]>> {
+    pub fn continued(&self, index: usize) -> Option<bool> {
+        self.rows.get(index).map(|(_, continued)| *continued)
+    }
+
+    pub fn pop_newest(&mut self) -> Option<(Arc<[Cell]>, bool)> {
         let row = Arc::make_mut(&mut self.rows).pop_back()?;
-        self.cells -= row.len();
+        self.cells -= row.0.len();
         Some(row)
     }
 
-    pub fn push(&mut self, row: &[Cell]) {
+    pub fn push(&mut self, row: &[Cell], continued: bool) {
         // An oversized row cannot fit even on its own. Discard older history too,
         // so retained history never jumps across an unrecorded newer row.
         if row.len() > MAX_CELLS {
@@ -37,9 +41,9 @@ impl Scrollback {
         }
         let rows = Arc::make_mut(&mut self.rows);
         while rows.len() >= MAX_LINES || self.cells + row.len() > MAX_CELLS {
-            self.cells -= rows.pop_front().expect("history exceeds its bound").len();
+            self.cells -= rows.pop_front().expect("history exceeds its bound").0.len();
         }
-        rows.push_back(Arc::from(row));
+        rows.push_back((Arc::from(row), continued));
         self.cells += row.len();
     }
 }

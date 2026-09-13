@@ -78,3 +78,7 @@ to the visible grid, and input still works. Model tests additionally cover newes
 ordering, partial restoration, saved cursors, hidden primary restoration, wide-cell
 clipping, snapshot isolation and repeated cycles. A compositor regression checks
 that enlarging the render canvas does not restore history or shift the cursor.
+
+[Soft-wrap flags](soft-wrap-metadata.md) follow same-width height changes. Width
+changes or restoration of mixed-width history clear visible flags conservatively;
+retained history flags remain attached to their original rows.

@@ -43,3 +43,4 @@
 - [Interactive Splits](reference/interactive-splits.md)
 - [Scrollback Storage](reference/scrollback.md)
 - [Browsing History](reference/history-view.md)
+- [Soft Wrap Metadata](reference/soft-wrap-metadata.md)

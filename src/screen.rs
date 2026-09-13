@@ -96,6 +96,8 @@ pub struct Screen {
     cells: Vec<Cell>,
     inactive_cells: Vec<Cell>,
     scrollback: Scrollback,
+    continued: Vec<bool>,
+    inactive_continued: Vec<bool>,
     saved_main_cursor: Option<SavedCursor>,
     saved_cursor: Option<SavedCursor>,
     inactive_saved_cursor: Option<SavedCursor>,
@@ -132,6 +134,16 @@ impl Screen {
         self.scrollback.row(index)
     }
 
+    /// Whether this row was reached by automatic wrapping from its predecessor.
+    pub fn row_continued(&self, row: usize) -> Option<bool> {
+        self.continued.get(row).copied()
+    }
+
+    /// Whether a retained history row continues its preceding physical row.
+    pub fn history_row_continued(&self, row: usize) -> Option<bool> {
+        self.scrollback.continued(row)
+    }
+
     /// Discard primary-screen history without changing either visible grid or modes.
     pub fn clear_history(&mut self) {
         self.scrollback = Scrollback::default();
@@ -159,7 +171,19 @@ impl Screen {
             .try_reserve_exact(columns)
             .map_err(io::Error::other)?;
         tab_stops.extend((0..columns).map(|column| column != 0 && column % DEFAULT_TAB_WIDTH == 0));
+        let mut continued = Vec::new();
+        continued
+            .try_reserve_exact(rows)
+            .map_err(io::Error::other)?;
+        continued.resize(rows, false);
+        let mut inactive_continued = Vec::new();
+        inactive_continued
+            .try_reserve_exact(rows)
+            .map_err(io::Error::other)?;
+        inactive_continued.resize(rows, false);
         Ok(Self {
+            continued,
+            inactive_continued,
             rows,
             columns,
             cells,
@@ -197,6 +221,8 @@ impl Screen {
         self.cells.fill(Cell::default());
         self.inactive_cells.fill(Cell::default());
         self.clear_history();
+        self.continued.fill(false);
+        self.inactive_continued.fill(false);
         self.saved_main_cursor = None;
         self.saved_cursor = None;
         self.inactive_saved_cursor = None;
@@ -305,8 +331,16 @@ impl Screen {
         } else {
             &self.cells
         };
-        for row in main_cells[..shift * self.columns].chunks(self.columns) {
-            resized.scrollback.push(row);
+        let main_continued = if self.is_alternate() {
+            &self.inactive_continued
+        } else {
+            &self.continued
+        };
+        for (index, row) in main_cells[..shift * self.columns]
+            .chunks(self.columns)
+            .enumerate()
+        {
+            resized.scrollback.push(row, main_continued[index]);
         }
         resized.cursor_visible = self.cursor_visible;
         resized.cursor_shape = self.cursor_shape;
@@ -354,11 +388,20 @@ impl Screen {
                 ..Cell::default()
             });
         }
+        let mut mixed_history_widths = false;
         for row in (0..restore).rev() {
-            let cells = resized
+            let (cells, continued) = resized
                 .scrollback
                 .pop_newest()
                 .expect("restorable history row");
+            mixed_history_widths |= cells.len() != columns;
+            if cells.len() == columns {
+                if self.is_alternate() {
+                    resized.inactive_continued[row] = continued;
+                } else {
+                    resized.continued[row] = continued;
+                }
+            }
             let destination = if self.is_alternate() {
                 &mut resized.inactive_cells
             } else {
@@ -383,6 +426,24 @@ impl Screen {
             &mut resized.inactive_cells[inactive_restore * columns..],
             columns,
         );
+        if self.columns == columns && !mixed_history_widths {
+            for (target, source) in resized.continued[active_restore..]
+                .iter_mut()
+                .zip(&self.continued[active_shift..])
+            {
+                *target = *source;
+            }
+            for (target, source) in resized.inactive_continued[inactive_restore..]
+                .iter_mut()
+                .zip(&self.inactive_continued[inactive_shift..])
+            {
+                *target = *source;
+            }
+        } else {
+            // Width clipping invalidates the visible row relationships until reflow exists.
+            resized.continued.fill(false);
+            resized.inactive_continued.fill(false);
+        }
         *self = resized;
         Ok(())
     }
@@ -392,6 +453,8 @@ impl Screen {
     pub(crate) fn prepend_display_row(&mut self) -> io::Result<()> {
         self.resize_display(self.rows + 1, self.columns)?;
         self.cells.rotate_right(self.columns);
+        self.continued.rotate_right(1);
+        self.continued[0] = false;
         self.row += 1;
         Ok(())
     }
@@ -452,10 +515,12 @@ impl Screen {
             character_sets: self.character_sets,
         });
         std::mem::swap(&mut self.cells, &mut self.inactive_cells);
+        std::mem::swap(&mut self.continued, &mut self.inactive_continued);
         std::mem::swap(&mut self.scroll_region, &mut self.inactive_scroll_region);
         std::mem::swap(&mut self.saved_cursor, &mut self.inactive_saved_cursor);
         let blank = self.blank();
         self.cells.fill(blank);
+        self.continued.fill(false);
         self.wrap_pending = false;
     }
 
@@ -466,10 +531,12 @@ impl Screen {
             return;
         };
         std::mem::swap(&mut self.cells, &mut self.inactive_cells);
+        std::mem::swap(&mut self.continued, &mut self.inactive_continued);
         std::mem::swap(&mut self.scroll_region, &mut self.inactive_scroll_region);
         std::mem::swap(&mut self.saved_cursor, &mut self.inactive_saved_cursor);
         // Release discarded combining suffixes; the next visit starts blank.
         self.inactive_cells.fill(Cell::default());
+        self.inactive_continued.fill(false);
         self.inactive_saved_cursor = None;
         self.inactive_scroll_region = (0, self.rows - 1);
         self.apply_saved_cursor(saved);
@@ -737,7 +804,7 @@ impl Screen {
                 self.clear_range(start..(self.row + 1) * self.columns);
             }
             self.column = 0;
-            self.line_feed();
+            self.advance_line(true);
             self.wrap_pending = false;
         }
         // With wrapping off, a wide glyph that cannot fit is ignored rather
@@ -746,7 +813,9 @@ impl Screen {
             return;
         }
         if self.insert_mode {
+            let continued = self.continued[self.row];
             self.insert_characters(width);
+            self.continued[self.row] = continued;
         }
         let index = self.row * self.columns + self.column;
         self.clear_range(index..index + width);
@@ -889,6 +958,10 @@ impl Screen {
         if count == 0 {
             return;
         }
+        self.continued[self.row] = false;
+        if self.row + 1 < self.rows {
+            self.continued[self.row + 1] = false;
+        }
         let start = self.row * self.columns + self.column;
         let end = (self.row + 1) * self.columns;
         // Inserting inside a wide glyph splits it: clear both halves first.
@@ -913,6 +986,10 @@ impl Screen {
         if count == 0 {
             return;
         }
+        self.continued[self.row] = false;
+        if self.row + 1 < self.rows {
+            self.continued[self.row + 1] = false;
+        }
         let start = self.row * self.columns + self.column;
         let end = (self.row + 1) * self.columns;
         self.clear_range(start..start + count);
@@ -928,6 +1005,10 @@ impl Screen {
         if count == 0 {
             return;
         }
+        self.continued[self.row] = false;
+        if self.row + 1 < self.rows {
+            self.continued[self.row + 1] = false;
+        }
         let start = self.row * self.columns + self.column;
         self.clear_range(start..start + count);
         self.wrap_pending = false;
@@ -936,6 +1017,10 @@ impl Screen {
     /// Blank part or all of the current row, including the cursor cell.
     /// Cursor coordinates stay unchanged; delayed wrapping is cancelled.
     pub fn erase_line(&mut self, mode: EraseMode) {
+        self.continued[self.row] = false;
+        if self.row + 1 < self.rows {
+            self.continued[self.row + 1] = false;
+        }
         let start = self.row * self.columns;
         let cursor = start + self.column;
         let end = start + self.columns;
@@ -949,8 +1034,9 @@ impl Screen {
     }
 
     /// Blank part or all of the grid, including the cursor cell, without homing.
-    /// This model has no saved lines, so only the visible grid is affected.
+    /// Retained history is unchanged; visible continuation flags are cleared.
     pub fn erase_display(&mut self, mode: EraseMode) {
+        self.continued.fill(false);
         let cursor = self.row * self.columns + self.column;
         let range = match mode {
             EraseMode::ToEnd => cursor..self.cells.len(),
@@ -993,6 +1079,7 @@ impl Screen {
             return;
         }
         self.shift_rows(self.row, self.scroll_region.1, count, false);
+        self.continued[self.row] = false;
         self.move_to(self.row, 0);
     }
 
@@ -1000,8 +1087,11 @@ impl Screen {
     pub fn scroll_up(&mut self, count: usize) {
         if count != 0 {
             if !self.is_alternate() && self.scroll_region == (0, self.rows - 1) {
-                for row in self.cells[..count.min(self.rows) * self.columns].chunks(self.columns) {
-                    self.scrollback.push(row);
+                for (index, row) in self.cells[..count.min(self.rows) * self.columns]
+                    .chunks(self.columns)
+                    .enumerate()
+                {
+                    self.scrollback.push(row, self.continued[index]);
                 }
             }
             self.shift_rows(self.scroll_region.0, self.scroll_region.1, count, false);
@@ -1020,7 +1110,24 @@ impl Screen {
     // Clamp before multiplication. Moving whole rows preserves wide-cell pairs
     // and moves combining suffix allocations without cloning or allocating.
     fn shift_rows(&mut self, top: usize, bottom: usize, count: usize, down: bool) {
-        let amount = count.min(bottom - top + 1) * self.columns;
+        let lines = count.min(bottom - top + 1);
+        let amount = lines * self.columns;
+        if down {
+            self.continued[top..=bottom].rotate_right(lines);
+            self.continued[top..top + lines].fill(false);
+            if top + lines <= bottom {
+                self.continued[top + lines] = false;
+            }
+        } else {
+            self.continued[top..=bottom].rotate_left(lines);
+            self.continued[bottom + 1 - lines..=bottom].fill(false);
+            if top != 0 || bottom != self.rows - 1 {
+                self.continued[top] = false;
+            }
+        }
+        if bottom + 1 < self.rows {
+            self.continued[bottom + 1] = false;
+        }
         let start = top * self.columns;
         let end = (bottom + 1) * self.columns;
         let blank = self.blank();
@@ -1036,11 +1143,17 @@ impl Screen {
     /// LF/IND: preserve the column and scroll only when at the bottom margin.
     /// Outside the region, move toward the physical bottom without scrolling.
     pub fn line_feed(&mut self) {
+        self.advance_line(false);
+    }
+
+    fn advance_line(&mut self, continued: bool) {
         self.wrap_pending = false;
         if self.row == self.scroll_region.1 {
             self.scroll_up(1);
-        } else {
-            self.row = (self.row + 1).min(self.rows - 1);
+            self.continued[self.row] = continued;
+        } else if self.row + 1 < self.rows {
+            self.row += 1;
+            self.continued[self.row] = continued;
         }
     }
 
