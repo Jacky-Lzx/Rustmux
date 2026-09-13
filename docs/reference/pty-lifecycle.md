@@ -73,3 +73,7 @@ It checks that reaping is complete with ECHILD and that the master is closed.
 Read and exit polling use five-second deadlines so ordinary regressions fail
 instead of waiting indefinitely. The final destructor wait still has the kernel
 blocking limitation described above.
+
+The CLI owns its shell through `pane::Pane`, which also retains the parser and
+screen and configures the master nonblocking. See [Window Model](windows.md#per-window-terminal-contents)
+for per-window ownership and the current integration boundary.

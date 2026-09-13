@@ -13,14 +13,13 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use nix::errno::Errno;
-use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use nix::poll::{PollFd, PollFlags, poll};
 use nix::sys::termios::{self, SetArg, Termios};
 use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGWINCH};
 
+use crate::pane::{MAX_CELLS, Pane};
 use crate::parser::MAX_REPLY_BYTES;
-use crate::pty::PtyShell;
-use crate::{parser::Parser, render::Renderer, screen::Screen};
+use crate::{render::Renderer, screen::Screen};
 
 // Bound pending keyboard input to 64 KiB; output retains at most one frame.
 const LIMIT: usize = 64 * 1024;
@@ -80,17 +79,13 @@ pub fn run(shell_path: &OsStr) -> io::Result<u8> {
     // Start the shell before changing the outer terminal, so exec failures
     // cannot leave it raw. Signal registration below creates no worker threads.
     check_size(size.ws_row, size.ws_col)?;
-    let screen = Screen::new(usize::from(size.ws_row), usize::from(size.ws_col))?;
-    let mut shell = PtyShell::spawn(shell_path, size.ws_row, size.ws_col)?;
-    let master = shell.master_fd().expect("new PTY is open");
-    let flags = OFlag::from_bits_truncate(fcntl(master, FcntlArg::F_GETFL)?);
-    fcntl(master, FcntlArg::F_SETFL(flags | OFlag::O_NONBLOCK))?;
+    let mut pane = Pane::spawn(shell_path, size.ws_row, size.ws_col)?;
     let signals = Signals::install()?;
     let mut terminal = Terminal::enter(file)?;
-    let result = forward(&mut terminal.file, &mut shell, &signals, screen);
+    let result = forward(&mut terminal.file, &mut pane, &signals);
     // Restore the user's terminal before potentially blocking child cleanup.
     let restored = terminal.restore();
-    drop(shell);
+    drop(pane);
     match result {
         Err(error) => Err(error),
         Ok(code) => restored.map(|()| code),
@@ -273,13 +268,8 @@ fn synchronized_pause(
     }
 }
 
-fn forward(
-    terminal: &mut File,
-    shell: &mut PtyShell,
-    signals: &Signals,
-    mut screen: Screen,
-) -> io::Result<u8> {
-    let mut parser = Parser::new();
+fn forward(terminal: &mut File, pane: &mut Pane, signals: &Signals) -> io::Result<u8> {
+    let (shell, parser, screen) = pane.parts_mut();
     let mut renderer = Renderer::default();
     let mut to_shell = VecDeque::new();
     let mut to_terminal = VecDeque::new();
@@ -312,9 +302,9 @@ fn forward(
                 dirty = true;
             }
         }
-        let paused = synchronized_pause(&mut screen, &mut synchronized_since, Instant::now(), eof);
+        let paused = synchronized_pause(screen, &mut synchronized_since, Instant::now(), eof);
         if dirty && !paused && to_terminal.is_empty() && (eof || Instant::now() >= next_frame) {
-            renderer.render(&screen, &mut FrameWriter(&mut to_terminal))?;
+            renderer.render(screen, &mut FrameWriter(&mut to_terminal))?;
             dirty = false;
             next_frame = Instant::now() + FRAME_INTERVAL;
         }
@@ -409,7 +399,7 @@ fn forward(
                 match shell.read(&mut bytes[..read_limit]) {
                     Ok(0) => eof = true,
                     Ok(n) => {
-                        parser.advance_with_replies(&mut screen, &bytes[..n], &mut |reply| {
+                        parser.advance_with_replies(screen, &bytes[..n], &mut |reply| {
                             if status.is_none() {
                                 to_shell.extend(reply);
                             }
@@ -429,7 +419,7 @@ fn forward(
                 eof = true;
             }
             if eof {
-                parser.finish(&mut screen);
+                parser.finish(screen);
                 dirty = true; // Always flush the final model before normal exit.
                 eof_at = Some(Instant::now());
             }

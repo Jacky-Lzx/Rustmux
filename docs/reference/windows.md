@@ -39,8 +39,8 @@ No terminal output or other I/O occurs inside this model.
 This intentionally separates the current single-pane implementation from the
 broader `main` window/pane implementation, which also includes layouts, floating
 terminals and persistent sessions. This model is not an H05 feature-acceptance
-claim. The next integration must attach per-window PTY/parser/screen state,
-continue reading inactive windows, route keyboard input to the active window,
+claim. The next event-loop integration must continue reading inactive windows,
+route keyboard input to the active window,
 and synchronize display and modes when focus changes.
 
 ## Verification
@@ -51,3 +51,33 @@ transfer. A parser/screen fixture verifies that an incomplete UTF-8 sequence,
 private input modes and background output stay with their originating windows.
 The unit test in `src/window.rs` exercises the last available ID and exhaustion.
 These are model tests, not interactive multi-window or process-preservation tests.
+
+## Per-window terminal contents
+
+`pane::Pane` now supplies concrete contents for `Windows<Pane>`: one `PtyShell`,
+one incremental `Parser` and one `Screen`. The current single-window CLI uses
+this same container. `Pane::spawn` validates the grid (at most 65,536 cells),
+allocates it before spawning, and sets the PTY master nonblocking. Failure after
+spawning drops the owned shell, closing the master and reclaiming the direct child.
+Follow the existing single-threaded spawning requirement of `PtyShell`.
+
+The caller polls and reads `shell_mut()`, passes received bytes to
+`process_output`, and sends generated replies back to that pane's shell. Reserve
+reply capacity using `parser::MAX_REPLY_BYTES` before reading. `finish_output`
+flushes partial parser input on EOF. Raw shell access is deliberately low-level:
+readiness, queue limits, matching PTY/model resize and process status remain the
+caller's responsibility. The CLI retains its existing resize, EOF, backpressure,
+signal and outer-terminal restoration behavior.
+
+The outer renderer stays outside Pane because it describes the physical output
+stream, not an individual child's screen. Switching displayed contents must
+therefore account for the previously displayed grid and modes. Output queues,
+frame deadlines and synchronized-output timers still live in the existing event
+loop; they have not yet been split into per-window runtime state.
+
+`cargo test --test panes` starts two real shells in `Windows<Pane>`, verifies
+nonblocking masters, stable PIDs across selection, background screen updates,
+separate parser/mode state and reclamation of one child while the other continues
+executing commands. Startup errors and invalid dimensions are also covered.
+This exercises process ownership but does not add an interactive multi-window
+CLI: multi-PTY polling, focus shortcuts and input routing are the next integration.

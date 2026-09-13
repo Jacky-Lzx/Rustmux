@@ -1,5 +1,6 @@
 //! Building blocks for the human-reviewed Rustmux implementation.
 
+pub mod pane;
 pub mod parser;
 pub mod pty;
 pub mod render;
