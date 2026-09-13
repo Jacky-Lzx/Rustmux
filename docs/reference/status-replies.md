@@ -44,7 +44,9 @@ malformed queries, incomplete-stream handling and the reply-size bound.
 The real CLI PTY test checks both queries and 20,000 status requests, producing
 more reply bytes than fit in the queue while the child reads concurrently.
 
-Device attributes (DA), private DSR, OSC foreground/background color queries,
+Secondary/tertiary device attributes, private DSR, OSC foreground/background color queries,
 and general terminal capability queries remain unsupported.
 [Mode queries](mode-queries.md) support the explicitly listed ANSI/private modes. In particular, this step
 does not resolve applications waiting for an OSC background-color reply.
+
+[Primary device attributes](device-attributes.md) provide a conservative DA1 reply.

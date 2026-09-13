@@ -349,6 +349,18 @@ time.sleep(0.1)
 receive(b"\x1b[?7;1$y\x1b[0n" * 10000)
 writer.join(timeout=2)
 assert not writer.is_alive()
+os.write(1, b"\x1b[c\x1b[0c\x1bZ")
+receive(b"\x1b[?1;0c" * 3)
+def identity_flood():
+    data = b"\x1b[c" * 10000
+    while data:
+        data = data[os.write(1, data):]
+writer = threading.Thread(target=identity_flood)
+writer.start()
+time.sleep(0.1)
+receive(b"\x1b[?1;0c" * 10000)
+writer.join(timeout=2)
+assert not writer.is_alive()
 os.write(1, b"\x1b[?6l\x1b[r\x1b[2J\x1b[HREPLIES_OK")
 """
 s = Session()
@@ -643,8 +655,8 @@ def receive(expected):
     assert data == expected, repr(data)
 os.write(1, b"\x1b[2J\x1b[HSYNC_READY")
 receive(b"x")
-os.write(1, b"\x1b[?2026h\x1b[2J\x1b[HPARTIAL_HIDDEN\x1b[?2026$p")
-receive(b"\x1b[?2026;1$y")
+os.write(1, b"\x1b[?2026h\x1b[2J\x1b[HPARTIAL_HIDDEN\x1b[?2026$p\x1b[c")
+receive(b"\x1b[?2026;1$y\x1b[?1;0c")
 time.sleep(0.2)
 os.write(1, b"\x1b[2J\x1b[HSYNC_COMPLETE\x1b[?2026l")
 receive(b"x")

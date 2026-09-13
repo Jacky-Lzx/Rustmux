@@ -8,6 +8,10 @@ pub const MAX_REPLY_BYTES: usize = 4 + 2 * (usize::BITS as usize / 3 + 1);
 
 use crate::screen::{CursorShape, EraseMode, MouseTracking, Screen};
 
+// Conservative VT100-family identity: VT101 with no optional hardware features.
+// This compatibility reply does not claim complete VT101 emulation.
+const PRIMARY_DA: &[u8] = b"\x1b[?1;0c";
+
 #[derive(Debug, Default, Clone, Copy)]
 enum State {
     #[default]
@@ -202,6 +206,11 @@ impl Parser {
                 State::Ground
             }
             State::Escape => match byte {
+                b'Z' => {
+                    // Legacy DECID alias for primary device attributes.
+                    reply(PRIMARY_DA);
+                    State::Ground
+                }
                 b'=' | b'>' => {
                     screen.set_application_keypad(byte == b'=');
                     State::Ground
@@ -473,6 +482,7 @@ impl Parser {
             return;
         }
         match command {
+            b'c' if first == 0 => reply(PRIMARY_DA),
             b'n' => match first {
                 5 => reply(b"\x1b[0n"),
                 6 => {
