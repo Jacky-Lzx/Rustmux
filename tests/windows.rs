@@ -183,12 +183,20 @@ fn reordering_preserves_identity_contents_history_and_uses_current_order() {
     assert_eq!(windows.select_last(), Some(b));
     assert_eq!(windows.select_last(), Some(c));
     assert!(windows.move_active_right());
-    assert!(!windows.move_active_right());
+    assert!(windows.move_active_right()); // C wraps from the end to the start.
+    assert_eq!(
+        windows.iter().map(|w| w.id()).collect::<Vec<_>>(),
+        vec![c, a, b]
+    );
     assert_eq!(windows.select_next(), Some(a));
     assert_eq!(windows.select_previous(), Some(c));
+    assert!(windows.move_active_left()); // C wraps to the end.
+    assert_eq!(
+        windows.iter().map(|w| w.id()).collect::<Vec<_>>(),
+        vec![a, b, c]
+    );
     assert!(windows.move_active_left());
     assert!(windows.move_active_left());
-    assert!(!windows.move_active_left());
     assert_eq!(
         windows.iter().map(|w| w.id()).collect::<Vec<_>>(),
         vec![c, a, b]

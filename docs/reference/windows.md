@@ -284,7 +284,9 @@ input, last-window restoration and natural exit during confirmation.
 ## Reordering windows
 
 Ctrl-B followed by `<` or `>` swaps the active window with its left or right
-neighbor. Moving past either edge is a no-op; it does not wrap. The active shell,
+neighbor. Moving left from the first position wraps to the end; moving right
+from the last position wraps to the start. Other windows retain their relative
+order. Empty and single-window collections are unchanged. The active shell,
 stable ID, name, contents and last-window record are preserved. Numeric shortcuts
 and next/previous selection follow the resulting display order, as does the
 successor/predecessor rule when a window closes. New windows still append at the

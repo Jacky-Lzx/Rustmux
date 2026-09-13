@@ -152,24 +152,35 @@ impl<T> Windows<T> {
     }
 
     /// Move the active window one position left without changing its identity or history.
-    /// Returns false for an empty collection or when already at the left edge.
+    /// At the left edge, move to the end while preserving the other windows' order.
+    /// Returns false only for empty or single-window collections.
     pub fn move_active_left(&mut self) -> bool {
-        if self.active == 0 {
+        if self.entries.len() <= 1 {
             return false;
         }
-        self.entries.swap(self.active, self.active - 1);
-        self.active -= 1;
+        if self.active == 0 {
+            self.entries.rotate_left(1);
+            self.active = self.entries.len() - 1;
+        } else {
+            self.entries.swap(self.active, self.active - 1);
+            self.active -= 1;
+        }
         true
     }
 
-    /// Move the active window one position right, stopping at the right edge.
+    /// Move the active window one position right, wrapping from the end to the start.
     /// Window contents, focus identity and last-window history remain attached.
     pub fn move_active_right(&mut self) -> bool {
-        if self.active + 1 >= self.entries.len() {
+        if self.entries.len() <= 1 {
             return false;
         }
-        self.entries.swap(self.active, self.active + 1);
-        self.active += 1;
+        if self.active + 1 == self.entries.len() {
+            self.entries.rotate_right(1);
+            self.active = 0;
+        } else {
+            self.entries.swap(self.active, self.active + 1);
+            self.active += 1;
+        }
         true
     }
 
