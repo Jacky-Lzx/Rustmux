@@ -19,7 +19,7 @@ fn full_grid_has_explicit_rows_and_never_uses_newlines() {
     let before = screen.clone();
     assert_eq!(
         frame(&screen),
-        b"\x1b[?25l\x1b[0m\x1b[?2004l\x1b[?1l\x1b>\x1b[1 q\x1b[?1004l\x1b[1;1Habc\x1b[2;1Hdef\x1b[0m\x1b[2;3H\x1b[?25h"
+        b"\x1b[?25l\x1b[0m\x1b[?2004l\x1b[?1l\x1b>\x1b[1 q\x1b[?1004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[1;1Habc\x1b[2;1Hdef\x1b[0m\x1b[2;3H\x1b[?25h"
     );
     assert_eq!(screen, before);
     assert!(screen.wrap_pending());
@@ -28,7 +28,7 @@ fn full_grid_has_explicit_rows_and_never_uses_newlines() {
 #[test]
 fn exact_style_encoding_resets_attributes_between_cells() {
     let screen = screen(1, 3, "\x1b[1;2;3;4;5;7;8;9;31;48;2;0;127;255mAB\x1b[0mC");
-    assert_eq!(frame(&screen), b"\x1b[?25l\x1b[0m\x1b[?2004l\x1b[?1l\x1b>\x1b[1 q\x1b[?1004l\x1b[1;1H\x1b[0;1;2;3;4;5;7;8;9;38;5;1;48;2;0;127;255mAB\x1b[0mC\x1b[0m\x1b[1;3H\x1b[?25h");
+    assert_eq!(frame(&screen), b"\x1b[?25l\x1b[0m\x1b[?2004l\x1b[?1l\x1b>\x1b[1 q\x1b[?1004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[1;1H\x1b[0;1;2;3;4;5;7;8;9;38;5;1;48;2;0;127;255mAB\x1b[0mC\x1b[0m\x1b[1;3H\x1b[?25h");
 }
 
 #[test]
@@ -36,7 +36,7 @@ fn wide_leaders_and_suffixes_are_emitted_once() {
     let screen = screen(1, 4, "中e\u{301}X");
     assert_eq!(
         frame(&screen),
-        "\x1b[?25l\x1b[0m\x1b[?2004l\x1b[?1l\x1b>\x1b[1 q\x1b[?1004l\x1b[1;1H中e\u{301}X\x1b[0m\x1b[1;4H\x1b[?25h"
+        "\x1b[?25l\x1b[0m\x1b[?2004l\x1b[?1l\x1b>\x1b[1 q\x1b[?1004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[1;1H中e\u{301}X\x1b[0m\x1b[1;4H\x1b[?25h"
             .as_bytes()
     );
 }

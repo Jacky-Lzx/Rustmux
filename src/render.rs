@@ -2,7 +2,7 @@
 
 use std::io::{self, Write};
 
-use crate::screen::Screen;
+use crate::screen::{MouseTracking, Screen};
 use crate::style::{Color, Style};
 
 /// Draw the active grid from the top-left corner onto an equally sized terminal.
@@ -15,7 +15,7 @@ use crate::style::{Color, Style};
 /// It does not flush. Errors may leave a partial frame; the caller must handle
 /// cleanup or redraw. For nonblocking output, render into a buffer and queue it.
 pub fn render(screen: &Screen, output: &mut impl Write) -> io::Result<()> {
-    render_frame(screen, output, true)
+    render_frame(screen, output, true, true)
 }
 
 /// Stateful rendering for an ordered output stream. Each successful frame must
@@ -25,12 +25,15 @@ pub fn render(screen: &Screen, output: &mut impl Write) -> io::Result<()> {
 #[derive(Default)]
 pub struct Renderer {
     focus_reporting: Option<bool>,
+    mouse: Option<(MouseTracking, bool)>,
 }
 
 impl Renderer {
     pub fn render(&mut self, screen: &Screen, output: &mut impl Write) -> io::Result<()> {
         let synchronize = self.focus_reporting != Some(screen.focus_reporting());
-        render_frame(screen, output, synchronize)?;
+        let mouse = (screen.mouse_tracking(), screen.sgr_mouse());
+        render_frame(screen, output, synchronize, self.mouse != Some(mouse))?;
+        self.mouse = Some(mouse);
         self.focus_reporting = Some(screen.focus_reporting());
         Ok(())
     }
@@ -40,6 +43,7 @@ fn render_frame(
     screen: &Screen,
     output: &mut impl Write,
     synchronize_focus: bool,
+    synchronize_mouse: bool,
 ) -> io::Result<()> {
     output.write_all(b"\x1b[?25l\x1b[0m")?;
     // The single active pane determines how the outer terminal encodes paste.
@@ -70,6 +74,19 @@ fn render_frame(
         } else {
             b"\x1b[?1004l"
         })?;
+    }
+    if synchronize_mouse {
+        // Clear old tracking before selecting the new exclusive mode. Set the
+        // encoding first so the first new event uses the requested format.
+        output.write_all(b"\x1b[?1000l\x1b[?1002l\x1b[?1003l")?;
+        output.write_all(if screen.sgr_mouse() {
+            b"\x1b[?1006h"
+        } else {
+            b"\x1b[?1006l"
+        })?;
+        if screen.mouse_tracking() != MouseTracking::Off {
+            write!(output, "\x1b[?{}h", screen.mouse_tracking() as u16)?;
+        }
     }
     let mut style = Style::default();
     for row in 0..screen.dimensions().0 {

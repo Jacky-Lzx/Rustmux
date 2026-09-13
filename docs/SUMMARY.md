@@ -30,3 +30,4 @@
 - [Cursor Shape](reference/cursor-shape.md)
 - [Focus Reporting](reference/focus-reporting.md)
 - [Terminal Mode Queries](reference/mode-queries.md)
+- [Mouse Reporting](reference/mouse-reporting.md)

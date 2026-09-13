@@ -4,7 +4,7 @@
 the active screen. The caller supplies any `std::io::Write`, such as a byte
 buffer. The renderer borrows the model without changing it and does not flush.
 The CLI uses `Renderer::render` with a bounded frame queue in its event loop.
-Renderer remembers the last queued focus-reporting mode and synchronizes it only
+Renderer remembers the last queued focus-reporting and mouse modes and synchronizes them only
 on the first frame or a change. The standalone `render` function always includes
 that synchronization. See [Focus Reporting](focus-reporting.md). A Renderer is
 specific to one ordered output stream; recreate it if queued output is discarded.

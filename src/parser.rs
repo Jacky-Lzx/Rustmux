@@ -6,7 +6,7 @@
 /// reply with one usize mode number and a one-digit status also fits.
 pub const MAX_REPLY_BYTES: usize = 4 + 2 * (usize::BITS as usize / 3 + 1);
 
-use crate::screen::{CursorShape, EraseMode, Screen};
+use crate::screen::{CursorShape, EraseMode, MouseTracking, Screen};
 
 #[derive(Debug, Default, Clone, Copy)]
 enum State {
@@ -339,6 +339,8 @@ impl Parser {
                     (true, 6) => Some(screen.origin_mode()),
                     (true, 7) => Some(screen.auto_wrap()),
                     (true, 25) => Some(screen.cursor_visible()),
+                    (true, 1000 | 1002 | 1003) => Some(screen.mouse_tracking() as usize == mode),
+                    (true, 1006) => Some(screen.sgr_mouse()),
                     (true, 1004) => Some(screen.focus_reporting()),
                     (true, 1049) => Some(screen.is_alternate()),
                     (true, 2004) => Some(screen.bracketed_paste()),
@@ -389,6 +391,21 @@ impl Parser {
                     }
                     if *mode == Some(1) {
                         screen.set_application_cursor_keys(command == b'h');
+                    }
+                    if let Some(mode @ (1000 | 1002 | 1003)) = *mode {
+                        let tracking = if command == b'l' {
+                            MouseTracking::Off
+                        } else {
+                            match mode {
+                                1000 => MouseTracking::Button,
+                                1002 => MouseTracking::Drag,
+                                _ => MouseTracking::Any,
+                            }
+                        };
+                        screen.set_mouse_tracking(tracking);
+                    }
+                    if *mode == Some(1006) {
+                        screen.set_sgr_mouse(command == b'h');
                     }
                     if *mode == Some(1004) {
                         screen.set_focus_reporting(command == b'h');

@@ -15,12 +15,14 @@ See [XTerm DECRQM/DECRPM](https://invisible-island.net/xterm/ctlseqs/ctlseqs.htm
 | DEC private | 6 | Origin mode |
 | DEC private | 7 | Automatic wrapping |
 | DEC private | 25 | Cursor visibility |
+| DEC private | 1000 / 1002 / 1003 | Mouse tracking |
+| DEC private | 1006 | SGR mouse encoding |
 | DEC private | 1004 | Focus reporting |
 | DEC private | 1049 | Alternate screen |
 | DEC private | 2004 | Bracketed paste |
 
 All other numbers report 0, including unsupported DECSET aliases such as 66,
-mouse modes and synchronized output mode 2026. Keypad ESC = / ESC > and cursor
+unsupported mouse extensions and synchronized output mode 2026. Keypad ESC = / ESC > and cursor
 shape commands remain supported separately; that does not imply support for
 other mode-number aliases. ANSI and private numbers are distinct namespaces.
 An omitted Ps is treated as 0, which is unrecognized.

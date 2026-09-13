@@ -8,6 +8,7 @@ Screen stores the requested mode, initially disabled. It is global across
 cursor saves and main/alternate grids. Resize and DECSTR preserve it; RIS clears
 it. This is a reporting request, not a stored observation of actual window focus.
 There is no mouse reporting dependency or multi-pane focus routing yet.
+[Mouse reporting](mouse-reporting.md) uses independent modes.
 
 ## Runtime synchronization
 

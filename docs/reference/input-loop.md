@@ -95,7 +95,7 @@ are required. Local validation is on macOS; Linux results require the CI run.
 
 ## Current compatibility
 
-The CLI now depends on our parser's supported subset. Queries beyond standard DSR and [DECRQM](mode-queries.md), mouse modes and full emoji shaping are not implemented. Programs requiring
+The CLI now depends on our parser's supported subset. Queries beyond standard DSR and [DECRQM](mode-queries.md), mouse extensions and full emoji shaping are not implemented. Programs requiring
 those features may display incorrectly or wait for an unsupported terminal reply.
 Full-screen editor compatibility is not yet an acceptance claim. There is no
 split layout or persistent session support.
@@ -104,3 +104,5 @@ split layout or persistent session support.
 reply capacity participates in PTY read backpressure.
 [Focus Reporting](focus-reporting.md) describes single-pane focus events and
 mode synchronization on changes.
+
+[Mouse Reporting](mouse-reporting.md) describes supported single-pane mouse modes.

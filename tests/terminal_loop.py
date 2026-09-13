@@ -573,6 +573,62 @@ for terminate in (False, True):
     finally:
         s.close()
 
+# Single-pane coordinates and event bytes are forwarded without translation.
+mouse_probe = r"""
+import os, select, time, tty
+tty.setraw(0)
+def receive(expected):
+    data = bytearray()
+    end = time.monotonic() + 6
+    while len(data) < len(expected):
+        assert time.monotonic() < end, repr(data)
+        if select.select([0], [], [], 0.1)[0]:
+            data.extend(os.read(0, len(expected) - len(data)))
+    assert data == expected, repr(data)
+for mode, encoding, payload in [
+    (1000, 1006, b"\x1b[<0;10;5M\x1b[<0;10;5m"),
+    (1002, 1006, b"\x1b[<32;11;6M\x1b[<0;11;6m"),
+    (1003, 1006, b"\x1b[<35;12;7M\x1b[<64;12;7M\x1b[<65;12;7M"),
+    (1000, 0, b"\x1b[M *%\x1b[M#*%"),
+]:
+    os.write(1, ("\x1b[?%dh\x1b[?1006%s\x1b[2J\x1b[HMOUSE_%d_%d" % (mode, 'h' if encoding else 'l', mode, encoding)).encode())
+    receive(payload)
+os.write(1, b"\x1b[?1000l\x1b[2J\x1b[HMOUSE_OFF")
+receive(b"x")
+os.write(1, b"\x1b[?1003;1006h\x1b[2J\x1b[HMOUSE_EXIT")
+receive(b"x")
+"""
+for terminate in (False, True):
+    s = Session()
+    try:
+        s.expect(b"RUSTMUX_READY> ")
+        s.send(("exec python3 -c " + shlex.quote(mouse_probe) + "\n").encode())
+        for mode, encoding, payload in [
+            (1000, 1006, b"\x1b[<0;10;5M\x1b[<0;10;5m"),
+            (1002, 1006, b"\x1b[<32;11;6M\x1b[<0;11;6m"),
+            (1003, 1006, b"\x1b[<35;12;7M\x1b[<64;12;7M\x1b[<65;12;7M"),
+            (1000, 0, b"\x1b[M *%\x1b[M#*%"),
+        ]:
+            s.expect(("\r\nMOUSE_%d_%d\r\n" % (mode, encoding)).encode())
+            assert ("\x1b[?%dh" % mode).encode() in s.last_frame
+            assert (b"\x1b[?1006h" if encoding else b"\x1b[?1006l") in s.last_frame
+            s.send(payload[:3])
+            s.send(payload[3:])
+        s.expect(b"\r\nMOUSE_OFF\r\n")
+        assert b"\x1b[?1000l" in s.last_frame
+        s.send(b"x")
+        s.expect(b"\r\nMOUSE_EXIT\r\n")
+        if terminate:
+            os.kill(s.app_pid, signal.SIGTERM)
+            s.finish(128 + signal.SIGTERM)
+        else:
+            s.send(b"x")
+            s.finish(0)
+        for mode in (1000, 1002, 1003, 1006):
+            assert s.output.rfind(("\x1b[?%dl" % mode).encode()) > s.output.rfind(("\x1b[?%dh" % mode).encode())
+    finally:
+        s.close()
+
 # A model-allocation limit error during resize must restore the terminal too.
 s = Session()
 try:
