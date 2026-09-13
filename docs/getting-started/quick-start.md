@@ -43,7 +43,9 @@ resize both model grids and the PTY in every window. The bar reserves one row;
 panes share the remaining content area, with one-cell separators. The bar
 is hidden when only one row is available. Outer dimensions must fit within
 65,536 cells.
-There is no scrollback: old text scrolled out of the grid is discarded.
+Primary-screen rows scrolled out of the grid enter bounded
+[history storage](../reference/scrollback.md). Interactive history browsing and
+resize reflow are not yet available.
 
 Only the documented terminal-control subset is supported. Full-screen editors,
 terminal queries and extended keyboard/mouse modes are not yet fully supported;

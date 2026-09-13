@@ -10,6 +10,7 @@ mod prompt;
 pub mod pty;
 pub mod render;
 pub mod screen;
+mod scrollback;
 pub mod style;
 pub mod terminal;
 

@@ -41,3 +41,4 @@
 - [Pane Contents and Layout Ownership](reference/pane-ownership.md)
 - [Composing Pane Screens](reference/pane-composition.md)
 - [Interactive Splits](reference/interactive-splits.md)
+- [Scrollback Storage](reference/scrollback.md)

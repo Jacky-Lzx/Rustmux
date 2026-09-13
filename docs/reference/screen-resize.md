@@ -8,7 +8,8 @@ size. The CLI now applies both operations when the outer terminal changes size.
 
 The top-left overlap is retained, including styles and combining suffixes.
 There is no text reflow: shrinking discards right-hand columns and bottom rows;
-growing later cannot recover them. New cells use the relevant grid's writing
+growing later cannot recover them. Existing [scrollback](scrollback.md) survives
+at its original widths, but resize does not add clipped content to that history. New cells use the relevant grid's writing
 background with default foreground and no decorations. While alternate is active,
 the saved main style supplies the main grid's background.
 

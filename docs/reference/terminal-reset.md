@@ -4,7 +4,7 @@ ESC c (RIS) returns the implemented terminal model to its initial state at the
 current dimensions. It follows the reset command in
 [XTerm's control sequence reference](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html).
 
-The reset clears both cell grids, releases combining suffixes and makes the
+The reset clears both cell grids and scrollback, releases combining suffixes and makes the
 main grid active. It removes all saved cursor state and restores:
 
 - Cursor at row 1, column 1, visible, with no pending wrap.

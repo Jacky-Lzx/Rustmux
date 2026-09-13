@@ -6,7 +6,15 @@ use unicode_width::UnicodeWidthChar;
 const MAX_COMBINING_SCALARS: usize = 16;
 const DEFAULT_TAB_WIDTH: usize = 8;
 
-use crate::style::{Cell, Style};
+use crate::{
+    scrollback::Scrollback,
+    style::{Cell, Style},
+};
+
+/// Maximum retained physical history rows per screen.
+pub const SCROLLBACK_MAX_LINES: usize = crate::scrollback::MAX_LINES;
+/// Maximum retained history cells, independent of the visible grid limit.
+pub const SCROLLBACK_MAX_CELLS: usize = crate::scrollback::MAX_CELLS;
 
 /// DECSCUSR shapes; blinking is delegated to the outer terminal.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -80,13 +88,14 @@ struct SavedCursor {
 ///
 /// The text API accepts printable ASCII, LF, CR and BS. Cursor movement and
 /// erasure are separate operations used by the parser. Grapheme-cluster shaping
-/// and scrollback belong to later steps.
+/// and interactive history browsing belong to later steps.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Screen {
     rows: usize,
     columns: usize,
     cells: Vec<Cell>,
     inactive_cells: Vec<Cell>,
+    scrollback: Scrollback,
     saved_main_cursor: Option<SavedCursor>,
     saved_cursor: Option<SavedCursor>,
     inactive_saved_cursor: Option<SavedCursor>,
@@ -113,6 +122,21 @@ pub struct Screen {
 }
 
 impl Screen {
+    /// Number of retained primary-screen rows, ordered oldest to newest.
+    pub fn history_len(&self) -> usize {
+        self.scrollback.len()
+    }
+
+    /// Read a retained physical row at its original width, including cell styles.
+    pub fn history_row(&self, index: usize) -> Option<&[Cell]> {
+        self.scrollback.row(index)
+    }
+
+    /// Discard primary-screen history without changing either visible grid or modes.
+    pub fn clear_history(&mut self) {
+        self.scrollback = Scrollback::default();
+    }
+
     /// Create a blank screen with the cursor at the upper-left corner.
     pub fn new(rows: usize, columns: usize) -> io::Result<Self> {
         let length = rows
@@ -140,6 +164,7 @@ impl Screen {
             columns,
             cells,
             inactive_cells,
+            scrollback: Scrollback::default(),
             saved_main_cursor: None,
             saved_cursor: None,
             inactive_saved_cursor: None,
@@ -171,6 +196,7 @@ impl Screen {
     pub fn reset(&mut self) {
         self.cells.fill(Cell::default());
         self.inactive_cells.fill(Cell::default());
+        self.clear_history();
         self.saved_main_cursor = None;
         self.saved_cursor = None;
         self.inactive_saved_cursor = None;
@@ -287,6 +313,7 @@ impl Screen {
             &mut resized.inactive_cells,
             columns,
         );
+        resized.scrollback = std::mem::take(&mut self.scrollback);
         *self = resized;
         Ok(())
     }
@@ -903,6 +930,11 @@ impl Screen {
     /// Scroll the entire region upward, retaining cursor coordinates.
     pub fn scroll_up(&mut self, count: usize) {
         if count != 0 {
+            if !self.is_alternate() && self.scroll_region == (0, self.rows - 1) {
+                for row in self.cells[..count.min(self.rows) * self.columns].chunks(self.columns) {
+                    self.scrollback.push(row);
+                }
+            }
             self.shift_rows(self.scroll_region.0, self.scroll_region.1, count, false);
             self.wrap_pending = false;
         }
