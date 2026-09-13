@@ -875,7 +875,7 @@ prefix_probe = r"""
 import os, select, time, tty
 tty.setraw(0)
 os.write(1, b"\x1b[?2004h\x1b[2J\x1b[HPREFIX_READY")
-expected = b"\x02n\x02z\x1b[200~paste\x02c\x02n\x02p\x021\x020\x02l\x02&\x02<\x02>\x1b[201~"
+expected = b"\x02n\x02z\x1b[200~paste\x02c\x02n\x02p\x021\x020\x02\t\x02&\x02<\x02>\x1b[201~"
 data = bytearray()
 end = time.monotonic() + 5
 while len(data) < len(expected):
@@ -894,7 +894,7 @@ try:
         s.send(("exec python3 " + shlex.quote(source.name) + "\n").encode())
         s.expect(b"PREFIX_READY")
         s.send(b"\x02\x02n\x02z\x1b[20")
-        s.send(b"0~paste\x02c\x02n\x02p\x021\x020\x02l\x02&\x02<\x02>\x1b[201~")
+        s.send(b"0~paste\x02c\x02n\x02p\x021\x020\x02\t\x02&\x02<\x02>\x1b[201~")
         s.finish(0)
         assert any(b"PREFIX_PASSED" in row for row in s.last_rows)
 finally:
@@ -909,7 +909,7 @@ with tempfile.TemporaryDirectory(prefix="rustmux-window-spawn-") as directory:
     s = Session(shell=shell)
     try:
         s.expect(b"RUSTMUX_READY> ")
-        s.send(b"\x02c")
+        s.send(b'\x02c\x02%\x02"')
         s.send(b"printf '\\n%s%s\\n' SPAWN_ SURVIVED; exit 0\n")
         s.finish(0)
         assert any(b"SPAWN_SURVIVED" in row for row in s.last_rows)
@@ -1127,10 +1127,10 @@ try:
     s.send(b"\x020printf '\\nSELECTED:%s\\n' $WIN\n")
     s.expect(b"SELECTED:10")
     expect_bar(s, b"*10:shell")
-    s.send(b"\x02lprintf '\\nLAST:%s\\n' $WIN\n")
+    s.send(b"\x02\tprintf '\\nLAST:%s\\n' $WIN\n")
     s.expect(b"LAST:1")
     expect_bar(s, b"*1:shell")
-    s.send(b"\x02lprintf '\\nBACK:%s\\n' $WIN\n")
+    s.send(b"\x02\tprintf '\\nBACK:%s\\n' $WIN\n")
     s.expect(b"BACK:10")
     expect_bar(s, b"*10:shell")
     s.send(b"\x021exit 0\n")
@@ -1227,7 +1227,7 @@ try:
     s.send(b"\x02<printf '\\nMOVED:%s\\n' $WIN\n")
     s.expect(b"MOVED:C")
     expect_bar(s, b"1:A  *2:C  3:B")
-    s.send(b"\x02lprintf '\\nLAST:%s\\n' $WIN\n")
+    s.send(b"\x02\tprintf '\\nLAST:%s\\n' $WIN\n")
     s.expect(b"LAST:B")
     expect_bar(s, b"*3:B")
     s.send(b"\x022\x02>\x02>printf '\\nRIGHT:%s\\n' $WIN\n")
@@ -1241,9 +1241,91 @@ try:
     expect_bar(s, b"*1:C  2:A  3:B")
     s.send(b"exit 0\n")
     expect_bar(s, b"*1:A  2:B")
-    s.send(b"\x02lprintf '\\nSURVIVING:%s\\n' $WIN\n")
+    s.send(b"\x02\tprintf '\\nSURVIVING:%s\\n' $WIN\n")
     s.expect(b"SURVIVING:B")
     expect_bar(s, b"*2:B")
+    os.kill(s.app_pid, signal.SIGTERM)
+    s.finish(128 + signal.SIGTERM)
+finally:
+    s.close()
+
+# Interactive splits retain all screens, route keys, resize and close only one pane.
+s = Session()
+try:
+    s.expect(b"RUSTMUX_READY> ")
+    s.send(b"stty -echo; VAR=A; printf '\\033[2J\\033[H%s%s\\n' MARK _A\n")
+    s.expect(b"MARK_A")
+    s.send(b"\x02%")
+    s.expect(b"RUSTMUX_READY>")
+    s.send(b"stty -echo; VAR=B; printf '\\033[2J\\033[H%s%s:%s\\n' RIGHT _B \"$(stty size)\"\n")
+    s.expect(b"RIGHT_B:23 40")
+    assert any(b"MARK_A" in row for row in s.last_rows)
+    s.send(b"\x02hprintf '\\033[2J\\033[HLEFT:%s:%s\\n' $VAR \"$(stty size)\"\n")
+    s.expect(b"LEFT:A:23 39")
+    s.send(b'\x02"')
+    s.expect(b"RUSTMUX_READY>")
+    s.send(b"stty -echo; VAR=C; printf '\\033[2J\\033[HLOWER:%s:%s\\n' $VAR \"$(stty size)\"\n")
+    s.expect(b"LOWER:C:11 39")
+    assert any(b"RIGHT_B:23 40" in row for row in s.last_rows)
+    s.send(b"\x02kprintf '\\033[2J\\033[HUP:%s:%s\\n' $VAR \"$(stty size)\"\n")
+    s.expect(b"UP:A:11 39")
+    s.send(b"\x02lprintf '\\033[2J\\033[HFOCUS:%s\\n' $VAR\n")
+    s.expect(b"FOCUS:B")
+    s.send(b"\x02oprintf '\\033[2J\\033[HCYCLE:%s\\n' $VAR\n")
+    s.expect(b"CYCLE:A")
+    fcntl.ioctl(s.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
+    s.read(0.1)
+    s.send(b"printf '\\033[2J\\033[HRESIZED:%s:%s\\n' $VAR \"$(stty size)\"\n")
+    s.expect(b"RESIZED:A:14 49")
+    s.send(b"\x02jexit 7\n")
+    end = time.monotonic() + 3
+    while any(b"LOWER:C" in row for row in s.last_rows):
+        s.read()
+        assert time.monotonic() < end, s.last_rows
+    s.send(b"printf '\\033[2J\\033[HAFTER:%s:%s\\n' $VAR \"$(stty size)\"\n")
+    s.expect(b"AFTER:B:29 50")
+    s.send(b"\x02hprintf '\\033[2J\\033[HRESTORED:%s:%s\\n' $VAR \"$(stty size)\"\n")
+    s.expect(b"RESTORED:A:29 49")
+    s.send(b"exit 0\n")
+    end = time.monotonic() + 3
+    while any(b"RESTORED:A" in row for row in s.last_rows):
+        s.read()
+        assert time.monotonic() < end, s.last_rows
+    s.send(b"printf '\\033[2J\\033[HLAST_PANE:%s:%s\\n' $VAR \"$(stty size)\"; exit 9\n")
+    s.finish(9)
+    assert any(b"LAST_PANE:B:29 100" in row for row in s.last_rows)
+finally:
+    s.close()
+
+# Mouse events target the active right pane in local coordinates; other panes are ignored.
+split_mouse = r"""
+import os, select, time, tty
+tty.setraw(0)
+os.write(1, b"\x1b[?1000;1006h\x1b[2J\x1b[HSPLIT_MOUSE_READY")
+expected = b'\x1b[<0;2;2M\x1b[<0;1;1m\x1b[M !"x'
+data = bytearray()
+end = time.monotonic() + 4
+while len(data) < len(expected):
+    assert time.monotonic() < end, repr(data)
+    if select.select([0], [], [], 0.1)[0]:
+        data.extend(os.read(0, len(expected) - len(data)))
+assert data == expected, repr(data)
+os.write(1, b"\x1b[?1000;1006l\x1b[2J\x1b[HSPLIT_MOUSE_OK")
+"""
+s = Session()
+try:
+    s.expect(b"RUSTMUX_READY> ")
+    s.send(b"stty -echo; printf '\\033[2J\\033[H%s%s\\n' BASE _READY\n")
+    s.expect(b"BASE_READY")
+    s.send(b"\x02%")
+    s.expect(b"RUSTMUX_READY>")
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py") as source:
+        source.write(split_mouse)
+        source.flush()
+        s.send(("python3 " + shlex.quote(source.name) + "\n").encode())
+        s.expect(b"SPLIT_MOUSE_READY")
+        s.send(b'\x1b[<0;42;3M\x1b[<0;1;1M\x1b[<0;1;1m\x1b[M I#x')
+        s.expect(b"SPLIT_MOUSE_OK")
     os.kill(s.app_pid, signal.SIGTERM)
     s.finish(128 + signal.SIGTERM)
 finally:

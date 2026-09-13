@@ -1,9 +1,8 @@
 # Windows
 
-The CLI supports multiple terminal windows, each with one shell and its own
-content screen. `window::Windows<T>` owns their ordered collection and stable identities.
-A top window bar shows names and focus. This is partial H05: split layouts
-and persistent sessions are not implemented. Window renaming uses the same bar
+The CLI supports multiple terminal windows, each with one or more shell panes. `window::Windows<T>` owns their ordered collection and stable identities.
+A top window bar shows names and focus. Basic [interactive splitting](interactive-splits.md) is available; persistent
+sessions are not implemented. Window renaming uses the same bar
 row as a temporary input prompt.
 
 ## Identity and focus
@@ -37,9 +36,8 @@ window drops its content normally, and dropping the collection drops remaining
 contents. `into_content` transfers the removed content without cloning it.
 No terminal output or other I/O occurs inside this model.
 
-This intentionally separates the current one-pane-per-window implementation from the
-broader `main` window/pane implementation, which also includes layouts, floating
-terminals and persistent sessions. This model is not an H05 feature-acceptance
+This keeps window identity separate from its owned pane layout. The broader
+`main` implementation also includes floating terminals and persistent sessions. This model is not an H05 feature-acceptance
 claim. The event loop reads inactive windows, routes keyboard input to the active
 window, and synchronizes display and modes when focus changes.
 
@@ -55,7 +53,7 @@ These are model tests, not interactive multi-window or process-preservation test
 ## Per-window terminal contents
 
 `pane::Pane` supplies one `PtyShell`, incremental `Parser` and `Screen`. The CLI
-now owns `Windows<PaneSet<Pane>>`, with exactly one pane per set for this stage. `Pane::spawn` validates the grid (at most 65,536 cells),
+now owns `Windows<PaneSet<Pane>>`, with one owned shell per layout leaf. `Pane::spawn` validates the grid (at most 65,536 cells),
 allocates it before spawning, and sets the PTY master nonblocking. Failure after
 spawning drops the owned shell, closing the master and reclaiming the direct child.
 Follow the existing single-threaded spawning requirement of `PtyShell`.
@@ -108,14 +106,17 @@ paths. These states now drive multi-window polling.
 | Ctrl-B, then c | Create a shell window and select it |
 | Ctrl-B, then n | Select the next window, wrapping |
 | Ctrl-B, then p | Select the previous window, wrapping |
-| Ctrl-B, then l | Return to the last active window |
+| Ctrl-B, then Tab | Return to the last active window |
 | Ctrl-B, then & | Confirm closing the active window |
 | Ctrl-B, then < / > | Move the active window left / right one position |
 | Ctrl-B, then 1–9 | Select the window at that one-based position |
 | Ctrl-B, then 0 | Select window 10 |
 | Ctrl-B, then , | Rename the active window |
 | Ctrl-B, then Ctrl-B | Send one literal Ctrl-B to the active child |
-| `exit` in the shell | Close that window after draining its final output |
+| Ctrl-B, then % / " | Split the active pane left/right or top/bottom |
+| Ctrl-B, then o | Select the next pane, wrapping |
+| Ctrl-B, then h / j / k / l | Select the pane left / down / up / right |
+| `exit` in the shell | Close that pane after draining its final output |
 
 Numeric shortcuts follow the current window-bar positions, not stable IDs. Closing
 an earlier window shifts later numbers down. Missing positions are ignored and
@@ -151,10 +152,10 @@ stays with the old child and subsequent bytes go to the newly selected one.
 Queued input backpressure can delay shortcuts. On active-child exit, unprocessed
 staged input and a pending prefix are discarded instead of reaching its successor.
 
-An inactive window is removed when its output is drained and child status is
-known. The active window's final frame is delivered before removal; focus then
-follows the model's successor/predecessor rule. The last window's exit status is
-returned. Global termination signals restore the outer terminal and clean up all
+A pane is removed when its output is drained and child status is known. In the
+active window, its final frame is delivered before removal. The surviving layout
+expands and focus follows its successor/predecessor rule. Removing the final pane
+closes that window; removing the final window returns its exit status. Global termination signals restore the outer terminal and clean up all
 owned children. A PTY/I/O failure still ends the whole CLI; per-window error
 recovery is not implemented.
 
@@ -224,10 +225,10 @@ Closing an inactive window also schedules a redraw so labels and positions
 update, respecting any synchronized-output hold on the active child.
 
 When the child enables mouse reporting, complete SGR and classic X10 reports are translated
-from physical rows to child rows by subtracting the top bar height. Press, wheel
-and motion reports outside the content area are ignored. Release reports are
-clamped to the nearest content row so a drag can end. In a one-row terminal,
-coordinates remain unchanged because the bar is hidden.
+from physical coordinates to active-pane coordinates, accounting for its column,
+row and the top bar. Press, wheel and motion reports outside that pane are
+ignored. Release reports are clamped to its nearest cell so a drag can end.
+Mouse clicks do not select other panes.
 Candidate reports use at most 64 buffered bytes; incomplete candidates are
 released after a 30ms minimum delay, subject to the event loop's polling and
 backpressure. Extremely delayed/split malformed reports may therefore be forwarded
@@ -240,7 +241,7 @@ one-row fallback and mouse interception in a real CLI process.
 
 ## Returning to the last window
 
-Ctrl-B followed by lowercase `l` returns to the last explicitly active window.
+Ctrl-B followed by Tab returns to the last explicitly active window.
 Repeated use toggles between two windows. Creation, numeric selection and next/previous
 selection update this record when focus changes. Selecting the already active
 window, an invalid number or renaming leaves the record unchanged.
@@ -255,7 +256,7 @@ This stores one previous window, not an unlimited navigation history.
 Model tests cover identity, toggling, cyclic selection, no-op selection, renaming
 and removal. The nested PTY test switches between windows 1 and 10 and checks that
 commands reach the original shells and the bar follows focus. Bracketed paste
-containing Ctrl-B followed by `l` remains child input.
+containing Ctrl-B followed by Tab remains child input.
 
 ## Closing a window explicitly
 

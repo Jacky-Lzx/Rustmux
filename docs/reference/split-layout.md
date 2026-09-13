@@ -3,15 +3,14 @@
 `layout::Layout` is the first part of H06: a binary tree of pane rectangles.
 It does not own PTYs, screen models or input queues. The
 [PaneSet container](pane-ownership.md) connects its leaves to owned content values.
-The CLI now uses the container and layout for one-pane windows.
-Interactive windows still contain one shell each. This is not a claim
-that interactive splitting or H06 acceptance is complete.
+The CLI uses the container and layout for [interactive splits](interactive-splits.md).
+This does not claim full H06 acceptance.
 
 ## Coordinates and splitting
 
 Create a layout with nonzero `u16` rows and columns. Its initial pane fills the
 content area. Coordinates are zero-based and exclude the top window bar; the
-future CLI integration must add the bar offset when rendering or handling mouse
+CLI adds the bar offset when rendering or handling mouse
 input. Geometry does not allocate screen cells or enforce the CLI's separate
 65,536-cell limit.
 
@@ -38,12 +37,11 @@ a five-column parent therefore assigns three columns, a separator, and one colum
 `minimum_size()` computes the full tree's requirements. A resize below that size
 returns an error and leaves the entire layout unchanged. Valid resizing preserves
 IDs, tree structure and active pane. Geometry is recomputed from the current size;
-there are no stored user ratios or text reflow decisions here. The caller must
-later decide how to handle outer terminals too small for an existing layout.
+there are no stored user ratios or text reflow decisions here. The CLI currently exits with terminal cleanup if the outer terminal becomes
+too small for an existing layout.
 
-The model does not yet support manual separator adjustment, pane swapping,
-or PTY/model resize coordination.
-Those remain subsequent steps. Ordinary allocation failure may abort as with
+The model does not support manual separator adjustment or pane swapping.
+The pane container coordinates PTY/model resizing. Ordinary allocation failure may abort as with
 standard Rust collection allocation; logical validation failures are atomic.
 
 ## Closing a pane
@@ -59,12 +57,12 @@ the next surviving leaf in first-subtree/second-subtree traversal order, or the
 previous leaf if it was last. The method returns the resulting active ID. Unknown
 or already closed IDs return `NotFound`; removing the final pane returns
 `InvalidInput`. Both leave the entire layout unchanged. The model remains nonempty;
-the future window layer must handle closing a window when its last pane exits.
+the CLI closes the window when its last pane exits.
 
 Closed IDs are never reused, and closing frees a slot under the 64-pane cap.
 This operation changes geometry only: it does not close a PTY, discard input,
 reap a process or resize screen models. Those remain the caller's responsibility
-when interactive splitting is connected.
+in the CLI.
 
 ## Zooming the active pane
 
@@ -83,11 +81,9 @@ returns to the full split view.
 
 Resize keeps zoom enabled and recomputes both views for the new dimensions. It
 still requires enough space for the underlying split tree, so unzooming can always
-succeed. A too-small resize leaves dimensions and zoom state unchanged. The future
-CLI must define its fallback for terminals smaller than this minimum.
+succeed. A too-small resize leaves dimensions and zoom state unchanged.
 
-This remains a geometry-only feature. There is no CLI zoom shortcut yet; PTY sizing,
-rendering and input routing for visible versus hidden panes are not connected.
+The container and compositor support zoom, but there is no CLI zoom shortcut yet.
 
 ## Directional focus
 
@@ -110,16 +106,15 @@ new target. Resize and close automatically affect future selection through the
 current geometry. `PaneSet::select_direction` delegates to this operation without
 moving, cloning or recreating any owned content.
 
-There is no CLI directional shortcut yet. This model operation supplies the focus
-policy for later interactive splitting and is not H07 acceptance.
+The CLI uses lowercase Ctrl-B `h/j/k/l` for left/down/up/right selection.
+This is not full H07 acceptance.
 
 ## Verification
 
 `cargo test --test layout` checks exact nested geometry, complete nonoverlapping
 coverage across many sizes, asymmetric subtree minima, stable IDs/focus, failed
 operations, the pane cap and maximum coordinate dimensions. A unit test checks
-unknown selection and ID exhaustion without mutation. Existing CLI behavior is retained by the one-pane collection integration;
-interactive split operations are still disabled.
+unknown selection and ID exhaustion without mutation. The nested-PTY suite also exercises interactive splits, focus, resize and exit.
 
 Pane-close tests cover sibling-subtree promotion, all active/removed combinations
 in a nested tree, full nonoverlapping coverage after removal and minimum-size

@@ -34,7 +34,9 @@ Interrupted/WouldBlock on later iterations.
 Changed screen state is painted at a target minimum spacing of 6 ms after the
 previous frame was generated. Frames redraw changed cell spans or whole rows, with full repaint on
 startup or resize. Idle screens are not redrawn. [Synchronized output](synchronized-output.md)
-defers new frames until the batch ends or its bounded wait expires. Poll waits at most
+defers new frames until every pane in the active window releases its hold or
+its bounded wait expires. Explicit focus/layout changes force a redraw. See
+[Interactive Splits](interactive-splits.md) for pane input and lifecycle rules. Poll waits at most
 50 ms for signal/exit checks, shortened when a frame is due. This is scheduling,
 not a hard real-time guarantee. The final frame bypasses the interval on EOF.
 Scrolling output updates the grid; there is no scrollback, and intermediate states

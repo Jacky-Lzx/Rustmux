@@ -20,6 +20,7 @@ use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGWINCH};
 use crate::pane::{INPUT_LIMIT as LIMIT, MAX_CELLS, Pane};
 use crate::{
     chrome::{compose, pane_rows},
+    layout::{Direction, SplitAxis},
     pane_set::PaneSet,
     pane_view,
     prompt::{EditResult, PromptKind, WindowPrompt},
@@ -300,6 +301,9 @@ enum WindowKey {
     Close,
     MoveLeft,
     MoveRight,
+    Split(SplitAxis),
+    NextPane,
+    FocusPane(Direction),
 }
 
 #[derive(Default)]
@@ -311,6 +315,8 @@ struct WindowInput {
     mouse_since: Option<Instant>,
     pane_height: usize,
     pane_top: usize,
+    pane_left: usize,
+    pane_width: usize,
     mouse_enabled: bool,
 }
 
@@ -339,8 +345,11 @@ impl WindowInput {
         if pending {
             return;
         }
-        let row = match self.mouse.as_slice() {
-            [27, b'[', b'M', _, _, row] => row.checked_sub(32).map(usize::from),
+        let coordinates = match self.mouse.as_slice() {
+            [27, b'[', b'M', _, column, row] => column
+                .checked_sub(32)
+                .zip(row.checked_sub(32))
+                .map(|(x, y)| (usize::from(x), usize::from(y))),
             [27, b'[', b'<', rest @ ..] if matches!(rest.last(), Some(b'M' | b'm')) => {
                 std::str::from_utf8(&rest[..rest.len() - 1])
                     .ok()
@@ -351,7 +360,10 @@ impl WindowInput {
                                 .iter()
                                 .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
                         {
-                            parts[2].parse::<usize>().ok()
+                            parts[1]
+                                .parse::<usize>()
+                                .ok()
+                                .zip(parts[2].parse::<usize>().ok())
                         } else {
                             None
                         }
@@ -360,26 +372,34 @@ impl WindowInput {
             _ => None,
         };
         let mut bytes = self.take_mouse();
-        if let Some(row) = row {
+        if let Some((column, row)) = coordinates {
             let release = (bytes.starts_with(b"\x1b[<") && bytes.last() == Some(&b'm'))
                 || (bytes.starts_with(b"\x1b[M")
                     && bytes[3]
                         .checked_sub(32)
                         .is_some_and(|button| button & 0x63 == 3));
             let child_row = row.saturating_sub(self.pane_top);
-            if (child_row == 0 || child_row > self.pane_height) && !release {
+            let child_column = column.saturating_sub(self.pane_left);
+            if (child_row == 0
+                || child_row > self.pane_height
+                || child_column == 0
+                || child_column > self.pane_width)
+                && !release
+            {
                 return;
             }
-            // Translate physical rows to child coordinates. A release over chrome
+            // Translate physical coordinates to the active pane. A release outside
             // still ends a drag at the nearest content edge.
             let child_row = child_row.clamp(1, self.pane_height.max(1));
+            let child_column = child_column.clamp(1, self.pane_width.max(1));
             if bytes.starts_with(b"\x1b[<") {
                 let terminator = *bytes.last().unwrap();
-                let separator = bytes.iter().rposition(|&byte| byte == b';').unwrap();
+                let separator = bytes.iter().position(|&byte| byte == b';').unwrap();
                 bytes.truncate(separator + 1);
-                bytes.extend_from_slice(child_row.to_string().as_bytes());
+                bytes.extend_from_slice(format!("{child_column};{child_row}").as_bytes());
                 bytes.push(terminator);
             } else {
+                bytes[4] = 32 + child_column.min(MAX_LEGACY_MOUSE_COORDINATE) as u8;
                 bytes[5] = 32 + child_row.min(MAX_LEGACY_MOUSE_COORDINATE) as u8;
             }
         }
@@ -418,10 +438,17 @@ impl WindowInput {
                 b'c' => output.push(WindowKey::Create),
                 b'n' => output.push(WindowKey::Next),
                 b'p' => output.push(WindowKey::Previous),
-                b'l' => output.push(WindowKey::Last),
+                b'\t' => output.push(WindowKey::Last),
                 b'&' => output.push(WindowKey::Close),
                 b'<' => output.push(WindowKey::MoveLeft),
                 b'>' => output.push(WindowKey::MoveRight),
+                b'%' => output.push(WindowKey::Split(SplitAxis::Columns)),
+                b'"' => output.push(WindowKey::Split(SplitAxis::Rows)),
+                b'o' => output.push(WindowKey::NextPane),
+                b'h' => output.push(WindowKey::FocusPane(Direction::Left)),
+                b'j' => output.push(WindowKey::FocusPane(Direction::Down)),
+                b'k' => output.push(WindowKey::FocusPane(Direction::Up)),
+                b'l' => output.push(WindowKey::FocusPane(Direction::Right)),
                 b',' => output.push(WindowKey::Rename),
                 b'1'..=b'9' => output.push(WindowKey::Select(usize::from(byte - b'1'))),
                 b'0' => output.push(WindowKey::Select(9)),
@@ -523,13 +550,24 @@ fn forward(
                     .content_mut()
                     .resize(pane_rows(size.ws_row), size.ws_col)?;
             }
-            // CLI windows still contain one pane. Preserve notification behavior,
-            // including same-size hold release, while preparing all panes first.
-            let prepared = windows
-                .iter_mut()
-                .flat_map(|window| window.content_mut().iter_mut())
-                .map(|(_, pane)| pane.prepare_resize(pane_rows(size.ws_row), size.ws_col))
-                .collect::<io::Result<Vec<_>>>()?;
+            let sizes: Vec<_> = windows
+                .iter()
+                .map(|window| {
+                    (
+                        window.id(),
+                        window.content().layout().tiled_geometry().panes,
+                    )
+                })
+                .collect();
+            // Prepare all destinations across all windows before changing any PTY.
+            let mut prepared = Vec::new();
+            for window in windows.iter_mut() {
+                let rectangles = &sizes.iter().find(|(id, _)| *id == window.id()).unwrap().1;
+                for (pane_id, pane) in window.content_mut().iter_mut() {
+                    let rect = rectangles.iter().find(|(id, _)| *id == pane_id).unwrap().1;
+                    prepared.push(pane.prepare_resize(rect.rows, rect.columns)?);
+                }
+            }
             for resize in prepared {
                 resize.commit()?;
             }
@@ -547,20 +585,22 @@ fn forward(
         for window in windows.iter_mut() {
             let id = window.id();
             let panes = window.content_mut();
-            // Multi-pane lifecycle and synchronized-frame scheduling are a later step.
-            debug_assert_eq!(panes.iter().len(), 1);
-            let (paused, eof, dirty) = {
-                let (_, _, screen, state) = panes.active_mut().parts_mut();
-                let paused = synchronized_pause(
+            let mut paused = false;
+            let mut eof = false;
+            let mut dirty = false;
+            for (_, pane) in panes.iter_mut() {
+                let (_, _, screen, state) = pane.parts_mut();
+                paused |= synchronized_pause(
                     screen,
                     &mut state.synchronized_since,
                     Instant::now(),
                     state.eof,
                 );
-                (paused, state.eof, state.dirty)
-            };
+                eof |= state.eof;
+                dirty |= state.dirty;
+            }
             if id == active {
-                if eof && prompt.is_some() {
+                if panes.active().io().eof && prompt.is_some() {
                     prompt = None;
                     renderer.invalidate();
                     force_redraw = true;
@@ -582,43 +622,57 @@ fn forward(
                     } else {
                         renderer.render(&view, &mut FrameWriter(&mut to_terminal))?;
                     }
-                    panes.active_mut().parts_mut().3.dirty = false;
+                    for (_, pane) in panes.iter_mut() {
+                        pane.parts_mut().3.dirty = false;
+                    }
                     bar_dirty = false;
                     force_redraw = false;
                     next_frame = Instant::now() + FRAME_INTERVAL;
                 }
             }
-            let state = panes.active().io();
-            if state.eof {
-                if let Some(status) = state.status {
-                    if id != active || (!state.dirty && to_terminal.is_empty()) {
-                        finished.push((id, exit_code(status)));
+            for (pane_id, pane) in panes.iter() {
+                let state = pane.io();
+                if state.eof {
+                    if let Some(status) = state.status {
+                        if id != active || (!state.dirty && to_terminal.is_empty()) {
+                            finished.push((id, pane_id, exit_code(status)));
+                        }
+                    } else if state
+                        .eof_at
+                        .is_some_and(|time| time.elapsed() > Duration::from_secs(1))
+                    {
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "shell kept running after PTY closed",
+                        ));
                     }
-                } else if state
-                    .eof_at
-                    .is_some_and(|time| time.elapsed() > Duration::from_secs(1))
-                {
-                    return Err(io::Error::new(
-                        io::ErrorKind::TimedOut,
-                        "shell kept running after PTY closed",
-                    ));
                 }
             }
         }
         if !finished.is_empty() {
-            // Label-only updates must not expose a paused child transaction.
             bar_dirty = true;
-            for (id, code) in finished {
-                if windows.iter().len() == 1 {
-                    return Ok(code);
-                }
+            for (id, pane_id, code) in finished {
                 let was_active = windows.active().unwrap().id() == id;
-                drop(windows.close(id)?);
+                let panes = windows
+                    .get_mut(id)
+                    .expect("finished pane owns a window")
+                    .content_mut();
+                let was_focused = panes.layout().active() == pane_id;
+                if panes.iter().len() == 1 {
+                    if windows.iter().len() == 1 {
+                        return Ok(code);
+                    }
+                    drop(windows.close(id)?);
+                } else {
+                    drop(panes.close(pane_id)?);
+                    panes.synchronize_sizes()?;
+                }
                 if was_active {
-                    // Do not deliver pending keystrokes from a dead window to its successor.
-                    input.clear();
-                    keys = WindowInput::default();
-                    prompt = None;
+                    if was_focused {
+                        input.clear();
+                        keys = WindowInput::default();
+                        prompt = None;
+                    }
                     renderer.invalidate();
                     force_redraw = true;
                 }
@@ -669,13 +723,27 @@ fn forward(
                 break;
             }
             keys.pane_height = pane.screen().dimensions().0;
-            keys.pane_top = usize::from(outer_rows > 1);
+            let set = windows.active().unwrap().content();
+            let rect = set
+                .layout()
+                .tiled_geometry()
+                .panes
+                .into_iter()
+                .find(|(id, _)| *id == set.layout().active())
+                .unwrap()
+                .1;
+            keys.pane_top = usize::from(outer_rows > 1) + usize::from(rect.row);
+            keys.pane_left = usize::from(rect.column);
+            keys.pane_width = usize::from(rect.columns);
             keys.mouse_enabled =
                 pane.screen().mouse_tracking() != crate::screen::MouseTracking::Off;
             actions.clear();
             keys.feed(input.pop_front().unwrap(), &mut actions);
             for action in actions.drain(..) {
-                let old = windows.active().unwrap().id();
+                let old = (
+                    windows.active().unwrap().id(),
+                    windows.active().unwrap().content().layout().active(),
+                );
                 match action {
                     WindowKey::Byte(byte) => windows
                         .active_mut()
@@ -686,6 +754,41 @@ fn forward(
                         .3
                         .to_shell
                         .push_back(byte),
+                    WindowKey::Split(axis) => {
+                        let panes = windows.active_mut().unwrap().content_mut();
+                        match panes.split_with(axis, |_, rect| {
+                            Pane::spawn(shell_path, rect.rows, rect.columns)
+                        }) {
+                            Ok(_) => panes.synchronize_sizes()?,
+                            Err(_) => {
+                                if to_terminal.is_empty() {
+                                    to_terminal.push_back(7);
+                                }
+                            }
+                        }
+                    }
+                    WindowKey::NextPane => {
+                        let panes = windows.active_mut().unwrap().content_mut();
+                        let ids: Vec<_> = panes
+                            .layout()
+                            .tiled_geometry()
+                            .panes
+                            .into_iter()
+                            .map(|(id, _)| id)
+                            .collect();
+                        let index = ids
+                            .iter()
+                            .position(|id| *id == panes.layout().active())
+                            .unwrap();
+                        panes.select(ids[(index + 1) % ids.len()])?;
+                    }
+                    WindowKey::FocusPane(direction) => {
+                        windows
+                            .active_mut()
+                            .unwrap()
+                            .content_mut()
+                            .select_direction(direction);
+                    }
                     WindowKey::Close => {
                         prompt = Some(WindowPrompt::close());
                         renderer.invalidate();
@@ -739,7 +842,11 @@ fn forward(
                         }
                     }
                 }
-                if windows.active().unwrap().id() != old {
+                if (
+                    windows.active().unwrap().id(),
+                    windows.active().unwrap().content().layout().active(),
+                ) != old
+                {
                     renderer.invalidate();
                     force_redraw = true;
                 }
@@ -750,7 +857,12 @@ fn forward(
             continue;
         }
         let active = windows.active().unwrap().id();
-        let active_io = windows.active().unwrap().content().active().io();
+        let active_dirty = windows
+            .active()
+            .unwrap()
+            .content()
+            .iter()
+            .any(|(_, pane)| pane.io().dirty);
         let mut outer_events = PollFlags::empty();
         if input.len() < LIMIT {
             outer_events |= PollFlags::POLLIN;
@@ -758,8 +870,7 @@ fn forward(
         if !to_terminal.is_empty() {
             outer_events |= PollFlags::POLLOUT;
         }
-        let timeout = if (active_io.dirty || bar_dirty) && !active_paused && to_terminal.is_empty()
-        {
+        let timeout = if (active_dirty || bar_dirty) && !active_paused && to_terminal.is_empty() {
             next_frame
                 .saturating_duration_since(Instant::now())
                 .as_millis()
@@ -1105,7 +1216,7 @@ mod window_input_tests {
     #[test]
     fn prefix_commands_literal_prefix_and_unknown_keys() {
         assert_eq!(
-            decode(b"a\x02c\x02n\x02p\x02l\x02&\x02<\x02>\x02\x02\x02z"),
+            decode(b"a\x02c\x02n\x02p\x02\t\x02&\x02<\x02>\x02\x02\x02z"),
             vec![
                 WindowKey::Byte(b'a'),
                 WindowKey::Create,
@@ -1118,6 +1229,22 @@ mod window_input_tests {
                 WindowKey::Byte(2),
                 WindowKey::Byte(2),
                 WindowKey::Byte(b'z')
+            ]
+        );
+    }
+
+    #[test]
+    fn split_and_pane_focus_shortcuts_are_decoded() {
+        assert_eq!(
+            decode(b"\x02%\x02\"\x02o\x02h\x02j\x02k\x02l"),
+            vec![
+                WindowKey::Split(SplitAxis::Columns),
+                WindowKey::Split(SplitAxis::Rows),
+                WindowKey::NextPane,
+                WindowKey::FocusPane(Direction::Left),
+                WindowKey::FocusPane(Direction::Down),
+                WindowKey::FocusPane(Direction::Up),
+                WindowKey::FocusPane(Direction::Right),
             ]
         );
     }
@@ -1138,7 +1265,7 @@ mod window_input_tests {
 
     #[test]
     fn bracketed_paste_and_utf8_are_forwarded_byte_for_byte() {
-        let bytes = "\x1b[200~中文\x02c\x02n\x02p\x021\x020\x02l\x02&\x02<\x02>\x02\x02\x1b[201~"
+        let bytes = "\x1b[200~中文\x02c\x02n\x02p\x021\x020\x02\t\x02&\x02<\x02>\x02%\x02o\x02h\x02j\x02k\x02l\x02\x02\x1b[201~"
             .as_bytes();
         assert_eq!(
             decode(bytes),
@@ -1162,6 +1289,7 @@ mod window_input_tests {
     fn hidden_bar_keeps_one_row_mouse_coordinates() {
         let mut keys = WindowInput {
             pane_height: 1,
+            pane_width: 80,
             pane_top: 0,
             mouse_enabled: true,
             ..WindowInput::default()
@@ -1185,6 +1313,7 @@ mod window_input_tests {
     fn bar_mouse_presses_are_ignored_but_releases_finish_child_drags() {
         let mut keys = WindowInput {
             pane_height: 23,
+            pane_width: 80,
             pane_top: 1,
             mouse_enabled: true,
             ..WindowInput::default()
