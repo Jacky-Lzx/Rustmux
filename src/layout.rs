@@ -46,7 +46,7 @@ impl Rect {
         self,
         other: Self,
         direction: Direction,
-    ) -> Option<(u32, std::cmp::Reverse<u32>, u32)> {
+    ) -> Option<(u32, u32, std::cmp::Reverse<u32>, u32)> {
         let (start, length, cross, span, target, target_length, target_cross, target_span, forward) =
             match direction {
                 Direction::Left | Direction::Right => (
@@ -92,7 +92,15 @@ impl Rect {
             return None;
         }
         let center_distance = (cross + cross_end).abs_diff(target_cross + target_cross_end);
-        Some((gap, std::cmp::Reverse(overlap), center_distance))
+        // Prefer aligned top/left edges before area: an extra row or column in
+        // the second half of a split must not steal focus from the aligned half.
+        let edge_distance = cross.abs_diff(target_cross);
+        Some((
+            gap,
+            edge_distance,
+            std::cmp::Reverse(overlap),
+            center_distance,
+        ))
     }
 }
 
@@ -312,7 +320,8 @@ impl Layout {
 
     /// Select a pane in the requested direction using the underlying tiled geometry.
     /// Require positive perpendicular overlap, then prefer the smallest edge gap,
-    /// largest overlap, nearest perpendicular center and finally traversal order.
+    /// nearest perpendicular starting edge, largest overlap, nearest perpendicular
+    /// center and finally traversal order.
     /// No candidate leaves the complete layout unchanged. Zoom follows the selection.
     pub fn select_direction(&mut self, direction: Direction) -> Option<PaneId> {
         let panes = self.tiled_geometry().panes;

@@ -93,8 +93,11 @@ the active pane's row interval; up/down candidates must overlap its column inter
 Overlap must have positive length: diagonal panes and corner-only contact are
 excluded. Candidates must lie wholly on the requested side.
 
-Among candidates, prefer the smallest edge gap, then the largest perpendicular
-overlap, then the nearest perpendicular center. Remaining ties use layout traversal
+Among candidates, prefer the smallest edge gap, then the nearest perpendicular
+starting edge (top for left/right, left for up/down), then the largest perpendicular
+overlap and nearest perpendicular center. Thus a full-height left pane selects
+the upper right pane even when the lower right pane has one extra row.
+Remaining ties use layout traversal
 order, making the result deterministic. This policy depends on pane rectangles,
 not the text cursor position. Because panes may have different sizes, moving in
 one direction and back is not guaranteed to restore the original pane.
@@ -123,5 +126,5 @@ resize, stale IDs, final-pane rejection and capacity recovery without ID reuse.
 Zoom tests check exact restoration, hidden-pane selection, resize and minimum-size
 rejection, single-pane behavior, and successful/failed structural operations.
 
-Directional tests cover unequal nested panes, distance/overlap preference, stable
+Directional tests cover unequal nested panes, edge alignment across odd/even sizes in all four directions, distance/overlap preference, stable
 ties, no-op boundaries, diagonal rejection, zoom, resize/close and content identity.

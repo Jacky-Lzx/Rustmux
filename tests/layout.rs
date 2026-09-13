@@ -421,7 +421,7 @@ fn directional_selection_uses_overlap_and_preserves_geometry_and_zoom() {
     let right_bottom = layout.split_active(SplitAxis::Rows).unwrap();
     layout.select(left).unwrap();
     let tiled = layout.tiled_geometry();
-    assert_eq!(layout.select_direction(Direction::Right), Some(right_top)); // Largest overlap.
+    assert_eq!(layout.select_direction(Direction::Right), Some(right_top)); // Aligned top edge.
     assert_eq!(layout.select_direction(Direction::Down), Some(right_middle)); // Nearest edge.
     assert_eq!(layout.select_direction(Direction::Down), Some(right_bottom));
     let before = layout.clone();
@@ -463,4 +463,41 @@ fn directional_ties_are_deterministic_and_single_panes_do_not_wrap() {
         Some(bottom_right)
     );
     assert_eq!(layout.select_direction(Direction::Up), Some(top));
+}
+
+#[test]
+fn directional_focus_prefers_aligned_edges_over_an_extra_cell() {
+    // Exercise both equal halves and the extra cell assigned to the second half.
+    for size in [15, 16, 17, 18] {
+        for (axis, cross_axis, forward, backward) in [
+            (
+                SplitAxis::Columns,
+                SplitAxis::Rows,
+                Direction::Right,
+                Direction::Left,
+            ),
+            (
+                SplitAxis::Rows,
+                SplitAxis::Columns,
+                Direction::Down,
+                Direction::Up,
+            ),
+        ] {
+            let mut layout = Layout::new(size, size).unwrap();
+            let first = layout.active();
+            let aligned = layout.split_active(axis).unwrap();
+            layout.split_active(cross_axis).unwrap();
+            layout.select(first).unwrap();
+            assert_eq!(layout.select_direction(forward), Some(aligned));
+
+            // Mirror the arrangement to cover left and up as well.
+            let mut layout = Layout::new(size, size).unwrap();
+            let aligned = layout.active();
+            let second = layout.split_active(axis).unwrap();
+            layout.select(aligned).unwrap();
+            layout.split_active(cross_axis).unwrap();
+            layout.select(second).unwrap();
+            assert_eq!(layout.select_direction(backward), Some(aligned));
+        }
+    }
 }
