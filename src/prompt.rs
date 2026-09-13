@@ -1,4 +1,4 @@
-//! Bounded text prompts for window renaming and explicit close confirmation.
+//! Bounded text prompts for window renaming and explicit window/pane close confirmation.
 
 use crate::{
     chrome::{bar_style, prepare_row},
@@ -21,6 +21,7 @@ pub(crate) enum EditResult {
 pub(crate) enum PromptKind {
     Rename,
     Close,
+    ClosePane,
 }
 
 pub(crate) struct WindowPrompt {
@@ -39,10 +40,17 @@ impl WindowPrompt {
         prompt
     }
 
+    pub fn close_pane() -> Self {
+        let mut prompt = Self::new("");
+        prompt.kind = PromptKind::ClosePane;
+        prompt
+    }
+
     fn label(&self) -> &'static str {
         match self.kind {
             PromptKind::Rename => "Rename: ",
             PromptKind::Close => "Close window? Type yes: ",
+            PromptKind::ClosePane => "Close pane? Type yes: ",
         }
     }
 
@@ -238,6 +246,19 @@ mod tests {
             assert!(view.cursor().1 < columns);
             assert!(!view.wrap_pending());
         }
+    }
+
+    #[test]
+    fn pane_close_prompt_has_distinct_scope_and_requires_explicit_enter() {
+        let mut prompt = WindowPrompt::close_pane();
+        assert_eq!(prompt.kind, PromptKind::ClosePane);
+        assert_eq!(prompt.label(), "Close pane? Type yes: ");
+        for byte in b"\x1b[200~yes\r\n\x1b[201~" {
+            assert_eq!(prompt.feed(*byte, Instant::now()), EditResult::Continue);
+        }
+        assert_eq!(prompt.text, "yes");
+        assert_eq!(prompt.feed(3, Instant::now()), EditResult::Cancel);
+        assert_eq!(prompt.feed(b'\r', Instant::now()), EditResult::Save);
     }
 
     #[test]

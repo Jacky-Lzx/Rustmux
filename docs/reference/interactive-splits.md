@@ -106,6 +106,36 @@ The nested-PTY suite checks unequal widths, both swap directions, input followin
 the same shell, process identity and variables, resulting on-screen placement,
 child-observed dimensions, subsequent pane exit and terminal restoration.
 
+## Confirmed pane close
+
+Ctrl-B `x` opens `Close pane? Type yes:` for the active pane. Type exactly
+lowercase `yes` and press Enter to force close it. Empty or other answers dismiss
+the prompt without closing; Esc, Ctrl-C and Ctrl-G cancel. This discards unsaved
+work in that pane. Ctrl-B `&` continues to close the entire window instead.
+
+The prompt consumes input locally. Bracketed paste may fill in `yes`, but a pasted
+newline cannot confirm: press Enter separately. Output keeps updating while the
+prompt is open. Natural exit of the target cancels the prompt and follows normal
+pane removal; it never transfers confirmation to a surviving pane.
+
+After confirmation, the CLI finishes the already encoded terminal frame, closes
+the target's PTY, terminates/reaps its direct shell and removes its stable pane ID.
+The sibling subtree is promoted; focus follows the ordinary next/previous traversal
+rule, zoom ends, and surviving pane sizes are synchronized. Staged keyboard input
+is discarded so trailing bytes cannot execute in the replacement shell. Other
+panes retain their processes and content, subject to normal resize/reflow limits.
+Detached descendants that escaped the controlling terminal are not guaranteed to
+terminate, as with existing PTY cleanup.
+
+Closing a window's final pane closes that window. Closing the application's last
+pane restores the outer terminal and exits with status zero for explicit close;
+natural shell exit still returns its own status. Cleanup errors use the normal
+error-return path. Forced close does not wait to display the child's final output.
+
+The nested-PTY test covers empty/wrong answers, cancellation, paste isolation,
+zoomed close, direct-child reaping, survivor state and size, discarded trailing
+input, natural target exit, last-pane window closure and final terminal restoration.
+
 ## Limits and verification
 
 There are at most 64 panes per window and 16 windows. The physical frame, including
@@ -115,8 +145,8 @@ with a best-effort bell. A later PTY resize/I/O error ends the CLI and restores
 the terminal; operating-system changes are not rolled back.
 
 Resizing the outer terminal below any window's layout minimum currently ends the
-CLI with terminal cleanup. There is no small-terminal placeholder, mouse-drag
-resizing, or separate force-close-pane prompt yet.
+CLI with terminal cleanup. There is no small-terminal placeholder or mouse-drag
+resizing yet.
 
 `cargo test` runs the nested-PTY suite. It checks nested splits, retained shell
 variables, child-observed dimensions, lowercase directional and cyclic focus,

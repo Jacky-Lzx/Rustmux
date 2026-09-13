@@ -1591,3 +1591,68 @@ try:
     s.finish(0)
 finally:
     s.close()
+
+# Confirmed pane close preserves siblings, discards staged input, and reaps its shell.
+with tempfile.TemporaryDirectory() as directory:
+    record = os.path.join(directory, "pane.pid")
+    s = Session()
+    try:
+        s.expect(b"RUSTMUX_READY> ")
+        s.send(b"stty -echo; KEEP=survivor; printf 'KEEP_%s\\n' READY\n")
+        s.expect(b"KEEP_READY")
+        s.send(b"\x02%")
+        s.expect(b"RUSTMUX_READY>")
+        s.send(("stty -echo; echo $$ > " + shlex.quote(record) + "; printf 'PANE_%s\\n' READY\n").encode())
+        s.expect(b"PANE_READY")
+        with open(record) as source:
+            closing_pid = int(source.read())
+        for answer in (b"\r", b"no\r", b"YES\r", b"yes\x03", b"yes\x07", b"yes\x1b"):
+            s.send(b"\x02x")
+            s.expect(b"Close pane? Type yes:")
+            s.send(answer)
+            end = time.monotonic() + 3
+            while s.last_rows[0].startswith(b"Close pane?"):
+                s.read()
+                assert time.monotonic() < end
+            os.kill(closing_pid, 0)
+        # Close the zoomed pane: removal unzooms and restores the sibling layout.
+        s.send(b"\x02z\x02x")
+        s.expect(b"Close pane? Type yes:")
+        s.send(b"\x1b[200~yes\r\n\x1b[201~")
+        s.expect(b"Close pane? Type yes: yes")
+        os.kill(closing_pid, 0)
+        s.send(b"\rLEAK=1\n")
+        s.expect(b"KEEP_READY")
+        try:
+            os.kill(closing_pid, 0)
+        except ProcessLookupError:
+            pass
+        else:
+            raise AssertionError("closed pane shell still alive")
+        s.send(b"printf '\\nSURVIVOR:%s:%s_' $KEEP ${LEAK-unset}; stty size\n")
+        s.expect(b"SURVIVOR:survivor:unset_23 80")
+        # A target that exits naturally while confirming must not close its sibling.
+        s.send(b"\x02%")
+        s.expect(b"RUSTMUX_READY>")
+        s.send(b"sleep 0.2; exit 7\n\x02x")
+        s.expect(b"Close pane? Type yes:")
+        end = time.monotonic() + 3
+        while (s.last_rows[0].startswith(b"Close pane?") or
+               any("│".encode() in row for row in s.last_rows[1:])):
+            s.read()
+            assert time.monotonic() < end, s.last_rows
+        s.send(b"printf '\\nSTILL_%s\\n' $KEEP\n")
+        s.expect(b"STILL_survivor")
+        # Closing a window's sole pane selects another window; the final one exits.
+        s.send(b"\x02c")
+        s.expect(b"RUSTMUX_READY>")
+        s.send(b"\x02x")
+        s.expect(b"Close pane? Type yes:")
+        s.send(b"yes\r")
+        expect_bar(s, b"*1:shell")
+        s.send(b"\x02x")
+        s.expect(b"Close pane? Type yes:")
+        s.send(b"yes\r")
+        s.finish(0)
+    finally:
+        s.close()

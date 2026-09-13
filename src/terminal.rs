@@ -299,6 +299,7 @@ enum WindowKey {
     Select(usize),
     Last,
     Close,
+    ClosePane,
     MoveLeft,
     MoveRight,
     Split(SplitAxis),
@@ -445,6 +446,7 @@ impl WindowInput {
                 b'p' => output.push(WindowKey::Previous),
                 b'\t' => output.push(WindowKey::Last),
                 b'&' => output.push(WindowKey::Close),
+                b'x' => output.push(WindowKey::ClosePane),
                 b'<' => output.push(WindowKey::MoveLeft),
                 b'>' => output.push(WindowKey::MoveRight),
                 b'%' => output.push(WindowKey::Split(SplitAxis::Columns)),
@@ -507,17 +509,34 @@ fn forward(
             return Ok((128 + received) as u8);
         }
         if close_requested.is_some() && to_terminal.is_empty() {
-            let id = close_requested.take().unwrap();
+            let (id, pane_id) = close_requested.take().unwrap();
             // Finish the already encoded physical frame before changing ownership.
             if windows.get(id).is_some() {
-                if windows.iter().len() == 1 {
-                    // run() restores the outer terminal before dropping the last shell.
-                    return Ok(0);
+                // A pane request names its stable identity, never a position that
+                // could refer to another child after layout changes.
+                if let Some(pane_id) = pane_id
+                    && windows.get(id).unwrap().content().get(pane_id).is_none()
+                {
+                    continue;
                 }
-                for (_, pane) in windows.get_mut(id).unwrap().content_mut().iter_mut() {
-                    pane.shell_mut().terminate()?;
+                let partial =
+                    pane_id.filter(|_| windows.get(id).unwrap().content().iter().len() > 1);
+                if let Some(pane_id) = partial {
+                    let panes = windows.get_mut(id).unwrap().content_mut();
+                    panes.get_mut(pane_id).unwrap().shell_mut().terminate()?;
+                    drop(panes.close(pane_id)?);
+                    panes.synchronize_sizes()?;
+                } else {
+                    if windows.iter().len() == 1 {
+                        // run() restores the terminal before dropping the last shell.
+                        return Ok(0);
+                    }
+                    for (_, pane) in windows.get_mut(id).unwrap().content_mut().iter_mut() {
+                        pane.shell_mut().terminate()?;
+                    }
+                    drop(windows.close(id)?);
                 }
-                drop(windows.close(id)?);
+                bar_dirty = true;
                 input.clear();
                 keys = WindowInput::default();
                 prompt = None;
@@ -769,9 +788,14 @@ fn forward(
                                 windows.rename(windows.active().unwrap().id(), name)?;
                             }
                             PromptKind::Close if editor.text == "yes" => {
-                                close_requested = Some(windows.active().unwrap().id());
+                                close_requested = Some((windows.active().unwrap().id(), None));
                             }
-                            PromptKind::Close => {}
+                            PromptKind::ClosePane if editor.text == "yes" => {
+                                let window = windows.active().unwrap();
+                                close_requested =
+                                    Some((window.id(), Some(window.content().layout().active())));
+                            }
+                            PromptKind::Close | PromptKind::ClosePane => {}
                         }
                         prompt = None;
                         keys = WindowInput::default();
@@ -897,6 +921,11 @@ fn forward(
                             .unwrap()
                             .content_mut()
                             .select_direction(direction);
+                    }
+                    WindowKey::ClosePane => {
+                        prompt = Some(WindowPrompt::close_pane());
+                        renderer.invalidate();
+                        force_redraw = true;
                     }
                     WindowKey::Close => {
                         prompt = Some(WindowPrompt::close());
@@ -1411,6 +1440,23 @@ mod window_input_tests {
             ]
         );
         let pasted = b"\x1b[200~\x02{\x02}\x1b[201~";
+        assert_eq!(
+            decode(pasted),
+            pasted
+                .iter()
+                .copied()
+                .map(WindowKey::Byte)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn pane_close_shortcut_requires_prefix_and_is_ignored_in_paste() {
+        assert_eq!(
+            decode(b"x\x02x"),
+            vec![WindowKey::Byte(b'x'), WindowKey::ClosePane]
+        );
+        let pasted = b"\x1b[200~\x02xyes\r\x1b[201~";
         assert_eq!(
             decode(pasted),
             pasted
