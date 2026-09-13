@@ -43,8 +43,7 @@ focus on the same shell. Resizing and swapping are disabled while zoomed.
 Ctrl-B `x` asks to hide the active pane and stop its foreground job: type `yes`
 and Enter to confirm, or Esc to cancel. Ctrl-B `z` restores the last hidden pane
 with its original shell; only one closed pane is retained. Unsaved work in the
-stopped foreground program is lost. Closing the last visible pane opens a fresh
-shell so undo remains available; Ctrl-B `&` still permanently closes a window. See [Interactive Splits](../reference/interactive-splits.md).
+stopped foreground program is lost. Closing the last visible pane exits the application; Ctrl-B `&` still permanently closes a window. See [Interactive Splits](../reference/interactive-splits.md).
 
 The CLI now parses shell output and renders its own screen model. Window changes
 resize both model grids and the PTY in every window. The bar reserves one row;

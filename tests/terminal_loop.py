@@ -1647,7 +1647,7 @@ with tempfile.TemporaryDirectory() as directory:
             assert time.monotonic() < end, s.last_rows
         s.send(b"printf '\\nSTILL_%s\\n' $KEEP\n")
         s.expect(b"STILL_survivor")
-        # Sole-pane close selects another window; the final close creates a blank shell.
+        # Sole-pane close selects another window; the final close exits even with undo cached.
         s.send(b"\x02c")
         s.expect(b"RUSTMUX_READY>")
         s.send(b"\x02x")
@@ -1656,10 +1656,6 @@ with tempfile.TemporaryDirectory() as directory:
         expect_bar(s, b"*1:shell")
         s.send(b"\x02x")
         s.expect(b"Close pane? Type yes:")
-        s.send(b"yes\r")
-        expect_bar(s, b"*1:shell")
-        s.send(b"\x02&")
-        s.expect(b"Close window? Type yes:")
         s.send(b"yes\r")
         s.finish(0)
     finally:

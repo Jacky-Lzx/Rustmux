@@ -535,13 +535,10 @@ fn forward(
                     let before = window.content().layout().clone();
                     let name = window.name().to_owned();
                     let sole_pane = window.content().iter().len() == 1;
-                    // Keep a visible input target so the last close remains undoable.
-                    let replacement = if sole_pane && windows.iter().len() == 1 {
-                        let (rows, columns) = before.dimensions();
-                        Some(spawn_window(shell_path, rows, columns)?)
-                    } else {
-                        None
-                    };
+                    if sole_pane && windows.iter().len() == 1 {
+                        // run() restores the terminal, then cleans up visible and hidden shells.
+                        return Ok(0);
+                    }
                     windows
                         .get_mut(id)
                         .unwrap()
@@ -549,9 +546,6 @@ fn forward(
                         .get_mut(pane_id)
                         .unwrap()
                         .stop_for_hide()?;
-                    if let Some(replacement) = replacement {
-                        windows.create("shell".into(), replacement)?;
-                    }
                     let (mut pane, after) = if sole_pane {
                         (windows.close(id)?.into_content().into_single(), None)
                     } else {

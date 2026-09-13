@@ -149,10 +149,11 @@ If the original window is gone, undo creates a window with its saved name.
 Insufficient space or a window/pane limit leaves the slot available for retry.
 Normal resize/reflow rules and history eviction still apply.
 
-Closing a window's sole pane hides that window. Closing the last visible pane
-creates a fresh shell window so undo remains accessible. Use Ctrl-B `&` to exit
-permanently. Application exit restores the outer terminal before cleaning up the
-hidden shell. A target that exits naturally during confirmation follows ordinary
+Closing a window's sole pane hides that window if another window remains.
+Closing the last visible pane exits with status zero, even if an undo slot exists;
+no replacement shell is created. Application exit restores the outer terminal
+before cleaning up both visible and hidden shells. Undo is available only while
+the application remains running. A target that exits naturally during confirmation follows ordinary
 exit handling; confirmation never transfers to another pane.
 
 Unit and nested-PTY checks cover cancellation, paste/input isolation, zoomed close,
