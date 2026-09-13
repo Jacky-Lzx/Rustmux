@@ -274,6 +274,15 @@ try:
     assert s.last_rows[0] == b"   A       C", s.last_rows
     s.send(b"\n")
     s.expect(b"RUSTMUX_READY> ")
+
+    s.send(b"stty -echo; printf '\\033[2J\\033[H\\033(0lqqk"
+           b"\\033(B\\033[2;1H\\033)0\\016x\\017q"
+           b"\\033[3;1HCHARSET_DONE'; read answer; "
+           b"stty echo; printf '\\033[3;1H'\n")
+    s.expect(b"\r\nCHARSET_DONE\r\n")
+    assert s.last_rows[:2] == ["┌──┐".encode(), "│q".encode()], s.last_rows
+    s.send(b"\n")
+    s.expect(b"RUSTMUX_READY> ")
     s.send(b"exit\n")
     s.finish(0)
 finally:

@@ -21,3 +21,4 @@
 - [Automatic Wrap Mode](reference/auto-wrap.md)
 - [Tab Stops](reference/tab-stops.md)
 - [Terminal Status Replies](reference/status-replies.md)
+- [Character Sets](reference/character-sets.md)

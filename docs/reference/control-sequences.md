@@ -44,6 +44,9 @@ unchanged. Movement clamps without scrolling; vertical relative movement respect
 cancel pending wrap. Screen methods use zero-based positions and `EraseMode`;
 the parser handles protocol defaults and one-based conversion.
 
+[Character Sets](character-sets.md) adds ESC ( / ESC ) designations and SI/SO
+invocation for ASCII and DEC Special Graphics.
+
 HT uses configurable [tab stops](tab-stops.md), initially eight columns apart,
 without erasing or wrapping. ESC H sets a stop; CSI g clears current/all stops;
 CSI n I/Z moves forward/backward through stops.

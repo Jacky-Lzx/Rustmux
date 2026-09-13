@@ -13,6 +13,9 @@ enum State {
     Ground,
     Escape,
     EscapeIntermediate,
+    DesignateCharacterSet {
+        g1: bool,
+    },
     Csi,
     String {
         osc: bool,
@@ -167,6 +170,10 @@ impl Parser {
             self.state = State::Escape;
             return;
         }
+        if matches!(byte, 0x0e | 0x0f) {
+            screen.select_character_set(byte == 0x0e);
+            return;
+        }
         if byte == b'\t' {
             screen.tab();
             return;
@@ -191,6 +198,7 @@ impl Parser {
                 State::Ground
             }
             State::Escape => match byte {
+                b'(' | b')' => State::DesignateCharacterSet { g1: byte == b')' },
                 b'H' => {
                     screen.set_tab_stop(true);
                     State::Ground
@@ -225,6 +233,16 @@ impl Parser {
                 0x20..=0x2f => State::EscapeIntermediate,
                 _ => State::Ground,
             },
+            State::DesignateCharacterSet { g1 } => {
+                if matches!(byte, b'B' | b'0') {
+                    screen.designate_character_set(g1, byte == b'0');
+                }
+                if (0x20..=0x2f).contains(&byte) {
+                    State::EscapeIntermediate
+                } else {
+                    State::Ground
+                }
+            }
             State::EscapeIntermediate => {
                 if (0x20..=0x2f).contains(&byte) {
                     State::EscapeIntermediate

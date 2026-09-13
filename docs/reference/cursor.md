@@ -33,3 +33,6 @@ PTY test also drives cursor hide/show through the CLI. Run `cargo test --test cu
 a saved row clamps it against the current margins when that mode is enabled.
 
 [Automatic Wrap Mode](auto-wrap.md) is also saved and restored with the cursor.
+
+[Character-set designations and invocation](character-sets.md) are included in
+saved cursor state.
