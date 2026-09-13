@@ -16,8 +16,9 @@ including escape sequences and UTF-8, rejects the entire call without changing
 state. This deliberately restricted API is not an escape-sequence parser.
 
 - Printable characters overwrite cells and advance the cursor.
-- Filling the last column leaves the cursor there with a pending wrap. Only the
-  next printable character wraps to column zero of the next row.
+- With default automatic wrapping, filling the last column leaves the cursor
+  there with a pending wrap. The next printable character wraps to column zero.
+  [DECAWM](auto-wrap.md) can disable this behavior.
 - LF advances one row while preserving the column. CR returns to column zero.
 - BS moves left without erasing, stops at column zero and never crosses rows.
 - LF, CR and BS cancel a pending wrap.

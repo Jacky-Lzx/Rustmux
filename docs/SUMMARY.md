@@ -18,3 +18,4 @@
 - [Character Editing](reference/character-editing.md)
 - [Origin Mode and Positioning](reference/origin-mode.md)
 - [Insert Mode](reference/insert-mode.md)
+- [Automatic Wrap Mode](reference/auto-wrap.md)

@@ -31,3 +31,5 @@ PTY test also drives cursor hide/show through the CLI. Run `cargo test --test cu
 
 [Origin Mode](origin-mode.md) is also included in saved cursor state. Restoring
 a saved row clamps it against the current margins when that mode is enabled.
+
+[Automatic Wrap Mode](auto-wrap.md) is also saved and restored with the cursor.

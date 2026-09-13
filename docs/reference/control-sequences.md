@@ -27,6 +27,7 @@ CSI below means the two bytes ESC followed by `[`. The command subset follows
 | CSI n J | Erase display: 0 cursor through end, 1 start through cursor, 2 whole grid |
 | CSI parameters m | Set text attributes and colors; see [Text Styles](text-styles.md) |
 | CSI 4 h / l | Enable / disable [insert mode](insert-mode.md) |
+| CSI ? 7 h / l | Enable / disable [automatic wrap](auto-wrap.md) |
 | CSI ? 6 h / l | Enable / disable [origin mode](origin-mode.md) and home |
 | CSI n G / ` / d | Set column / column / origin-relative row |
 | CSI n E / F | Next / previous line, moving to column zero |

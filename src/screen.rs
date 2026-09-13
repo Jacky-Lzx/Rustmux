@@ -22,6 +22,7 @@ struct SavedCursor {
     style: Style,
     wrap_pending: bool,
     origin_mode: bool,
+    auto_wrap: bool,
 }
 
 /// Screen state with zero-based coordinates and per-grid vertical scrolling margins.
@@ -47,6 +48,7 @@ pub struct Screen {
     column: usize,
     wrap_pending: bool,
     origin_mode: bool,
+    auto_wrap: bool,
 }
 
 impl Screen {
@@ -84,6 +86,7 @@ impl Screen {
             column: 0,
             wrap_pending: false,
             origin_mode: false,
+            auto_wrap: true,
         })
     }
 
@@ -102,6 +105,7 @@ impl Screen {
         resized.cursor_visible = self.cursor_visible;
         resized.insert_mode = self.insert_mode;
         resized.origin_mode = self.origin_mode;
+        resized.auto_wrap = self.auto_wrap;
         let clamp = |saved: SavedCursor| SavedCursor {
             row: saved.row.min(rows - 1),
             column: saved.column.min(columns - 1),
@@ -172,6 +176,7 @@ impl Screen {
             style: self.style,
             wrap_pending: self.wrap_pending,
             origin_mode: self.origin_mode,
+            auto_wrap: self.auto_wrap,
         });
         std::mem::swap(&mut self.cells, &mut self.inactive_cells);
         std::mem::swap(&mut self.scroll_region, &mut self.inactive_scroll_region);
@@ -224,6 +229,7 @@ impl Screen {
             style: self.style,
             wrap_pending: self.wrap_pending,
             origin_mode: self.origin_mode,
+            auto_wrap: self.auto_wrap,
         });
     }
 
@@ -237,6 +243,7 @@ impl Screen {
 
     fn apply_saved_cursor(&mut self, saved: SavedCursor) {
         self.origin_mode = saved.origin_mode;
+        self.auto_wrap = saved.auto_wrap;
         self.move_to(saved.row, saved.column);
         self.style = saved.style;
         // A changed margin can clamp the saved row. Do not restore delayed
@@ -278,8 +285,19 @@ impl Screen {
         (self.row, self.column)
     }
 
+    /// Whether the next positive-width character will trigger delayed wrapping.
     pub fn wrap_pending(&self) -> bool {
-        self.wrap_pending
+        self.auto_wrap && self.wrap_pending
+    }
+
+    pub fn auto_wrap(&self) -> bool {
+        self.auto_wrap
+    }
+
+    /// DECAWM changes wrapping without moving the cursor or clearing its edge state.
+    /// The internal edge flag also locates combining suffixes when wrapping is off.
+    pub fn set_auto_wrap(&mut self, enabled: bool) {
+        self.auto_wrap = enabled;
     }
 
     /// Borrow a row, including its trailing blank cells.
@@ -357,7 +375,7 @@ impl Screen {
             character = '\u{fffd}';
             width = 1;
         }
-        if self.wrap_pending || self.column + width > self.columns {
+        if self.auto_wrap && (self.wrap_pending || self.column + width > self.columns) {
             if !self.wrap_pending {
                 let start = self.row * self.columns + self.column;
                 self.clear_range(start..(self.row + 1) * self.columns);
@@ -365,6 +383,11 @@ impl Screen {
             self.column = 0;
             self.line_feed();
             self.wrap_pending = false;
+        }
+        // With wrapping off, a wide glyph that cannot fit is ignored rather
+        // than leaving half a glyph or moving the cursor backward.
+        if self.column + width > self.columns {
+            return;
         }
         if self.insert_mode {
             self.insert_characters(width);

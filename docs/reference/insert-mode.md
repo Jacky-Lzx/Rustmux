@@ -47,5 +47,5 @@ delayed wrap, region scrolling, one-column screens, saved cursor/alternate/resiz
 behavior and interaction with explicit edits. A real CLI PTY test switches from
 insertion to replacement and verifies the final visible row.
 
-Automatic-wrap control (DECAWM), custom tab stops, horizontal margins and terminal
-queries remain future work. Full Neovim compatibility is not yet claimed.
+[Automatic Wrap Mode](auto-wrap.md) controls edge wrapping independently of IRM.
+Custom tab stops, horizontal margins and terminal queries remain future work. Full Neovim compatibility is not yet claimed.

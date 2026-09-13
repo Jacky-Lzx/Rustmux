@@ -260,6 +260,9 @@ impl Parser {
                     if *mode == Some(6) {
                         screen.set_origin_mode(command == b'h');
                     }
+                    if *mode == Some(7) {
+                        screen.set_auto_wrap(command == b'h');
+                    }
                     if *mode == Some(25) {
                         screen.set_cursor_visible(command == b'h');
                     }
