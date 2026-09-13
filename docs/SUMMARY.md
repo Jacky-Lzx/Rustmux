@@ -36,3 +36,5 @@
 - [Rendering Measurements](reference/rendering-performance.md)
 
 - [Windows](reference/windows.md)
+
+- [Split Layout Model](reference/split-layout.md)

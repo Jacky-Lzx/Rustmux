@@ -1,6 +1,7 @@
 //! Building blocks for the human-reviewed Rustmux implementation.
 
 mod chrome;
+pub mod layout;
 pub mod pane;
 pub mod parser;
 mod prompt;
