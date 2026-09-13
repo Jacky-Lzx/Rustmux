@@ -108,9 +108,18 @@ paths. These states now drive multi-window polling.
 | Ctrl-B, then c | Create a shell window and select it |
 | Ctrl-B, then n | Select the next window, wrapping |
 | Ctrl-B, then p | Select the previous window, wrapping |
+| Ctrl-B, then 1–9 | Select the window at that one-based position |
+| Ctrl-B, then 0 | Select window 10 |
 | Ctrl-B, then , | Rename the active window |
 | Ctrl-B, then Ctrl-B | Send one literal Ctrl-B to the active child |
 | `exit` in the shell | Close that window after draining its final output |
+
+Numeric shortcuts follow the current window-bar positions, not stable IDs. Closing
+an earlier window shifts later numbers down. Missing positions are ignored and
+the shortcut is consumed; selecting the active position keeps focus unchanged.
+Only one digit is consumed: Ctrl-B, then `1`, then `0` selects window 1 and sends
+`0` to its child. Use next/previous for windows 11–16. Renaming does not change
+numbers, and digits inside bracketed paste remain child input.
 
 An unrecognized prefix combination forwards both bytes unchanged. A prefix can
 span separate reads and waits for the following byte without a timeout. Ordinary UTF-8 bytes are forwarded immediately. When mouse reporting is enabled,

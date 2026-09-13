@@ -875,7 +875,7 @@ prefix_probe = r"""
 import os, select, time, tty
 tty.setraw(0)
 os.write(1, b"\x1b[?2004h\x1b[2J\x1b[HPREFIX_READY")
-expected = b"\x02n\x02z\x1b[200~paste\x02c\x02n\x02p\x1b[201~"
+expected = b"\x02n\x02z\x1b[200~paste\x02c\x02n\x02p\x021\x020\x1b[201~"
 data = bytearray()
 end = time.monotonic() + 5
 while len(data) < len(expected):
@@ -894,7 +894,7 @@ try:
         s.send(("exec python3 " + shlex.quote(source.name) + "\n").encode())
         s.expect(b"PREFIX_READY")
         s.send(b"\x02\x02n\x02z\x1b[20")
-        s.send(b"0~paste\x02c\x02n\x02p\x1b[201~")
+        s.send(b"0~paste\x02c\x02n\x02p\x021\x020\x1b[201~")
         s.finish(0)
         assert any(b"PREFIX_PASSED" in row for row in s.last_rows)
 finally:
@@ -1107,5 +1107,38 @@ try:
         s.send(b"\x1b[<0;2;1M\x1b[<0;2;1m\x1b[<0;2;24Mx")
         s.finish(0)
         assert any(b"BAR_MOUSE_OK" in row for row in s.last_rows)
+finally:
+    s.close()
+
+# Numeric selection follows visible positions, including after earlier removal.
+s = Session()
+try:
+    s.expect(b"RUSTMUX_READY> ")
+    for number in range(1, 11):
+        if number > 1:
+            s.send(b"\x02c")
+            s.expect(b"RUSTMUX_READY> ")
+        s.send(("WIN=%d; printf '\\033[2J\\033[HREADY_%%s\\n' $WIN\n" % number).encode())
+        s.expect(("READY_%d" % number).encode())
+    s.send(b"\x02")
+    s.send(b"1printf '\\nSELECTED:%s\\n' $WIN\n")
+    s.expect(b"SELECTED:1")
+    expect_bar(s, b"*1:shell")
+    s.send(b"\x020printf '\\nSELECTED:%s\\n' $WIN\n")
+    s.expect(b"SELECTED:10")
+    expect_bar(s, b"*10:shell")
+    s.send(b"\x021exit 0\n")
+    s.expect(b"\r\nREADY_2\r\n")
+    expect_bar(s, b"*1:shell")
+    s.send(b"\x029printf '\\nSHIFTED:%s\\n' $WIN\n")
+    s.expect(b"SHIFTED:10")
+    expect_bar(s, b"*9:shell")
+    # Position ten is now absent. Both missing and current selections preserve input routing.
+    s.send(b"\x020\x029printf '\\nSTILL:%s\\n' $WIN\n")
+    s.expect(b"STILL:10")
+    s.send(b"\x021printf '\\nFIRST:%s\\n' $WIN\n")
+    s.expect(b"FIRST:2")
+    os.kill(s.app_pid, signal.SIGTERM)
+    s.finish(128 + signal.SIGTERM)
 finally:
     s.close()

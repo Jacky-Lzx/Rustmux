@@ -293,6 +293,7 @@ enum WindowKey {
     Next,
     Previous,
     Rename,
+    Select(usize),
 }
 
 #[derive(Default)]
@@ -412,6 +413,8 @@ impl WindowInput {
                 b'n' => output.push(WindowKey::Next),
                 b'p' => output.push(WindowKey::Previous),
                 b',' => output.push(WindowKey::Rename),
+                b'1'..=b'9' => output.push(WindowKey::Select(usize::from(byte - b'1'))),
+                b'0' => output.push(WindowKey::Select(9)),
                 2 => output.push(WindowKey::Byte(2)),
                 _ => {
                     output.push(WindowKey::Byte(2));
@@ -621,6 +624,13 @@ fn forward(
                         rename = Some(RenamePrompt::new(windows.active().unwrap().name()));
                         renderer.invalidate();
                         force_redraw = true;
+                    }
+                    WindowKey::Select(position) => {
+                        // Bar numbers are current positions, not stable WindowIds.
+                        let target = windows.iter().nth(position).map(|window| window.id());
+                        if let Some(id) = target {
+                            windows.select(id)?;
+                        }
                     }
                     WindowKey::Next => {
                         windows.select_next();
@@ -1023,8 +1033,22 @@ mod window_input_tests {
     }
 
     #[test]
+    fn numeric_shortcuts_consume_only_the_prefixed_digit() {
+        for (digit, position) in (b'1'..=b'9').zip(0..9).chain([(b'0', 9)]) {
+            assert_eq!(
+                decode(&[digit, 2, digit, b'x']),
+                vec![
+                    WindowKey::Byte(digit),
+                    WindowKey::Select(position),
+                    WindowKey::Byte(b'x')
+                ]
+            );
+        }
+    }
+
+    #[test]
     fn bracketed_paste_and_utf8_are_forwarded_byte_for_byte() {
-        let bytes = "\x1b[200~中文\x02c\x02n\x02p\x02\x02\x1b[201~".as_bytes();
+        let bytes = "\x1b[200~中文\x02c\x02n\x02p\x021\x020\x02\x02\x1b[201~".as_bytes();
         assert_eq!(
             decode(bytes),
             bytes
