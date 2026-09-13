@@ -2,7 +2,8 @@
 
 /// Maximum reply bytes per consumed input byte, including a final byte that
 /// completes a query begun in an earlier chunk. Two decimal usize coordinates
-/// plus CSI, separator and final byte fit in this conservative bound.
+/// plus CSI, separator and final byte fit in this conservative bound. A DECRPM
+/// reply with one usize mode number and a one-digit status also fits.
 pub const MAX_REPLY_BYTES: usize = 4 + 2 * (usize::BITS as usize / 3 + 1);
 
 use crate::screen::{CursorShape, EraseMode, Screen};
@@ -35,6 +36,7 @@ struct Parameters {
     private: bool,
     soft_reset: bool,
     cursor_shape: bool,
+    mode_query: bool,
 }
 
 impl Parameters {
@@ -271,9 +273,13 @@ impl Parser {
                 } else {
                     if !parameters.invalid {
                         match byte {
-                            _ if parameters.soft_reset || parameters.cursor_shape => {
+                            _ if parameters.soft_reset
+                                || parameters.cursor_shape
+                                || parameters.mode_query =>
+                            {
                                 parameters.invalid = true
                             }
+                            b'$' if parameters.index == 0 => parameters.mode_query = true,
                             b' ' if !parameters.private && parameters.index == 0 => {
                                 parameters.cursor_shape = true
                             }
@@ -322,6 +328,35 @@ impl Parser {
         command: u8,
         reply: &mut impl FnMut(&[u8]),
     ) {
+        if parameters.mode_query {
+            if command == b'p' {
+                let mode = parameters.values[0].unwrap_or(0);
+                // Report only modes whose set/reset commands we implement.
+                // ANSI and DEC private mode numbers are separate namespaces.
+                let enabled = match (parameters.private, mode) {
+                    (false, 4) => Some(screen.insert_mode()),
+                    (true, 1) => Some(screen.application_cursor_keys()),
+                    (true, 6) => Some(screen.origin_mode()),
+                    (true, 7) => Some(screen.auto_wrap()),
+                    (true, 25) => Some(screen.cursor_visible()),
+                    (true, 1004) => Some(screen.focus_reporting()),
+                    (true, 1049) => Some(screen.is_alternate()),
+                    (true, 2004) => Some(screen.bracketed_paste()),
+                    _ => None,
+                };
+                let status = match enabled {
+                    Some(true) => 1,
+                    Some(false) => 2,
+                    None => 0,
+                };
+                let prefix = if parameters.private { "?" } else { "" };
+                let response = format!("\x1b[{prefix}{mode};{status}$y");
+                // One mode per query keeps replies within the existing queue budget.
+                debug_assert!(response.len() <= MAX_REPLY_BYTES);
+                reply(response.as_bytes());
+            }
+            return;
+        }
         if parameters.cursor_shape {
             if command == b'q' {
                 let shape = match parameters.values[0].unwrap_or(0) {

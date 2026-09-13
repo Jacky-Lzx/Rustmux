@@ -42,7 +42,8 @@ the running child remain unchanged. Parsing continues after the command.
 Only the parameterless CSI ! p form is accepted. Parameters, private prefixes,
 additional intermediates or other final bytes are ignored. C0 controls retain
 their existing immediate behavior inside the sequence; CAN/SUB cancel it.
-The supported intermediate forms are DECSTR and [DECSCUSR](cursor-shape.md);
+The supported intermediate forms are DECSTR, [DECSCUSR](cursor-shape.md) and
+[DECRQM](mode-queries.md);
 other CSI intermediate commands remain unsupported.
 
 Run `cargo test --test soft_reset`. Fixtures cover mode restoration, cell and

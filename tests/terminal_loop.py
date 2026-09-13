@@ -334,6 +334,21 @@ time.sleep(0.1)
 receive(b"\x1b[0n" * 20000)
 writer.join(timeout=2)
 assert not writer.is_alive()
+# Mode replies share the same bounded queue with DSR replies and keyboard input.
+os.write(1, b"\x1b[4$p\x1b[4h\x1b[4$p\x1b[4l\x1b[?2026$p")
+receive(b"\x1b[4;2$y\x1b[4;1$y\x1b[?2026;0$y")
+os.write(1, b"\x1b[?2004h\x1b[?2004$p\x1b[?2004l\x1b[?2004$p")
+receive(b"\x1b[?2004;1$y\x1b[?2004;2$y")
+def mode_flood():
+    data = b"\x1b[?7$p\x1b[5n" * 10000
+    while data:
+        data = data[os.write(1, data):]
+writer = threading.Thread(target=mode_flood)
+writer.start()
+time.sleep(0.1)
+receive(b"\x1b[?7;1$y\x1b[0n" * 10000)
+writer.join(timeout=2)
+assert not writer.is_alive()
 os.write(1, b"\x1b[?6l\x1b[r\x1b[2J\x1b[HREPLIES_OK")
 """
 s = Session()

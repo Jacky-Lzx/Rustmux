@@ -45,5 +45,6 @@ The real CLI PTY test checks both queries and 20,000 status requests, producing
 more reply bytes than fit in the queue while the child reads concurrently.
 
 Device attributes (DA), private DSR, OSC foreground/background color queries,
-and terminal capability queries remain unsupported. In particular, this step
+and general terminal capability queries remain unsupported.
+[Mode queries](mode-queries.md) support the explicitly listed ANSI/private modes. In particular, this step
 does not resolve applications waiting for an OSC background-color reply.

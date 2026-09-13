@@ -29,3 +29,4 @@
 - [Application Keypad](reference/application-keypad.md)
 - [Cursor Shape](reference/cursor-shape.md)
 - [Focus Reporting](reference/focus-reporting.md)
+- [Terminal Mode Queries](reference/mode-queries.md)
