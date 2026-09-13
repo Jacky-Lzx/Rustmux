@@ -3,7 +3,7 @@
 `Screen::row_continued(row)` reports whether a physical row continues its
 predecessor through automatic wrapping. `history_row_continued(index)` exposes
 the same flag for retained scrollback. Invalid indices return `None`.
-This is metadata for future logical-line reflow, not reflow itself.
+This is metadata used by primary logical-line reflow, not reflow itself.
 
 A flag becomes true when the next printable character actually wraps, including
 a wide character that cannot fit at the right edge. Merely filling the final
@@ -29,17 +29,14 @@ preserves the incoming continuation established by automatic wrapping.
 Cursor movement alone does not rewrite metadata. Flags describe physical-row
 provenance rather than the application's intent after arbitrary cursor editing.
 
-Width changes clear visible flags because current resize still clips/pads instead
-of reflowing. Restoring history rows with differing widths also clears visible
-flags. Existing retained history keeps its original widths and flags. This avoids
-joining a clipped row to the next row based on obsolete geometry.
+Primary width changes use [reflow](reflow.md), rebuilding continuation flags for
+the new physical rows. Alternate clipping clears visible flags. Same-width height
+changes retain flags with archived/restored rows.
 
 ## Scope and validation
 
-Visible output and shortcuts are unchanged. Width shrink can still lose right-edge
-content. [Row extents](line-extents.md) now distinguish meaningful trailing spaces from
-wide-glyph padding. Full reflow still needs logical-line reconstruction, cursor
-mapping and bounded history growth; these must not be inferred from this flag alone.
+The flag and [row extents](line-extents.md) are inputs to primary reflow. They do
+not infer application intent after arbitrary cursor editing.
 
 `cargo test --test soft_wrap_metadata` checks delayed and wide-character wrapping,
 explicit line feeds, disabled wrap, single-row scrolling, history and height round

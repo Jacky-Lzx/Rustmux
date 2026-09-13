@@ -73,14 +73,15 @@ fn growth_consumes_history_without_changing_existing_snapshots() {
     screen.resize(2, 2).unwrap();
     feed(&mut screen, b"ef\r\ngh\r\n");
     assert_eq!(history_text(&screen, 0), "ab"); // Restored at the narrower width, then scrolled again.
-    assert_eq!(history_text(&screen, 1), "ef");
+    assert_eq!(history_text(&screen, 1), "cd");
+    assert_eq!(history_text(&screen, 2), "ef");
     assert_eq!(snapshot.history_len(), 1);
     assert_eq!(history_text(&snapshot, 0), "abcd");
     let before = screen.clone();
     assert!(screen.resize(0, 2).is_err());
     assert_eq!(screen, before);
     screen.soft_reset();
-    assert_eq!(screen.history_len(), 2);
+    assert_eq!(screen.history_len(), 3);
     screen.clear_history();
     assert_eq!(screen.history_len(), 0);
     assert_eq!(screen.row(0), before.row(0));
@@ -112,7 +113,7 @@ fn line_and_cell_limits_evict_oldest_complete_rows() {
     assert!(cells <= SCROLLBACK_MAX_CELLS);
     wide.resize(1, 1).unwrap();
     wide.scroll_up(1);
-    cells += 1;
+    cells = wide.history_len(); // Reflow packed blank history at width one.
     assert_eq!(
         (0..wide.history_len())
             .map(|i| wide.history_row(i).unwrap().len())

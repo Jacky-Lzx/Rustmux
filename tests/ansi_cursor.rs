@@ -36,11 +36,11 @@ fn repeated_restore_and_alternate_slots_work_without_reverting_global_modes() {
     assert_eq!(parsed(b"abc\x1b[u"), parsed(b"abc"));
 }
 #[test]
-fn saved_position_is_clamped_by_resize_and_reset_clears_it() {
+fn saved_position_is_reflowed_by_resize_and_reset_clears_it() {
     let mut screen = parsed(b"\x1b[4;8H\x1b[s");
     screen.resize(2, 3).unwrap();
     Parser::new().advance(&mut screen, b"\x1b[H\x1b[u");
-    assert_eq!(screen.cursor(), (1, 2));
+    assert_eq!(screen.cursor(), (1, 1));
     assert!(!screen.wrap_pending());
     Parser::new().advance(&mut screen, b"\x1bcX\x1b[u");
     assert_eq!(screen.cursor(), (0, 1));

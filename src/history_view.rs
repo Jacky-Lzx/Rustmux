@@ -120,7 +120,7 @@ mod tests {
     fn snapshot_navigation_clips_wide_cells_and_does_not_follow_new_output() {
         let mut source = Screen::new(2, 4).unwrap();
         Parser::new().advance(&mut source, "A中B\r\nnext\r\nlast".as_bytes());
-        source.resize(2, 2).unwrap();
+        source.resize_display(2, 2).unwrap();
         let mut view = HistoryView::new(&source).unwrap();
         source.reset();
         let first = view.render().unwrap();

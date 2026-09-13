@@ -93,7 +93,7 @@ fn repeated_reset_after_resize_and_queries_keep_position() {
     Parser::new().advance_with_replies(&mut screen, b"\x1b[6n", &mut |r| {
         replies.extend_from_slice(r)
     });
-    assert_eq!(replies, b"\x1b[2;6R");
+    assert_eq!(replies, b"\x1b[2;2R");
     let mut one = Screen::new(1, 1).unwrap();
     Parser::new().advance(&mut one, b"X\x1b[!p");
     assert_eq!(one.row(0).unwrap()[0].character, 'X');

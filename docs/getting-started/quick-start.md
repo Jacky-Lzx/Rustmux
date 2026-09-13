@@ -47,7 +47,8 @@ Primary-screen rows scrolled out of the grid enter bounded
 [history storage](../reference/scrollback.md). Use Ctrl-B `[` to browse a frozen snapshot; `k/j` move, `g/G` jump, and `q`
 returns to live output. Height shrink keeps the primary cursor visible and archives
 rows moved off the top. Growing restores the newest retained history above the
-current content. Width reflow is not yet available. See
+current content. Width changes reflow primary text and retained history;
+alternate-screen applications retain the clipping policy. See
 [Browsing History](../reference/history-view.md).
 
 Only the documented terminal-control subset is supported. Full-screen editors,

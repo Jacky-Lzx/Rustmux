@@ -36,8 +36,9 @@ leaves history unchanged. Height shrink archives departing top rows when moving
 the primary grid upward to keep its cursor visible; see [Screen Resize](screen-resize.md).
 Right-edge and remaining bottom clipping are not recorded. Height growth consumes
 the newest history rows and restores them above the old grid, preserving order.
-Restored rows are clipped/padded to the new width; text is not reflowed. Physical rows now
-carry [soft-wrap metadata](soft-wrap-metadata.md), but logical-line reflow is not yet implemented.
+Height-only restoration retains physical rows. Column changes use
+[primary reflow](reflow.md) to rebuild history and visible content together;
+normal capacity limits still apply.
 
 `clear_history()` discards history without changing grids, cursor or terminal
 modes. RIS clears history with the screen reset; DECSTR and normal display erasure

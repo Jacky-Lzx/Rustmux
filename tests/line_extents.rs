@@ -88,7 +88,7 @@ fn history_resize_and_alternate_preserve_lengths_with_snapshot_isolation() {
     feed(&mut s, "\x1bc");
     assert_eq!(s.row_used_columns(0), Some(0));
     let mut s = Screen::new(1, 4).unwrap();
-    feed(&mut s, "A中");
+    feed(&mut s, "\x1b[?1049hA中");
     s.resize(1, 2).unwrap();
     assert_eq!(s.row_used_columns(0), Some(1));
 }

@@ -1,6 +1,8 @@
 //! A resizable text grid, independent of PTY I/O and escape-sequence parsing.
 
 use std::io;
+
+mod reflow;
 use unicode_width::UnicodeWidthChar;
 
 const MAX_COMBINING_SCALARS: usize = 16;
@@ -302,16 +304,23 @@ impl Screen {
         });
     }
 
-    /// Resize both grids without text reflow. Keep the primary cursor visible by
-    /// moving departing top rows into history. Growth restores newest history above
-    /// the primary grid and shifts its cursors down; alternate keeps its origin.
-    /// New cells use each grid's writing background; other clipped content is lost.
-    /// Invalid dimensions or reported allocation errors leave the model unchanged.
-    /// History allocation may abort on exhaustion, as during ordinary scrolling.
-    /// An unchanged size is a no-op; changed sizes cancel current and saved wrap
-    /// and reset both grids to full-height scrolling regions.
+    /// Resize both grids. Width changes reflow the primary grid and its history,
+    /// mapping current/saved cursors through logical lines. The alternate grid clips.
+    /// Same-width height changes archive/restore rows to retain the primary cursor.
+    /// Invalid dimensions or reported allocation errors leave the model unchanged;
+    /// infallible cloning/history allocations may abort on exhaustion.
+    /// Scrolling margins reset. Primary reflow preserves a mapped pending wrap;
+    /// other size changes clear it. An unchanged size is a no-op.
     pub fn resize(&mut self, rows: usize, columns: usize) -> io::Result<()> {
-        self.resize_grid(rows, columns, true)
+        if columns != self.columns {
+            let mut resized = self.clone();
+            resized.resize_grid(rows, columns, false)?;
+            self.reflow_primary_into(&mut resized);
+            *self = resized;
+            Ok(())
+        } else {
+            self.resize_grid(rows, columns, true)
+        }
     }
 
     /// Resize a disposable render canvas without archiving or restoring history.

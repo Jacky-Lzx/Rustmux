@@ -1491,3 +1491,26 @@ try:
     s.finish(128 + signal.SIGTERM)
 finally:
     s.close()
+
+# Primary output reflows across real SIGWINCH width changes without truncating text.
+s = Session()
+try:
+    s.expect(b"RUSTMUX_READY> ")
+    payload = b"REFLOW_BEGIN_" + b"0123456789" * 12 + b"_END"
+    s.send(b"stty -echo; printf '\\033[2J\\033[H%s\\n' " + payload + b"\n")
+    s.expect(b"_END")
+    for width in [32, 53, 80]:
+        fcntl.ioctl(s.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, width, 0, 0))
+        end = time.monotonic() + 3
+        count = (len(payload) + width - 1) // width
+        while True:
+            s.read()
+            visible = b"".join(row[:width] for row in s.last_rows[1:1 + count])
+            if visible == payload:
+                break
+            assert time.monotonic() < end, (width, s.last_rows)
+    s.send(b"printf '\\n%s%s\\n' REFLOW_ INPUT_OK; exit 0\n")
+    s.finish(0)
+    assert any(b"REFLOW_INPUT_OK" in row for row in s.last_rows)
+finally:
+    s.close()

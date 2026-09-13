@@ -4,7 +4,7 @@
 physical row; `history_row_used_columns(index)` exposes the stored history value.
 Both return `None` outside their range. The extent is a column count, including
 wide-character continuation cells, and never exceeds the row's physical width.
-It is metadata for future reflow, not the cursor position or a trimmed string.
+It is metadata for primary reflow, not the cursor position or a trimmed string.
 
 New default-background rows start at zero. Printing extends the length through
 the written character, including explicitly printed spaces. Moving the cursor or
@@ -35,10 +35,9 @@ their original extents when live history is consumed or changed.
 
 ## Scope and tests
 
-This does not yet reflow text or prevent width-shrink data loss. Combined with
-[soft-wrap metadata](soft-wrap-metadata.md), it supplies the content boundaries
-needed to reconstruct logical lines without trimming explicit spaces or joining
-wide-character padding into the text.
+[Primary reflow](reflow.md) uses these extents with soft-wrap metadata to rebuild
+logical lines without trimming explicit spaces or joining wide-character padding
+into the text. Alternate-screen clipping retains its existing behavior.
 
 `cargo test --test line_extents` covers spaces, cursor gaps, combining characters,
 early wide wrapping, colored erasure, character/line editing, wide-cell clipping,

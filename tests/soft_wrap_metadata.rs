@@ -37,7 +37,7 @@ fn history_and_height_round_trip_preserve_continuations() {
     assert_eq!(screen.row_continued(2), Some(true));
     assert_eq!(snapshot.history_len(), 1);
     screen.resize(3, 2).unwrap();
-    assert!((0..3).all(|row| screen.row_continued(row) == Some(false)));
+    assert!((0..3).all(|row| screen.row_continued(row) == Some(true)));
 }
 
 #[test]

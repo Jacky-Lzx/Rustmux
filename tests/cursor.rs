@@ -59,7 +59,7 @@ fn resize_clamps_all_saved_positions_and_preserves_visibility() {
     screen.leave_alternate();
     screen.restore_cursor();
     assert_eq!(screen.cursor(), (0, 1));
-    assert!(!screen.wrap_pending());
+    assert!(screen.wrap_pending());
     assert!(!screen.cursor_visible());
 }
 

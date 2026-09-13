@@ -4,7 +4,7 @@
 This is separate from `PtyShell::resize`, which changes the operating system PTY
 size. The CLI now applies both operations when the outer terminal changes size.
 
-## Policy
+## Same-width height policy
 
 The primary grid keeps the cursor's row visible. If its zero-based row would be
 outside the new height, resize moves the grid upward by `cursor_row + 1 - new_rows`
@@ -32,18 +32,12 @@ remain within the history limits. Previously frozen history views keep their own
 snapshot and are unaffected by consumption of live history. Repeated same-size
 notifications do not consume history.
 
-There is no text reflow. Right-hand columns and any remaining bottom rows outside
-the retained rectangle are still discarded. Restored rows use the new width:
-short rows are padded; long rows are clipped, removing any cut wide-character
-pair. The clipped part is not kept in history after the row is restored.
-History that remains stored keeps its original widths and normal eviction limits. New cells use the relevant grid's writing
-background with default foreground and no decorations. While alternate is active,
-the saved main style supplies the main grid's background.
-
-A wide character cut in half at the right edge is replaced by a blank, so no
-orphan leader or continuation remains. Current and saved cursors translate with their own grid, then clamp to the new
-bounds. A saved cursor in an archived row clamps to the top row. Any actual dimension change clears both
-pending-wrap flags and resets both scrolling regions to full height. Resizing to the same dimensions changes nothing.
+When columns change, the primary grid and its history use [reflow](reflow.md)
+instead of the height-only policy above. Alternate-screen columns still clip;
+a clipped wide glyph is fully removed. The primary cursor and save slot map
+through logical lines, while alternate cursors clamp. All changed sizes reset
+scrolling margins. Height-only changes clear pending wrap; primary width reflow
+preserves it when the insertion point lands at the new right edge.
 
 Alternate mode remains active across resize. Leaving it restores the resized main
 grid and the clamped saved cursor/style. Re-entering still starts a blank alternate
@@ -79,6 +73,5 @@ ordering, partial restoration, saved cursors, hidden primary restoration, wide-c
 clipping, snapshot isolation and repeated cycles. A compositor regression checks
 that enlarging the render canvas does not restore history or shift the cursor.
 
-[Soft-wrap flags](soft-wrap-metadata.md) follow same-width height changes. Width
-changes or restoration of mixed-width history clear visible flags conservatively;
-retained history flags remain attached to their original rows.
+Soft-wrap flags and extents follow height-only changes. Primary width reflow
+rebuilds them at the new width; alternate clipping clears visible wrap connections.

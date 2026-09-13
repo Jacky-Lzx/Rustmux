@@ -25,7 +25,7 @@ fn grow_preserves_cells_styles_and_combining_suffixes() {
     let mut screen = screen(2, 4, "\x1b[31m中e\u{301}\x1b[44m");
     let old = screen.row(0).unwrap().to_vec();
     screen.resize(3, 6).unwrap();
-    assert_eq!(&screen.row(0).unwrap()[..4], old);
+    assert_eq!(&screen.row(0).unwrap()[..3], &old[..3]);
     assert_eq!(text(&screen, 0), "中e\u{301}   ");
     assert_eq!(screen.cursor(), (0, 3));
     let blank = &screen.row(2).unwrap()[0];
@@ -41,33 +41,24 @@ fn grow_preserves_cells_styles_and_combining_suffixes() {
 }
 
 #[test]
-fn shrink_keeps_cursor_row_and_archives_top_without_width_reflow() {
+fn width_reflow_preserves_text_through_history_and_restores_it() {
     let mut screen = screen(3, 4, "abcdefghijkl");
     screen.resize(2, 2).unwrap();
-    assert_eq!(text(&screen, 0), "ef");
-    assert_eq!(text(&screen, 1), "ij");
+    assert_eq!(text(&screen, 0), "ij");
+    assert_eq!(text(&screen, 1), "kl");
     assert_eq!(screen.cursor(), (1, 1));
-    assert_eq!(screen.history_len(), 1);
-    assert_eq!(
-        screen
-            .history_row(0)
-            .unwrap()
-            .iter()
-            .map(|c| c.character)
-            .collect::<String>(),
-        "abcd"
-    );
-    assert!(!screen.wrap_pending());
+    assert_eq!(screen.history_len(), 4);
+    assert!(screen.wrap_pending());
     screen.resize(3, 4).unwrap();
     assert_eq!(text(&screen, 0), "abcd");
-    assert_eq!(text(&screen, 1), "ef  ");
-    assert_eq!(text(&screen, 2), "ij  ");
+    assert_eq!(text(&screen, 1), "efgh");
+    assert_eq!(text(&screen, 2), "ijkl");
     assert_eq!(screen.history_len(), 0);
 }
 
 #[test]
-fn clipped_wide_character_is_fully_removed() {
-    let mut screen = screen(1, 4, "A中B\x1b[44m");
+fn alternate_clipped_wide_character_is_fully_removed() {
+    let mut screen = screen(1, 4, "\x1b[?1049hA中B\x1b[44m");
     screen.resize(1, 2).unwrap();
     assert_eq!(text(&screen, 0), "A ");
     assert_eq!(screen.row(0).unwrap()[1].width, 1);
@@ -75,7 +66,7 @@ fn clipped_wide_character_is_fully_removed() {
         screen.row(0).unwrap()[1].style.background,
         Color::Indexed(4)
     );
-    let mut screen = self::screen(1, 4, "中AB");
+    let mut screen = self::screen(1, 4, "\x1b[?1049h中AB");
     screen.resize(1, 1).unwrap();
     assert_eq!(text(&screen, 0), " ");
     screen.print('X');
@@ -95,8 +86,8 @@ fn alternate_and_saved_main_resize_with_independent_backgrounds() {
     screen.resize(1, 3).unwrap();
     assert_eq!(screen.cursor(), (0, 2));
     screen.leave_alternate();
-    assert_eq!(text(&screen, 0), "MAI");
-    assert_eq!(screen.cursor(), (0, 2));
+    assert_eq!(text(&screen, 0), "N  ");
+    assert_eq!(screen.cursor(), (0, 1));
     assert_eq!(screen.style().background, Color::Indexed(1));
     assert!(!screen.wrap_pending());
     screen.resize(2, 5).unwrap();
@@ -230,15 +221,17 @@ fn alternate_growth_restores_only_hidden_main_and_its_saved_cursors() {
 }
 
 #[test]
-fn restored_rows_keep_styles_but_clip_wide_characters_at_new_edge() {
+fn reflow_preserves_wide_characters_and_styles_in_history() {
     let mut screen = screen(1, 4, "\x1b[31mA中B\r\nX");
     screen.resize(2, 2).unwrap();
-    assert_eq!(text(&screen, 0), "A ");
+    assert_eq!(text(&screen, 0), "B ");
     assert_eq!(
         screen.row(0).unwrap()[0].style.foreground,
         Color::Indexed(1)
     );
     assert_eq!(screen.row(0).unwrap()[1].width, 1);
-    assert_eq!(screen.history_len(), 0);
+    assert_eq!(screen.history_len(), 2);
+    assert_eq!(screen.history_row(1).unwrap()[0].character, '中');
+    assert_eq!(screen.history_row(1).unwrap()[0].width, 2);
     assert_eq!(screen.cursor(), (1, 1));
 }
