@@ -42,7 +42,7 @@ status. Ctrl-B `&` confirms closing the entire window and all its panes.
 
 ## Zoom
 
-Ctrl-B `z` makes the active pane fill the content area beneath the window bar;
+Ctrl-B `Z` makes the active pane fill the content area beneath the window bar;
 press it again to restore the original split tree. A single pane stays unzoomed.
 Directional focus still uses tiled geometry, and `o` still cycles all panes.
 Changing focus while zoomed enlarges the new target and returns the previous
@@ -106,35 +106,59 @@ The nested-PTY suite checks unequal widths, both swap directions, input followin
 the same shell, process identity and variables, resulting on-screen placement,
 child-observed dimensions, subsequent pane exit and terminal restoration.
 
-## Confirmed pane close
+## Close and undo
 
-Ctrl-B `x` opens `Close pane? Type yes:` for the active pane. Type exactly
-lowercase `yes` and press Enter to force close it. Empty or other answers dismiss
-the prompt without closing; Esc, Ctrl-C and Ctrl-G cancel. This discards unsaved
-work in that pane. Ctrl-B `&` continues to close the entire window instead.
+Ctrl-B `x` opens `Close pane? Type yes:`. Type exactly lowercase `yes` and
+press Enter to hide the pane and stop its foreground job. Empty or other answers
+dismiss the prompt; Esc, Ctrl-C and Ctrl-G cancel. Bracketed paste can fill the
+answer, but a pasted newline cannot confirm it. Ctrl-B `&` still permanently
+closes a whole window; it does not populate the undo slot.
 
-The prompt consumes input locally. Bracketed paste may fill in `yes`, but a pasted
-newline cannot confirm: press Enter separately. Output keeps updating while the
-prompt is open. Natural exit of the target cancels the prompt and follows normal
-pane removal; it never transfers confirmation to a surviving pane.
+Ctrl-B `z` restores the last explicitly closed pane and focuses its original
+shell. Zoom has moved to **Ctrl-B `Z`**. Undo with no retained pane is a no-op.
+There is one slot for the whole application, not one per window. A second close
+replaces it and finally closes/kills/reaps the older hidden shell. Undo consumes
+the slot; natural pane exits and window closes are not undoable.
 
-After confirmation, the CLI finishes the already encoded terminal frame, closes
-the target's PTY, terminates/reaps its direct shell and removes its stable pane ID.
-The sibling subtree is promoted; focus follows the ordinary next/previous traversal
-rule, zoom ends, and surviving pane sizes are synchronized. Staged keyboard input
-is discarded so trailing bytes cannot execute in the replacement shell. Other
-panes retain their processes and content, subject to normal resize/reflow limits.
-Detached descendants that escaped the controlling terminal are not guaranteed to
-terminate, as with existing PTY cleanup.
+The retained pane keeps its PTY, shell PID, working directory, shell variables,
+screen and bounded scrollback. A foreground process group distinct from
+the shell is killed; unsaved work in that program is lost. When the shell itself
+owns the foreground, it receives SIGINT instead. Builtin interruption depends on
+the shell's signal handling. `exec` replaces the shell, so stopping an exec'd
+program cannot preserve a shell that no longer exists; if the hidden process
+exits, the undo slot is discarded. Background jobs and detached descendants are
+not promised to stop. This is process retention, not process checkpoint/restart.
+After killing a separate foreground job, incomplete parser input is discarded
+and supported screen/input modes are reset to the primary screen, keeping its
+existing primary history.
 
-Closing a window's final pane closes that window. Closing the application's last
-pane restores the outer terminal and exits with status zero for explicit close;
-natural shell exit still returns its own status. Cleanup errors use the normal
-error-return path. Forced close does not wait to display the child's final output.
+Before hiding, the already encoded physical frame finishes. Pending user input
+for the pane and already staged outer input are discarded. The visible layout
+removes the pane, exits zoom and resizes surviving panes normally. The hidden
+PTY participates in readiness polling and is serviced in bounded nonblocking
+reads/writes, including terminal-query replies, but is never
+rendered or given user keystrokes. It retains its last dimensions until restore.
+Output from background jobs may still change its bounded history.
 
-The nested-PTY test covers empty/wrong answers, cancellation, paste isolation,
-zoomed close, direct-child reaping, survivor state and size, discarded trailing
-input, natural target exit, last-pane window closure and final terminal restoration.
+If the original window's split tree and ratios have not changed, undo restores
+the original position and ratio at the current outer size. Focus or zoom changes
+alone do not prevent this. If the layout changed, the saved pane is inserted
+beside that window's current focus using its original split axis, without undoing
+newer edits. In that case it receives a new layout ID but retains the same shell.
+If the original window is gone, undo creates a window with its saved name.
+Insufficient space or a window/pane limit leaves the slot available for retry.
+Normal resize/reflow rules and history eviction still apply.
+
+Closing a window's sole pane hides that window. Closing the last visible pane
+creates a fresh shell window so undo remains accessible. Use Ctrl-B `&` to exit
+permanently. Application exit restores the outer terminal before cleaning up the
+hidden shell. A target that exits naturally during confirmation follows ordinary
+exit handling; confirmation never transfers to another pane.
+
+Unit and nested-PTY checks cover cancellation, paste/input isolation, zoomed close,
+foreground job termination, shell PID/variables/directory and history restoration,
+cache replacement/reaping, distinct undo/zoom keys, original/fallback geometry,
+retry after insufficient size, natural target exit and last-visible-pane behavior.
 
 ## Limits and verification
 

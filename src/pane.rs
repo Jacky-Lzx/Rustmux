@@ -7,6 +7,7 @@ use std::{collections::VecDeque, ffi::OsStr, io, process::ExitStatus, time::Inst
 pub(crate) const INPUT_LIMIT: usize = 64 * 1024;
 
 pub(crate) const MAX_CELLS: usize = 64 * 1024;
+pub(crate) const MAX_REPLY_DRAIN_BYTES: usize = 8192;
 
 /// Owns one nonblocking PTY, incremental parser and screen. Moving a pane between
 /// windows does not restart its process or reset its parsing state. Dropping it
@@ -89,7 +90,7 @@ impl PaneIo {
             0
         } else if self.status.is_some() {
             // No live child to receive replies; drain its final output.
-            8192
+            MAX_REPLY_DRAIN_BYTES
         } else {
             (INPUT_LIMIT - self.to_shell.len()) / crate::parser::MAX_REPLY_BYTES
         }
@@ -118,6 +119,23 @@ impl Pane {
             screen,
             io: PaneIo::default(),
         })
+    }
+
+    /// Keep the shell but discard user input intended for the stopped foreground job.
+    pub(crate) fn stop_for_hide(&mut self) -> io::Result<()> {
+        if self.shell.stop_foreground()? {
+            // A killed full-screen job cannot restore these modes itself.
+            self.parser = Parser::new();
+            self.screen.leave_alternate();
+            self.screen.soft_reset();
+            self.screen
+                .set_mouse_tracking(crate::screen::MouseTracking::Off);
+            self.screen.set_sgr_mouse(false);
+            self.screen.set_focus_reporting(false);
+            self.screen.set_bracketed_paste(false);
+        }
+        self.io.to_shell.clear();
+        Ok(())
     }
 
     pub fn shell(&self) -> &PtyShell {
@@ -217,7 +235,7 @@ mod io_tests {
         // Reaping a child must allow draining final output even with a full queue.
         state.status = Some(ExitStatus::from_raw(0));
         assert!(!state.accepts_input());
-        assert_eq!(state.reply_read_limit(), 8192);
+        assert_eq!(state.reply_read_limit(), MAX_REPLY_DRAIN_BYTES);
         state.eof = true;
         assert_eq!(state.reply_read_limit(), 0);
         state.status = None;

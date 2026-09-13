@@ -120,7 +120,7 @@ Resize keeps zoom enabled and recomputes both views for the new dimensions. It
 still requires enough space for the underlying split tree, so unzooming can always
 succeed. A too-small resize leaves dimensions and zoom state unchanged.
 
-Ctrl-B `z` toggles zoom in the CLI. Focus shortcuts preserve zoom and resize the
+Ctrl-B `Z` toggles zoom in the CLI. Focus shortcuts preserve zoom and resize the
 new target; mouse routing uses its full visible rectangle.
 
 ## Directional focus

@@ -35,13 +35,16 @@ force close, or Esc to cancel. Unsaved work in that window can be lost. The top 
 Use Ctrl-B followed by `%` to split left/right, or `"` to split top/bottom.
 The new pane is selected. Ctrl-B followed by lowercase `h/j/k/l` selects the pane
 to the left/down/up/right; `o` cycles through all panes. Directional selection
-stops at the boundary. Ctrl-B followed by `z` enlarges the active pane to the
+stops at the boundary. Ctrl-B followed by `Z` enlarges the active pane to the
 content area; repeat to restore the split view. Focus shortcuts work while zoomed. Ctrl-B followed by Ctrl-h/j/k/l moves the
 nearest separator left/down/up/right by one cell. Ctrl-B `{` / `}` swaps the active
 pane with the previous/next layout position, wrapping at the edges and keeping
 focus on the same shell. Resizing and swapping are disabled while zoomed.
-Ctrl-B `x` asks to close only the active pane: type `yes` and Enter to confirm,
-or Esc to cancel. Unsaved work in that pane can be lost. See [Interactive Splits](../reference/interactive-splits.md).
+Ctrl-B `x` asks to hide the active pane and stop its foreground job: type `yes`
+and Enter to confirm, or Esc to cancel. Ctrl-B `z` restores the last hidden pane
+with its original shell; only one closed pane is retained. Unsaved work in the
+stopped foreground program is lost. Closing the last visible pane opens a fresh
+shell so undo remains available; Ctrl-B `&` still permanently closes a window. See [Interactive Splits](../reference/interactive-splits.md).
 
 The CLI now parses shell output and renders its own screen model. Window changes
 resize both model grids and the PTY in every window. The bar reserves one row;

@@ -118,6 +118,36 @@ impl PtyShell {
         self.child.wait()
     }
 
+    /// Stop a foreground job while retaining the shell and its PTY.
+    /// A separate job group is killed; shell builtins receive SIGINT instead.
+    /// Returns true when a separate job was stopped and its display modes need cleanup.
+    pub fn stop_foreground(&mut self) -> io::Result<bool> {
+        use nix::{
+            sys::signal::{Signal, kill, killpg},
+            unistd::{Pid, tcgetpgrp},
+        };
+        if self.child.try_wait()?.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "shell already exited",
+            ));
+        }
+        let foreground = tcgetpgrp(self.master()?)?;
+        if foreground.as_raw() <= 0 {
+            return Err(io::Error::other("invalid foreground process group"));
+        }
+        let shell = Pid::from_raw(self.child.id() as i32);
+        let result = if foreground == shell {
+            kill(shell, Signal::SIGINT)
+        } else {
+            killpg(foreground, Signal::SIGKILL)
+        };
+        match result {
+            Ok(()) | Err(nix::errno::Errno::ESRCH) => Ok(foreground != shell),
+            Err(error) => Err(error.into()),
+        }
+    }
+
     /// Close the terminal, forcibly stop the direct shell if needed, and reap it.
     pub fn terminate(&mut self) -> io::Result<ExitStatus> {
         self.master.take();

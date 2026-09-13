@@ -119,6 +119,33 @@ impl<T> PaneSet<T> {
         Ok(id)
     }
 
+    pub(crate) fn restore_with(
+        &mut self,
+        before: &Layout,
+        after: &Layout,
+        id: PaneId,
+        create: impl FnOnce(Rect) -> io::Result<T>,
+    ) -> io::Result<()> {
+        let (layout, id) = self.layout.restore_closed(before, after, id)?;
+        let rect = layout
+            .tiled_geometry()
+            .panes
+            .into_iter()
+            .find(|(pane, _)| *pane == id)
+            .unwrap()
+            .1;
+        self.entries.try_reserve(1).map_err(io::Error::other)?;
+        let content = create(rect)?;
+        self.entries.push((id, content));
+        self.layout = layout;
+        Ok(())
+    }
+
+    pub(crate) fn into_single(mut self) -> T {
+        assert_eq!(self.entries.len(), 1);
+        self.entries.pop().unwrap().1
+    }
+
     /// Remove a layout leaf and return its owned contents without dropping them.
     /// Unknown IDs and the last pane are rejected without changing either collection.
     /// The caller decides when to clean up a returned PTY or transfer other resources.

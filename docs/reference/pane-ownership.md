@@ -138,7 +138,7 @@ its owned direct children before removing it. Natural pane exit drains its final
 output, removes that leaf and resizes surviving panes; the last pane closes the
 window. Frames and synchronized-output scheduling include visible panes in the active
 window. See [Interactive Splits](interactive-splits.md) for shortcuts and limits.
-Ctrl-B `z` toggles zoom of the selected pane.
+Ctrl-B `Z` toggles zoom of the selected pane.
 
 The full existing nested-PTY suite is the regression check for this integration,
 including window creation and selection, background replies, modes, resize,

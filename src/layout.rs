@@ -192,6 +192,28 @@ impl Node {
         }
     }
 
+    fn parent_axis(&self, target: PaneId) -> Option<SplitAxis> {
+        match self {
+            Self::Pane(_) => None,
+            Self::Split {
+                axis,
+                first,
+                second,
+                ..
+            } => {
+                if matches!(first.as_ref(), Self::Pane(id) if *id == target)
+                    || matches!(second.as_ref(), Self::Pane(id) if *id == target)
+                {
+                    Some(*axis)
+                } else {
+                    first
+                        .parent_axis(target)
+                        .or_else(|| second.parent_axis(target))
+                }
+            }
+        }
+    }
+
     fn contains(&self, target: PaneId) -> bool {
         match self {
             Self::Pane(id) => *id == target,
@@ -415,6 +437,28 @@ impl Layout {
         true
     }
 
+    pub(crate) fn restore_closed(
+        &self,
+        before: &Self,
+        after: &Self,
+        id: PaneId,
+    ) -> io::Result<(Self, PaneId)> {
+        if self.root == after.root {
+            let mut restored = before.clone();
+            restored.resize(self.rows, self.columns)?;
+            restored.next_id = restored.next_id.max(self.next_id);
+            restored.active = id;
+            restored.zoomed = false;
+            Ok((restored, id))
+        } else {
+            // Keep newer layout edits; insert beside current focus on the old axis.
+            let mut restored = self.clone();
+            let id =
+                restored.split_active(before.root.parent_axis(id).unwrap_or(SplitAxis::Columns))?;
+            Ok((restored, id))
+        }
+    }
+
     /// Move the nearest ancestor separator on the requested axis by one cell.
     /// Directions describe separator movement, independently of which child is
     /// active. Preserve focus and IDs. Zoom, no matching split or a minimum-size
@@ -608,5 +652,29 @@ mod tests {
         let before = layout.clone();
         assert!(layout.split_active(SplitAxis::Columns).is_err());
         assert_eq!(layout, before);
+    }
+    #[test]
+    fn restoring_close_preserves_edits_and_retry_after_small_resize() {
+        let mut layout = Layout::new(7, 11).unwrap();
+        let closed = layout.split_active(SplitAxis::Columns).unwrap();
+        layout.resize_active(Direction::Right);
+        let before = layout.clone();
+        layout.close(closed).unwrap();
+        let after = layout.clone();
+        layout.resize(1, 2).unwrap();
+        let small = layout.clone();
+        assert!(layout.restore_closed(&before, &after, closed).is_err());
+        assert_eq!(layout, small);
+        layout.resize(7, 11).unwrap();
+        let (restored, id) = layout.restore_closed(&before, &after, closed).unwrap();
+        assert_eq!(id, closed);
+        assert_eq!(restored.geometry(), before.geometry());
+        layout.split_active(SplitAxis::Rows).unwrap();
+        let edited = layout.geometry();
+        let (restored, id) = layout.restore_closed(&before, &after, closed).unwrap();
+        assert_ne!(id, closed);
+        assert_eq!(restored.geometry().panes.len(), 3);
+        assert_eq!(restored.geometry().panes[0], edited.panes[0]);
+        assert_eq!(restored.active(), id);
     }
 }

@@ -1341,7 +1341,7 @@ try:
     s.expect(b"RUSTMUX_READY>")
     s.send(b"stty -echo; VAR=B; printf '\\033[2J\\033[H%s%s\\n' ZOOM _RIGHT\n")
     s.expect(b"ZOOM_RIGHT")
-    s.send(b"\x02zprintf '\\033[2J\\033[HZOOM:%s:%s\\n' $VAR \"$(stty size)\"\n")
+    s.send(b"\x02Zprintf '\\033[2J\\033[HZOOM:%s:%s\\n' $VAR \"$(stty size)\"\n")
     s.expect(b"ZOOM:B:23 80")
     assert not any(b"ZOOM_BASE" in row for row in s.last_rows)
     s.send(b"\x02hprintf '\\033[2J\\033[HTARGET:%s:%s\\n' $VAR \"$(stty size)\"\n")
@@ -1353,12 +1353,12 @@ try:
     s.expect(b"ZOOM_RESIZE:A:29 100")
     s.send(b"\x02oprintf '\\033[2J\\033[HCYCLE_ZOOM:%s:%s\\n' $VAR \"$(stty size)\"\n")
     s.expect(b"CYCLE_ZOOM:B:29 100")
-    s.send(b"\x02zprintf '\\033[2J\\033[HTILED:%s:%s\\n' $VAR \"$(stty size)\"\n")
+    s.send(b"\x02Zprintf '\\033[2J\\033[HTILED:%s:%s\\n' $VAR \"$(stty size)\"\n")
     s.expect(b"TILED:B:29 50")
     assert any(b"ZOOM_RESIZE:A" in row for row in s.last_rows)
     s.send(b"\x02hprintf '\\033[2J\\033[HRESTORED_ZOOM:%s:%s\\n' $VAR \"$(stty size)\"\n")
     s.expect(b"RESTORED_ZOOM:A:29 49")
-    s.send(b"\x02zexit 0\n")
+    s.send(b"\x02Zexit 0\n")
     end = time.monotonic() + 3
     while any(b"RESTORED_ZOOM:A" in row for row in s.last_rows):
         s.read()
@@ -1375,7 +1375,7 @@ try:
     s.expect(b"RUSTMUX_READY> ")
     s.send(b"stty -echo; printf '\\033[2J\\033[H%s%s\\n' BASE _READY\n")
     s.expect(b"BASE_READY")
-    s.send(b"\x02%\x02z")
+    s.send(b"\x02%\x02Z")
     s.expect(b"RUSTMUX_READY>")
     with tempfile.NamedTemporaryFile(mode="w", suffix=".py") as source:
         source.write(split_mouse)
@@ -1399,7 +1399,7 @@ try:
         source.flush()
         s.send(("exec python3 " + shlex.quote(source.name) + "\n").encode())
         s.expect(b"QUERY_WAIT")
-        s.send(b"\x02%\x02z")
+        s.send(b"\x02%\x02Z")
         s.expect(b"RUSTMUX_READY> ")
         s.read(0.5)
         assert not any(b"QUERY_BG_OK" in row for row in s.last_rows)
@@ -1476,11 +1476,11 @@ finally:
 s = Session()
 try:
     s.expect(b"RUSTMUX_READY> ")
-    s.send(b'\x02"\x02z')
+    s.send(b'\x02"\x02Z')
     s.expect(b"RUSTMUX_READY>")
     s.send(b"stty -echo; printf '\\033[2J\\033[H'; i=0; while [ $i -lt 20 ]; do printf 'RESIZE_HIST_%02d\\n' $i; i=$((i+1)); done\n")
     s.expect(b"RESIZE_HIST_19")
-    s.send(b"\x02z")
+    s.send(b"\x02Z")
     end = time.monotonic() + 2
     # Wait for the restored separator, not a frame from before the shortcut.
     while not any(b"\xe2\x94\x80" in row for row in s.last_rows):
@@ -1493,7 +1493,7 @@ try:
     assert b"History " in s.last_rows[0]
     s.send(b"qprintf '\\n%s%s\\n' RESIZE_PROMPT_ OK\n")
     s.expect(b"RESIZE_PROMPT_OK")
-    s.send(b"\x02z")
+    s.send(b"\x02Z")
     s.expect(b"RESIZE_HIST_00")
     assert any(b"RESIZE_PROMPT_OK" in row for row in s.last_rows)
     s.send(b"printf '\\n%s%s\\n' REGROWN_ INPUT_OK\n")
@@ -1549,7 +1549,7 @@ try:
     s.send(b"\x02\x0b")
     s.send(b"printf 'BOTTOM_%s_' SIZE; stty size\n")
     s.expect(b"BOTTOM_SIZE_12 39")
-    s.send(b"\x02z\x02\x0a\x02z")
+    s.send(b"\x02Z\x02\x0a\x02Z")
     s.send(b"printf 'RESTORED_%s_' SIZE; stty size\n")
     s.expect(b"RESTORED_SIZE_12 39")
     s.send(b"\x02\x0a")
@@ -1592,7 +1592,7 @@ try:
 finally:
     s.close()
 
-# Confirmed pane close preserves siblings, discards staged input, and reaps its shell.
+# Confirmed close hides one shell for undo and preserves existing cancellation checks.
 with tempfile.TemporaryDirectory() as directory:
     record = os.path.join(directory, "pane.pid")
     s = Session()
@@ -1602,7 +1602,7 @@ with tempfile.TemporaryDirectory() as directory:
         s.expect(b"KEEP_READY")
         s.send(b"\x02%")
         s.expect(b"RUSTMUX_READY>")
-        s.send(("stty -echo; echo $$ > " + shlex.quote(record) + "; printf 'PANE_%s\\n' READY\n").encode())
+        s.send(("stty -echo; UNDO_KEEP=restored; cd " + shlex.quote(directory) + "; echo $$ > " + shlex.quote(record) + "; printf 'PANE_%s\\n' READY\n").encode())
         s.expect(b"PANE_READY")
         with open(record) as source:
             closing_pid = int(source.read())
@@ -1616,20 +1616,24 @@ with tempfile.TemporaryDirectory() as directory:
                 assert time.monotonic() < end
             os.kill(closing_pid, 0)
         # Close the zoomed pane: removal unzooms and restores the sibling layout.
-        s.send(b"\x02z\x02x")
+        s.send(b"\x02Z\x02x")
         s.expect(b"Close pane? Type yes:")
         s.send(b"\x1b[200~yes\r\n\x1b[201~")
         s.expect(b"Close pane? Type yes: yes")
         os.kill(closing_pid, 0)
         s.send(b"\rLEAK=1\n")
         s.expect(b"KEEP_READY")
-        try:
-            os.kill(closing_pid, 0)
-        except ProcessLookupError:
-            pass
-        else:
-            raise AssertionError("closed pane shell still alive")
+        os.kill(closing_pid, 0)  # Undo keeps this shell alive and hidden.
         s.send(b"printf '\\nSURVIVOR:%s:%s_' $KEEP ${LEAK-unset}; stty size\n")
+        s.expect(b"SURVIVOR:survivor:unset_23 80")
+        s.send(b"\x02z")
+        command = ("test \"$PWD\" = " + shlex.quote(directory) +
+                   " && printf '\\nUNDO:%s:%s\\n' $UNDO_KEEP $$\n")
+        s.send(command.encode())
+        s.expect(("UNDO:restored:" + str(closing_pid)).encode())
+        s.send(b"\x02x")
+        s.expect(b"Close pane? Type yes:")
+        s.send(b"yes\r")
         s.expect(b"SURVIVOR:survivor:unset_23 80")
         # A target that exits naturally while confirming must not close its sibling.
         s.send(b"\x02%")
@@ -1643,7 +1647,7 @@ with tempfile.TemporaryDirectory() as directory:
             assert time.monotonic() < end, s.last_rows
         s.send(b"printf '\\nSTILL_%s\\n' $KEEP\n")
         s.expect(b"STILL_survivor")
-        # Closing a window's sole pane selects another window; the final one exits.
+        # Sole-pane close selects another window; the final close creates a blank shell.
         s.send(b"\x02c")
         s.expect(b"RUSTMUX_READY>")
         s.send(b"\x02x")
@@ -1652,6 +1656,93 @@ with tempfile.TemporaryDirectory() as directory:
         expect_bar(s, b"*1:shell")
         s.send(b"\x02x")
         s.expect(b"Close pane? Type yes:")
+        s.send(b"yes\r")
+        expect_bar(s, b"*1:shell")
+        s.send(b"\x02&")
+        s.expect(b"Close window? Type yes:")
+        s.send(b"yes\r")
+        s.finish(0)
+    finally:
+        s.close()
+
+# Kill a separate foreground job, retain the shell, and replace only one undo slot.
+with tempfile.TemporaryDirectory() as directory:
+    job_record = os.path.join(directory, "job.pid")
+    shell_record = os.path.join(directory, "shell.pid")
+    s = Session()
+    try:
+        s.expect(b"RUSTMUX_READY>")
+        s.send(b"stty -echo; printf 'BASE_%s\\n' READY\n")
+        s.expect(b"BASE_READY")
+        s.send(b"\x02%")
+        s.expect(b"RUSTMUX_READY>")
+        s.send(("stty -echo; SAVED=original; echo $$ > " + shlex.quote(shell_record) +
+                "; printf 'HISTORY_%s\\n' SAVED\n").encode())
+        s.expect(b"HISTORY_SAVED")
+        with open(shell_record) as source:
+            shell_pid = int(source.read())
+        script = ("import os,time; open(" + repr(job_record) + ", 'w').write(str(os.getpid())); "
+                  "print('\\x1b[?1049h\\x1b[?1003hJOB_RUNNING', flush=True); time.sleep(60)")
+        s.send(("python3 -c " + shlex.quote(script) + "\n").encode())
+        s.expect(b"JOB_RUNNING")
+        with open(job_record) as source:
+            job_pid = int(source.read())
+        s.send(b"\x02x")
+        s.expect(b"Close pane? Type yes:")
+        s.send(b"yes\r")
+        s.expect(b"BASE_READY")
+        end = time.monotonic() + 3
+        while True:
+            try:
+                os.kill(job_pid, 0)
+            except ProcessLookupError:
+                break
+            s.read()
+            assert time.monotonic() < end, "foreground job survived close"
+        os.kill(shell_pid, 0)
+        s.send(b"\x02z")
+        s.expect(b"HISTORY_SAVED")
+        assert not s.private_modes.get(1003, False)
+        s.send(b"printf '\\nRESTORED:%s:%s\\n' $SAVED $$\n")
+        s.expect(("RESTORED:original:" + str(shell_pid)).encode())
+        s.send(b"\x02x")
+        s.expect(b"Close pane? Type yes:")
+        s.send(b"yes\r")
+        s.expect(b"BASE_READY")
+        # New pane C supersedes hidden B; B is finally killed/reaped.
+        s.send(b'\x02"')
+        s.expect(b"RUSTMUX_READY>")
+        s.send(b"stty -echo; SAVED=newest; printf 'NEWEST_%s\\n' READY\n")
+        s.expect(b"NEWEST_READY")
+        trigger = os.path.join(directory, "hidden-trigger")
+        done = os.path.join(directory, "hidden-done")
+        writer = ("import pathlib,sys,time; trigger=pathlib.Path(" + repr(trigger) + "); "
+                  "exec('while not trigger.exists(): time.sleep(0.01)'); "
+                  "sys.stdout.write('hidden-output' * 16000); sys.stdout.flush(); "
+                  "pathlib.Path(" + repr(done) + ").write_text('done')")
+        s.send(("python3 -c " + shlex.quote(writer) + " &\n").encode())
+        s.expect(b"RUSTMUX_READY>")
+        s.send(b"\x02x")
+        s.expect(b"Close pane? Type yes:")
+        s.send(b"yes\r")
+        s.expect(b"BASE_READY")
+        try:
+            os.kill(shell_pid, 0)
+        except ProcessLookupError:
+            pass
+        else:
+            raise AssertionError("older hidden shell was not discarded")
+        with open(trigger, "w") as output:
+            output.write("go")
+        end = time.monotonic() + 4
+        while not os.path.exists(done):
+            s.read()
+            assert time.monotonic() < end, "hidden output stopped draining"
+        assert not any(b"hidden-output" in row for row in s.last_rows)
+        s.send(b"\x02zprintf '\\nONLY_%s\\n' $SAVED\n")
+        s.expect(b"ONLY_newest")
+        s.send(b"\x02&")
+        s.expect(b"Close window? Type yes:")
         s.send(b"yes\r")
         s.finish(0)
     finally:

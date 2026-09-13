@@ -94,15 +94,18 @@ pub fn run(shell_path: &OsStr) -> io::Result<u8> {
     )?;
     let signals = Signals::install()?;
     let mut terminal = Terminal::enter(file)?;
+    let mut closed = None;
     let result = forward(
         &mut terminal.file,
         &mut windows,
         &signals,
         shell_path,
         size.ws_row,
+        &mut closed,
     );
     // Restore the user's terminal before potentially blocking child cleanup.
     let restored = terminal.restore();
+    drop(closed);
     drop(windows);
     match result {
         Err(error) => Err(error),
@@ -287,7 +290,7 @@ fn synchronized_pause(
 }
 
 // Bound total resident grids and descriptors before starting another process.
-const MAX_WINDOWS: usize = 16;
+pub(crate) const MAX_WINDOWS: usize = 16;
 
 #[derive(Debug, PartialEq, Eq)]
 enum WindowKey {
@@ -305,6 +308,7 @@ enum WindowKey {
     Split(SplitAxis),
     NextPane,
     ToggleZoom,
+    UndoClose,
     History,
     FocusPane(Direction),
     ResizePane(Direction),
@@ -454,7 +458,8 @@ impl WindowInput {
                 b'{' => output.push(WindowKey::SwapPanePrevious),
                 b'}' => output.push(WindowKey::SwapPaneNext),
                 b'o' => output.push(WindowKey::NextPane),
-                b'z' => output.push(WindowKey::ToggleZoom),
+                b'Z' => output.push(WindowKey::ToggleZoom),
+                b'z' => output.push(WindowKey::UndoClose),
                 b'[' => output.push(WindowKey::History),
                 8 => output.push(WindowKey::ResizePane(Direction::Left)),
                 10 => output.push(WindowKey::ResizePane(Direction::Down)),
@@ -491,6 +496,7 @@ fn forward(
     signals: &Signals,
     shell_path: &OsStr,
     mut outer_rows: u16,
+    closed: &mut Option<crate::closed_pane::ClosedPane>,
 ) -> io::Result<u8> {
     let mut renderer = Renderer::default();
     let mut to_terminal = VecDeque::new();
@@ -508,6 +514,11 @@ fn forward(
         if received != 0 {
             return Ok((128 + received) as u8);
         }
+        if let Some(saved) = closed.as_mut()
+            && !saved.service()?
+        {
+            *closed = None;
+        }
         if close_requested.is_some() && to_terminal.is_empty() {
             let (id, pane_id) = close_requested.take().unwrap();
             // Finish the already encoded physical frame before changing ownership.
@@ -519,16 +530,47 @@ fn forward(
                 {
                     continue;
                 }
-                let partial =
-                    pane_id.filter(|_| windows.get(id).unwrap().content().iter().len() > 1);
-                if let Some(pane_id) = partial {
-                    let panes = windows.get_mut(id).unwrap().content_mut();
-                    panes.get_mut(pane_id).unwrap().shell_mut().terminate()?;
-                    drop(panes.close(pane_id)?);
-                    panes.synchronize_sizes()?;
+                if let Some(pane_id) = pane_id {
+                    let window = windows.get(id).unwrap();
+                    let before = window.content().layout().clone();
+                    let name = window.name().to_owned();
+                    let sole_pane = window.content().iter().len() == 1;
+                    // Keep a visible input target so the last close remains undoable.
+                    let replacement = if sole_pane && windows.iter().len() == 1 {
+                        let (rows, columns) = before.dimensions();
+                        Some(spawn_window(shell_path, rows, columns)?)
+                    } else {
+                        None
+                    };
+                    windows
+                        .get_mut(id)
+                        .unwrap()
+                        .content_mut()
+                        .get_mut(pane_id)
+                        .unwrap()
+                        .stop_for_hide()?;
+                    if let Some(replacement) = replacement {
+                        windows.create("shell".into(), replacement)?;
+                    }
+                    let (mut pane, after) = if sole_pane {
+                        (windows.close(id)?.into_content().into_single(), None)
+                    } else {
+                        let panes = windows.get_mut(id).unwrap().content_mut();
+                        let pane = panes.close(pane_id)?;
+                        panes.synchronize_sizes()?;
+                        (pane, Some(panes.layout().clone()))
+                    };
+                    pane.parts_mut().3.to_shell.clear();
+                    *closed = Some(crate::closed_pane::ClosedPane {
+                        pane: Some(pane),
+                        window: id,
+                        name,
+                        before,
+                        after,
+                        id: pane_id,
+                    });
                 } else {
                     if windows.iter().len() == 1 {
-                        // run() restores the terminal before dropping the last shell.
                         return Ok(0);
                     }
                     for (_, pane) in windows.get_mut(id).unwrap().content_mut().iter_mut() {
@@ -891,6 +933,22 @@ fn forward(
                             force_redraw = true;
                         }
                     }
+                    WindowKey::UndoClose => {
+                        if let Some(mut saved) = closed.take() {
+                            if let Err(error) = saved.restore(windows) {
+                                if saved.pane.is_none() {
+                                    return Err(error);
+                                }
+                                *closed = Some(saved);
+                                if to_terminal.is_empty() {
+                                    to_terminal.push_back(7);
+                                }
+                            } else {
+                                renderer.invalidate();
+                                force_redraw = true;
+                            }
+                        }
+                    }
                     WindowKey::ToggleZoom => {
                         let panes = windows.active_mut().unwrap().content_mut();
                         let was_zoomed = panes.layout().is_zoomed();
@@ -1046,6 +1104,21 @@ fn forward(
                     }
                 }
             }
+            // Wake immediately for hidden PTY traffic too. Its bounded I/O runs
+            // at the top of the next loop and does not schedule a visible frame.
+            if let Some(saved) = closed.as_ref() {
+                let pane = saved.pane.as_ref().unwrap();
+                let mut flags = PollFlags::empty();
+                if pane.io().reply_read_limit() > 0 {
+                    flags |= PollFlags::POLLIN;
+                }
+                if !pane.io().to_shell.is_empty() {
+                    flags |= PollFlags::POLLOUT;
+                }
+                if !flags.is_empty() {
+                    fds.push(PollFd::new(pane.shell().master_fd().unwrap(), flags));
+                }
+            }
             match poll(&mut fds, timeout) {
                 Err(Errno::EINTR) => continue,
                 Err(e) => return Err(e.into()),
@@ -1055,6 +1128,7 @@ fn forward(
                 fds[0].revents().unwrap_or(PollFlags::empty()),
                 fds[1..]
                     .iter()
+                    .take(interests.len()) // Hidden readiness is serviced on the next turn.
                     .map(|fd| fd.revents().unwrap_or(PollFlags::empty()))
                     .collect::<Vec<_>>(),
             )
@@ -1379,7 +1453,7 @@ mod window_input_tests {
     #[test]
     fn split_and_pane_focus_shortcuts_are_decoded() {
         assert_eq!(
-            decode(b"\x02%\x02\"\x02o\x02z\x02[\x02h\x02j\x02k\x02l"),
+            decode(b"\x02%\x02\"\x02o\x02Z\x02[\x02h\x02j\x02k\x02l"),
             vec![
                 WindowKey::Split(SplitAxis::Columns),
                 WindowKey::Split(SplitAxis::Rows),
@@ -1468,6 +1542,23 @@ mod window_input_tests {
     }
 
     #[test]
+    fn undo_and_zoom_use_distinct_keys_and_paste_never_invokes_them() {
+        assert_eq!(
+            decode(b"\x02z\x02Z"),
+            vec![WindowKey::UndoClose, WindowKey::ToggleZoom]
+        );
+        let bytes = b"\x1b[200~\x02z\x02Z\x1b[201~";
+        assert_eq!(
+            decode(bytes),
+            bytes
+                .iter()
+                .copied()
+                .map(WindowKey::Byte)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
     fn numeric_shortcuts_consume_only_the_prefixed_digit() {
         for (digit, position) in (b'1'..=b'9').zip(0..9).chain([(b'0', 9)]) {
             assert_eq!(
@@ -1483,7 +1574,7 @@ mod window_input_tests {
 
     #[test]
     fn bracketed_paste_and_utf8_are_forwarded_byte_for_byte() {
-        let bytes = "\x1b[200~中文\x02c\x02n\x02p\x021\x020\x02\t\x02&\x02<\x02>\x02%\x02o\x02z\x02[\x02h\x02j\x02k\x02l\x02\x02\x1b[201~"
+        let bytes = "\x1b[200~中文\x02c\x02n\x02p\x021\x020\x02\t\x02&\x02<\x02>\x02%\x02o\x02Z\x02[\x02h\x02j\x02k\x02l\x02\x02\x1b[201~"
             .as_bytes();
         assert_eq!(
             decode(bytes),
