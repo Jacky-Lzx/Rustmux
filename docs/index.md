@@ -1,7 +1,7 @@
 # Rustmux: main-human
 
 This documentation describes the implementation on `main-human`. The branch
-provides a single interactive shell with keyboard input, parsed screen rendering,
+provides multiple shell windows with prefix-key switching, parsed screen rendering,
 dynamic resize propagation and outer-terminal restoration. The terminal protocol
 subset is documented in the [input and rendering loop](reference/input-loop.md).
 Split panes and session persistence are not yet implemented.

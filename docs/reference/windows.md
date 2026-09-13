@@ -1,9 +1,9 @@
-# Window Model
+# Windows
 
-This is the first model-only part of H05. `window::Windows<T>` owns an ordered
-collection of named windows, each containing a caller-supplied value. The CLI
-still runs one shell: this module does not yet create PTYs, intercept shortcuts,
-draw a window bar or implement an interactive rename prompt.
+The CLI supports multiple terminal windows, each with one shell and a full-size
+screen. `window::Windows<T>` owns their ordered collection and stable identities.
+This is partial H05: there is no window bar, interactive rename prompt, split
+layout or persistent session yet.
 
 ## Identity and focus
 
@@ -36,12 +36,11 @@ window drops its content normally, and dropping the collection drops remaining
 contents. `into_content` transfers the removed content without cloning it.
 No terminal output or other I/O occurs inside this model.
 
-This intentionally separates the current single-pane implementation from the
+This intentionally separates the current one-pane-per-window implementation from the
 broader `main` window/pane implementation, which also includes layouts, floating
 terminals and persistent sessions. This model is not an H05 feature-acceptance
-claim. The next event-loop integration must continue reading inactive windows,
-route keyboard input to the active window,
-and synchronize display and modes when focus changes.
+claim. The event loop reads inactive windows, routes keyboard input to the active
+window, and synchronizes display and modes when focus changes.
 
 ## Verification
 
@@ -55,8 +54,7 @@ These are model tests, not interactive multi-window or process-preservation test
 ## Per-window terminal contents
 
 `pane::Pane` now supplies concrete contents for `Windows<Pane>`: one `PtyShell`,
-one incremental `Parser` and one `Screen`. The current single-window CLI uses
-this same container. `Pane::spawn` validates the grid (at most 65,536 cells),
+one incremental `Parser` and one `Screen`. The CLI uses this same container. `Pane::spawn` validates the grid (at most 65,536 cells),
 allocates it before spawning, and sets the PTY master nonblocking. Failure after
 spawning drops the owned shell, closing the master and reclaiming the direct child.
 Follow the existing single-threaded spawning requirement of `PtyShell`.
@@ -80,8 +78,7 @@ cache and 6ms frame cadence remain shared in the event loop.
 nonblocking masters, stable PIDs across selection, background screen updates,
 separate parser/mode state and reclamation of one child while the other continues
 executing commands. Startup errors and invalid dimensions are also covered.
-This exercises process ownership but does not add an interactive multi-window
-CLI: multi-PTY polling, focus shortcuts and input routing are the next integration.
+These ownership tests complement the interactive CLI tests described below.
 
 ## Independent I/O state
 
@@ -101,5 +98,55 @@ performed outside the event loop do not automatically update cached status.
 Unit tests cover input/reply capacity boundaries, final draining after exit,
 and window switching/removal with different queues, synchronization times and
 exit states. Existing real-PTY tests cover the actual forwarding and restoration
-paths. This is still preparation for multi-window polling, not an interactive
-window-switching feature.
+paths. These states now drive multi-window polling.
+
+## Interactive controls
+
+| Input | Action |
+| --- | --- |
+| Ctrl-B, then c | Create a shell window and select it |
+| Ctrl-B, then n | Select the next window, wrapping |
+| Ctrl-B, then p | Select the previous window, wrapping |
+| Ctrl-B, then Ctrl-B | Send one literal Ctrl-B to the active child |
+| `exit` in the shell | Close that window after draining its final output |
+
+An unrecognized prefix combination forwards both bytes unchanged. A prefix can
+span separate reads and waits for the following byte without a timeout. Ordinary
+Escape and UTF-8 bytes are forwarded immediately. Bracketed paste markers and
+payload are forwarded unchanged, including Ctrl-B combinations inside the paste.
+Unbracketed pasted text is indistinguishable from typing and follows the same
+shortcut rules. Key bindings are fixed for this initial integration.
+
+There are at most 16 windows. New shells use the originally selected executable
+and Rustmux's startup working directory; active-shell cwd inheritance is not yet
+implemented. A failed creation or the window limit preserves existing windows
+and focus, with a best-effort bell when the output queue is empty. No error dialog
+or status bar is provided yet.
+
+Each iteration performs at most one bounded read/write per ready pane. Inactive
+windows keep parsing output and replying to terminal queries without rendering
+their grids. SIGWINCH resizes all windows. Switching invalidates the physical
+renderer and redraws the selected screen with its modes after any queued frame
+finishes; queued frames are never discarded midway. Selecting a window forces
+one redraw even if that child's synchronized-output hold is active; later updates
+still obey the hold. Window switching does not synthesize focus-in/out events.
+
+Raw terminal input has a shared 64 KiB staging queue; each child also retains its
+own 64 KiB input/reply queue. Input is decoded in order, so data before a shortcut
+stays with the old child and subsequent bytes go to the newly selected one.
+Queued input backpressure can delay shortcuts. On active-child exit, unprocessed
+staged input and a pending prefix are discarded instead of reaching its successor.
+
+An inactive window is removed when its output is drained and child status is
+known. The active window's final frame is delivered before removal; focus then
+follows the model's successor/predecessor rule. The last window's exit status is
+returned. Global termination signals restore the outer terminal and clean up all
+owned children. A PTY/I/O failure still ends the whole CLI; per-window error
+recovery is not implemented.
+
+The nested-PTY suite tests actual creation, previous/next selection, retained
+shell variables, background output, resize of inactive PTYs, mode synchronization,
+child exit and focus fallback, literal-prefix/paste forwarding, failed creation,
+terminal-query replies to inactive children, the 16-window cap, and cleanup of
+all recorded child PIDs on global termination. These do not claim acceptance
+of the remaining H05 UI features or of all full-screen application behavior.

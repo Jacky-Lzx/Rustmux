@@ -13,15 +13,17 @@ this avoids modifying the parent's shared file status flags, and avoids polling
 macOS's /dev/tty indirection. No shell command string is interpolated at startup.
 
 The outer terminal enters raw mode so Ctrl-C and other input arrive as bytes.
-An alternate screen preserves the previous screen contents. Input is forwarded to
-the inner PTY unchanged, including [bracketed paste](bracketed-paste.md) markers
+An alternate screen preserves the previous screen contents. After handling the
+[window shortcuts](windows.md#interactive-controls), input is forwarded to the
+active PTY unchanged, including [bracketed paste](bracketed-paste.md) markers
 when enabled by the child. Frames also synchronize
 [application cursor key mode](application-cursor.md) with the outer terminal. Output follows `PTY -> Parser -> Screen -> render ->
 outer terminal`. The inner PTY's line discipline and shell handle editing and
 keyboard signals. The parser supports the documented control subset and standard
 eight-column tabs; unknown commands are ignored rather than passed through.
 
-Both descriptors are nonblocking. Keyboard input has a 64 KiB queue. Output holds
+All terminal descriptors are nonblocking. Raw input has a 64 KiB staging queue,
+and each pane has a separate 64 KiB keyboard/reply queue. Output holds
 at most one ANSI frame, capped at 16 MiB; grids are limited to 65,536 cells.
 These limits also apply on resize. A limit error follows normal terminal cleanup.
 Child output reads pause while a frame is pending, applying backpressure without
@@ -119,5 +121,5 @@ drain wait; successful restoration checks still happen before those closes.
 Child-specific I/O state now belongs to `Pane`: the input/reply FIFO, dirty flag,
 synchronized-output start time, EOF observation time and cached child status.
 The event loop retains one physical-terminal frame queue and render deadline.
-This preserves the current single-window behavior while preventing future focus
-changes from reassigning pending bytes or lifecycle state to another child.
+This keeps pending bytes and lifecycle state with their originating child across
+focus changes. Background panes continue to receive polling time.

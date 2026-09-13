@@ -116,6 +116,10 @@ impl Pane {
         self.io.eof_at.get_or_insert_with(Instant::now);
     }
 
+    pub(crate) fn io(&self) -> &PaneIo {
+        &self.io
+    }
+
     // Borrow disjoint pane state for readiness-driven event-loop operations.
     pub(crate) fn parts_mut(&mut self) -> (&mut PtyShell, &mut Parser, &mut Screen, &mut PaneIo) {
         (

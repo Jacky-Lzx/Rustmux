@@ -79,6 +79,10 @@ impl<T> Windows<T> {
         self.entries.iter()
     }
 
+    pub fn iter_mut(&mut self) -> impl ExactSizeIterator<Item = &mut Window<T>> {
+        self.entries.iter_mut()
+    }
+
     pub fn active(&self) -> Option<&Window<T>> {
         self.entries.get(self.active)
     }

@@ -17,12 +17,17 @@ RUSTMUX_SHELL=/bin/sh ./target/debug/rustmux
 ```
 
 Type commands normally. Ctrl-C reaches the inner terminal rather than terminating
-Rustmux itself. Type `exit` or use the shell's EOF key to leave. The shell's exit
-status is returned to the caller. Shell output is drained before normal exit, and
+Rustmux itself. Type `exit` or use the shell's EOF key to close the current window. When the last
+window closes, its exit status is returned to the caller. Shell output is drained before normal exit, and
 the outer terminal modes and previous screen are restored.
 
+Use Ctrl-B followed by `c` to create a window, `n` for the next window and `p`
+for the previous one. Ctrl-B twice sends a literal Ctrl-B to the child. Background
+shells continue running. See [Windows](../reference/windows.md#interactive-controls)
+for limits and input behavior. There is no window bar yet.
+
 The CLI now parses shell output and renders its own screen model. Window changes
-resize both model grids and the inner PTY. Dimensions must fit within 65,536 cells.
+resize both model grids and the PTY in every window. Dimensions must fit within 65,536 cells.
 There is no scrollback: old text scrolled out of the grid is discarded.
 
 Only the documented terminal-control subset is supported. Full-screen editors,

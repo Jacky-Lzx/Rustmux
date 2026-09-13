@@ -35,4 +35,4 @@
 - [Device Attributes](reference/device-attributes.md)
 - [Rendering Measurements](reference/rendering-performance.md)
 
-- [Window Model](reference/windows.md)
+- [Windows](reference/windows.md)

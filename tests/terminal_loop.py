@@ -61,6 +61,7 @@ class Session:
         self.last_rows = []
         self.last_frame = b""
         self.cursor_shape = None
+        self.private_modes = {}
 
     def read(self, seconds=0.05):
         if select.select([self.master], [], [], seconds)[0]:
@@ -77,6 +78,9 @@ class Session:
                     if b"\x1b[?25l" not in frame:
                         continue
                     self.last_frame = frame
+                    for mode in re.finditer(rb"\x1b\[\?([0-9;]+)([hl])", frame):
+                        for number in mode.group(1).split(b";"):
+                            self.private_modes[int(number)] = mode.group(2) == b"h"
                     for shape in re.finditer(rb"\x1b\[([0-6]) q", frame):
                         self.cursor_shape = int(shape.group(1))
                     # Drawing CUPs replace cell spans. The final CUP only positions
@@ -832,3 +836,157 @@ finally:
 result = subprocess.run([BINARY], stdin=subprocess.DEVNULL, capture_output=True, timeout=5)
 assert result.returncode == 1 and b"must be terminals" in result.stderr
 print("Nested PTY: Unicode, backspace, Ctrl-C, 200KB output, exit tail, termios, startup failure and SIGTERM passed.")
+
+# Real interactive windows: retain shell variables, background output and size.
+s = Session()
+try:
+    s.expect(b"RUSTMUX_READY> ")
+    s.send(b"WIN=A; printf '\\033[2J\\033[H%s%s\\n' READY _A\n")
+    s.expect(b"READY_A")
+    s.send(b"sleep 0.2; printf '\\033[?2004h\\033[2J\\033[H%s%s\\n' BACK _A\n")
+    s.send(b"\x02")
+    s.send(b"c")
+    s.expect(b"RUSTMUX_READY> ")
+    s.send(b"printf '\\033[2J\\033[H%s:%s\\n' WINDOW_B ${WIN-unset}\n")
+    s.expect(b"WINDOW_B:unset")
+    s.read(0.3)
+    assert not any(b"BACK_A" in row for row in s.last_rows)
+    fcntl.ioctl(s.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 100, 0, 0))
+    s.read(0.1)
+    s.send(b"\x02p")
+    s.expect(b"BACK_A")
+    assert s.private_modes[2004]
+    s.send(b"printf '\\n%s:%s:%s\\n' RETAINED $WIN \"$(stty size)\"\n")
+    s.expect(b"RETAINED:A:40 100")
+    s.send(b"\x02n")
+    s.expect(b"WINDOW_B:unset")
+    assert not s.private_modes[2004]
+    s.send(b"exit 4\n")
+    s.expect(b"RETAINED:A")
+    s.send(b"printf '\\n%s%s\\n' LAST _WINDOW; exit 7\n")
+    s.finish(7)
+    assert any(b"LAST_WINDOW" in row for row in s.last_rows)
+finally:
+    s.close()
+
+# Prefix escaping and bracketed paste containing window commands reach the child.
+prefix_probe = r"""
+import os, select, time, tty
+tty.setraw(0)
+os.write(1, b"\x1b[?2004h\x1b[2J\x1b[HPREFIX_READY")
+expected = b"\x02n\x02z\x1b[200~paste\x02c\x02n\x02p\x1b[201~"
+data = bytearray()
+end = time.monotonic() + 5
+while len(data) < len(expected):
+    assert time.monotonic() < end, repr(data)
+    if select.select([0], [], [], 0.1)[0]:
+        data.extend(os.read(0, len(expected) - len(data)))
+assert data == expected, repr(data)
+os.write(1, b"\x1b[2J\x1b[HPREFIX_PASSED")
+"""
+s = Session()
+try:
+    s.expect(b"RUSTMUX_READY> ")
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py") as source:
+        source.write(prefix_probe)
+        source.flush()
+        s.send(("exec python3 " + shlex.quote(source.name) + "\n").encode())
+        s.expect(b"PREFIX_READY")
+        s.send(b"\x02\x02n\x02z\x1b[20")
+        s.send(b"0~paste\x02c\x02n\x02p\x1b[201~")
+        s.finish(0)
+        assert any(b"PREFIX_PASSED" in row for row in s.last_rows)
+finally:
+    s.close()
+
+# A later spawn failure must not close or replace the existing window.
+with tempfile.TemporaryDirectory(prefix="rustmux-window-spawn-") as directory:
+    shell = os.path.join(directory, "shell")
+    with open(shell, "w") as source:
+        source.write('#!/bin/sh\nrm -- "$0"\nexport PS1="RUSTMUX_READY> "\nexec /bin/sh -i\n')
+    os.chmod(shell, 0o700)
+    s = Session(shell=shell)
+    try:
+        s.expect(b"RUSTMUX_READY> ")
+        s.send(b"\x02c")
+        s.send(b"printf '\\n%s%s\\n' SPAWN_ SURVIVED; exit 0\n")
+        s.finish(0)
+        assert any(b"SPAWN_SURVIVED" in row for row in s.last_rows)
+    finally:
+        s.close()
+
+# An inactive child's terminal query must be answered without stealing focus.
+background_query = r"""
+import os, select, time, tty
+tty.setraw(0)
+os.write(1, b"\x1b[2J\x1b[HQUERY_WAIT")
+time.sleep(0.3)
+os.write(1, b"\x1b[4;5H\x1b[6n")
+data = bytearray()
+end = time.monotonic() + 5
+while len(data) < len(b"\x1b[4;5R"):
+    assert time.monotonic() < end, repr(data)
+    if select.select([0], [], [], 0.1)[0]:
+        data.extend(os.read(0, 1))
+assert data == b"\x1b[4;5R", repr(data)
+os.write(1, b"\x1b[2J\x1b[HQUERY_BG_OK")
+assert select.select([0], [], [], 5)[0]
+assert os.read(0, 1) == b"x"
+"""
+s = Session()
+try:
+    s.expect(b"RUSTMUX_READY> ")
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py") as source:
+        source.write(background_query)
+        source.flush()
+        s.send(("exec python3 " + shlex.quote(source.name) + "\n").encode())
+        s.expect(b"QUERY_WAIT")
+        s.send(b"\x02c")
+        s.expect(b"RUSTMUX_READY> ")
+        s.read(0.5)
+        assert not any(b"QUERY_BG_OK" in row for row in s.last_rows)
+        s.send(b"\x02p")
+        s.expect(b"QUERY_BG_OK")
+        s.send(b"x")
+        s.expect(b"RUSTMUX_READY> ")
+        s.send(b"exit 0\n")
+        s.finish(0)
+finally:
+    s.close()
+
+# The resident-window cap and global termination cover every owned direct child.
+with tempfile.TemporaryDirectory(prefix="rustmux-window-limit-") as directory:
+    shell = os.path.join(directory, "shell")
+    record = os.path.join(directory, "pids")
+    with open(shell, "w") as source:
+        source.write('#!/bin/sh\nprintf "%s\\n" "$$" >> ' + shlex.quote(record) + '\n'
+                     'export PS1="RUSTMUX_READY> "\nexec /bin/sh -i\n')
+    os.chmod(shell, 0o700)
+    s = Session(shell=shell)
+    try:
+        s.expect(b"RUSTMUX_READY> ")
+        s.send(b"\x02c" * 15)
+        end = time.monotonic() + 5
+        while True:
+            s.read()
+            with open(record) as source:
+                pids = [int(line) for line in source if line.strip()]
+            if len(pids) == 16:
+                break
+            assert time.monotonic() < end, pids
+        s.send(b"\x02c")
+        for _ in range(4):
+            s.read(0.05)
+        with open(record) as source:
+            assert len(source.readlines()) == 16
+        os.kill(s.app_pid, signal.SIGTERM)
+        s.finish(128 + signal.SIGTERM)
+        for pid in pids:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                pass
+            else:
+                raise AssertionError(("child still alive after global shutdown", pid))
+    finally:
+        s.close()
