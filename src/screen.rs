@@ -88,7 +88,7 @@ struct SavedCursor {
 ///
 /// The text API accepts printable ASCII, LF, CR and BS. Cursor movement and
 /// erasure are separate operations used by the parser. Grapheme-cluster shaping
-/// and interactive history browsing belong to later steps.
+/// remains outside this model; history browsing uses a separate snapshot view.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Screen {
     rows: usize,

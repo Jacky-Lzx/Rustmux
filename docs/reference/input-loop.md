@@ -40,7 +40,7 @@ its bounded wait expires. Explicit focus/layout changes force a redraw. See
 50 ms for signal/exit checks, shortened when a frame is due. This is scheduling,
 not a hard real-time guarantee. The final frame bypasses the interval on EOF.
 Scrolling output updates the grid and records bounded primary-screen
-[history](scrollback.md), which cannot yet be browsed interactively. Intermediate
+[history](scrollback.md), browsable as a frozen snapshot with Ctrl-B `[`. Intermediate
 states may be coalesced before painting. The output is no longer a byte-for-byte copy of
 the child's stream.
 

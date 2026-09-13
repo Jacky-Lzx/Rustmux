@@ -40,9 +40,8 @@ soft-wrap boundaries needed for logical-line reflow.
 modes. RIS clears history with the screen reset; DECSTR and normal display erasure
 preserve it. No history-clear escape sequence is added in this step.
 
-There is no history browsing key, mouse-wheel scrolling, copy mode, persistence
-or renderer integration yet. The normal live display is unchanged. Browsing and
-resize/reflow are subsequent steps built on this storage.
+Ctrl-B `[` opens the [history browser](history-view.md). Mouse-wheel navigation,
+copy mode, persistence and resize/reflow remain subsequent steps.
 
 `cargo test --test scrollback` checks exact Unicode/style preservation, LF and
 wrap capture, explicit scrolling, editing exclusion, margins and alternate-screen

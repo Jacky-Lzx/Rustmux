@@ -1411,3 +1411,52 @@ try:
         s.finish(0)
 finally:
     s.close()
+
+# Browse a frozen pane snapshot while new output arrives; navigation never types into the shell.
+s = Session()
+try:
+    s.expect(b"RUSTMUX_READY> ")
+    s.send(b"stty -echo; printf '\\033[2J\\033[H%s%s\\n' HISTORY _LEFT\n")
+    s.expect(b"HISTORY_LEFT")
+    s.send(b"\x02%")
+    s.expect(b"RUSTMUX_READY>")
+    with tempfile.TemporaryDirectory(prefix="rustmux-history-") as directory:
+        trigger = os.path.join(directory, "continue")
+        command = (
+            "stty -echo; i=0; while [ $i -lt 45 ]; do printf 'HIST_%02d\\n' $i; i=$((i+1)); done; "
+            "(while [ ! -f " + shlex.quote(trigger) + " ]; do sleep 0.05; done; "
+            "printf '\\nLATE_HISTORY_OUTPUT\\n') &\n"
+        )
+        s.send(command.encode())
+        s.expect(b"HIST_44")
+        s.send(b"\x02[g")
+        s.expect(b"HIST_00")
+        assert b"History " in s.last_rows[0]
+        assert any(b"HISTORY_LEFT" in row for row in s.last_rows)
+        frozen = list(s.last_rows)
+        with open(trigger, "w") as file:
+            file.write("go")
+        end = time.monotonic() + 0.3
+        while time.monotonic() < end:
+            s.read(0.05)
+        assert s.last_rows == frozen
+        s.send(b"\x1b[200~qjG\x03\x02c\x1b[201~")
+        s.read(0.1)
+        assert s.last_rows == frozen
+        s.send(b"G")
+        s.expect(b"History 0/")
+        assert not any(b"LATE_HISTORY_OUTPUT" in row for row in s.last_rows)
+        s.send(b"q")
+        s.expect(b"LATE_HISTORY_OUTPUT")
+        s.send(b"printf '\\n%s%s\\n' INPUT_ INTACT\n")
+        s.expect(b"INPUT_INTACT")
+        s.send(b"\x02[\x1b[5~")
+        s.expect(b"History ")
+        fcntl.ioctl(s.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
+        expect_bar(s, b"*1:shell")
+        s.send(b"printf '\\n%s%s\\n' RESIZE_ LIVE\n")
+        s.expect(b"RESIZE_LIVE")
+    os.kill(s.app_pid, signal.SIGTERM)
+    s.finish(128 + signal.SIGTERM)
+finally:
+    s.close()

@@ -304,6 +304,7 @@ enum WindowKey {
     Split(SplitAxis),
     NextPane,
     ToggleZoom,
+    History,
     FocusPane(Direction),
 }
 
@@ -447,6 +448,7 @@ impl WindowInput {
                 b'"' => output.push(WindowKey::Split(SplitAxis::Rows)),
                 b'o' => output.push(WindowKey::NextPane),
                 b'z' => output.push(WindowKey::ToggleZoom),
+                b'[' => output.push(WindowKey::History),
                 b'h' => output.push(WindowKey::FocusPane(Direction::Left)),
                 b'j' => output.push(WindowKey::FocusPane(Direction::Down)),
                 b'k' => output.push(WindowKey::FocusPane(Direction::Up)),
@@ -488,6 +490,7 @@ fn forward(
     let mut force_redraw = true;
     let mut bar_dirty = false;
     let mut prompt: Option<WindowPrompt> = None;
+    let mut history: Option<crate::history_view::HistoryView> = None;
     let mut close_requested = None;
     loop {
         let received = signals.pending.load(Ordering::Relaxed);
@@ -528,6 +531,10 @@ fn forward(
             if size.ws_row != 0 && size.ws_col != 0 {
                 check_size(size.ws_row, size.ws_col)?;
                 outer_rows = size.ws_row;
+                if history.take().is_some() {
+                    input.clear();
+                    keys = WindowInput::default();
+                }
                 renderer.invalidate();
                 force_redraw = true;
                 Some(size)
@@ -603,14 +610,17 @@ fn forward(
                     Instant::now(),
                     state.eof,
                 );
-                if !zoomed || pane_id == focused {
+                if (!zoomed || pane_id == focused)
+                    && !(id == active && pane_id == focused && history.is_some())
+                {
                     paused |= pane_paused;
                     eof |= state.eof;
                     dirty |= state.dirty;
                 }
             }
             if id == active {
-                if panes.active().io().eof && prompt.is_some() {
+                if panes.active().io().eof && (prompt.is_some() || history.is_some()) {
+                    history = None;
                     prompt = None;
                     renderer.invalidate();
                     force_redraw = true;
@@ -622,10 +632,28 @@ fn forward(
                     && to_terminal.is_empty()
                     && (eof || force_redraw || Instant::now() >= next_frame)
                 {
-                    let screens: Vec<_> =
-                        panes.iter().map(|(id, pane)| (id, pane.screen())).collect();
+                    let historical = history.as_ref().map(|view| view.render()).transpose()?;
+                    let screens: Vec<_> = panes
+                        .iter()
+                        .map(|(pane_id, pane)| {
+                            let screen = if pane_id == focused {
+                                historical.as_ref().unwrap_or(pane.screen())
+                            } else {
+                                pane.screen()
+                            };
+                            (pane_id, screen)
+                        })
+                        .collect();
                     let content = pane_view::compose(panes.layout(), &screens)?;
-                    let view = compose(&content, outer_rows, &names, active_index)?;
+                    let mut view = compose(&content, outer_rows, &names, active_index)?;
+                    if let Some(history) = &history
+                        && outer_rows > 1
+                    {
+                        crate::chrome::prepare_row(&mut view, crate::chrome::bar_style(true));
+                        for character in history.label().chars() {
+                            view.print(character);
+                        }
+                    }
                     if let Some(prompt) = &prompt {
                         renderer
                             .render(&prompt.overlay(&view), &mut FrameWriter(&mut to_terminal))?;
@@ -683,6 +711,10 @@ fn forward(
                     panes.synchronize_sizes()?;
                 }
                 if was_active {
+                    if history.take().is_some() {
+                        input.clear();
+                        keys = WindowInput::default();
+                    }
                     if was_focused {
                         input.clear();
                         keys = WindowInput::default();
@@ -705,6 +737,14 @@ fn forward(
         // Decode in input order. Bytes preceding a switch remain queued for the
         // old child; following bytes target the newly selected one.
         while close_requested.is_none() && !input.is_empty() {
+            if let Some(view) = &mut history {
+                if view.feed(input.pop_front().unwrap()) {
+                    history = None;
+                    keys = WindowInput::default();
+                }
+                force_redraw = true;
+                continue;
+            }
             if let Some(editor) = &mut prompt {
                 let result = editor.feed(input.pop_front().unwrap(), Instant::now());
                 match result {
@@ -780,6 +820,16 @@ fn forward(
                                     to_terminal.push_back(7);
                                 }
                             }
+                        }
+                    }
+                    WindowKey::History => {
+                        history = crate::history_view::HistoryView::new(
+                            windows.active().unwrap().content().active().screen(),
+                        );
+                        keys = WindowInput::default();
+                        if history.is_some() {
+                            renderer.invalidate();
+                            force_redraw = true;
                         }
                     }
                     WindowKey::ToggleZoom => {
@@ -889,6 +939,7 @@ fn forward(
         let active_set = windows.active().unwrap().content();
         let active_dirty = active_set.iter().any(|(id, pane)| {
             (!active_set.layout().is_zoomed() || id == active_set.layout().active())
+                && !(history.is_some() && id == active_set.layout().active())
                 && pane.io().dirty
         });
         let mut outer_events = PollFlags::empty();
@@ -1264,12 +1315,13 @@ mod window_input_tests {
     #[test]
     fn split_and_pane_focus_shortcuts_are_decoded() {
         assert_eq!(
-            decode(b"\x02%\x02\"\x02o\x02z\x02h\x02j\x02k\x02l"),
+            decode(b"\x02%\x02\"\x02o\x02z\x02[\x02h\x02j\x02k\x02l"),
             vec![
                 WindowKey::Split(SplitAxis::Columns),
                 WindowKey::Split(SplitAxis::Rows),
                 WindowKey::NextPane,
                 WindowKey::ToggleZoom,
+                WindowKey::History,
                 WindowKey::FocusPane(Direction::Left),
                 WindowKey::FocusPane(Direction::Down),
                 WindowKey::FocusPane(Direction::Up),
@@ -1294,7 +1346,7 @@ mod window_input_tests {
 
     #[test]
     fn bracketed_paste_and_utf8_are_forwarded_byte_for_byte() {
-        let bytes = "\x1b[200~中文\x02c\x02n\x02p\x021\x020\x02\t\x02&\x02<\x02>\x02%\x02o\x02z\x02h\x02j\x02k\x02l\x02\x02\x1b[201~"
+        let bytes = "\x1b[200~中文\x02c\x02n\x02p\x021\x020\x02\t\x02&\x02<\x02>\x02%\x02o\x02z\x02[\x02h\x02j\x02k\x02l\x02\x02\x1b[201~"
             .as_bytes();
         assert_eq!(
             decode(bytes),

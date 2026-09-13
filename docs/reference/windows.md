@@ -114,6 +114,7 @@ paths. These states now drive multi-window polling.
 | Ctrl-B, then , | Rename the active window |
 | Ctrl-B, then Ctrl-B | Send one literal Ctrl-B to the active child |
 | Ctrl-B, then % / " | Split the active pane left/right or top/bottom |
+| Ctrl-B, then [ | Browse current-pane history |
 | Ctrl-B, then z | Toggle active-pane zoom |
 | Ctrl-B, then o | Select the next pane, wrapping |
 | Ctrl-B, then h / j / k / l | Select the pane left / down / up / right |

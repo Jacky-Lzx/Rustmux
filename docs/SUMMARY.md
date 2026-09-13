@@ -42,3 +42,4 @@
 - [Composing Pane Screens](reference/pane-composition.md)
 - [Interactive Splits](reference/interactive-splits.md)
 - [Scrollback Storage](reference/scrollback.md)
+- [Browsing History](reference/history-view.md)
