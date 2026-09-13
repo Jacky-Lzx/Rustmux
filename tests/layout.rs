@@ -1,4 +1,4 @@
-use rustmux::layout::{Layout, MAX_PANES, Rect, SplitAxis};
+use rustmux::layout::{Direction, Layout, MAX_PANES, Rect, SplitAxis};
 
 fn assert_partition(layout: &Layout) {
     let (rows, columns) = layout.dimensions();
@@ -410,4 +410,57 @@ fn structural_changes_exit_zoom_only_after_success() {
     assert!(!layout.is_zoomed());
     assert!(!layout.toggle_zoom());
     assert_partition(&layout);
+}
+
+#[test]
+fn directional_selection_uses_overlap_and_preserves_geometry_and_zoom() {
+    let mut layout = Layout::new(15, 17).unwrap();
+    let left = layout.active();
+    let right_top = layout.split_active(SplitAxis::Columns).unwrap();
+    let right_middle = layout.split_active(SplitAxis::Rows).unwrap();
+    let right_bottom = layout.split_active(SplitAxis::Rows).unwrap();
+    layout.select(left).unwrap();
+    let tiled = layout.tiled_geometry();
+    assert_eq!(layout.select_direction(Direction::Right), Some(right_top)); // Largest overlap.
+    assert_eq!(layout.select_direction(Direction::Down), Some(right_middle)); // Nearest edge.
+    assert_eq!(layout.select_direction(Direction::Down), Some(right_bottom));
+    let before = layout.clone();
+    assert_eq!(layout.select_direction(Direction::Down), None);
+    assert_eq!(layout, before);
+    assert_eq!(layout.select_direction(Direction::Left), Some(left));
+    assert_eq!(layout.tiled_geometry(), tiled);
+    layout.toggle_zoom();
+    assert_eq!(layout.select_direction(Direction::Right), Some(right_top));
+    assert!(layout.is_zoomed());
+    assert_eq!(layout.geometry().panes[0].0, right_top);
+    assert_eq!(layout.tiled_geometry(), tiled);
+    layout.resize(9, 11).unwrap();
+    layout.close(right_middle).unwrap();
+    assert_eq!(layout.select_direction(Direction::Down), Some(right_bottom));
+    assert_partition(&layout);
+}
+
+#[test]
+fn directional_ties_are_deterministic_and_single_panes_do_not_wrap() {
+    let mut layout = Layout::new(7, 7).unwrap();
+    let top = layout.active();
+    for direction in [
+        Direction::Left,
+        Direction::Right,
+        Direction::Up,
+        Direction::Down,
+    ] {
+        let before = layout.clone();
+        assert_eq!(layout.select_direction(direction), None);
+        assert_eq!(layout, before);
+    }
+    let bottom_left = layout.split_active(SplitAxis::Rows).unwrap();
+    let bottom_right = layout.split_active(SplitAxis::Columns).unwrap();
+    layout.select(top).unwrap();
+    assert_eq!(layout.select_direction(Direction::Down), Some(bottom_left));
+    assert_eq!(
+        layout.select_direction(Direction::Right),
+        Some(bottom_right)
+    );
+    assert_eq!(layout.select_direction(Direction::Up), Some(top));
 }

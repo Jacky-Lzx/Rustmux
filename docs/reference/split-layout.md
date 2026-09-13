@@ -41,8 +41,8 @@ IDs, tree structure and active pane. Geometry is recomputed from the current siz
 there are no stored user ratios or text reflow decisions here. The caller must
 later decide how to handle outer terminals too small for an existing layout.
 
-The model does not yet support directional selection,
-manual separator adjustment, pane swapping, or PTY/model resize coordination.
+The model does not yet support manual separator adjustment, pane swapping,
+or PTY/model resize coordination.
 Those remain subsequent steps. Ordinary allocation failure may abort as with
 standard Rust collection allocation; logical validation failures are atomic.
 
@@ -89,6 +89,30 @@ CLI must define its fallback for terminals smaller than this minimum.
 This remains a geometry-only feature. There is no CLI zoom shortcut yet; PTY sizing,
 rendering and input routing for visible versus hidden panes are not connected.
 
+## Directional focus
+
+`select_direction(Direction::Left | Right | Up | Down)` finds a target using the
+underlying tiled rectangles and returns its ID. Left/right candidates must overlap
+the active pane's row interval; up/down candidates must overlap its column interval.
+Overlap must have positive length: diagonal panes and corner-only contact are
+excluded. Candidates must lie wholly on the requested side.
+
+Among candidates, prefer the smallest edge gap, then the largest perpendicular
+overlap, then the nearest perpendicular center. Remaining ties use layout traversal
+order, making the result deterministic. This policy depends on pane rectangles,
+not the text cursor position. Because panes may have different sizes, moving in
+one direction and back is not guaranteed to restore the original pane.
+
+No candidate leaves the entire layout unchanged and returns `None`; there is no
+edge wrapping. A successful move changes only the active ID. While zoomed, hidden
+panes remain eligible using their tiled rectangles, and zoom stays enabled on the
+new target. Resize and close automatically affect future selection through the
+current geometry. `PaneSet::select_direction` delegates to this operation without
+moving, cloning or recreating any owned content.
+
+There is no CLI directional shortcut yet. This model operation supplies the focus
+policy for later interactive splitting and is not H07 acceptance.
+
 ## Verification
 
 `cargo test --test layout` checks exact nested geometry, complete nonoverlapping
@@ -103,3 +127,6 @@ resize, stale IDs, final-pane rejection and capacity recovery without ID reuse.
 
 Zoom tests check exact restoration, hidden-pane selection, resize and minimum-size
 rejection, single-pane behavior, and successful/failed structural operations.
+
+Directional tests cover unequal nested panes, distance/overlap preference, stable
+ties, no-op boundaries, diagonal rejection, zoom, resize/close and content identity.

@@ -1,4 +1,7 @@
-use rustmux::{layout::SplitAxis, pane_set::PaneSet};
+use rustmux::{
+    layout::{Direction, SplitAxis},
+    pane_set::PaneSet,
+};
 use std::{cell::RefCell, io, rc::Rc};
 
 #[derive(Debug)]
@@ -126,7 +129,7 @@ fn hidden_contents_remain_mutable_and_geometry_operations_preserve_them() {
         .unwrap();
     panes.toggle_zoom();
     panes.get_mut(first).unwrap().push(3);
-    panes.select(first).unwrap();
+    assert_eq!(panes.select_direction(Direction::Left), Some(first));
     assert_eq!(panes.active(), &[1, 3]);
     panes.active_mut().push(4);
     for (_, content) in panes.iter_mut() {

@@ -23,6 +23,15 @@ pub enum SplitAxis {
     Rows,
 }
 
+/// Geometric focus direction. Selection does not wrap at the content-area edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
 /// Zero-based coordinates relative to the window's content area, excluding its bar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rect {
@@ -30,6 +39,61 @@ pub struct Rect {
     pub column: u16,
     pub rows: u16,
     pub columns: u16,
+}
+
+impl Rect {
+    fn focus_score(
+        self,
+        other: Self,
+        direction: Direction,
+    ) -> Option<(u32, std::cmp::Reverse<u32>, u32)> {
+        let (start, length, cross, span, target, target_length, target_cross, target_span, forward) =
+            match direction {
+                Direction::Left | Direction::Right => (
+                    self.column,
+                    self.columns,
+                    self.row,
+                    self.rows,
+                    other.column,
+                    other.columns,
+                    other.row,
+                    other.rows,
+                    direction == Direction::Right,
+                ),
+                Direction::Up | Direction::Down => (
+                    self.row,
+                    self.rows,
+                    self.column,
+                    self.columns,
+                    other.row,
+                    other.rows,
+                    other.column,
+                    other.columns,
+                    direction == Direction::Down,
+                ),
+            };
+        let start = u32::from(start);
+        let end = start + u32::from(length);
+        let target = u32::from(target);
+        let target_end = target + u32::from(target_length);
+        let gap = if forward {
+            target.checked_sub(end)?
+        } else {
+            start.checked_sub(target_end)?
+        };
+        let cross = u32::from(cross);
+        let cross_end = cross + u32::from(span);
+        let target_cross = u32::from(target_cross);
+        let target_cross_end = target_cross + u32::from(target_span);
+        let overlap = cross_end
+            .min(target_cross_end)
+            .checked_sub(cross.max(target_cross))?;
+        if overlap == 0 {
+            return None;
+        }
+        let center_distance = (cross + cross_end).abs_diff(target_cross + target_cross_end);
+        Some((gap, std::cmp::Reverse(overlap), center_distance))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -246,6 +310,32 @@ impl Layout {
         Ok(())
     }
 
+    /// Select a pane in the requested direction using the underlying tiled geometry.
+    /// Require positive perpendicular overlap, then prefer the smallest edge gap,
+    /// largest overlap, nearest perpendicular center and finally traversal order.
+    /// No candidate leaves the complete layout unchanged. Zoom follows the selection.
+    pub fn select_direction(&mut self, direction: Direction) -> Option<PaneId> {
+        let panes = self.tiled_geometry().panes;
+        let source = panes
+            .iter()
+            .find(|(id, _)| *id == self.active)
+            .expect("active pane exists")
+            .1;
+        let target = panes
+            .iter()
+            .enumerate()
+            .filter(|(_, (id, _))| *id != self.active)
+            .filter_map(|(index, (id, rect))| {
+                source
+                    .focus_score(*rect, direction)
+                    .map(|score| ((score, index), *id))
+            })
+            .min_by_key(|(score, _)| *score)
+            .map(|(_, id)| id)?;
+        self.active = target;
+        Some(target)
+    }
+
     /// Split only if the active rectangle can contain two cells plus a separator.
     /// Rejected requests leave IDs, focus, dimensions and the entire tree unchanged.
     pub fn split_active(&mut self, axis: SplitAxis) -> io::Result<PaneId> {
@@ -328,6 +418,39 @@ fn invalid(message: &str) -> io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn direction_scoring_rejects_diagonals_and_corner_contact() {
+        let source = Rect {
+            row: 0,
+            column: 0,
+            rows: 2,
+            columns: 2,
+        };
+        for other in [
+            Rect {
+                row: 3,
+                column: 3,
+                rows: 2,
+                columns: 2,
+            },
+            Rect {
+                row: 2,
+                column: 2,
+                rows: 2,
+                columns: 2,
+            },
+        ] {
+            for direction in [
+                Direction::Left,
+                Direction::Right,
+                Direction::Up,
+                Direction::Down,
+            ] {
+                assert_eq!(source.focus_score(other, direction), None);
+            }
+        }
+    }
 
     #[test]
     fn unknown_selection_and_id_exhaustion_leave_layout_unchanged() {

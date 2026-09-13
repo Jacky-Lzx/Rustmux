@@ -1,6 +1,6 @@
 //! Pane contents keyed by stable layout identity, independent of process I/O.
 
-use crate::layout::{Layout, PaneId, Rect, SplitAxis};
+use crate::layout::{Direction, Layout, PaneId, Rect, SplitAxis};
 use std::io;
 
 /// Owns exactly one content value per layout leaf, without requiring T: Clone.
@@ -62,6 +62,11 @@ impl<T> PaneSet<T> {
 
     pub fn select(&mut self, id: PaneId) -> io::Result<()> {
         self.layout.select(id)
+    }
+
+    /// Move focus geometrically without moving or recreating owned contents.
+    pub fn select_direction(&mut self, direction: Direction) -> Option<PaneId> {
+        self.layout.select_direction(direction)
     }
 
     pub fn toggle_zoom(&mut self) -> bool {
