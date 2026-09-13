@@ -136,3 +136,8 @@ after external mode changes or lost output, invalidate it before drawing again.
 `cargo test --test render_modes` checks unchanged-frame bytes, text-only updates,
 mode changes and resets replayed into a screen, and failure at every byte boundary
 of a mode-changing frame followed by full synchronization.
+
+The window rename prompt renders a temporary screen clone through the same
+Renderer. It covers the bottom row without changing the child model. Entering
+and leaving the prompt invalidates the renderer so display modes are synchronized
+with the editor or the active child respectively.

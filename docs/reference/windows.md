@@ -2,8 +2,8 @@
 
 The CLI supports multiple terminal windows, each with one shell and a full-size
 screen. `window::Windows<T>` owns their ordered collection and stable identities.
-This is partial H05: there is no window bar, interactive rename prompt, split
-layout or persistent session yet.
+This is partial H05: there is no window bar, split layout or persistent session
+yet. Window renaming is available through a temporary input prompt.
 
 ## Identity and focus
 
@@ -107,6 +107,7 @@ paths. These states now drive multi-window polling.
 | Ctrl-B, then c | Create a shell window and select it |
 | Ctrl-B, then n | Select the next window, wrapping |
 | Ctrl-B, then p | Select the previous window, wrapping |
+| Ctrl-B, then , | Rename the active window |
 | Ctrl-B, then Ctrl-B | Send one literal Ctrl-B to the active child |
 | `exit` in the shell | Close that window after draining its final output |
 
@@ -150,3 +151,33 @@ child exit and focus fallback, literal-prefix/paste forwarding, failed creation,
 terminal-query replies to inactive children, the 16-window cap, and cleanup of
 all recorded child PIDs on global termination. These do not claim acceptance
 of the remaining H05 UI features or of all full-screen application behavior.
+
+## Renaming a window
+
+Ctrl-B followed by `,` opens `Rename: <current name>` on the bottom row. Type to
+append, use Backspace to remove the last Unicode scalar, or Ctrl-U to clear.
+Enter saves; Esc, Ctrl-C or Ctrl-G cancel. Empty names are allowed. Names are
+limited to 128 UTF-8 bytes; excess text, malformed UTF-8 and control characters
+are ignored. Editing is append-only: arrow/control sequences do not move a text
+cursor. Backspace removes a combining mark separately from its base character.
+
+Bracketed paste is enabled while the prompt is visible. Its payload is treated
+as name text, including letters following Ctrl-B, and control characters such as
+newlines are ignored rather than saving the name. The terminating Enter must be
+outside the paste. Bare Esc is distinguished from CSI/SS3 sequences by a 30ms
+minimum delay; the event loop normally observes cancellation within its 50ms
+poll interval. Escape-prefixed sequences are consumed without executing them.
+
+The prompt shows the tail of long names without splitting wide characters and
+reserves a cursor cell. On extremely narrow terminals even the label is clipped.
+It uses a temporary screen clone, resets the clone's character-set/style/input
+modes for editing, and never overwrites the child's grid or cursor. Background
+output and query replies continue while editing, and resize relocates the prompt
+to the new bottom row. The original pane's display and input modes are restored
+when editing ends. Exiting the active child cancels the prompt before final output
+and focus fallback. Names remain per-window metadata; a persistent window bar is
+not yet implemented.
+
+Tests exercise Unicode and combining input, byte limits, invalid/control input,
+paste boundaries, escape handling, narrow grids, DEC graphics/origin-mode
+isolation, and real CLI save/cancel/reopen with continued child output and resize.

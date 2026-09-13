@@ -24,7 +24,9 @@ the outer terminal modes and previous screen are restored.
 Use Ctrl-B followed by `c` to create a window, `n` for the next window and `p`
 for the previous one. Ctrl-B twice sends a literal Ctrl-B to the child. Background
 shells continue running. See [Windows](../reference/windows.md#interactive-controls)
-for limits and input behavior. There is no window bar yet.
+for limits and input behavior. Ctrl-B followed by `,` opens the name editor:
+Enter saves, Esc cancels, and Ctrl-U clears the existing name. There is no window
+bar yet.
 
 The CLI now parses shell output and renders its own screen model. Window changes
 resize both model grids and the PTY in every window. Dimensions must fit within 65,536 cells.

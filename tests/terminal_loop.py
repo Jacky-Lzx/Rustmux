@@ -990,3 +990,53 @@ with tempfile.TemporaryDirectory(prefix="rustmux-window-limit-") as directory:
                 raise AssertionError(("child still alive after global shutdown", pid))
     finally:
         s.close()
+
+# Rename edits window metadata while the child continues writing its own screen.
+s = Session()
+try:
+    s.expect(b"RUSTMUX_READY> ")
+    s.send(b"sleep 0.2; printf '\\033[2J\\033[H%s%s\\n' WORK _DONE\n")
+    s.send(b"\x02,")
+    s.expect(b"Rename: 1")
+    s.send("\x15中文e\u0301\x7f".encode())
+    s.expect("Rename: 中文e".encode())
+    end = time.monotonic() + 3
+    while not any(b"WORK_DONE" in row for row in s.last_rows):
+        s.read()
+        assert time.monotonic() < end, s.last_rows
+    assert s.last_rows[-1].startswith("Rename: 中文e".encode())
+    s.send(b"\r")
+    s.send(b"\x02,")
+    s.expect("Rename: 中文e".encode())
+    s.send(b"\x15discard\x1b")
+    end = time.monotonic() + 3
+    while s.last_rows[-1].startswith(b"Rename:"):
+        s.read()
+        assert time.monotonic() < end, s.last_rows
+    s.send(b"\x02,")
+    s.expect("Rename: 中文e".encode())
+    s.send("\x15\x1b[200~粘贴\x02c\n\x1b[201~\r".encode())
+    s.send(b"\x02,")
+    s.expect("Rename: 粘贴c".encode())
+    fcntl.ioctl(s.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 18, 60, 0, 0))
+    s.read(0.1)
+    s.send(b"\x07")
+    s.send(b"printf '\\n%s%s\\n' RENAME_ RESTORED; exit 0\n")
+    s.finish(0)
+    assert any(b"RENAME_RESTORED" in row for row in s.last_rows)
+    assert not any(row.startswith(b"Rename:") for row in s.last_rows)
+finally:
+    s.close()
+
+# A child exit cancels its pending rename and delivers the child's final screen.
+s = Session()
+try:
+    s.expect(b"RUSTMUX_READY> ")
+    s.send(b"sleep 0.2; printf '\\033[2J\\033[H%s%s\\n' EDITOR_ EXIT; exit 7\n")
+    s.send(b"\x02,")
+    s.expect(b"Rename: 1")
+    s.finish(7)
+    assert any(b"EDITOR_EXIT" in row for row in s.last_rows)
+    assert not any(row.startswith(b"Rename:") for row in s.last_rows)
+finally:
+    s.close()

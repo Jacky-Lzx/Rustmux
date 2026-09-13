@@ -18,7 +18,12 @@ use nix::sys::termios::{self, SetArg, Termios};
 use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGWINCH};
 
 use crate::pane::{INPUT_LIMIT as LIMIT, MAX_CELLS, Pane};
-use crate::{render::Renderer, screen::Screen, window::Windows};
+use crate::{
+    rename::{EditResult, RenamePrompt},
+    render::Renderer,
+    screen::Screen,
+    window::Windows,
+};
 
 // Bound pending keyboard input to 64 KiB; output retains at most one frame.
 const POLL_TIMEOUT_MILLIS: u16 = 50;
@@ -278,6 +283,7 @@ enum WindowKey {
     Create,
     Next,
     Previous,
+    Rename,
 }
 
 #[derive(Default)]
@@ -308,6 +314,7 @@ impl WindowInput {
                 b'c' => output.push(WindowKey::Create),
                 b'n' => output.push(WindowKey::Next),
                 b'p' => output.push(WindowKey::Previous),
+                b',' => output.push(WindowKey::Rename),
                 2 => output.push(WindowKey::Byte(2)),
                 _ => {
                     output.push(WindowKey::Byte(2));
@@ -335,10 +342,19 @@ fn forward(
     let mut actions = Vec::new();
     let mut next_frame = Instant::now();
     let mut force_redraw = true;
+    let mut rename: Option<RenamePrompt> = None;
     loop {
         let received = signals.pending.load(Ordering::Relaxed);
         if received != 0 {
             return Ok((128 + received) as u8);
+        }
+        if rename
+            .as_ref()
+            .is_some_and(|prompt| prompt.cancel_due(Instant::now()))
+        {
+            rename = None;
+            renderer.invalidate();
+            force_redraw = true;
         }
         let active = windows.active().expect("at least one window").id();
         let resize = if signals.resize.swap(false, Ordering::Relaxed) {
@@ -378,13 +394,23 @@ fn forward(
                 state.eof,
             );
             if id == active {
+                if state.eof && rename.is_some() {
+                    rename = None;
+                    renderer.invalidate();
+                    force_redraw = true;
+                }
                 active_paused = paused;
                 if (state.dirty || force_redraw)
                     && (!paused || force_redraw)
                     && to_terminal.is_empty()
                     && (state.eof || force_redraw || Instant::now() >= next_frame)
                 {
-                    renderer.render(screen, &mut FrameWriter(&mut to_terminal))?;
+                    if let Some(prompt) = &rename {
+                        renderer
+                            .render(&prompt.overlay(screen), &mut FrameWriter(&mut to_terminal))?;
+                    } else {
+                        renderer.render(screen, &mut FrameWriter(&mut to_terminal))?;
+                    }
                     state.dirty = false;
                     force_redraw = false;
                     next_frame = Instant::now() + FRAME_INTERVAL;
@@ -417,6 +443,7 @@ fn forward(
                     // Do not deliver pending keystrokes from a dead window to its successor.
                     input.clear();
                     keys = WindowInput::default();
+                    rename = None;
                     renderer.invalidate();
                     force_redraw = true;
                 }
@@ -426,6 +453,26 @@ fn forward(
         // Decode in input order. Bytes preceding a switch remain queued for the
         // old child; following bytes target the newly selected one.
         while !input.is_empty() {
+            if let Some(prompt) = &mut rename {
+                let result = prompt.feed(input.pop_front().unwrap(), Instant::now());
+                match result {
+                    EditResult::Save => {
+                        let name = prompt.text.clone();
+                        windows.rename(windows.active().unwrap().id(), name)?;
+                        rename = None;
+                        keys = WindowInput::default();
+                        renderer.invalidate();
+                    }
+                    EditResult::Cancel => {
+                        rename = None;
+                        keys = WindowInput::default();
+                        renderer.invalidate();
+                    }
+                    EditResult::Continue => {}
+                }
+                force_redraw = true;
+                continue;
+            }
             let pane = windows.active().unwrap().content();
             if !pane.io().accepts_input() || pane.io().to_shell.len() > LIMIT - 2 {
                 break;
@@ -443,6 +490,11 @@ fn forward(
                         .3
                         .to_shell
                         .push_back(byte),
+                    WindowKey::Rename => {
+                        rename = Some(RenamePrompt::new(windows.active().unwrap().name()));
+                        renderer.invalidate();
+                        force_redraw = true;
+                    }
                     WindowKey::Next => {
                         windows.select_next();
                     }

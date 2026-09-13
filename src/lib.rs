@@ -3,6 +3,7 @@
 pub mod pane;
 pub mod parser;
 pub mod pty;
+mod rename;
 pub mod render;
 pub mod screen;
 pub mod style;
