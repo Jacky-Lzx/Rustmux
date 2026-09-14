@@ -308,6 +308,7 @@ enum WindowKey {
     Split(SplitAxis),
     NextPane,
     BreakPane,
+    JoinPane,
     ToggleZoom,
     UndoClose,
     History,
@@ -459,6 +460,7 @@ impl WindowInput {
                 b'{' => output.push(WindowKey::SwapPanePrevious),
                 b'}' => output.push(WindowKey::SwapPaneNext),
                 b'!' => output.push(WindowKey::BreakPane),
+                b'm' => output.push(WindowKey::JoinPane),
                 b'o' => output.push(WindowKey::NextPane),
                 b'Z' => output.push(WindowKey::ToggleZoom),
                 b'z' => output.push(WindowKey::UndoClose),
@@ -825,6 +827,43 @@ fn forward(
                                 let name = editor.text.clone();
                                 windows.rename(windows.active().unwrap().id(), name)?;
                             }
+                            PromptKind::MovePane => {
+                                // Numbers refer to the IDs shown when opening the prompt,
+                                // so a background exit cannot silently retarget the move.
+                                let target = editor
+                                    .text
+                                    .trim()
+                                    .parse::<usize>()
+                                    .ok()
+                                    .and_then(|number| number.checked_sub(1))
+                                    .and_then(|index| editor.destinations.get(index))
+                                    .copied();
+                                let source = windows.active().unwrap().id();
+                                let result = target
+                                    .ok_or_else(|| io::Error::other("invalid window number"))
+                                    .and_then(|target| {
+                                        windows.join_active_pane(target, SplitAxis::Columns)
+                                    });
+                                match result {
+                                    Ok(true) => {
+                                        if let Some(source) = windows.get_mut(source) {
+                                            source.content_mut().synchronize_sizes()?;
+                                        }
+                                        windows
+                                            .active_mut()
+                                            .unwrap()
+                                            .content_mut()
+                                            .synchronize_sizes()?;
+                                        bar_dirty = true;
+                                    }
+                                    Ok(false) => {}
+                                    Err(_) => {
+                                        if to_terminal.is_empty() {
+                                            to_terminal.push_back(7);
+                                        }
+                                    }
+                                }
+                            }
                             PromptKind::Close if editor.text == "yes" => {
                                 close_requested = Some((windows.active().unwrap().id(), None));
                             }
@@ -953,6 +992,13 @@ fn forward(
                             renderer.invalidate();
                             force_redraw = true;
                         }
+                    }
+                    WindowKey::JoinPane => {
+                        prompt = Some(WindowPrompt::move_pane(
+                            windows.iter().map(|window| window.id()).collect(),
+                        ));
+                        renderer.invalidate();
+                        force_redraw = true;
                     }
                     WindowKey::BreakPane => {
                         if windows.iter().len() == MAX_WINDOWS {
@@ -1588,6 +1634,23 @@ mod window_input_tests {
             vec![WindowKey::Byte(b'!'), WindowKey::BreakPane]
         );
         let bytes = b"\x1b[200~\x02!\x1b[201~";
+        assert_eq!(
+            decode(bytes),
+            bytes
+                .iter()
+                .copied()
+                .map(WindowKey::Byte)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn join_pane_key_requires_prefix_and_respects_paste() {
+        assert_eq!(
+            decode(b"m\x02m"),
+            vec![WindowKey::Byte(b'm'), WindowKey::JoinPane]
+        );
+        let bytes = b"\x1b[200~\x02m1\r\x1b[201~";
         assert_eq!(
             decode(bytes),
             bytes

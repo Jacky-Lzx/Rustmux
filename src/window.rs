@@ -220,6 +220,40 @@ impl<T> Windows<T> {
 }
 
 impl<T> Windows<crate::pane_set::PaneSet<T>> {
+    /// Transfer the active pane into a split of the target's active pane.
+    /// Keep processes/content intact. Destination validation failures change neither
+    /// window. Remove an emptied source; otherwise remember it for last-window focus.
+    pub fn join_active_pane(
+        &mut self,
+        target: WindowId,
+        axis: crate::layout::SplitAxis,
+    ) -> io::Result<bool> {
+        let target_index = self.index(target)?;
+        let source_index = self.active;
+        if source_index == target_index {
+            return Ok(false);
+        }
+        let source_id = self.entries[source_index].id;
+        {
+            let (source, destination) = if source_index < target_index {
+                let (left, right) = self.entries.split_at_mut(target_index);
+                (&mut left[source_index], &mut right[0])
+            } else {
+                let (left, right) = self.entries.split_at_mut(source_index);
+                (&mut right[0], &mut left[target_index])
+            };
+            source
+                .content
+                .transfer_active_to(&mut destination.content, axis)?;
+        }
+        let empty = self.entries[source_index].content.iter().len() == 0;
+        self.select(target)?;
+        if empty {
+            drop(self.close(source_id)?);
+        }
+        Ok(true)
+    }
+
     /// Move the active pane into a new trailing window without cloning contents.
     /// Empty/single-pane sources are no-ops. Reserve storage and validate window
     /// identity before taking ownership; reported errors preserve both collections.

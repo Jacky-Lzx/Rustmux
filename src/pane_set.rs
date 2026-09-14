@@ -141,6 +141,23 @@ impl<T> PaneSet<T> {
         Ok(())
     }
 
+    // The owning Windows operation immediately removes an emptied source window.
+    // Destination validation/reservation happens before the content is extracted.
+    pub(crate) fn transfer_active_to(
+        &mut self,
+        target: &mut Self,
+        axis: SplitAxis,
+    ) -> io::Result<()> {
+        target.split_with(axis, |_, _| {
+            if self.entries.len() == 1 {
+                Ok(self.entries.pop().unwrap().1)
+            } else {
+                self.close(self.layout.active())
+            }
+        })?;
+        Ok(())
+    }
+
     /// Prepare destination storage before removing the active pane from this set.
     pub(crate) fn detach_active(&mut self) -> io::Result<Option<Self>> {
         if self.entries.len() == 1 {

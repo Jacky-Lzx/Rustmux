@@ -154,3 +154,14 @@ window ID, selects it and remembers the source for last-window navigation. Its
 name is copied from the source. Source layout removal preserves surviving leaf
 IDs and promotes the sibling subtree; destination pane IDs are collection-local.
 The operation performs no process I/O; the CLI then synchronizes both sets.
+
+## Move into an existing window
+
+`Windows<PaneSet<T>>::join_active_pane(target, axis)` splits the target's active
+leaf and transfers the source's active content into the new leaf. It checks the
+stable target ID, split geometry and destination allocation before extracting any
+content. Same-window requests return `Ok(false)`. A sole-pane source is temporarily
+empty only inside this synchronous operation and its window is immediately removed;
+otherwise normal source removal preserves surviving IDs and promotes siblings.
+The target becomes active and the transferred content receives a target-local ID.
+The generic operation does no PTY I/O; the CLI synchronizes both surviving windows.

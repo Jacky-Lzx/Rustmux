@@ -244,3 +244,118 @@ fn breaking_pane_into_window_moves_content_and_preserves_source_geometry() {
     actual.sort();
     assert_eq!(actual, vec![1, 2, 3]);
 }
+
+#[test]
+fn join_moves_nonclone_contents_both_directions_without_stopping_owners() {
+    use rustmux::window::Windows;
+    let drops = Rc::new(RefCell::new(Vec::new()));
+    let make = |value| Content {
+        value,
+        drops: drops.clone(),
+    };
+    let mut source = PaneSet::new(7, 15, make(1)).unwrap();
+    source
+        .split_with(SplitAxis::Columns, |_, _| Ok(make(2)))
+        .unwrap();
+    source.toggle_zoom();
+    let mut target = PaneSet::new(7, 15, make(3)).unwrap();
+    target
+        .split_with(SplitAxis::Rows, |_, _| Ok(make(4)))
+        .unwrap();
+    target.toggle_zoom();
+    let mut windows = Windows::default();
+    let source_id = windows.create("source".into(), source).unwrap();
+    let target_id = windows.create("target".into(), target).unwrap();
+    windows.select(source_id).unwrap();
+    assert!(
+        windows
+            .join_active_pane(target_id, SplitAxis::Columns)
+            .unwrap()
+    );
+    assert_eq!(windows.active().unwrap().id(), target_id);
+    assert_eq!(windows.active().unwrap().name(), "target");
+    assert_eq!(windows.active().unwrap().content().active().value, 2);
+    assert!(!windows.active().unwrap().content().layout().is_zoomed());
+    assert_eq!(windows.get(source_id).unwrap().content().iter().len(), 1);
+    assert!(
+        !windows
+            .get(source_id)
+            .unwrap()
+            .content()
+            .layout()
+            .is_zoomed()
+    );
+    assert_eq!(windows.get(target_id).unwrap().content().iter().len(), 3);
+    assert!(
+        windows
+            .join_active_pane(source_id, SplitAxis::Rows)
+            .unwrap()
+    );
+    assert_eq!(windows.active().unwrap().content().active().value, 2);
+    windows.select_last();
+    assert_eq!(windows.active().unwrap().id(), target_id);
+    assert!(drops.borrow().is_empty());
+    for window in windows.iter() {
+        assert_membership(window.content());
+    }
+    drop(windows);
+    let mut actual = drops.borrow().clone();
+    actual.sort();
+    assert_eq!(actual, vec![1, 2, 3, 4]);
+}
+
+#[test]
+fn join_rejects_bad_targets_atomically_and_removes_only_an_empty_source() {
+    use rustmux::window::Windows;
+    let mut windows = Windows::default();
+    let source = windows
+        .create("source".into(), PaneSet::new(5, 9, 1).unwrap())
+        .unwrap();
+    let target = windows
+        .create("target".into(), PaneSet::new(5, 2, 2).unwrap())
+        .unwrap();
+    windows.select(source).unwrap();
+    let before_source = windows.get(source).unwrap().content().layout().clone();
+    let before_target = windows.get(target).unwrap().content().layout().clone();
+    assert!(
+        windows
+            .join_active_pane(target, SplitAxis::Columns)
+            .is_err()
+    );
+    assert!(
+        !windows
+            .join_active_pane(source, SplitAxis::Columns)
+            .unwrap()
+    );
+    assert_eq!(windows.active().unwrap().id(), source);
+    assert_eq!(
+        windows.get(source).unwrap().content().layout(),
+        &before_source
+    );
+    assert_eq!(
+        windows.get(target).unwrap().content().layout(),
+        &before_target
+    );
+    windows
+        .get_mut(target)
+        .unwrap()
+        .content_mut()
+        .resize(5, 9)
+        .unwrap();
+    assert!(
+        windows
+            .join_active_pane(target, SplitAxis::Columns)
+            .unwrap()
+    );
+    assert_eq!(windows.iter().len(), 1);
+    assert!(windows.get(source).is_none());
+    assert_eq!(windows.active().unwrap().id(), target);
+    assert_eq!(*windows.active().unwrap().content().active(), 1);
+    assert_eq!(
+        windows.active().unwrap().content().layout().active().get(),
+        1
+    );
+    assert!(windows.join_active_pane(source, SplitAxis::Rows).is_err());
+    assert_eq!(windows.iter().len(), 1);
+    assert_membership(windows.active().unwrap().content());
+}

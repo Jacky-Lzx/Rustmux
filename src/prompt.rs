@@ -1,4 +1,4 @@
-//! Bounded text prompts for window renaming and explicit window/pane close confirmation.
+//! Bounded window-bar editors for names, pane destinations and close confirmations.
 
 use crate::{
     chrome::{bar_style, prepare_row},
@@ -22,11 +22,13 @@ pub(crate) enum PromptKind {
     Rename,
     Close,
     ClosePane,
+    MovePane,
 }
 
 pub(crate) struct WindowPrompt {
     pub kind: PromptKind,
     pub text: String,
+    pub destinations: Vec<crate::window::WindowId>,
     utf8: Vec<u8>,
     escape: Vec<u8>,
     escape_at: Option<Instant>,
@@ -46,11 +48,19 @@ impl WindowPrompt {
         prompt
     }
 
+    pub fn move_pane(destinations: Vec<crate::window::WindowId>) -> Self {
+        let mut prompt = Self::new("");
+        prompt.kind = PromptKind::MovePane;
+        prompt.destinations = destinations;
+        prompt
+    }
+
     fn label(&self) -> &'static str {
         match self.kind {
             PromptKind::Rename => "Rename: ",
             PromptKind::Close => "Close window? Type yes: ",
             PromptKind::ClosePane => "Close pane? Type yes: ",
+            PromptKind::MovePane => "Move to window #: ",
         }
     }
 
@@ -58,6 +68,7 @@ impl WindowPrompt {
         let mut prompt = Self {
             kind: PromptKind::Rename,
             text: String::new(),
+            destinations: Vec::new(),
             utf8: Vec::new(),
             escape: Vec::new(),
             escape_at: None,

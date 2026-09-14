@@ -1786,3 +1786,49 @@ with tempfile.TemporaryDirectory() as directory:
         s.finish(0)
     finally:
         s.close()
+
+# Join a running pane to an existing window; pasted Enter cannot submit the target.
+with tempfile.TemporaryDirectory() as directory:
+    record = os.path.join(directory, "join-job.pid")
+    s = Session()
+    try:
+        s.expect(b"RUSTMUX_READY>")
+        s.send(b"stty -echo; KEEP=target; printf 'TARGET_%s\\n' READY\n")
+        s.expect(b"TARGET_READY")
+        s.send(b"\x02c")
+        s.expect(b"RUSTMUX_READY>")
+        s.send(b"stty -echo; KEEP=moved; printf 'JOIN_%s\\n' HISTORY\n")
+        s.expect(b"JOIN_HISTORY")
+        for answer in (b"999\r", b"2\r", b"1\x03", b"1\x1b"):
+            s.send(b"\x02m")
+            s.expect(b"Move to window #:")
+            s.send(answer)
+            expect_bar(s, b"*2:shell")
+        script = ("import os; open(" + repr(record) + ", 'w').write(str(os.getpid())); "
+                  "print('JOIN_JOB_READY', flush=True); "
+                  "exec('while input() != \"quit\": print(\"JOINJOB:%s:%s\" % "
+                  "(os.getpid(), os.get_terminal_size().columns), flush=True)')")
+        s.send(("python3 -c " + shlex.quote(script) + "\n").encode())
+        s.expect(b"JOIN_JOB_READY")
+        with open(record) as source:
+            pid = int(source.read())
+        s.send(b"\x02m\x1b[200~1\r\n\x1b[201~")
+        s.expect(b"Move to window #: 1")
+        os.kill(pid, 0)
+        s.send(b"\rreport\n")
+        s.expect(("JOINJOB:%s:40" % pid).encode())
+        expect_bar(s, b"*1:shell")
+        assert b"2:shell" not in s.last_rows[0]
+        assert any(b"JOIN_HISTORY" in row for row in s.last_rows[1:])
+        s.send(b"\x02hprintf '\\nKEEP:%s_' $KEEP; stty size\n")
+        s.expect(b"KEEP:target_23 39")
+        s.send(b"\x02lquit\n")
+        s.expect(b"RUSTMUX_READY>")
+        s.send(b"printf '\\nKEEP:%s\\n' $KEEP\n")
+        s.expect(b"KEEP:moved")
+        s.send(b"\x02&")
+        s.expect(b"Close window? Type yes:")
+        s.send(b"yes\r")
+        s.finish(0)
+    finally:
+        s.close()

@@ -131,7 +131,41 @@ Unit tests cover non-Clone ownership, source geometry, zoom exit, focus/last-win
 selection, name inheritance, single-pane no-op and exhausted window IDs. A real
 PTY test moves an interactive foreground program, checks its unchanged PID and new
 width, retained screen content, source/moved shell variables and subsequent exits.
-Moving into an existing window is not implemented yet.
+Use the destination prompt below to move into an existing window.
+
+## Move a pane into an existing window
+
+Ctrl-B `m` opens `Move to window #:`. Enter a window number from the top bar
+and press Enter. The active pane is moved into a new split to the right of the
+target window's selected pane; focus follows it. The CLI currently uses a
+left/right split for this operation. Esc, Ctrl-C and Ctrl-G cancel. Bracketed
+paste can fill the number, but a pasted newline does not submit it.
+
+Numbers are bound to stable window IDs when the prompt opens. If a background
+window exits while editing, its number cannot silently refer to another window.
+An invalid/departed target, insufficient tiled space or the target's pane limit
+rejects the move without changing ownership or layout, with a best-effort bell;
+the prompt closes. Choosing the source window itself is a no-op.
+
+The moved pane retains its shell, foreground program, parser, screen/history and
+queued input. No process is started or stopped. Both source and destination use
+normal screen/PTY resize synchronization, including SIGWINCH and primary reflow.
+The destination's existing pane stays on the left and the moved pane gets a new
+local ID on the right. Its window name and position in the bar remain unchanged.
+
+If source panes remain, their sibling subtree is promoted and Ctrl-B Tab can
+return to that source window. Moving the last source pane removes its empty
+window. Successful moves exit source/destination zoom; invalid moves retain it.
+The destination is validated and reserved before removing content from the source.
+Later PTY synchronization errors follow normal terminal cleanup. This operation
+does not use or replace the close-undo slot, and can run at the window limit
+because it creates no window. History mode consumes its own keys.
+
+Model tests cover both transfer directions, non-Clone content ownership, local ID
+allocation, zoom, surviving/empty sources, same-window no-op and atomic rejection
+of impossible or stale targets. The nested-PTY test covers cancellation, invalid
+numbers, paste protection, uninterrupted foreground PID, changed PTY widths,
+retained history and shell variables, source-window removal and terminal cleanup.
 
 ## Close and undo
 
