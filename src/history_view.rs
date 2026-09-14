@@ -4,7 +4,7 @@ use std::io;
 
 const MAX_HISTORY_ESCAPE_BYTES: usize = 64;
 mod search;
-use search::{Direction, Hit, QueryInput};
+use search::{Direction, Hit, QueryHistory, QueryInput};
 
 pub(crate) struct HistoryView {
     source: Screen,
@@ -16,6 +16,7 @@ pub(crate) struct HistoryView {
     query: String,
     direction: Direction,
     editor: Option<QueryInput>,
+    queries: QueryHistory,
     hits: Vec<Hit>,
     selected: Option<usize>,
 }
@@ -35,6 +36,7 @@ impl HistoryView {
             query: String::new(),
             direction: Direction::Forward,
             editor: None,
+            queries: QueryHistory::default(),
             hits: Vec::new(),
             selected: None,
         })
@@ -96,8 +98,20 @@ impl HistoryView {
                 match self.escape.as_slice() {
                     b"\x1b[200~" => self.paste = true,
                     b"\x1b[201~" => self.paste = false,
-                    b"\x1b[A" | b"\x1bOA" if !self.paste && self.editor.is_none() => self.up(1),
-                    b"\x1b[B" | b"\x1bOB" if !self.paste && self.editor.is_none() => self.down(1),
+                    b"\x1b[A" | b"\x1bOA" if !self.paste => {
+                        if let Some(editor) = &mut self.editor {
+                            editor.recall(&self.queries, true);
+                        } else {
+                            self.up(1);
+                        }
+                    }
+                    b"\x1b[B" | b"\x1bOB" if !self.paste => {
+                        if let Some(editor) = &mut self.editor {
+                            editor.recall(&self.queries, false);
+                        } else {
+                            self.down(1);
+                        }
+                    }
                     b"\x1b[5~" if !self.paste && self.editor.is_none() => {
                         self.up(self.source.dimensions().0)
                     }
@@ -129,6 +143,7 @@ impl HistoryView {
                 b'\r' | b'\n' => {
                     let editor = self.editor.take().unwrap();
                     self.query = editor.text;
+                    self.queries.remember(&self.query);
                     self.direction = editor.direction;
                     self.hits = search::find(&self.source, &self.query);
                     let top = self.source.history_len() - self.offset;
@@ -470,7 +485,7 @@ mod tests {
         type_bytes(&mut view, b"\x1b[200~?other\r\x1b[201~");
         assert!(view.editor.is_none());
         assert_eq!(view.query, "XX");
-        type_bytes(&mut view, b"?qjk/?\x1b[A\x1b[<64;1;1M");
+        type_bytes(&mut view, b"?qjk/?\x1b[5~\x1b[<64;1;1M");
         assert_eq!(view.editor.as_ref().unwrap().text, "qjk/?");
         assert!(view.label(80).starts_with("Search ?qjk/?"));
         type_bytes(&mut view, b"\x15missing\r");
@@ -483,6 +498,32 @@ mod tests {
         assert_eq!(view.selected, None);
         type_bytes(&mut view, b"?end\rnN");
         assert_eq!(view.selected, Some(0)); // One hit remains stable.
+    }
+
+    #[test]
+    fn query_recall_is_modal_preserves_direction_and_records_only_submissions() {
+        let mut source = Screen::new(2, 8).unwrap();
+        Parser::new().advance(&mut source, b"one\r\ntwo\r\nend");
+        let mut view = HistoryView::new(&source).unwrap();
+        type_bytes(&mut view, b"/one\r?two\r/cancelled\x03/\r");
+        let offset = view.offset;
+        type_bytes(&mut view, b"?draft\x1b[A");
+        assert_eq!(view.editor.as_ref().unwrap().text, "two");
+        assert_eq!(view.offset, offset);
+        assert_eq!(view.selected, None); // Recall alone does not search.
+        type_bytes(&mut view, b"\x1bOA");
+        assert_eq!(view.editor.as_ref().unwrap().text, "one");
+        type_bytes(&mut view, b"\x1b[200~\x1b[B\r\x1b[201~");
+        assert_eq!(view.editor.as_ref().unwrap().text, "one");
+        type_bytes(&mut view, b"\x1bOB\x1b[B");
+        assert_eq!(view.editor.as_ref().unwrap().text, "draft");
+        type_bytes(&mut view, b"\x1b[A\x1b[A\r");
+        assert_eq!(view.query, "one");
+        assert_eq!(view.direction, Direction::Backward);
+        assert_eq!(view.hits.len(), 1);
+        let mut reopened = HistoryView::new(&source).unwrap();
+        type_bytes(&mut reopened, b"/\x1b[A");
+        assert_eq!(reopened.editor.as_ref().unwrap().text, "");
     }
 
     #[test]

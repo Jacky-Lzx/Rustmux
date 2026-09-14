@@ -62,8 +62,26 @@ scalar and Ctrl-U clears the query. Long queries show their trailing characters
 in the bar so the latest input stays visible. Ctrl-C or Ctrl-G cancels editing and retains
 the previous search, selected result and direction; it does not exit history.
 Enter with an empty query clears search highlighting. While editing, `q`, `j`, `k`, `n`, and other printable keys
-are query text. Arrow/page escape sequences, mouse events and bracketed paste are ignored.
+are query text. Up/Down recall search terms; other arrow/page sequences, mouse
+events and bracketed paste are ignored.
 Use Ctrl-C to cancel rather than Esc. Searches and query edits never reach a shell.
+
+### Reusing search terms
+
+Inside the query editor, Up recalls older submitted terms and Down recalls newer
+ones. Both ordinary and application-mode arrow keys work. The first Up saves the
+current draft; Down past the newest term restores it. Up stops at the oldest term.
+Recall changes only the input text: Enter runs the search, using the direction
+chosen when opening the editor (`/` or `?`). Cancelling leaves the active search
+and its direction unchanged.
+
+Each frozen history view stores at most 20 distinct, nonempty submitted terms,
+including searches with no matches. Resubmitting a term moves it to the newest
+position. Empty submissions and cancelled edits are not recorded. Each term
+retains the existing 128-byte UTF-8 limit. Editing a recalled term creates a new
+draft without changing the stored entry; the next Up starts from the newest term
+again, and Down can restore that edited draft. Records are discarded on leaving
+history, including automatic exits; they are not shared across panes or persisted.
 
 Search runs only on submission, over the frozen snapshot. It temporarily creates
 a text/cell index proportional to snapshot content and retains matching cell
@@ -94,10 +112,12 @@ This does not recover content previously discarded by resize. A one-row outer te
 
 Unit tests cover snapshot independence, navigation, wide-cell clipping, paste
 isolation, logical-line and Unicode search, overlapping results, highlighting,
-query editing, both search directions and their row anchors, cancellation, result
+query editing and bounded query recall with draft restoration, both search
+directions and their row anchors, cancellation, result
 wraparound, wheel bounds, malformed mouse reports and modal
 input isolation. The nested-PTY suite checks browsing inside a split, the other pane's
 continued visibility, new background output while frozen, snapshot-bottom versus
-live output, forward/backward search submission/result cycling/no-match/cancellation, navigation/paste
+live output, forward/backward search submission/result cycling/no-match/cancellation,
+query recall and draft restoration, navigation/paste
 isolation, wheel routing within a split, mouse-mode restoration and return to live
 input after resize.

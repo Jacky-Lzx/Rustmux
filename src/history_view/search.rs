@@ -10,6 +10,7 @@ const CONTROL_BYTE_START: u8 = 0;
 const CONTROL_BYTE_END: u8 = 31;
 const PRINTABLE_BYTE_START: u8 = 32;
 const PRINTABLE_BYTE_END: u8 = 126;
+pub(super) const MAX_QUERY_HISTORY: usize = 20;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Hit {
@@ -96,11 +97,30 @@ impl Direction {
     }
 }
 
+// Oldest first. Search text is already limited to 128 UTF-8 bytes by the editor.
+#[derive(Default)]
+pub(super) struct QueryHistory(Vec<String>);
+
+impl QueryHistory {
+    pub fn remember(&mut self, query: &str) {
+        if query.is_empty() {
+            return;
+        }
+        self.0.retain(|previous| previous != query);
+        self.0.push(query.to_owned());
+        if self.0.len() > MAX_QUERY_HISTORY {
+            self.0.remove(0);
+        }
+    }
+}
+
 #[derive(Default)]
 pub(super) struct QueryInput {
     pub text: String,
     pub direction: Direction,
     utf8: Vec<u8>,
+    recalled: Option<usize>,
+    draft: String,
 }
 
 impl QueryInput {
@@ -108,6 +128,31 @@ impl QueryInput {
         Self {
             direction,
             ..Self::default()
+        }
+    }
+
+    pub fn recall(&mut self, history: &QueryHistory, older: bool) {
+        self.utf8.clear();
+        if history.0.is_empty() {
+            return;
+        }
+        if older {
+            let index = if let Some(index) = self.recalled {
+                index.saturating_sub(1)
+            } else {
+                self.draft = self.text.clone();
+                history.0.len() - 1
+            };
+            self.text.clone_from(&history.0[index]);
+            self.recalled = Some(index);
+        } else if let Some(index) = self.recalled {
+            if index + 1 < history.0.len() {
+                self.text.clone_from(&history.0[index + 1]);
+                self.recalled = Some(index + 1);
+            } else {
+                self.text = std::mem::take(&mut self.draft);
+                self.recalled = None;
+            }
         }
     }
 
@@ -132,10 +177,11 @@ impl QueryInput {
             .chars()
             .skip_while(|character| character.width() == Some(0))
             .collect();
-        format!("{prefix}{tail} · Enter:find Ctrl-C:cancel")
+        format!("{prefix}{tail} · Up/Down:recall Enter:find Ctrl-C:cancel")
     }
 
     pub fn feed(&mut self, byte: u8) {
+        let old_len = self.text.len();
         match byte {
             CONTROL_BACKSPACE | CONTROL_DELETE => {
                 self.utf8.clear();
@@ -162,6 +208,12 @@ impl QueryInput {
                     Err(_) => {}
                 }
             }
+        }
+        // Editing a recalled query makes it a new draft. Stored entries stay
+        // unchanged; subsequent Up starts again at the most recent submission.
+        if self.text.len() != old_len {
+            self.recalled = None;
+            self.draft.clear();
         }
     }
 
@@ -240,6 +292,73 @@ mod tests {
             input.feed(*byte);
         }
         assert_eq!(input.text.len(), MAX_QUERY_BYTES);
+    }
+
+    #[test]
+    fn query_history_is_bounded_deduplicated_and_restores_unicode_drafts() {
+        let mut history = QueryHistory::default();
+        let mut editor = QueryInput::new(Direction::Backward);
+        for byte in "草稿".bytes() {
+            editor.feed(byte);
+        }
+        editor.recall(&history, true);
+        assert_eq!(editor.text, "草稿");
+        for index in 0..25 {
+            history.remember(&format!("query{index}"));
+        }
+        assert_eq!(history.0.len(), MAX_QUERY_HISTORY);
+        assert_eq!(history.0[0], "query5");
+        history.remember("");
+        history.remember("query5");
+        assert_eq!(history.0.len(), MAX_QUERY_HISTORY);
+        assert_eq!(history.0[0], "query6");
+        assert_eq!(history.0.last().unwrap(), "query5");
+        editor.recall(&history, false);
+        assert_eq!(editor.text, "草稿");
+        editor.recall(&history, true);
+        assert_eq!(editor.text, "query5");
+        for _ in 0..25 {
+            editor.recall(&history, true);
+        }
+        assert_eq!(editor.text, "query6");
+        for _ in 0..25 {
+            editor.recall(&history, false);
+        }
+        assert_eq!(editor.text, "草稿");
+        assert_eq!(editor.direction, Direction::Backward);
+    }
+
+    #[test]
+    fn editing_a_recalled_query_creates_a_draft_without_mutating_history() {
+        let mut history = QueryHistory::default();
+        history.remember("old");
+        history.remember("中");
+        let mut editor = QueryInput::default();
+        editor.recall(&history, true);
+        for byte in "文".bytes() {
+            editor.feed(byte);
+        }
+        assert_eq!(editor.text, "中文");
+        editor.recall(&history, true);
+        assert_eq!(editor.text, "中");
+        editor.recall(&history, false);
+        assert_eq!(editor.text, "中文");
+        editor.recall(&history, true);
+        editor.feed(127);
+        assert!(editor.text.is_empty());
+        editor.recall(&history, true);
+        editor.recall(&history, false);
+        assert!(editor.text.is_empty());
+        editor.feed(0xe4); // Incomplete UTF-8 is discarded when recalling.
+        editor.recall(&history, true);
+        editor.feed(0xb8);
+        editor.feed(0xad);
+        assert_eq!(editor.text, "中");
+        editor.feed(21);
+        editor.recall(&history, true);
+        editor.recall(&history, false);
+        assert!(editor.text.is_empty());
+        assert_eq!(history.0, ["old", "中"]);
     }
 
     #[test]
