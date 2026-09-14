@@ -1,5 +1,5 @@
 //! Read-only navigation over a frozen primary-screen snapshot.
-use crate::screen::Screen;
+use crate::screen::{MouseTracking, Screen};
 use std::io;
 
 const MAX_HISTORY_ESCAPE_BYTES: usize = 64;
@@ -10,6 +10,8 @@ pub(crate) struct HistoryView {
     source: Screen,
     offset: usize,
     escape: Vec<u8>,
+    discard_escape: bool,
+    origin: (usize, usize),
     paste: bool,
     query: String,
     editor: Option<QueryInput>,
@@ -26,12 +28,19 @@ impl HistoryView {
             source: source.clone(),
             offset: source.history_len().min(source.dimensions().0),
             escape: Vec::new(),
+            discard_escape: false,
+            origin: (0, 0),
             paste: false,
             query: String::new(),
             editor: None,
             hits: Vec::new(),
             selected: None,
         })
+    }
+
+    // Zero-based outer-terminal origin, including the window bar when present.
+    pub fn set_origin(&mut self, row: usize, column: usize) {
+        self.origin = (row, column);
     }
 
     pub fn label(&self, columns: usize) -> String {
@@ -61,12 +70,26 @@ impl HistoryView {
     // Return true only on an explicit exit key. Consume escape sequences and paste
     // locally so their payload cannot become navigation or reach a child shell.
     pub fn feed(&mut self, byte: u8) -> bool {
+        if self.discard_escape {
+            self.discard_escape = !(0x40..=0x7e).contains(&byte);
+            return false;
+        }
         if !self.escape.is_empty() {
             self.escape.push(byte);
             if self.escape.len() == 2 && matches!(byte, b'[' | b'O') {
                 return false;
             }
+            // Legacy mouse reports have three raw payload bytes after CSI M.
+            // Those bytes may themselves be navigation keys or CSI final bytes.
+            if self.escape.starts_with(b"\x1b[M") {
+                if self.escape.len() == 6 {
+                    self.wheel();
+                    self.escape.clear();
+                }
+                return false;
+            }
             if self.escape.len() == 2 || (0x40..=0x7e).contains(&byte) {
+                self.wheel();
                 match self.escape.as_slice() {
                     b"\x1b[200~" => self.paste = true,
                     b"\x1b[201~" => self.paste = false,
@@ -81,6 +104,9 @@ impl HistoryView {
                     _ => {}
                 }
                 self.escape.clear();
+            } else if self.escape.len() >= MAX_HISTORY_ESCAPE_BYTES {
+                self.escape.clear();
+                self.discard_escape = true;
             }
             return false;
         }
@@ -128,6 +154,51 @@ impl HistoryView {
         false
     }
 
+    fn wheel(&mut self) {
+        if self.paste || self.editor.is_some() {
+            return;
+        }
+        let report = match self.escape.as_slice() {
+            [27, b'[', b'M', button, column, row] => button
+                .checked_sub(32)
+                .zip(column.checked_sub(32))
+                .zip(row.checked_sub(32))
+                .map(|((button, column), row)| {
+                    (usize::from(button), usize::from(column), usize::from(row))
+                }),
+            [27, b'[', b'<', rest @ .., b'M'] => std::str::from_utf8(rest).ok().and_then(|text| {
+                let mut parts = text.split(';');
+                let mut number = || {
+                    let part = parts.next()?;
+                    if part.is_empty() || !part.bytes().all(|b| b.is_ascii_digit()) {
+                        return None;
+                    }
+                    part.parse::<usize>().ok()
+                };
+                let report = (number()?, number()?, number()?);
+                parts.next().is_none().then_some(report)
+            }),
+            _ => None,
+        };
+        let Some((button, column, row)) = report else {
+            return;
+        };
+        let (rows, columns) = self.source.dimensions();
+        let local_row = row.checked_sub(self.origin.0);
+        let local_column = column.checked_sub(self.origin.1);
+        if !local_row.is_some_and(|r| (1..=rows).contains(&r))
+            || !local_column.is_some_and(|c| (1..=columns).contains(&c))
+        {
+            return;
+        }
+        // Ignore modifiers but reject motion, horizontal wheels and releases.
+        match button & !0x1c {
+            64 => self.up(3),
+            65 => self.down(3),
+            _ => {}
+        }
+    }
+
     fn select(&mut self, index: usize) {
         self.selected = self.hits.get(index).map(|_| index);
         if let Some(hit) = self.hits.get(index) {
@@ -162,6 +233,8 @@ impl HistoryView {
         let mut view = Screen::new(rows, columns)?;
         view.set_cursor_visible(false);
         view.set_bracketed_paste(true);
+        view.set_mouse_tracking(MouseTracking::Button);
+        view.set_sgr_mouse(true);
         let history = self.source.history_len();
         for row in 0..rows {
             let index = history - self.offset + row;
@@ -230,6 +303,73 @@ mod tests {
         assert_eq!(view.offset, 1);
         assert!(view.feed(b'q'));
         assert!(HistoryView::new(&source).is_none());
+    }
+
+    #[test]
+    fn wheel_scrolls_only_inside_the_pane_and_clamps_at_both_ends() {
+        let mut source = Screen::new(4, 12).unwrap();
+        let mut parser = Parser::new();
+        for _ in 0..20 {
+            parser.advance(&mut source, b"row\r\n");
+        }
+        let mut view = HistoryView::new(&source).unwrap();
+        view.set_origin(5, 40);
+        let rendered = view.render().unwrap();
+        assert_eq!(rendered.mouse_tracking(), MouseTracking::Button);
+        assert!(rendered.sgr_mouse());
+        assert_eq!(source.mouse_tracking(), MouseTracking::Off);
+        type_bytes(&mut view, b"G\x1b[<64;41;6M");
+        assert_eq!(view.offset, 3);
+        type_bytes(&mut view, b"\x1b[<80;52;9M"); // Ctrl + wheel, last cell.
+        assert_eq!(view.offset, 6);
+        for report in [
+            &b"\x1b[<64;40;6M"[..],
+            b"\x1b[<64;53;6M",
+            b"\x1b[<64;41;5M",
+            b"\x1b[<64;41;10M",
+            b"\x1b[<64;0;0M",
+            b"\x1b[<64;41;6m",
+            b"\x1b[<0;41;6M",
+            b"\x1b[<96;41;6M",
+            b"\x1b[<66;41;6M",
+            b"\x1b[<64;999999999999999999999999;6M",
+            b"\x1b[<64;;6M",
+            b"\x1b[<64;41;6;1M",
+        ] {
+            type_bytes(&mut view, report);
+            assert_eq!(view.offset, 6);
+        }
+        type_bytes(&mut view, b"\x1b[M`I&"); // Legacy wheel up, column 41, row 6.
+        assert_eq!(view.offset, 9);
+        type_bytes(&mut view, b"g\x1b[<64;41;6M");
+        assert_eq!(view.offset, source.history_len());
+        type_bytes(&mut view, b"G\x1b[<65;41;6M");
+        assert_eq!(view.offset, 0);
+        view.set_origin(0, 0); // No bar and no split offset.
+        type_bytes(&mut view, b"\x1b[<64;1;1M");
+        assert_eq!(view.offset, 3);
+    }
+
+    #[test]
+    fn mouse_payload_never_becomes_navigation_or_search_text() {
+        let mut source = Screen::new(4, 12).unwrap();
+        Parser::new().advance(&mut source, b"a\r\nb\r\nc\r\nd\r\ne\r\nf");
+        let mut view = HistoryView::new(&source).unwrap();
+        type_bytes(&mut view, b"G\x1b[Mqjk");
+        assert_eq!(view.offset, 0);
+        type_bytes(&mut view, b"\x1b[200~\x1b[<64;1;1M\x1b[Mqjk\x1b[201~");
+        assert_eq!(view.offset, 0);
+        type_bytes(&mut view, b"/find\x1b[<64;1;1M\x1b[Mqjk");
+        assert_eq!(view.editor.as_ref().unwrap().text, "find");
+        assert_eq!(view.offset, 0);
+        type_bytes(&mut view, b"\x03");
+        let mut oversized = b"\x1b[<64;".to_vec();
+        oversized.extend(std::iter::repeat_n(b'9', 100));
+        oversized.extend_from_slice(b";1M");
+        type_bytes(&mut view, &oversized);
+        assert_eq!(view.offset, 0);
+        type_bytes(&mut view, b"\x1b[<64;1;1M");
+        assert_eq!(view.offset, source.history_len());
     }
 
     fn type_bytes(view: &mut HistoryView, text: &[u8]) {

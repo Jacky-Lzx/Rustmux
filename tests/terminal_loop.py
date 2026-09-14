@@ -1432,6 +1432,8 @@ try:
         s.send(b"\x02[g")
         s.expect(b"HIST_00")
         assert b"History " in s.last_rows[0]
+        assert b"\x1b[?1000h" in s.last_frame
+        assert b"\x1b[?1006h" in s.last_frame
         assert any(b"HISTORY_LEFT" in row for row in s.last_rows)
         frozen = list(s.last_rows)
         with open(trigger, "w") as file:
@@ -1457,8 +1459,21 @@ try:
         s.send(b"G")
         s.expect(b"History 0/")
         assert not any(b"LATE_HISTORY_OUTPUT" in row for row in s.last_rows)
+        # Mouse coordinates are outer-terminal coordinates: bar row 1 and the
+        # left pane / column-40 separator must not scroll the right snapshot.
+        frozen = list(s.last_rows)
+        s.send(b"\x1b[<64;10;5M\x1b[<64;40;5M\x1b[<64;50;1M")
+        s.read(0.1)
+        assert s.last_rows == frozen
+        s.send(b"\x1b[<64;50;5M")
+        s.expect(b"History 3/")
+        assert any(b"HISTORY_LEFT" in row for row in s.last_rows)
+        s.send(b"\x1b[<65;50;5M")
+        s.expect(b"History 0/")
         s.send(b"q")
         s.expect(b"LATE_HISTORY_OUTPUT")
+        assert b"\x1b[?1000l" in s.last_frame
+        assert b"\x1b[?1006l" in s.last_frame
         s.send(b"printf '\\n%s%s\\n' INPUT_ INTACT\n")
         s.expect(b"INPUT_INTACT")
         s.send(b"\x02[\x1b[5~")

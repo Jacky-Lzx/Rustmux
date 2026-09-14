@@ -5,17 +5,24 @@ history and current screen. It initially moves up one pane-height, clamped to
 available history. Empty history and alternate-screen applications ignore entry.
 Other panes continue displaying live output. The window bar shows `History`, the
 number of rows above the snapshot's bottom, and the snapshot history length.
-The cursor is hidden and mouse reporting is disabled while browsing.
+The cursor is hidden. History mode enables button-event mouse reporting with SGR
+coordinates; exiting restores the live application's mouse modes.
 
 | Key in history mode | Action |
 | --- | --- |
 | `k` / `j`, Up / Down | One row older / newer |
+| Mouse wheel up / down inside the active pane | Three rows older / newer |
 | Ctrl-U / Ctrl-D | Half a pane older / newer |
 | Page Up / Page Down | One pane older / newer |
 | `g` / `G` | Oldest retained row / bottom of the snapshot |
 | `/` | Enter a search query |
 | `n` / `N` | Next / previous match, wrapping at either end |
 | `q` / Ctrl-C | Exit to the live screen |
+
+Wheel events over the bar, separators or another pane are ignored. Clicking does
+not change focus or select text. Modified vertical wheel events also scroll;
+horizontal wheel, motion and release events are ignored. Legacy mouse reports
+are consumed as complete reports so their payload cannot become keypresses.
 
 Navigation stops at both ends. `G` stays in history mode; it does not resume the
 live display. Window/pane shortcuts are unavailable until exit. Other input is
@@ -48,7 +55,7 @@ scalar and Ctrl-U clears the query. Long queries show their trailing characters
 in the bar so the latest input stays visible. Ctrl-C or Ctrl-G cancels editing and retains
 the previous search; it does not exit history. Enter with an empty query clears
 search highlighting. While editing, `q`, `j`, `k`, `n`, and other printable keys
-are query text. Arrow/page escape sequences and bracketed paste are ignored.
+are query text. Arrow/page escape sequences, mouse events and bracketed paste are ignored.
 Use Ctrl-C to cancel rather than Esc. Searches and query edits never reach a shell.
 
 Search runs only on submission, over the frozen snapshot. It temporarily creates
@@ -75,13 +82,14 @@ normal terminal cleanup. Previously queued output frames always finish first.
 
 Rows retain their original widths: shorter rows are padded and longer rows are
 clipped to the pane width, with clipped wide characters replaced by blank cells.
-There is no snapshot text reflow, text selection, copying, mouse-wheel navigation
-or disk persistence yet. This does not recover content previously discarded by
-resize. A one-row outer terminal has no bar, so the history indicator is hidden.
+There is no snapshot text reflow, text selection, copying or disk persistence yet.
+This does not recover content previously discarded by resize. A one-row outer terminal has no bar, so the history indicator is hidden.
 
 Unit tests cover snapshot independence, navigation, wide-cell clipping, paste
 isolation, logical-line and Unicode search, overlapping results, highlighting,
-query editing and result wraparound. The nested-PTY suite checks browsing inside a split, the other pane's
+query editing, result wraparound, wheel bounds, malformed mouse reports and modal
+input isolation. The nested-PTY suite checks browsing inside a split, the other pane's
 continued visibility, new background output while frozen, snapshot-bottom versus
 live output, search submission/result cycling/no-match/cancellation, navigation/paste
-isolation and return to live input after resize.
+isolation, wheel routing within a split, mouse-mode restoration and return to live
+input after resize.

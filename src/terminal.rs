@@ -962,6 +962,9 @@ fn forward(
                         history = crate::history_view::HistoryView::new(
                             windows.active().unwrap().content().active().screen(),
                         );
+                        if let Some(view) = &mut history {
+                            view.set_origin(keys.pane_top, keys.pane_left);
+                        }
                         keys = WindowInput::default();
                         if history.is_some() {
                             renderer.invalidate();
