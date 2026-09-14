@@ -11,6 +11,12 @@ const CONTROL_BYTE_END: u8 = 31;
 const PRINTABLE_BYTE_START: u8 = 32;
 const PRINTABLE_BYTE_END: u8 = 126;
 pub(super) const MAX_QUERY_HISTORY: usize = 20;
+pub(super) const MAX_QUERY_BYTES: usize = 128;
+const KEY_HOME: u8 = 1;
+const KEY_LEFT: u8 = 2;
+const KEY_DELETE: u8 = 4;
+const KEY_END: u8 = 5;
+const KEY_RIGHT: u8 = 6;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Hit {
@@ -121,6 +127,8 @@ pub(super) struct QueryInput {
     utf8: Vec<u8>,
     recalled: Option<usize>,
     draft: String,
+    cursor: usize,
+    draft_cursor: usize,
 }
 
 impl QueryInput {
@@ -141,55 +149,114 @@ impl QueryInput {
                 index.saturating_sub(1)
             } else {
                 self.draft = self.text.clone();
+                self.draft_cursor = self.cursor;
                 history.0.len() - 1
             };
             self.text.clone_from(&history.0[index]);
             self.recalled = Some(index);
+            self.cursor = self.text.len();
         } else if let Some(index) = self.recalled {
             if index + 1 < history.0.len() {
                 self.text.clone_from(&history.0[index + 1]);
                 self.recalled = Some(index + 1);
+                self.cursor = self.text.len();
             } else {
                 self.text = std::mem::take(&mut self.draft);
+                self.cursor = self.draft_cursor;
                 self.recalled = None;
             }
         }
     }
 
     pub fn label(&self, columns: usize) -> String {
+        self.display(columns).0
+    }
+
+    pub fn display(&self, columns: usize) -> (String, usize) {
         let marker = self.direction.marker();
-        let prefix = if columns >= 8 {
+        let prefix = if columns >= 9 {
             format!("Search {marker}")
-        } else {
+        } else if columns > 1 {
             marker.to_string()
+        } else {
+            String::new()
         };
-        let mut remaining = columns.saturating_sub(prefix.len());
-        let mut start = self.text.len();
-        for (index, character) in self.text.char_indices().rev() {
+        // Reserve one cell for the insertion cursor, even at the end of text.
+        let mut remaining = columns.saturating_sub(prefix.len() + 1);
+        let mut start = self.cursor;
+        let mut before_width = 0;
+        for (index, character) in self.text[..self.cursor].char_indices().rev() {
             let width = character.width().unwrap_or(0);
             if width > remaining {
                 break;
             }
             remaining -= width;
+            before_width += width;
             start = index;
         }
         let tail: String = self.text[start..]
             .chars()
             .skip_while(|character| character.width() == Some(0))
             .collect();
-        format!("{prefix}{tail} · Up/Down:recall Enter:find Ctrl-C:cancel")
+        (
+            format!("{prefix}{tail} · Up/Down:recall Enter:find Ctrl-C:cancel"),
+            (prefix.len() + before_width).min(columns.saturating_sub(1)),
+        )
+    }
+
+    pub fn edit_sequence(&mut self, sequence: &[u8]) {
+        match sequence {
+            b"\x1b[D" | b"\x1bOD" => self.feed(KEY_LEFT),
+            b"\x1b[C" | b"\x1bOC" => self.feed(KEY_RIGHT),
+            b"\x1b[H" | b"\x1bOH" | b"\x1b[1~" | b"\x1b[7~" => self.feed(KEY_HOME),
+            b"\x1b[F" | b"\x1bOF" | b"\x1b[4~" | b"\x1b[8~" => self.feed(KEY_END),
+            b"\x1b[3~" => self.feed(KEY_DELETE),
+            _ => {}
+        }
     }
 
     pub fn feed(&mut self, byte: u8) {
         let old_len = self.text.len();
         match byte {
+            KEY_HOME | KEY_LEFT | KEY_END | KEY_RIGHT => {
+                self.utf8.clear();
+                self.cursor = match byte {
+                    KEY_HOME => 0,
+                    KEY_END => self.text.len(),
+                    KEY_LEFT => self.text[..self.cursor]
+                        .char_indices()
+                        .next_back()
+                        .map_or(0, |(i, _)| i),
+                    _ => {
+                        self.cursor
+                            + self.text[self.cursor..]
+                                .chars()
+                                .next()
+                                .map_or(0, char::len_utf8)
+                    }
+                };
+            }
+            KEY_DELETE => {
+                self.utf8.clear();
+                if self.cursor < self.text.len() {
+                    self.text.remove(self.cursor);
+                }
+            }
             CONTROL_BACKSPACE | CONTROL_DELETE => {
                 self.utf8.clear();
-                self.text.pop();
+                if self.cursor > 0 {
+                    self.cursor = self.text[..self.cursor]
+                        .char_indices()
+                        .next_back()
+                        .unwrap()
+                        .0;
+                    self.text.remove(self.cursor);
+                }
             }
             CONTROL_CLEAR_LINE => {
                 self.utf8.clear();
                 self.text.clear();
+                self.cursor = 0;
             }
             CONTROL_BYTE_START..=CONTROL_BYTE_END => self.utf8.clear(),
             PRINTABLE_BYTE_START..=PRINTABLE_BYTE_END => {
@@ -219,7 +286,8 @@ impl QueryInput {
 
     fn append(&mut self, character: char) {
         if !character.is_control() && self.text.len() + character.len_utf8() <= MAX_QUERY_BYTES {
-            self.text.push(character);
+            self.text.insert(self.cursor, character);
+            self.cursor += character.len_utf8();
         }
     }
 }
@@ -362,15 +430,88 @@ mod tests {
     }
 
     #[test]
+    fn editing_moves_on_unicode_boundaries_and_keeps_draft_cursor() {
+        let mut editor = QueryInput::default();
+        for b in "A中e\u{301}Z".bytes() {
+            editor.feed(b);
+        }
+        editor.edit_sequence(b"\x1b[D");
+        editor.feed(127); // Delete the combining scalar before Z.
+        assert_eq!(editor.text, "A中eZ");
+        editor.edit_sequence(b"\x1bOD");
+        editor.edit_sequence(b"\x1b[3~");
+        editor.feed(b'x');
+        assert_eq!(editor.text, "A中xZ");
+        editor.edit_sequence(b"\x1bOH");
+        editor.feed(127); // Start boundary.
+        editor.feed(b'!');
+        assert_eq!(editor.text, "!A中xZ");
+        let draft_cursor = editor.cursor;
+        let mut history = QueryHistory::default();
+        history.remember("old");
+        editor.recall(&history, true);
+        editor.feed(2); // Moving alone does not detach recalled text.
+        editor.recall(&history, false);
+        assert_eq!(editor.cursor, draft_cursor);
+        editor.feed(b'?');
+        assert_eq!(editor.text, "!?A中xZ");
+        editor.edit_sequence(b"\x1bOF");
+        editor.feed(4); // End boundary.
+        editor.feed(6);
+        assert_eq!(editor.cursor, editor.text.len());
+        editor.feed(21);
+        for _ in 0..128 {
+            editor.feed(b'a');
+        }
+        editor.feed(1);
+        editor.feed(b'b');
+        assert_eq!(editor.cursor, 0);
+        assert_eq!(editor.text.len(), 128);
+        editor.feed(4);
+        editor.feed(b'b');
+        assert!(editor.text.starts_with("ba"));
+    }
+
+    #[test]
+    fn label_scrolls_with_insertion_cursor_even_in_narrow_columns() {
+        let mut editor = QueryInput::default();
+        for b in "abcdefgh中".bytes() {
+            editor.feed(b);
+        }
+        for width in 1..20 {
+            let (_, cursor) = editor.display(width);
+            assert!(cursor < width);
+        }
+        editor.feed(1);
+        let (label, cursor) = editor.display(12);
+        assert_eq!(crate::chrome::clipped(&label, 12), "Search /abcd");
+        assert_eq!(cursor, 8);
+        editor.feed(6);
+        assert_eq!(editor.display(12).1, 9);
+        editor.feed(5);
+        assert_eq!(
+            crate::chrome::clipped(&editor.display(12).0, 12),
+            "Search /h中 "
+        );
+        assert_eq!(editor.display(12).1, 11);
+    }
+
+    #[test]
     fn narrow_query_label_keeps_the_latest_complete_characters_visible() {
         let mut input = QueryInput::default();
         for byte in "abcdef中文".bytes() {
             input.feed(byte);
         }
-        assert_eq!(crate::chrome::clipped(&input.label(12), 12), "Search /中文");
-        assert_eq!(crate::chrome::clipped(&input.label(3), 3), "/文");
+        assert_eq!(
+            crate::chrome::clipped(&input.label(13), 13),
+            "Search /中文 "
+        );
+        assert_eq!(crate::chrome::clipped(&input.label(4), 4), "/文 ");
         input.direction = Direction::Backward;
-        assert_eq!(crate::chrome::clipped(&input.label(12), 12), "Search ?中文");
-        assert_eq!(crate::chrome::clipped(&input.label(3), 3), "?文");
+        assert_eq!(
+            crate::chrome::clipped(&input.label(13), 13),
+            "Search ?中文 "
+        );
+        assert_eq!(crate::chrome::clipped(&input.label(4), 4), "?文 ");
     }
 }

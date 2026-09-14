@@ -726,6 +726,11 @@ fn forward(
                         {
                             view.print(character);
                         }
+                        if let Some(column) = history.query_cursor(view.dimensions().1) {
+                            view.position(0, column);
+                            view.set_cursor_visible(true);
+                            view.set_cursor_shape(crate::screen::CursorShape::SteadyBar);
+                        }
                     }
                     if let Some(prompt) = &prompt {
                         renderer

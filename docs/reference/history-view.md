@@ -5,7 +5,8 @@ history and current screen. It initially moves up one pane-height, clamped to
 available history. Empty history and alternate-screen applications ignore entry.
 Other panes continue displaying live output. The window bar shows `History`, the
 number of rows above the snapshot's bottom, and the snapshot history length.
-The cursor is hidden. History mode enables button-event mouse reporting with SGR
+The cursor is hidden while browsing and shown in the bar while editing a query.
+History mode enables button-event mouse reporting with SGR
 coordinates; exiting restores the live application's mouse modes.
 
 | Key in history mode | Action |
@@ -57,20 +58,25 @@ cells when matching a combining suffix. The original snapshot is unchanged.
 A match taller than the pane is only partially visible; use ordinary navigation
 to inspect the remainder. Navigation preserves the selected result.
 
-The query editor accepts at most 128 UTF-8 bytes. Backspace deletes one Unicode
-scalar and Ctrl-U clears the query. Long queries show their trailing characters
-in the bar so the latest input stays visible. Ctrl-C or Ctrl-G cancels editing and retains
+The query editor accepts at most 128 UTF-8 bytes. Left/Right (or Ctrl-B/Ctrl-F)
+move by Unicode scalar; Home/End (or Ctrl-A/Ctrl-E) move to the start/end.
+Typing inserts at the cursor. Backspace deletes the preceding scalar; Delete
+(or Ctrl-D) deletes the following one. Ctrl-U clears the whole query.
+Combining marks are separate scalars, not grapheme clusters. Long queries scroll
+horizontally to keep the insertion cursor visible. A steady bar cursor appears
+in the search row; it is hidden again on submission or cancellation. Ctrl-C or Ctrl-G cancels editing and retains
 the previous search, selected result and direction; it does not exit history.
 Enter with an empty query clears search highlighting. While editing, `q`, `j`, `k`, `n`, and other printable keys
-are query text. Up/Down recall search terms; other arrow/page sequences, mouse
-events and bracketed paste are ignored.
+are query text. Up/Down recall search terms; page sequences, mouse events and bracketed paste
+are ignored.
 Use Ctrl-C to cancel rather than Esc. Searches and query edits never reach a shell.
 
 ### Reusing search terms
 
 Inside the query editor, Up recalls older submitted terms and Down recalls newer
 ones. Both ordinary and application-mode arrow keys work. The first Up saves the
-current draft; Down past the newest term restores it. Up stops at the oldest term.
+current draft and cursor position; Down past the newest term restores both.
+Recalled terms initially place the cursor at the end. Up stops at the oldest term.
 Recall changes only the input text: Enter runs the search, using the direction
 chosen when opening the editor (`/` or `?`). Cancelling leaves the active search
 and its direction unchanged.
@@ -112,12 +118,13 @@ This does not recover content previously discarded by resize. A one-row outer te
 
 Unit tests cover snapshot independence, navigation, wide-cell clipping, paste
 isolation, logical-line and Unicode search, overlapping results, highlighting,
-query editing and bounded query recall with draft restoration, both search
+Unicode cursor editing, narrow query views and bounded query recall with draft
+restoration, both search
 directions and their row anchors, cancellation, result
 wraparound, wheel bounds, malformed mouse reports and modal
 input isolation. The nested-PTY suite checks browsing inside a split, the other pane's
 continued visibility, new background output while frozen, snapshot-bottom versus
 live output, forward/backward search submission/result cycling/no-match/cancellation,
-query recall and draft restoration, navigation/paste
+query recall, middle editing, cursor visibility and draft restoration, navigation/paste
 isolation, wheel routing within a split, mouse-mode restoration and return to live
 input after resize.

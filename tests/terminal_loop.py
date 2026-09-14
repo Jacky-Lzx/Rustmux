@@ -1475,6 +1475,12 @@ try:
         s.send(b"\x1b[A\x1b[A\r")
         s.expect(b"8/10 ?HIST_0")
         assert b"Search " not in s.last_rows[0]
+        s.send(b"/HIST_X\x1b[D\x1b[3~0")
+        s.expect(b"Search /HIST_0")
+        assert b"\x1b[?25h" in s.last_frame
+        s.send(b"\x1b[H\x1b[C\x1b[F\r")
+        s.expect(b"8/10 /HIST_0")
+        assert b"\x1b[?25l" in s.last_frame
         s.send(b"G")
         s.expect(b"History 0/")
         assert not any(b"LATE_HISTORY_OUTPUT" in row for row in s.last_rows)

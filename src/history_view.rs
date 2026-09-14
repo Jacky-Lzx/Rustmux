@@ -47,6 +47,10 @@ impl HistoryView {
         self.origin = (row, column);
     }
 
+    pub fn query_cursor(&self, columns: usize) -> Option<usize> {
+        self.editor.as_ref().map(|editor| editor.display(columns).1)
+    }
+
     pub fn label(&self, columns: usize) -> String {
         if let Some(editor) = &self.editor {
             return editor.label(columns);
@@ -117,6 +121,11 @@ impl HistoryView {
                     }
                     b"\x1b[6~" if !self.paste && self.editor.is_none() => {
                         self.down(self.source.dimensions().0)
+                    }
+                    _ if !self.paste => {
+                        if let Some(editor) = &mut self.editor {
+                            editor.edit_sequence(&self.escape);
+                        }
                     }
                     _ => {}
                 }
@@ -524,6 +533,22 @@ mod tests {
         let mut reopened = HistoryView::new(&source).unwrap();
         type_bytes(&mut reopened, b"/\x1b[A");
         assert_eq!(reopened.editor.as_ref().unwrap().text, "");
+    }
+
+    #[test]
+    fn query_editing_sequences_stay_modal_and_paste_cannot_move_cursor() {
+        let mut source = Screen::new(2, 10).unwrap();
+        Parser::new().advance(&mut source, b"one\r\ntwo\r\nend");
+        let mut view = HistoryView::new(&source).unwrap();
+        assert_eq!(view.query_cursor(20), None);
+        type_bytes(&mut view, b"/onx\x1b[D\x1b[3~e");
+        assert_eq!(view.editor.as_ref().unwrap().text, "one");
+        type_bytes(&mut view, b"\x1b[200~\x1b[Hbad\x1b[3~\x1b[201~");
+        assert_eq!(view.query_cursor(20), Some(11));
+        type_bytes(&mut view, b"\r");
+        assert_eq!(view.query_cursor(20), None);
+        assert_eq!(view.query, "one");
+        assert_eq!(view.hits.len(), 1);
     }
 
     #[test]
