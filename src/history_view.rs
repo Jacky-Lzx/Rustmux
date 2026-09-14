@@ -144,6 +144,11 @@ impl HistoryView {
             return false;
         }
         if self.paste {
+            if let Some(editor) = &mut self.editor {
+                // Paste inserts text only. Controls (including newline, Delete
+                // and editing shortcuts) must never execute editor commands.
+                editor.feed_paste(byte);
+            }
             return false;
         }
         if self.editor.is_some() {
@@ -543,12 +548,57 @@ mod tests {
         assert_eq!(view.query_cursor(20), None);
         type_bytes(&mut view, b"/onx\x1b[D\x1b[3~e");
         assert_eq!(view.editor.as_ref().unwrap().text, "one");
-        type_bytes(&mut view, b"\x1b[200~\x1b[Hbad\x1b[3~\x1b[201~");
+        type_bytes(&mut view, b"\x1b[200~\x1b[H\x01\x02\x04\x1b[3~\x1b[201~");
         assert_eq!(view.query_cursor(20), Some(11));
         type_bytes(&mut view, b"\r");
         assert_eq!(view.query_cursor(20), None);
         assert_eq!(view.query, "one");
         assert_eq!(view.hits.len(), 1);
+    }
+
+    #[test]
+    fn pasted_query_inserts_at_cursor_without_submitting_or_running_controls() {
+        let mut source = Screen::new(2, 12).unwrap();
+        Parser::new().advance(&mut source, "A中B\r\nnext\r\nend".as_bytes());
+        let mut view = HistoryView::new(&source).unwrap();
+        type_bytes(&mut view, b"/AB\x1b[D\x1b[200~");
+        type_bytes(&mut view, "中".as_bytes());
+        type_bytes(
+            &mut view,
+            b"\r\n\t\x01\x02\x03\x04\x05\x06\x07\x08\x15\x7f\x1b[H\x1b[3~\x1b[201~",
+        );
+        assert_eq!(view.editor.as_ref().unwrap().text, "A中B");
+        assert!(view.query.is_empty());
+        assert!(view.hits.is_empty());
+        type_bytes(&mut view, b"\r");
+        assert_eq!(view.query, "A中B");
+        assert_eq!(view.hits.len(), 1);
+        type_bytes(&mut view, b"?\x1b[A\x1b[200~qjk/?\x1b[201~");
+        assert_eq!(view.editor.as_ref().unwrap().text, "A中Bqjk/?");
+        type_bytes(&mut view, b"\x03/\x1b[A");
+        assert_eq!(view.editor.as_ref().unwrap().text, "A中B");
+    }
+
+    #[test]
+    fn oversized_unicode_paste_is_bounded_and_incomplete_text_stays_local() {
+        let mut source = Screen::new(2, 4).unwrap();
+        Parser::new().advance(&mut source, b"a\r\nb\r\nc");
+        let mut view = HistoryView::new(&source).unwrap();
+        type_bytes(&mut view, b"/\x1b[200~");
+        type_bytes(&mut view, "中".repeat(1000).as_bytes());
+        type_bytes(&mut view, b"abcd\xe4\x1b[201~");
+        assert_eq!(
+            view.editor.as_ref().unwrap().text,
+            format!("{}ab", "中".repeat(42))
+        );
+        type_bytes(
+            &mut view,
+            b"\x15\x1b[200~\xe4\r\xb8\xadX\xe4\x1b[201~\xb8\xad",
+        );
+        assert_eq!(view.editor.as_ref().unwrap().text, "X");
+        type_bytes(&mut view, b"\r");
+        assert_eq!(view.query, "X");
+        assert_eq!(view.query_cursor(20), None);
     }
 
     #[test]
@@ -558,7 +608,7 @@ mod tests {
         let mut view = HistoryView::new(&source).unwrap();
         let offset = view.offset;
         type_bytes(&mut view, b"/qjk\x1b[A\x1b[6~\x1b[200~bad\r\x03\x1b[201~");
-        assert_eq!(view.editor.as_ref().unwrap().text, "qjk");
+        assert_eq!(view.editor.as_ref().unwrap().text, "qjkbad");
         assert_eq!(view.offset, offset);
         type_bytes(&mut view, b"\x15two\r");
         assert_eq!(view.hits.len(), 1);

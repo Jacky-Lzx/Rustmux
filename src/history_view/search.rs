@@ -215,6 +215,14 @@ impl QueryInput {
         }
     }
 
+    pub fn feed_paste(&mut self, byte: u8) {
+        if byte >= 32 && byte != 127 {
+            self.feed(byte);
+        } else {
+            self.utf8.clear();
+        }
+    }
+
     pub fn feed(&mut self, byte: u8) {
         let old_len = self.text.len();
         match byte {

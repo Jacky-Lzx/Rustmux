@@ -27,8 +27,8 @@ are consumed as complete reports so their payload cannot become keypresses.
 
 Navigation stops at both ends. `G` stays in history mode; it does not resume the
 live display. Window/pane shortcuts are unavailable until exit. Other input is
-consumed locally, and bracketed paste is ignored, including navigation and exit
-characters in its payload. Plain unbracketed paste cannot be distinguished from
+consumed locally. Bracketed paste is ignored while browsing; inside the query
+editor it inserts text as described below. Plain unbracketed paste cannot be distinguished from
 keypresses. Escape sequences are consumed with a 64-byte bound; standalone Esc
 is not an exit key in this version.
 
@@ -67,9 +67,25 @@ horizontally to keep the insertion cursor visible. A steady bar cursor appears
 in the search row; it is hidden again on submission or cancellation. Ctrl-C or Ctrl-G cancels editing and retains
 the previous search, selected result and direction; it does not exit history.
 Enter with an empty query clears search highlighting. While editing, `q`, `j`, `k`, `n`, and other printable keys
-are query text. Up/Down recall search terms; page sequences, mouse events and bracketed paste
-are ignored.
+are query text. Up/Down recall search terms; page sequences and mouse events are ignored.
 Use Ctrl-C to cancel rather than Esc. Searches and query edits never reach a shell.
+
+### Pasting a query
+
+Bracketed paste inserts printable UTF-8 text at the query cursor without running
+editor shortcuts. CR, LF, Tab, Backspace, Delete and other control characters are
+discarded; line breaks are not converted to spaces. Supported escape reports are
+consumed without navigation or editing. Pasted `q`, `j`, `k`, `/` and `?` are
+ordinary query text. A newline inside the paste never submits a search: press
+Enter after pasting to search, or Ctrl-C/Ctrl-G to cancel.
+
+The existing 128-byte limit applies to the combined query, including pasted text.
+Characters that do not fit are ignored whole; invalid or incomplete UTF-8 cannot
+become part of the query. Paste is processed incrementally rather than buffered
+as an unbounded string. Pasting into a recalled term creates an editable draft;
+only explicit submission records it in query history. This behavior requires
+bracketed-paste delimiters from the outer terminal; unbracketed text is handled
+as ordinary keystrokes.
 
 ### Reusing search terms
 
@@ -125,6 +141,7 @@ wraparound, wheel bounds, malformed mouse reports and modal
 input isolation. The nested-PTY suite checks browsing inside a split, the other pane's
 continued visibility, new background output while frozen, snapshot-bottom versus
 live output, forward/backward search submission/result cycling/no-match/cancellation,
-query recall, middle editing, cursor visibility and draft restoration, navigation/paste
+query recall, middle editing, cursor visibility, query paste and draft restoration,
+navigation/paste
 isolation, wheel routing within a split, mouse-mode restoration and return to live
 input after resize.
