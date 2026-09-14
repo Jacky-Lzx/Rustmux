@@ -80,15 +80,44 @@ pub(super) fn find(source: &Screen, query: &str) -> Vec<Hit> {
         .collect()
 }
 
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub(super) enum Direction {
+    #[default]
+    Forward,
+    Backward,
+}
+
+impl Direction {
+    pub fn marker(self) -> char {
+        match self {
+            Self::Forward => '/',
+            Self::Backward => '?',
+        }
+    }
+}
+
 #[derive(Default)]
 pub(super) struct QueryInput {
     pub text: String,
+    pub direction: Direction,
     utf8: Vec<u8>,
 }
 
 impl QueryInput {
+    pub fn new(direction: Direction) -> Self {
+        Self {
+            direction,
+            ..Self::default()
+        }
+    }
+
     pub fn label(&self, columns: usize) -> String {
-        let prefix = if columns >= 8 { "Search /" } else { "/" };
+        let marker = self.direction.marker();
+        let prefix = if columns >= 8 {
+            format!("Search {marker}")
+        } else {
+            marker.to_string()
+        };
         let mut remaining = columns.saturating_sub(prefix.len());
         let mut start = self.text.len();
         for (index, character) in self.text.char_indices().rev() {
@@ -221,5 +250,8 @@ mod tests {
         }
         assert_eq!(crate::chrome::clipped(&input.label(12), 12), "Search /中文");
         assert_eq!(crate::chrome::clipped(&input.label(3), 3), "/文");
+        input.direction = Direction::Backward;
+        assert_eq!(crate::chrome::clipped(&input.label(12), 12), "Search ?中文");
+        assert_eq!(crate::chrome::clipped(&input.label(3), 3), "?文");
     }
 }

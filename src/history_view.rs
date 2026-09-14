@@ -4,7 +4,7 @@ use std::io;
 
 const MAX_HISTORY_ESCAPE_BYTES: usize = 64;
 mod search;
-use search::{Hit, QueryInput};
+use search::{Direction, Hit, QueryInput};
 
 pub(crate) struct HistoryView {
     source: Screen,
@@ -14,6 +14,7 @@ pub(crate) struct HistoryView {
     origin: (usize, usize),
     paste: bool,
     query: String,
+    direction: Direction,
     editor: Option<QueryInput>,
     hits: Vec<Hit>,
     selected: Option<usize>,
@@ -32,6 +33,7 @@ impl HistoryView {
             origin: (0, 0),
             paste: false,
             query: String::new(),
+            direction: Direction::Forward,
             editor: None,
             hits: Vec::new(),
             selected: None,
@@ -47,20 +49,21 @@ impl HistoryView {
         if let Some(editor) = &self.editor {
             return editor.label(columns);
         }
+        let marker = self.direction.marker();
         let search = if self.query.is_empty() {
             String::new()
         } else if self.hits.is_empty() {
-            format!(" · no match /{}", self.query)
+            format!(" · no match {marker}{}", self.query)
         } else {
             format!(
-                " · {}/{} /{}",
+                " · {}/{} {marker}{}",
                 self.selected.map_or(0, |index| index + 1),
                 self.hits.len(),
                 self.query
             )
         };
         format!(
-            "History {}/{}{} · /:search n/N:next/prev q:exit",
+            "History {}/{}{} · /?:search n/N:next/prev q:exit",
             self.offset,
             self.source.history_len(),
             search
@@ -124,14 +127,26 @@ impl HistoryView {
             match byte {
                 3 | 7 => self.editor = None,
                 b'\r' | b'\n' => {
-                    self.query = self.editor.take().unwrap().text;
+                    let editor = self.editor.take().unwrap();
+                    self.query = editor.text;
+                    self.direction = editor.direction;
                     self.hits = search::find(&self.source, &self.query);
                     let top = self.source.history_len() - self.offset;
-                    let index = self
-                        .hits
-                        .iter()
-                        .position(|hit| hit.start.0 >= top)
-                        .unwrap_or(0);
+                    // Both directions start at the viewport's top row. With no
+                    // text cursor, forward chooses that row's first match and
+                    // backward its last match. Wrap only when no candidate exists.
+                    let index = match self.direction {
+                        Direction::Forward => self
+                            .hits
+                            .iter()
+                            .position(|hit| hit.start.0 >= top)
+                            .unwrap_or(0),
+                        Direction::Backward => self
+                            .hits
+                            .iter()
+                            .rposition(|hit| hit.start.0 <= top)
+                            .unwrap_or(self.hits.len().saturating_sub(1)),
+                    };
                     self.select(index);
                 }
                 _ => self.editor.as_mut().unwrap().feed(byte),
@@ -139,7 +154,8 @@ impl HistoryView {
             return false;
         }
         match byte {
-            b'/' => self.editor = Some(QueryInput::default()),
+            b'/' => self.editor = Some(QueryInput::new(Direction::Forward)),
+            b'?' => self.editor = Some(QueryInput::new(Direction::Backward)),
             b'n' => self.next(false),
             b'N' => self.next(true),
             b'q' | 3 => return true,
@@ -206,7 +222,8 @@ impl HistoryView {
         }
     }
 
-    fn next(&mut self, backwards: bool) {
+    fn next(&mut self, reverse: bool) {
+        let backwards = (self.direction == Direction::Backward) != reverse;
         if let Some(index) = self.selected {
             let count = self.hits.len();
             self.select(if backwards {
@@ -407,6 +424,65 @@ mod tests {
         assert_eq!(view.source, original);
         assert_eq!(source, original);
         assert!(view.feed(b'q'));
+    }
+
+    #[test]
+    fn backward_search_anchors_at_top_row_and_repeats_in_search_direction() {
+        let mut source = Screen::new(2, 8).unwrap();
+        Parser::new().advance(&mut source, b"none\r\nXX XX\r\nplain\r\nXX\r\nend");
+        let mut view = HistoryView::new(&source).unwrap();
+        type_bytes(&mut view, b"g?XX\r");
+        assert_eq!(view.selected, Some(2)); // No older match: wrap to newest.
+        assert!(view.label(80).contains("3/3 ?XX"));
+        type_bytes(&mut view, b"n");
+        assert_eq!(view.selected, Some(1));
+        assert!(view.render().unwrap().row(0).unwrap()[3].style.inverse);
+        type_bytes(&mut view, b"n");
+        assert_eq!(view.selected, Some(0));
+        type_bytes(&mut view, b"n");
+        assert_eq!(view.selected, Some(2));
+        type_bytes(&mut view, b"N");
+        assert_eq!(view.selected, Some(0));
+        view.offset = source.history_len() - 1;
+        type_bytes(&mut view, b"?XX\r");
+        assert_eq!(view.selected, Some(1)); // Rightmost match on the top row.
+        type_bytes(&mut view, b"/XX\r");
+        assert_eq!(view.selected, Some(0)); // Forward chooses the first.
+        type_bytes(&mut view, b"n");
+        assert_eq!(view.selected, Some(1));
+        type_bytes(&mut view, b"G?XX\r");
+        assert_eq!(view.selected, Some(2));
+    }
+
+    #[test]
+    fn cancelled_search_keeps_direction_and_empty_or_missing_queries_are_safe() {
+        let mut source = Screen::new(2, 8).unwrap();
+        Parser::new().advance(&mut source, b"XX\r\nXX\r\nXX\r\nend");
+        let mut view = HistoryView::new(&source).unwrap();
+        type_bytes(&mut view, b"G?XX\r");
+        assert_eq!(view.selected, Some(2));
+        type_bytes(&mut view, b"/other\x03n");
+        assert_eq!(view.query, "XX");
+        assert_eq!(view.direction, Direction::Backward);
+        assert_eq!(view.selected, Some(1));
+        type_bytes(&mut view, b"/other\x07n");
+        assert_eq!(view.selected, Some(0));
+        type_bytes(&mut view, b"\x1b[200~?other\r\x1b[201~");
+        assert!(view.editor.is_none());
+        assert_eq!(view.query, "XX");
+        type_bytes(&mut view, b"?qjk/?\x1b[A\x1b[<64;1;1M");
+        assert_eq!(view.editor.as_ref().unwrap().text, "qjk/?");
+        assert!(view.label(80).starts_with("Search ?qjk/?"));
+        type_bytes(&mut view, b"\x15missing\r");
+        assert!(view.label(80).contains("no match ?missing"));
+        let offset = view.offset;
+        type_bytes(&mut view, b"nN?\rnN");
+        assert_eq!(view.offset, offset);
+        assert!(view.query.is_empty());
+        assert!(view.hits.is_empty());
+        assert_eq!(view.selected, None);
+        type_bytes(&mut view, b"?end\rnN");
+        assert_eq!(view.selected, Some(0)); // One hit remains stable.
     }
 
     #[test]
