@@ -1435,6 +1435,9 @@ try:
         assert b"\x1b[?1000h" in s.last_frame
         assert b"\x1b[?1006h" in s.last_frame
         assert any(b"HISTORY_LEFT" in row for row in s.last_rows)
+        s.send(b"y")
+        s.read(0.1)
+        assert b"\x1b]52;c;" in s.output
         frozen = list(s.last_rows)
         with open(trigger, "w") as file:
             file.write("go")

@@ -1,10 +1,17 @@
 //! Read-only navigation over a frozen primary-screen snapshot.
 use crate::screen::{MouseTracking, Screen};
+use base64::Engine;
 use std::io;
 
 const MAX_HISTORY_ESCAPE_BYTES: usize = 64;
 mod search;
 use search::{Direction, Hit, QueryHistory, QueryInput};
+
+fn base64(input: &str) -> Vec<u8> {
+    base64::engine::general_purpose::STANDARD
+        .encode(input)
+        .into_bytes()
+}
 
 pub(crate) struct HistoryView {
     source: Screen,
@@ -19,6 +26,7 @@ pub(crate) struct HistoryView {
     queries: QueryHistory,
     hits: Vec<Hit>,
     selected: Option<usize>,
+    copy_pending: Option<Vec<u8>>,
 }
 
 impl HistoryView {
@@ -39,12 +47,17 @@ impl HistoryView {
             queries: QueryHistory::default(),
             hits: Vec::new(),
             selected: None,
+            copy_pending: None,
         })
     }
 
     // Zero-based outer-terminal origin, including the window bar when present.
     pub fn set_origin(&mut self, row: usize, column: usize) {
         self.origin = (row, column);
+    }
+
+    pub fn take_copy(&mut self) -> Option<Vec<u8>> {
+        self.copy_pending.take()
     }
 
     pub fn query_cursor(&self, columns: usize) -> Option<usize> {
@@ -185,6 +198,7 @@ impl HistoryView {
         match byte {
             b'/' => self.editor = Some(QueryInput::new(Direction::Forward)),
             b'?' => self.editor = Some(QueryInput::new(Direction::Backward)),
+            b'y' => self.copy_pending = Some(self.copy_sequence()),
             b'n' => self.next(false),
             b'N' => self.next(true),
             b'q' | 3 => return true,
@@ -197,6 +211,47 @@ impl HistoryView {
             _ => {}
         }
         false
+    }
+
+    fn copy_sequence(&self) -> Vec<u8> {
+        let (rows, columns) = self.source.dimensions();
+        let history = self.source.history_len();
+        let mut text = String::new();
+        for row in 0..rows {
+            let index = history - self.offset + row;
+            let (cells, used) = if index < history {
+                (
+                    self.source.history_row(index).expect("snapshot row exists"),
+                    self.source.history_row_used_columns(index).unwrap(),
+                )
+            } else {
+                let screen_row = index - history;
+                (
+                    self.source.row(screen_row).expect("snapshot row exists"),
+                    self.source.row_used_columns(screen_row).unwrap(),
+                )
+            };
+            let mut line = String::new();
+            for cell in cells.iter().take(used.min(columns)) {
+                if cell.width == 0 {
+                    continue;
+                }
+                line.push(cell.character);
+                line.extend(cell.combining.iter());
+            }
+            while line.ends_with(' ') {
+                line.pop();
+            }
+            if row > 0 {
+                text.push('\n');
+            }
+            text.push_str(&line);
+        }
+        let encoded = base64(&text);
+        let mut sequence = b"\x1b]52;c;".to_vec();
+        sequence.extend(encoded);
+        sequence.push(7);
+        sequence
     }
 
     fn wheel(&mut self) {
@@ -349,6 +404,29 @@ mod tests {
         assert_eq!(view.offset, 1);
         assert!(view.feed(b'q'));
         assert!(HistoryView::new(&source).is_none());
+    }
+
+    #[test]
+    fn y_copies_visible_rows_as_osc52_and_is_consumed_locally() {
+        let mut source = Screen::new(2, 8).unwrap();
+        Parser::new().advance(&mut source, "old\r\n中e\u{301}  \r\nnew".as_bytes());
+        let mut view = HistoryView::new(&source).unwrap();
+        assert!(!view.feed(b'y'));
+        let sequence = view.take_copy().unwrap();
+        assert!(sequence.starts_with(b"\x1b]52;c;"));
+        assert_eq!(sequence.last(), Some(&7));
+        assert!(view.take_copy().is_none());
+        assert!(!view.feed(b"y"[0]));
+        assert!(view.take_copy().is_some());
+    }
+
+    #[test]
+    fn base64_encoding_matches_osc52_payload_rules() {
+        assert_eq!(base64(""), b"");
+        assert_eq!(base64("f"), b"Zg==");
+        assert_eq!(base64("fo"), b"Zm8=");
+        assert_eq!(base64("foo"), b"Zm9v");
+        assert_eq!(base64("中\n"), b"5LitCg==");
     }
 
     #[test]

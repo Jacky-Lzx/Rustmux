@@ -6,6 +6,7 @@ description = "Rustmux human-reviewed implementation track"
 license = "MIT"
 
 [dependencies]
+base64 = "0.23.1"
 nix = { version = "0.31", features = ["fs", "term", "process", "poll", "signal"] }
 signal-hook = "0.3"
 unicode-width = { version = "0.2.2", default-features = false }

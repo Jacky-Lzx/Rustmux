@@ -816,9 +816,14 @@ fn forward(
         // old child; following bytes target the newly selected one.
         while close_requested.is_none() && !input.is_empty() {
             if let Some(view) = &mut history {
-                if view.feed(input.pop_front().unwrap()) {
+                let exited = view.feed(input.pop_front().unwrap());
+                let copy = view.take_copy();
+                if exited {
                     history = None;
                     keys = WindowInput::default();
+                }
+                if let Some(sequence) = copy {
+                    to_terminal.extend(sequence);
                 }
                 force_redraw = true;
                 continue;

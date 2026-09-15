@@ -18,6 +18,7 @@ coordinates; exiting restores the live application's mouse modes.
 | `g` / `G` | Oldest retained row / bottom of the snapshot |
 | `/` / `?` | Search toward newer / older text |
 | `n` / `N` | Repeat in the submitted search direction / opposite direction |
+| `y` | Copy the visible snapshot through OSC 52 |
 | `q` / Ctrl-C | Exit to the live screen |
 
 Wheel events over the bar, separators or another pane are ignored. Clicking does
@@ -136,7 +137,9 @@ normal terminal cleanup. Previously queued output frames always finish first.
 
 Rows retain their original widths: shorter rows are padded and longer rows are
 clipped to the pane width, with clipped wide characters replaced by blank cells.
-There is no snapshot text reflow, text selection, copying or disk persistence yet.
+There is no snapshot text reflow, text selection or disk persistence yet. Copying
+uses the outer terminal's OSC 52 clipboard support; terminals or multiplexers
+that disable OSC 52 will ignore it.
 This does not recover content previously discarded by resize. A one-row outer terminal has no bar, so the history indicator is hidden.
 
 Unit tests cover snapshot independence, navigation, wide-cell clipping, paste
@@ -147,7 +150,7 @@ directions and their row anchors, cancellation, result
 wraparound, wheel bounds, malformed mouse reports and modal
 input isolation. The nested-PTY suite checks browsing inside a split, the other pane's
 continued visibility, new background output while frozen, snapshot-bottom versus
-live output, forward/backward search submission/result cycling/no-match/cancellation,
+live output, OSC 52 copying, forward/backward search submission/result cycling/no-match/cancellation,
 query recall, middle editing, cursor visibility, query paste and draft restoration,
 navigation/paste
 isolation, wheel routing within a split, mouse-mode restoration and return to live
