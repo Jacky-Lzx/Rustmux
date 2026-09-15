@@ -217,6 +217,8 @@ impl QueryInput {
         match sequence {
             b"\x1b[D" | b"\x1bOD" => self.feed(KEY_LEFT),
             b"\x1b[C" | b"\x1bOC" => self.feed(KEY_RIGHT),
+            b"\x1b[1;5D" | b"\x1b[5D" => self.move_word_left(),
+            b"\x1b[1;5C" | b"\x1b[5C" => self.move_word_right(),
             b"\x1b[H" | b"\x1bOH" | b"\x1b[1~" | b"\x1b[7~" => self.feed(KEY_HOME),
             b"\x1b[F" | b"\x1bOF" | b"\x1b[4~" | b"\x1b[8~" => self.feed(KEY_END),
             b"\x1b[3~" => self.feed(KEY_DELETE),
@@ -336,6 +338,43 @@ impl QueryInput {
         }
         self.text.drain(boundary..self.cursor);
         self.cursor = boundary;
+    }
+
+    fn move_word_left(&mut self) {
+        let before = &self.text[..self.cursor];
+        let mut boundary = self.cursor;
+        let mut seen_word = false;
+        for (index, character) in before.char_indices().rev() {
+            if character.is_whitespace() {
+                if seen_word {
+                    boundary = index + character.len_utf8();
+                    break;
+                }
+            } else {
+                seen_word = true;
+            }
+            boundary = index;
+        }
+        self.cursor = boundary;
+    }
+
+    fn move_word_right(&mut self) {
+        let after = &self.text[self.cursor..];
+        let mut offset = 0;
+        let mut seen_word = false;
+        for character in after.chars() {
+            let width = character.len_utf8();
+            if character.is_whitespace() {
+                if seen_word {
+                    offset += width;
+                    break;
+                }
+            } else {
+                seen_word = true;
+            }
+            offset += width;
+        }
+        self.cursor += offset;
     }
 }
 
@@ -541,6 +580,30 @@ mod tests {
             "Search /h中 "
         );
         assert_eq!(editor.display(12).1, 11);
+    }
+
+    #[test]
+    fn word_motion_skips_whitespace_and_preserves_unicode_boundaries() {
+        let mut editor = QueryInput::default();
+        for byte in "one  中文 two end".bytes() {
+            editor.feed(byte);
+        }
+        editor.edit_sequence(b"\x1b[1;5D");
+        assert_eq!(&editor.text[..editor.cursor], "one  中文 two ");
+        editor.edit_sequence(b"\x1b[5D");
+        assert_eq!(&editor.text[..editor.cursor], "one  中文 ");
+        editor.edit_sequence(b"\x1b[1;5C");
+        assert_eq!(&editor.text[..editor.cursor], "one  中文 two ");
+        editor.edit_sequence(b"\x1b[5C");
+        assert_eq!(editor.cursor, editor.text.len());
+        editor.edit_sequence(b"\x1b[1;5D");
+        assert_eq!(&editor.text[..editor.cursor], "one  中文 two ");
+        editor.edit_sequence(b"\x1b[1;5D");
+        assert_eq!(&editor.text[..editor.cursor], "one  中文 ");
+        editor.edit_sequence(b"\x1b[1;5D");
+        assert_eq!(&editor.text[..editor.cursor], "one  ");
+        editor.edit_sequence(b"\x1b[1;5D");
+        assert_eq!(editor.cursor, 0);
     }
 
     #[test]

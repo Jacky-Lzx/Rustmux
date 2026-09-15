@@ -59,7 +59,9 @@ A match taller than the pane is only partially visible; use ordinary navigation
 to inspect the remainder. Navigation preserves the selected result.
 
 The query editor accepts at most 128 UTF-8 bytes. Left/Right (or Ctrl-B/Ctrl-F)
-move by Unicode scalar; Home/End (or Ctrl-A/Ctrl-E) move to the start/end.
+move by Unicode scalar; Ctrl-Left/Ctrl-Right move by word. Home/End (or
+Ctrl-A/Ctrl-E) move to the start/end. Common CSI word-motion forms are accepted
+as well, so the behavior follows terminals that encode Ctrl-Left as `ESC[1;5D`.
 Typing inserts at the cursor. Backspace deletes the preceding scalar; Delete
 (or Ctrl-D) deletes the following one. Ctrl-W deletes the preceding word,
 including its separating whitespace; Ctrl-K deletes from the cursor to the end.
