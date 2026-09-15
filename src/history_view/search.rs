@@ -11,21 +11,13 @@ const CONTROL_BYTE_END: u8 = 31;
 const PRINTABLE_BYTE_START: u8 = 32;
 const PRINTABLE_BYTE_END: u8 = 126;
 pub(super) const MAX_QUERY_HISTORY: usize = 20;
-pub(super) const MAX_QUERY_BYTES: usize = 128;
 const KEY_HOME: u8 = 1;
 const KEY_LEFT: u8 = 2;
 const KEY_DELETE: u8 = 4;
 const KEY_END: u8 = 5;
 const KEY_RIGHT: u8 = 6;
-const CONTROL_BACKSPACE: u8 = 8;
-const CONTROL_DELETE: u8 = 127;
-const CONTROL_CLEAR_LINE: u8 = 21;
 const CONTROL_KILL_LINE: u8 = 11;
 const CONTROL_DELETE_PREVIOUS_WORD: u8 = 23;
-const CONTROL_BYTE_START: u8 = 0;
-const CONTROL_BYTE_END: u8 = 31;
-const PRINTABLE_BYTE_START: u8 = 32;
-const PRINTABLE_BYTE_END: u8 = 126;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Hit {
@@ -215,6 +207,8 @@ impl QueryInput {
 
     pub fn edit_sequence(&mut self, sequence: &[u8]) {
         match sequence {
+            b"\x1b\x7f" | b"\x1b\x08" => self.feed(CONTROL_DELETE_PREVIOUS_WORD),
+            b"\x1bd" => self.delete_next_word(),
             b"\x1b[D" | b"\x1bOD" => self.feed(KEY_LEFT),
             b"\x1b[C" | b"\x1bOC" => self.feed(KEY_RIGHT),
             b"\x1b[1;5D" | b"\x1b[5D" => self.move_word_left(),
@@ -338,6 +332,27 @@ impl QueryInput {
         }
         self.text.drain(boundary..self.cursor);
         self.cursor = boundary;
+    }
+
+    fn delete_next_word(&mut self) {
+        if self.cursor == self.text.len() {
+            return;
+        }
+        let after = &self.text[self.cursor..];
+        let mut end = self.cursor;
+        let mut seen_word = false;
+        for (offset, character) in after.char_indices() {
+            if character.is_whitespace() {
+                if seen_word {
+                    end = self.cursor + offset + character.len_utf8();
+                    break;
+                }
+            } else {
+                seen_word = true;
+            }
+            end = self.cursor + offset + character.len_utf8();
+        }
+        self.text.drain(self.cursor..end);
     }
 
     fn move_word_left(&mut self) {
@@ -604,6 +619,24 @@ mod tests {
         assert_eq!(&editor.text[..editor.cursor], "one  ");
         editor.edit_sequence(b"\x1b[1;5D");
         assert_eq!(editor.cursor, 0);
+    }
+
+    #[test]
+    fn alt_word_editing_matches_ctrl_word_semantics() {
+        let mut editor = QueryInput::default();
+        for byte in "one 中文 two end".bytes() {
+            editor.feed(byte);
+        }
+        editor.edit_sequence(b"\x1b\x7f");
+        assert_eq!(editor.text, "one 中文 two");
+        editor.feed(1);
+        editor.edit_sequence(b"\x1bd");
+        assert_eq!(editor.text, "中文 two");
+        editor.edit_sequence(b"\x1b\x08");
+        assert_eq!(editor.text, "中文 two");
+        editor.feed(5);
+        editor.edit_sequence(b"\x1bd");
+        assert_eq!(editor.text, "中文 two");
     }
 
     #[test]

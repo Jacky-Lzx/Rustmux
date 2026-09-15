@@ -66,6 +66,9 @@ Typing inserts at the cursor. Backspace deletes the preceding scalar; Delete
 (or Ctrl-D) deletes the following one. Ctrl-W deletes the preceding word,
 including its separating whitespace; Ctrl-K deletes from the cursor to the end.
 Ctrl-U clears the whole query.
+Alt-Backspace (`ESC DEL`) is another spelling of Ctrl-W. Alt-D (`ESC d`) deletes
+the next word and its following separator. At the beginning or end of the query,
+these operations are no-ops.
 Combining marks are separate scalars, not grapheme clusters. Long queries scroll
 horizontally to keep the insertion cursor visible. A steady bar cursor appears
 in the search row; it is hidden again on submission or cancellation. Ctrl-C or Ctrl-G cancels editing and retains
