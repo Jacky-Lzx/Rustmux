@@ -557,6 +557,27 @@ mod tests {
     }
 
     #[test]
+    fn word_and_line_deletion_respect_unicode_cursor_boundaries() {
+        let mut source = Screen::new(2, 12).unwrap();
+        Parser::new().advance(&mut source, b"one\r\ntwo\r\nend");
+        let mut view = HistoryView::new(&source).unwrap();
+        type_bytes(&mut view, "/one 中文 two".as_bytes());
+        type_bytes(&mut view, b"\x17");
+        assert_eq!(view.editor.as_ref().unwrap().text, "one 中文");
+        type_bytes(&mut view, b"\x17");
+        assert_eq!(view.editor.as_ref().unwrap().text, "one");
+        type_bytes(&mut view, b"\x01\x0b");
+        assert_eq!(view.editor.as_ref().unwrap().text, "");
+        type_bytes(&mut view, "one 中文 two".as_bytes());
+        type_bytes(&mut view, b"\x01\x06\x17");
+        assert_eq!(view.editor.as_ref().unwrap().text, "ne 中文 two");
+        type_bytes(&mut view, b"\x05\x17");
+        assert_eq!(view.editor.as_ref().unwrap().text, "ne 中文");
+        type_bytes(&mut view, b"\x0b");
+        assert_eq!(view.editor.as_ref().unwrap().text, "ne 中文");
+    }
+
+    #[test]
     fn pasted_query_inserts_at_cursor_without_submitting_or_running_controls() {
         let mut source = Screen::new(2, 12).unwrap();
         Parser::new().advance(&mut source, "A中B\r\nnext\r\nend".as_bytes());

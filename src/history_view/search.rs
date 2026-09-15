@@ -17,6 +17,15 @@ const KEY_LEFT: u8 = 2;
 const KEY_DELETE: u8 = 4;
 const KEY_END: u8 = 5;
 const KEY_RIGHT: u8 = 6;
+const CONTROL_BACKSPACE: u8 = 8;
+const CONTROL_DELETE: u8 = 127;
+const CONTROL_CLEAR_LINE: u8 = 21;
+const CONTROL_KILL_LINE: u8 = 11;
+const CONTROL_DELETE_PREVIOUS_WORD: u8 = 23;
+const CONTROL_BYTE_START: u8 = 0;
+const CONTROL_BYTE_END: u8 = 31;
+const PRINTABLE_BYTE_START: u8 = 32;
+const PRINTABLE_BYTE_END: u8 = 126;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Hit {
@@ -250,6 +259,14 @@ impl QueryInput {
                     self.text.remove(self.cursor);
                 }
             }
+            CONTROL_KILL_LINE => {
+                self.utf8.clear();
+                self.text.truncate(self.cursor);
+            }
+            CONTROL_DELETE_PREVIOUS_WORD => {
+                self.utf8.clear();
+                self.delete_previous_word();
+            }
             CONTROL_BACKSPACE | CONTROL_DELETE => {
                 self.utf8.clear();
                 if self.cursor > 0 {
@@ -297,6 +314,28 @@ impl QueryInput {
             self.text.insert(self.cursor, character);
             self.cursor += character.len_utf8();
         }
+    }
+
+    fn delete_previous_word(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
+        let before = &self.text[..self.cursor];
+        let mut boundary = self.cursor;
+        let mut seen_word = false;
+        for (index, character) in before.char_indices().rev() {
+            if character.is_whitespace() {
+                if seen_word {
+                    boundary = index;
+                    break;
+                }
+            } else {
+                seen_word = true;
+            }
+            boundary = index;
+        }
+        self.text.drain(boundary..self.cursor);
+        self.cursor = boundary;
     }
 }
 
@@ -474,7 +513,7 @@ mod tests {
         editor.feed(1);
         editor.feed(b'b');
         assert_eq!(editor.cursor, 0);
-        assert_eq!(editor.text.len(), 128);
+        assert_eq!(editor.text.len(), MAX_QUERY_BYTES);
         editor.feed(4);
         editor.feed(b'b');
         assert!(editor.text.starts_with("ba"));
