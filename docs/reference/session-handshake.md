@@ -13,9 +13,9 @@ A second `Hello` or `Attached` is invalid after negotiation.
 One socket read may contain both the handshake and later frames. The peer types
 retain those later messages instead of dropping them at the ownership boundary.
 They also retain their incremental decoders so partial frames can continue in
-the future socket frontend.
+the socket frontend or client bridge.
 
 Tests use real `UnixStream` pairs to cover successful negotiation, initial
 terminal size, messages coalesced with `Hello`, incompatible versions, invalid
-first messages and repeated handshakes. This step still does not spawn a server
-process or connect the terminal event loop to the socket.
+first messages and repeated handshakes. Background process creation remains the
+responsibility of the command-line orchestration layer.

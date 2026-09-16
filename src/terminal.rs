@@ -2,10 +2,9 @@
 
 use std::collections::VecDeque;
 use std::ffi::{OsStr, OsString};
-use std::fs::{File, OpenOptions};
-use std::io::{self, IsTerminal, Read, Write};
-use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
-use std::os::unix::fs::OpenOptionsExt;
+use std::fs::File;
+use std::io::{self, Read, Write};
+use std::os::fd::{AsFd, BorrowedFd};
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
@@ -16,7 +15,8 @@ use std::time::{Duration, Instant};
 
 use nix::errno::Errno;
 use nix::poll::{PollFd, PollFlags, poll};
-use nix::sys::termios::{self, SetArg, Termios};
+#[cfg(test)]
+use nix::sys::termios;
 use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGWINCH};
 
 use crate::pane::{INPUT_LIMIT as LIMIT, MAX_CELLS, Pane};
@@ -33,6 +33,7 @@ use crate::{
         frontend::{ConnectionState, ServerFrontend},
         handshake::{self, ServerPeer},
     },
+    terminal_device::{TerminalDevice, window_size},
     window::Windows,
 };
 
@@ -44,52 +45,11 @@ const MAX_FRAME: usize = 16 * 1024 * 1024;
 const SYNC_TIMEOUT: Duration = Duration::from_secs(1);
 const FRAME_INTERVAL: Duration = Duration::from_millis(6);
 
-// \x1b is ESC; ESC [ introduces a control sequence. For private modes (? prefix),
-// h enables a mode and l (lowercase L) disables it.
-// ?1049h saves the cursor and switches to a cleared alternate screen buffer.
-const ENTER: &[u8] = b"\x1b[?1049h";
-// Reset common display modes on exit, in sequence:
-// CSI 0 SP q: reset cursor shape (the space is part of DECSCUSR).
-// ESC >: restore numeric keypad encoding (disable application keypad).
-// ?1l: restore normal cursor-key encoding (disable application cursor keys).
-// ?2004l: disable bracketed paste (the markers around pasted input).
-// ?1000l: disable basic mouse button reporting.
-// ?1002l: disable mouse motion reporting while a button is held.
-// ?1003l: disable reporting of all mouse motion.
-// ?1004l: disable focus-in/focus-out event reporting.
-// ?1006l: disable SGR mouse report encoding.
-// 0m: reset text attributes, including colors and bold.
-// ?25h: show the cursor.
-// ?1049l: return to the main screen buffer and restore the saved cursor.
-// These are baseline resets, not a snapshot of the previous display modes.
-// Raw mode and other termios attributes are restored separately.
-const LEAVE: &[u8] =
-    b"\x1b[0 q\x1b>\x1b[?1l\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1004l\x1b[?1006l\x1b[0m\x1b[?25h\x1b[?1049l";
-
 /// Run on the controlling terminal during single-threaded program startup.
 /// Returns the shell exit code, or 128 + signal for termination by signal.
 /// Input and output must be terminals. Raw mode is restored before returning.
 pub fn run(shell_path: &OsStr) -> io::Result<u8> {
-    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "stdin and stdout must be terminals",
-        ));
-    }
-    let device = nix::unistd::ttyname(io::stdin())?;
-    if device != nix::unistd::ttyname(io::stdout())? {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "stdin and stdout must use the same terminal",
-        ));
-    }
-    // Open the actual device: macOS cannot poll the /dev/tty indirection.
-    // A separate open description avoids changing the parent's file flags.
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .custom_flags(nix::libc::O_NONBLOCK)
-        .open(device)?;
+    let file = TerminalDevice::open_controlling()?;
     let size = window_size(&file)?;
     // Start the shell before changing the outer terminal, so exec failures
     // cannot leave it raw. Signal registration below creates no worker threads.
@@ -349,20 +309,6 @@ impl TerminalSession {
     }
 }
 
-fn window_size(file: &impl AsRawFd) -> io::Result<nix::pty::Winsize> {
-    let mut size = nix::pty::Winsize {
-        ws_row: 0,
-        ws_col: 0,
-        ws_xpixel: 0,
-        ws_ypixel: 0,
-    };
-    // SAFETY: file is live and size points to writable Winsize storage.
-    if unsafe { nix::libc::ioctl(file.as_raw_fd(), nix::libc::TIOCGWINSZ, &mut size) } == -1 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(size)
-}
-
 trait Frontend {
     fn poll_fd(&self) -> BorrowedFd<'_>;
     fn take_resize(&mut self) -> io::Result<Option<nix::pty::Winsize>>;
@@ -373,77 +319,31 @@ trait Frontend {
 }
 
 struct LocalFrontend {
-    file: File,
-    original: Termios,
+    terminal: TerminalDevice,
     resize: Arc<AtomicBool>,
-    active: bool,
 }
 
 impl LocalFrontend {
     fn enter(file: File, resize: Arc<AtomicBool>) -> io::Result<Self> {
-        let original = termios::tcgetattr(&file)?;
-        let mut raw = original.clone();
-        termios::cfmakeraw(&mut raw);
-        let mut terminal = Self {
-            file,
-            original,
+        Ok(Self {
+            terminal: TerminalDevice::enter(file)?,
             resize,
-            active: true,
-        };
-        termios::tcsetattr(&terminal.file, SetArg::TCSANOW, &raw)?;
-        terminal.control(ENTER)?;
-        Ok(terminal)
+        })
     }
 
     fn restore(&mut self) -> io::Result<()> {
-        if !self.active {
-            return Ok(());
-        }
-        // Always attempt termios restoration, independently of output failures.
-        let modes = termios::tcsetattr(&self.file, SetArg::TCSANOW, &self.original);
-        let screen = self.control(LEAVE);
-        if modes.is_ok() && screen.is_ok() {
-            self.active = false;
-        }
-        modes?;
-        screen
-    }
-
-    fn control(&mut self, mut bytes: &[u8]) -> io::Result<()> {
-        let deadline = Instant::now() + Duration::from_millis(500);
-        while !bytes.is_empty() {
-            if Instant::now() >= deadline {
-                return Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "terminal control output stalled",
-                ));
-            }
-            match self.file.write(bytes) {
-                Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
-                Ok(n) => bytes = &bytes[n..],
-                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                    let mut fds = [PollFd::new(self.file.as_fd(), PollFlags::POLLOUT)];
-                    match poll(&mut fds, POLL_TIMEOUT_MILLIS) {
-                        Ok(_) | Err(Errno::EINTR) => {}
-                        Err(e) => return Err(e.into()),
-                    }
-                }
-                Err(e) => return Err(e),
-            }
-        }
-        Ok(())
+        self.terminal.restore()
     }
 }
 
 impl Frontend for LocalFrontend {
     fn poll_fd(&self) -> BorrowedFd<'_> {
-        self.file.as_fd()
+        self.terminal.file().as_fd()
     }
 
     fn take_resize(&mut self) -> io::Result<Option<nix::pty::Winsize>> {
         if self.resize.swap(false, Ordering::Relaxed) {
-            let size = window_size(&self.file)?;
+            let size = self.terminal.size()?;
             Ok((size.ws_row != 0 && size.ws_col != 0).then_some(size))
         } else {
             Ok(None)
@@ -457,7 +357,7 @@ impl Frontend for LocalFrontend {
     fn drain_input(&mut self, _pending: &mut VecDeque<u8>) {}
 
     fn receive(&mut self, pending: &mut VecDeque<u8>) -> io::Result<ConnectionState> {
-        if receive(&mut self.file, pending)? {
+        if receive(self.terminal.file_mut(), pending)? {
             Ok(ConnectionState::Disconnected)
         } else {
             Ok(ConnectionState::Attached)
@@ -465,7 +365,7 @@ impl Frontend for LocalFrontend {
     }
 
     fn send(&mut self, pending: &mut VecDeque<u8>) -> io::Result<()> {
-        send(&mut self.file, pending)
+        send(self.terminal.file_mut(), pending)
     }
 }
 
@@ -495,12 +395,6 @@ impl Frontend for ServerFrontend {
 
     fn send(&mut self, pending: &mut VecDeque<u8>) -> io::Result<()> {
         self.send_output(pending)
-    }
-}
-
-impl Drop for LocalFrontend {
-    fn drop(&mut self) {
-        let _ = self.restore();
     }
 }
 
@@ -1973,7 +1867,7 @@ mod tests {
             let terminal =
                 LocalFrontend::enter(pair.slave.into(), Arc::new(AtomicBool::new(false)))?;
             assert!(
-                !termios::tcgetattr(&terminal.file)?
+                !termios::tcgetattr(terminal.terminal.file())?
                     .local_flags
                     .contains(termios::LocalFlags::ICANON)
             );

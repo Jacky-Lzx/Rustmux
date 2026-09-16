@@ -18,5 +18,6 @@ mod semantic;
 pub mod session;
 pub mod style;
 pub mod terminal;
+mod terminal_device;
 
 pub mod window;
