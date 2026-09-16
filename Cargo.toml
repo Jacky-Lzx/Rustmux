@@ -10,4 +10,5 @@ base64 = "0.23.1"
 nix = { version = "0.31", features = ["fs", "term", "process", "poll", "signal"] }
 signal-hook = "0.3"
 tempfile = "3.27.0"
+toml = "1.1.6"
 unicode-width = { version = "0.2.2", default-features = false }

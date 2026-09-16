@@ -6,7 +6,8 @@ This describes H02 input, H03 rendering integration and H04 resize handling. Rea
 
 ## Scope and data flow
 
-The CLI selects an executable from RUSTMUX_SHELL, SHELL or /bin/sh and starts
+The CLI selects an executable from `RUSTMUX_SHELL`, the top-level `shell` value
+in the user configuration, `SHELL` or `/bin/sh`, in that order, and starts
 PtyShell with the content dimensions (one fewer row for the window bar,
 with a minimum of one row). It requires terminal stdin
 and stdout pointing to the same device. It opens that actual device separately:

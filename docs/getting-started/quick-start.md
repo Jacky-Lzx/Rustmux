@@ -9,12 +9,17 @@ cargo build --locked
 
 Run inside a terminal with nonzero dimensions; stdin and stdout must refer to
 the same terminal. Rustmux opens one interactive shell, forwards keyboard input
-and displays its output. It uses `RUSTMUX_SHELL`, then `SHELL`, then `/bin/sh`.
-An invalid selected executable reports an error without silently falling back.
+and displays its output. It uses `RUSTMUX_SHELL`, then the top-level `shell`
+value in `~/.config/rustmux/config.toml`, then `SHELL`, then `/bin/sh`.
+`XDG_CONFIG_HOME` replaces `~/.config` when set. An invalid selected executable
+reports an error without silently falling back.
 
-```sh
-RUSTMUX_SHELL=/bin/sh ./target/debug/rustmux
+```toml
+shell = "/opt/homebrew/bin/fish"
 ```
+
+`RUSTMUX_SHELL=/bin/sh ./target/debug/rustmux` remains available as a temporary
+override. Changes take effect the next time Rustmux starts.
 
 Type commands normally. Ctrl-C reaches the inner terminal rather than terminating
 Rustmux itself. Type `exit` or use the shell's EOF key to close the current pane. Its final pane closes the window. When the last

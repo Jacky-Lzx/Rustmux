@@ -29,10 +29,13 @@ The shell receives `-i`; its environment is inherited. The initial shell inherit
 Rustmux's working directory, while later windows and splits may select an OSC 7
 directory.
 An explicit executable is required by the API; PATH lookup is handled by Command.
-Invalid paths fail without fallback. User shell selection and config integration
-belong to a later change. The parent drops every slave copy after spawn and retains
-only the master. On spawn failure, descriptor ownership unwinds automatically and
-Command reports the error after handling its failed child.
+Invalid paths fail without fallback. Shell selection reads the top-level `shell`
+value from `$XDG_CONFIG_HOME/rustmux/config.toml` or
+`~/.config/rustmux/config.toml`; `RUSTMUX_SHELL` overrides it and `$SHELL`
+provides the default. Other configuration keys are ignored by this implementation.
+The parent drops every slave copy after spawn and retains only the master. On spawn
+failure, descriptor ownership unwinds automatically and Command reports the error
+after handling its failed child.
 
 ## Exit and I/O
 

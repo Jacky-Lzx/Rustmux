@@ -2,6 +2,7 @@
 
 mod chrome;
 mod closed_pane;
+pub mod config;
 mod history_view;
 pub mod layout;
 pub mod pane;
