@@ -3,6 +3,7 @@
 use crate::{parser::Parser, pty::PtyShell, screen::Screen, semantic::SemanticOutput};
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use std::io::Write;
+use std::path::Path;
 use std::{collections::VecDeque, ffi::OsStr, io, process::ExitStatus, time::Instant};
 use tempfile::{Builder, NamedTempFile};
 
@@ -121,6 +122,15 @@ impl Pane {
     /// nonblocking. Startup failures leave no live child behind. Follow
     /// PtyShell::spawn's single-threaded process-spawning requirement.
     pub fn spawn(shell: impl AsRef<OsStr>, rows: u16, columns: u16) -> io::Result<Self> {
+        Self::spawn_in(shell, None, rows, columns)
+    }
+
+    pub(crate) fn spawn_in(
+        shell: impl AsRef<OsStr>,
+        directory: Option<&Path>,
+        rows: u16,
+        columns: u16,
+    ) -> io::Result<Self> {
         if usize::from(rows) * usize::from(columns) > MAX_CELLS {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -128,15 +138,20 @@ impl Pane {
             ));
         }
         let screen = Screen::new(usize::from(rows), usize::from(columns))?;
-        let shell = PtyShell::spawn(shell, rows, columns)?;
+        let directory = directory.filter(|path| path.is_dir());
+        let shell = PtyShell::spawn_in(shell, directory, rows, columns)?;
         let master = shell.master_fd().expect("new PTY is open");
         let flags = OFlag::from_bits_truncate(fcntl(master, FcntlArg::F_GETFL)?);
         fcntl(master, FcntlArg::F_SETFL(flags | OFlag::O_NONBLOCK))?;
+        let mut io = PaneIo::default();
+        if let Some(directory) = directory {
+            io.semantic.set_current_directory(directory.to_owned());
+        }
         Ok(Self {
             shell,
             parser: Parser::new(),
             screen,
-            io: PaneIo::default(),
+            io,
             _temporary_file: None,
         })
     }
@@ -229,6 +244,10 @@ impl Pane {
 
     pub(crate) fn last_command_output(&self) -> Option<&str> {
         self.io.semantic.last_output()
+    }
+
+    pub(crate) fn current_directory(&self) -> Option<&Path> {
+        self.io.semantic.current_directory()
     }
 
     /// Consume child output and route terminal replies back to this same child.

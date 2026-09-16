@@ -154,10 +154,13 @@ before it can be opened; missing markers, an active command, output over 4 MiB,
 the window limit and editor startup failures ring the bell. Rustmux does not
 guess boundaries from prompt text.
 
-There are at most 16 windows. New shells use the originally selected executable
-and Rustmux's startup working directory; active-shell cwd inheritance is not yet
-implemented. A failed creation or the window limit preserves existing windows
-and focus, with a best-effort bell when the output queue is empty. No creation-error dialog is provided yet.
+There are at most 16 windows. New windows and splits use the originally selected
+executable and inherit the active pane's latest valid OSC 7 working directory.
+Malformed OSC 7 leaves the previous directory unchanged; a missing or no-longer
+existing directory falls back to Rustmux's startup working directory. This step
+does not inspect foreground processes when shell integration is absent. A failed
+creation or the window limit preserves existing windows and focus, with a
+best-effort bell when the output queue is empty. No creation-error dialog is provided yet.
 
 Each iteration performs at most one bounded read/write per ready pane. Inactive
 windows keep parsing output and replying to terminal queries without rendering

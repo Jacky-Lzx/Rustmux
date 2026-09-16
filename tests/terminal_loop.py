@@ -1987,3 +1987,47 @@ with tempfile.TemporaryDirectory(prefix="rustmux-command-editor-") as directory:
         s.finish(0)
     finally:
         s.close()
+
+
+# OSC 7 directories are percent-decoded, isolated in pane metadata and inherited by new shells.
+with tempfile.TemporaryDirectory(prefix="rustmux-osc7-") as directory:
+    target = os.path.join(directory, "cwd with spaces")
+    os.mkdir(target)
+    encoded = target.replace("%", "%25").replace(" ", "%20")
+    quoted = shlex.quote(target)
+    s = Session()
+    try:
+        s.expect(b"RUSTMUX_READY>")
+        s.send(b"stty -echo; KEEP=source\n")
+        s.expect(b"RUSTMUX_READY>")
+        s.send((
+            "printf '\\033]7;file://localhost%s\\007' " + shlex.quote(encoded) + "; "
+            "printf 'OSC7_READY\\n'\n"
+        ).encode())
+        s.expect(b"OSC7_READY")
+        s.send(b"printf '\\033]7;file://localhost%s\\007' '/tmp/%GG'; printf 'BAD_OSC7_DONE\\n'\n")
+        s.expect(b"BAD_OSC7_DONE")
+
+        s.send(b"\x02c")
+        s.expect(b"RUSTMUX_READY>")
+        s.send(("test \"$PWD\" = " + quoted + " && printf 'WINDOW_OSC7_OK\\n'\n").encode())
+        s.expect(b"WINDOW_OSC7_OK")
+
+        # The inherited directory is initial pane metadata, so a split made before
+        # that shell emits its own OSC 7 still inherits the same directory.
+        s.send(b"\x02%")
+        s.expect(b"RUSTMUX_READY>")
+        s.send(("test \"$PWD\" = " + quoted + " && printf 'SPLIT_OSC7_OK\\n'\n").encode())
+        s.expect(b"SPLIT_OSC7_OK")
+        s.frames.clear()
+        s.send(b"exit 0\n")
+        s.expect(b"RUSTMUX_READY>")
+        s.frames.clear()
+        s.send(b"exit 0\n")
+        expect_bar(s, b"*1:shell")
+        s.send(b"printf 'SOURCE_%s\\n' \"$KEEP\"\n")
+        s.expect(b"SOURCE_source")
+        s.send(b"exit 0\n")
+        s.finish(0)
+    finally:
+        s.close()

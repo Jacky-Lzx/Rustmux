@@ -66,8 +66,9 @@ sequence length. Unsupported ESC sequences are consumed without printing their
 sequence bytes.
 
 The display parser discards OSC payload through BEL or ST (ESC followed by
-backslash). A separate bounded observer recognizes OSC 133 command-output
-boundaries for Ctrl-B `e`; other OSC payload remains uninterpreted.
+backslash). A separate bounded observer recognizes OSC 7 working-directory
+metadata and OSC 133 command-output boundaries for Ctrl-B `e`; other OSC payload
+remains uninterpreted.
 DCS, SOS, PM and APC payloads are discarded through ST. These strings are not
 interpreted or buffered; an unterminated string continues to discard input until
 its terminator or cancellation. Other unsupported controls are ignored.

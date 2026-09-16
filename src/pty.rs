@@ -5,6 +5,7 @@ use std::fs::File;
 use std::io::{self, Read, Write};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use std::os::unix::process::CommandExt;
+use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
 
 use nix::pty::{Winsize, openpty};
@@ -30,8 +31,20 @@ impl PtyShell {
     /// openpty does not atomically set CLOEXEC, so concurrent unrelated process spawning could
     /// inherit its original descriptors before they are replaced with close-on-exec copies.
     pub fn spawn(shell: impl AsRef<OsStr>, rows: u16, columns: u16) -> io::Result<Self> {
+        Self::spawn_in(shell, None, rows, columns)
+    }
+
+    pub(crate) fn spawn_in(
+        shell: impl AsRef<OsStr>,
+        directory: Option<&Path>,
+        rows: u16,
+        columns: u16,
+    ) -> io::Result<Self> {
         let mut command = Command::new(shell);
         command.arg("-i");
+        if let Some(directory) = directory {
+            command.current_dir(directory);
+        }
         Self::spawn_command(command, rows, columns)
     }
 

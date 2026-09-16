@@ -25,7 +25,9 @@ three child standard streams. Before exec, the safe `nix::unistd::setsid` wrappe
 calls and allocation-free error construction; see Rust's
 [pre_exec safety contract](https://doc.rust-lang.org/std/os/unix/process/trait.CommandExt.html#tymethod.pre_exec).
 
-The shell receives `-i`; its environment and working directory are inherited.
+The shell receives `-i`; its environment is inherited. The initial shell inherits
+Rustmux's working directory, while later windows and splits may select an OSC 7
+directory.
 An explicit executable is required by the API; PATH lookup is handled by Command.
 Invalid paths fail without fallback. User shell selection and config integration
 belong to a later change. The parent drops every slave copy after spawn and retains

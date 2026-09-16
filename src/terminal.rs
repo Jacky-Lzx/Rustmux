@@ -7,6 +7,7 @@ use std::io::{self, IsTerminal, Read, Write};
 use std::os::fd::{AsFd, AsRawFd};
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::process::ExitStatusExt;
+use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -90,7 +91,7 @@ pub fn run(shell_path: &OsStr) -> io::Result<u8> {
     let mut windows = Windows::default();
     windows.create(
         "shell".into(),
-        spawn_window(shell_path, pane_rows(size.ws_row), size.ws_col)?,
+        spawn_window(shell_path, None, pane_rows(size.ws_row), size.ws_col)?,
     )?;
     let signals = Signals::install()?;
     let mut terminal = Terminal::enter(file)?;
@@ -494,8 +495,28 @@ impl WindowInput {
     }
 }
 
-fn spawn_window(shell: &OsStr, rows: u16, columns: u16) -> io::Result<PaneSet<Pane>> {
-    PaneSet::new(rows, columns, Pane::spawn(shell, rows, columns)?)
+fn spawn_window(
+    shell: &OsStr,
+    directory: Option<&Path>,
+    rows: u16,
+    columns: u16,
+) -> io::Result<PaneSet<Pane>> {
+    PaneSet::new(
+        rows,
+        columns,
+        Pane::spawn_in(shell, directory, rows, columns)?,
+    )
+}
+
+fn active_directory(windows: &Windows<PaneSet<Pane>>) -> Option<PathBuf> {
+    windows
+        .active()
+        .unwrap()
+        .content()
+        .active()
+        .current_directory()
+        .filter(|path| path.is_dir())
+        .map(Path::to_owned)
 }
 
 fn spawn_editor_window(text: &str, rows: u16, columns: u16) -> io::Result<PaneSet<Pane>> {
@@ -948,9 +969,15 @@ fn forward(
                         .to_shell
                         .push_back(byte),
                     WindowKey::Split(axis) => {
+                        let directory = active_directory(windows);
                         let panes = windows.active_mut().unwrap().content_mut();
                         match panes.split_with(axis, |_, rect| {
-                            Pane::spawn(shell_path, rect.rows, rect.columns)
+                            Pane::spawn_in(
+                                shell_path,
+                                directory.as_deref(),
+                                rect.rows,
+                                rect.columns,
+                            )
                         }) {
                             Ok(_) => panes.synchronize_sizes()?,
                             Err(_) => {
@@ -1170,7 +1197,8 @@ fn forward(
                         }
                         let (rows, columns) =
                             windows.active().unwrap().content().layout().dimensions();
-                        match spawn_window(shell_path, rows, columns) {
+                        let directory = active_directory(windows);
+                        match spawn_window(shell_path, directory.as_deref(), rows, columns) {
                             Ok(pane) => {
                                 windows.create("shell".into(), pane)?;
                             }

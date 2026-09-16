@@ -1,4 +1,8 @@
-//! Bounded plain-text capture between OSC 133 command-output markers.
+//! Bounded OSC 7 directory metadata and OSC 133 command-output capture.
+
+use std::ffi::OsString;
+use std::os::unix::ffi::OsStringExt;
+use std::path::{Path, PathBuf};
 
 const MAX_OSC_BYTES: usize = 1024;
 const MAX_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
@@ -10,6 +14,7 @@ pub(crate) struct SemanticOutput {
     overflowed: bool,
     current: Vec<u8>,
     last: Option<String>,
+    current_directory: Option<PathBuf>,
 }
 
 #[derive(Debug, Default)]
@@ -110,6 +115,14 @@ impl SemanticOutput {
         (!self.capturing).then_some(self.last.as_deref()).flatten()
     }
 
+    pub fn current_directory(&self) -> Option<&Path> {
+        self.current_directory.as_deref()
+    }
+
+    pub fn set_current_directory(&mut self, path: PathBuf) {
+        self.current_directory = Some(path);
+    }
+
     pub fn cancel_current(&mut self) {
         self.capturing = false;
         self.overflowed = false;
@@ -137,6 +150,10 @@ impl SemanticOutput {
     }
 
     fn osc(&mut self, control: &[u8]) {
+        if let Some(path) = control.strip_prefix(b"7;").and_then(osc7_path) {
+            self.current_directory = Some(path);
+            return;
+        }
         let mut fields = control.split(|&byte| byte == b';');
         if fields.next() != Some(b"133".as_slice()) {
             return;
@@ -167,6 +184,36 @@ impl SemanticOutput {
             Some(String::from_utf8_lossy(&std::mem::take(&mut self.current)).into_owned())
         };
         self.cancel_current();
+    }
+}
+
+fn osc7_path(uri: &[u8]) -> Option<PathBuf> {
+    let uri = uri.strip_prefix(b"file://")?;
+    let path_start = uri.iter().position(|&byte| byte == b'/')?;
+    let encoded = &uri[path_start..];
+    let mut decoded = Vec::with_capacity(encoded.len());
+    let mut index = 0;
+    while index < encoded.len() {
+        if encoded[index] == b'%' {
+            let high = hex_digit(*encoded.get(index + 1)?)?;
+            let low = hex_digit(*encoded.get(index + 2)?)?;
+            decoded.push(high * 16 + low);
+            index += 3;
+        } else {
+            decoded.push(encoded[index]);
+            index += 1;
+        }
+    }
+    (!decoded.contains(&0) && decoded.starts_with(b"/"))
+        .then(|| PathBuf::from(OsString::from_vec(decoded)))
+}
+
+fn hex_digit(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
     }
 }
 
@@ -240,5 +287,31 @@ mod tests {
         let mut output = SemanticOutput::default();
         output.advance(b"\x1b]133;C\x07A\xe4\xb8\xad\x08B\x1b]133;D\x07");
         assert_eq!(output.last_output(), Some("AB"));
+    }
+
+    #[test]
+    fn osc7_tracks_absolute_percent_decoded_paths_without_interrupting_capture() {
+        let mut output = SemanticOutput::default();
+        output.advance(b"\x1b]133;C\x07before\x1b]7;file://host/tmp/My%20Project\x1b\\after");
+        assert_eq!(
+            output.current_directory(),
+            Some(Path::new("/tmp/My Project"))
+        );
+        output.advance(b"\x1b]133;D\x07");
+        assert_eq!(output.last_output(), Some("beforeafter"));
+    }
+
+    #[test]
+    fn invalid_osc7_does_not_replace_the_last_valid_directory() {
+        let mut output = SemanticOutput::default();
+        output.advance(b"\x1b]7;file:///tmp/valid\x07");
+        for invalid in [
+            b"\x1b]7;https://host/tmp\x07".as_slice(),
+            b"\x1b]7;file://host/relative%GG\x07",
+            b"\x1b]7;file://host/tmp/%00bad\x07",
+        ] {
+            output.advance(invalid);
+        }
+        assert_eq!(output.current_directory(), Some(Path::new("/tmp/valid")));
     }
 }
