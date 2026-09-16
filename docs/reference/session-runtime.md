@@ -18,7 +18,21 @@ second socket at a different size and exits according to the retained value.
 This covers shell identity, ordered pending input and size persistence across
 attachments.
 
-This step does not yet service pane PTYs while no frontend is attached. The next
-runtime step must keep parsing bounded PTY output in detached mode and accept a
-new client from the session listener, so a noisy child cannot fill the kernel
-PTY buffer while waiting for reattachment.
+`terminal::serve_session` alternates between an attached frontend and a detached
+runtime. While detached, it polls the session listener together with every
+visible pane PTY, services one bounded read or write per ready pane and also
+keeps the hidden undo pane moving. Output continues through the same parser and
+screen model, so a child cannot fill the kernel PTY buffer merely because no
+client is displaying it.
+
+The detached runtime observes child exits and signals, removes finished panes
+and returns when the final pane exits. A newly accepted socket must complete the
+normal handshake before it becomes the next frontend; malformed or abandoned
+connections do not terminate the existing session. When an attached session
+finishes after its rendered output drains, the server sends the protocol `Exit`
+status before closing the connection.
+
+This library path is now complete enough for a CLI supervisor to invoke. The
+next step is process and command orchestration: create a named endpoint, start
+the server independently of the launching terminal, and provide attach and
+detach commands.

@@ -6,6 +6,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, IsTerminal, Read, Write};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
 use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::net::UnixStream;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
@@ -27,7 +28,11 @@ use crate::{
     prompt::{EditResult, PromptKind, WindowPrompt},
     render::Renderer,
     screen::Screen,
-    session::frontend::{ConnectionState, ServerFrontend},
+    session::{
+        SessionEndpoint,
+        frontend::{ConnectionState, ServerFrontend},
+        handshake::{self, ServerPeer},
+    },
     window::Windows,
 };
 
@@ -108,6 +113,44 @@ pub fn run(shell_path: &OsStr) -> io::Result<u8> {
     }
 }
 
+/// Run one persistent session, preserving panes while clients detach and reconnect.
+pub fn serve_session(
+    shell_path: &OsStr,
+    endpoint: &SessionEndpoint,
+    mut peer: ServerPeer,
+) -> io::Result<u8> {
+    let (rows, columns) = peer.size();
+    let mut session = TerminalSession::new(shell_path, rows, columns)?;
+    let signals = Signals::install()?;
+    loop {
+        let mut frontend = ServerFrontend::new(peer);
+        match session.attach(&mut frontend, &signals)? {
+            ForwardExit::Process(code) => {
+                if !frontend.has_pending_output() {
+                    frontend.send_exit(i32::from(code))?;
+                }
+                return Ok(code);
+            }
+            ForwardExit::Detached | ForwardExit::Disconnected => {}
+        }
+
+        loop {
+            match session.wait_for_client(endpoint, &signals)? {
+                DetachedEvent::Process(code) => return Ok(code),
+                DetachedEvent::Client(stream) => match handshake::server(stream) {
+                    Ok(next) => {
+                        peer = next;
+                        break;
+                    }
+                    // A malformed or abandoned connection belongs to that client;
+                    // it must not terminate the existing panes.
+                    Err(_) => continue,
+                },
+            }
+        }
+    }
+}
+
 /// State that must survive one frontend disconnect and a later attachment.
 struct TerminalSession {
     shell_path: OsString,
@@ -145,6 +188,164 @@ impl TerminalSession {
             &mut self.outer_rows,
             &mut self.closed,
         )
+    }
+
+    /// Keep every PTY live while waiting for the next session client.
+    fn wait_for_client(
+        &mut self,
+        endpoint: &SessionEndpoint,
+        signals: &Signals,
+    ) -> io::Result<DetachedEvent> {
+        loop {
+            let received = signals.pending.load(Ordering::Relaxed);
+            if received != 0 {
+                return Ok(DetachedEvent::Process((128 + received) as u8));
+            }
+            if let Some(saved) = self.closed.as_mut()
+                && !saved.service()?
+            {
+                self.closed = None;
+            }
+
+            for window in self.windows.iter_mut() {
+                for (_, pane) in window.content_mut().iter_mut() {
+                    let (shell, _, _, state) = pane.parts_mut();
+                    if state.status.is_none() {
+                        state.status = shell.try_wait()?;
+                    }
+                }
+            }
+            if let Some(code) = self.remove_finished_detached()? {
+                return Ok(DetachedEvent::Process(code));
+            }
+
+            let mut interests = Vec::new();
+            let (listener_events, pane_events) = {
+                let mut fds = vec![PollFd::new(endpoint.listener().as_fd(), PollFlags::POLLIN)];
+                for window in self.windows.iter() {
+                    for (pane_id, pane) in window.content().iter() {
+                        let mut flags = PollFlags::empty();
+                        if pane.io().reply_read_limit() != 0 {
+                            flags |= PollFlags::POLLIN;
+                        }
+                        if !pane.io().eof
+                            && pane.io().status.is_none()
+                            && !pane.io().to_shell.is_empty()
+                        {
+                            flags |= PollFlags::POLLOUT;
+                        }
+                        if !flags.is_empty() {
+                            interests.push((window.id(), pane_id, flags));
+                            fds.push(PollFd::new(
+                                pane.shell().master_fd().expect("live PTY"),
+                                flags,
+                            ));
+                        }
+                    }
+                }
+                if let Some(saved) = self.closed.as_ref() {
+                    let pane = saved.pane.as_ref().unwrap();
+                    let mut flags = PollFlags::empty();
+                    if pane.io().reply_read_limit() != 0 {
+                        flags |= PollFlags::POLLIN;
+                    }
+                    if !pane.io().to_shell.is_empty() {
+                        flags |= PollFlags::POLLOUT;
+                    }
+                    if !flags.is_empty() {
+                        fds.push(PollFd::new(pane.shell().master_fd().unwrap(), flags));
+                    }
+                }
+                match poll(&mut fds, POLL_TIMEOUT_MILLIS) {
+                    Ok(_) | Err(Errno::EINTR) => {}
+                    Err(error) => return Err(error.into()),
+                }
+                (
+                    fds[0].revents().unwrap_or(PollFlags::empty()),
+                    fds[1..]
+                        .iter()
+                        .take(interests.len())
+                        .map(|fd| fd.revents().unwrap_or(PollFlags::empty()))
+                        .collect::<Vec<_>>(),
+                )
+            };
+
+            for ((window_id, pane_id, requested), ready) in interests.into_iter().zip(pane_events) {
+                service_pane(
+                    self.windows
+                        .get_mut(window_id)
+                        .unwrap()
+                        .content_mut()
+                        .get_mut(pane_id)
+                        .expect("polled pane exists"),
+                    requested,
+                    ready,
+                )?;
+            }
+
+            if listener_events.contains(PollFlags::POLLNVAL) {
+                return Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "invalid session listener descriptor",
+                ));
+            }
+            if listener_events.intersects(PollFlags::POLLERR | PollFlags::POLLHUP) {
+                return Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "session listener failed",
+                ));
+            }
+            if listener_events.contains(PollFlags::POLLIN) {
+                match endpoint.listener().accept() {
+                    Ok((stream, _)) => return Ok(DetachedEvent::Client(stream)),
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            io::ErrorKind::Interrupted | io::ErrorKind::WouldBlock
+                        ) => {}
+                    Err(error) => return Err(error),
+                }
+            }
+        }
+    }
+
+    fn remove_finished_detached(&mut self) -> io::Result<Option<u8>> {
+        let mut finished = Vec::new();
+        for window in self.windows.iter() {
+            for (pane_id, pane) in window.content().iter() {
+                let state = pane.io();
+                if state.eof {
+                    if let Some(status) = state.status {
+                        finished.push((window.id(), pane_id, exit_code(status)));
+                    } else if state
+                        .eof_at
+                        .is_some_and(|time| time.elapsed() > Duration::from_secs(1))
+                    {
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "shell kept running after PTY closed",
+                        ));
+                    }
+                }
+            }
+        }
+        for (window_id, pane_id, code) in finished {
+            let panes = self
+                .windows
+                .get_mut(window_id)
+                .expect("finished pane owns a window")
+                .content_mut();
+            if panes.iter().len() == 1 {
+                if self.windows.iter().len() == 1 {
+                    return Ok(Some(code));
+                }
+                drop(self.windows.close(window_id)?);
+            } else {
+                drop(panes.close(pane_id)?);
+                panes.synchronize_sizes()?;
+            }
+        }
+        Ok(None)
     }
 }
 
@@ -639,6 +840,11 @@ enum ForwardExit {
     Disconnected,
 }
 
+enum DetachedEvent {
+    Client(UnixStream),
+    Process(u8),
+}
+
 fn frontend_exit(state: ConnectionState, input: &VecDeque<u8>) -> Option<ForwardExit> {
     if !input.is_empty() {
         return None;
@@ -648,6 +854,55 @@ fn frontend_exit(state: ConnectionState, input: &VecDeque<u8>) -> Option<Forward
         ConnectionState::Detached => Some(ForwardExit::Detached),
         ConnectionState::Disconnected => Some(ForwardExit::Disconnected),
     }
+}
+
+fn service_pane(pane: &mut Pane, requested: PollFlags, ready: PollFlags) -> io::Result<()> {
+    if ready.contains(PollFlags::POLLNVAL) {
+        return Err(io::Error::new(
+            io::ErrorKind::BrokenPipe,
+            "invalid PTY descriptor",
+        ));
+    }
+    let (shell, parser, screen, state) = pane.parts_mut();
+    let reply_read_limit = state.reply_read_limit();
+    let readable = ready.intersects(PollFlags::POLLIN | PollFlags::POLLHUP | PollFlags::POLLERR);
+    if !state.eof && requested.contains(PollFlags::POLLIN) {
+        if readable {
+            let mut bytes = [0; 8192];
+            let read_limit = bytes.len().min(reply_read_limit);
+            match shell.read(&mut bytes[..read_limit]) {
+                Ok(0) => state.eof = true,
+                Ok(count) => {
+                    state.semantic.advance(&bytes[..count]);
+                    parser.advance_with_replies(screen, &bytes[..count], &mut |reply| {
+                        if state.status.is_none() {
+                            state.to_shell.extend(reply);
+                        }
+                    });
+                    debug_assert!(state.to_shell.len() <= LIMIT);
+                    state.dirty = true;
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::Interrupted | io::ErrorKind::WouldBlock
+                    ) => {}
+                Err(error) => return Err(error),
+            }
+        } else if state.status.is_some() {
+            // Descendants retaining the slave must not delay direct-child exit.
+            state.eof = true;
+        }
+        if state.eof {
+            parser.finish(screen);
+            state.dirty = true;
+            state.eof_at = Some(Instant::now());
+        }
+    }
+    if !state.eof && state.status.is_none() && ready.contains(PollFlags::POLLOUT) {
+        send(shell, &mut state.to_shell)?;
+    }
+    Ok(())
 }
 
 fn forward(
@@ -1455,58 +1710,16 @@ fn forward(
         // One bounded read/write per pane per iteration prevents a busy background
         // process from starving the other panes, keyboard or signal handling.
         for ((id, pane_id, inner_events), inner) in interests.into_iter().zip(events) {
-            if inner.contains(PollFlags::POLLNVAL) {
-                return Err(io::Error::new(
-                    io::ErrorKind::BrokenPipe,
-                    "invalid PTY descriptor",
-                ));
-            }
-            let (shell, parser, screen, state) = windows
-                .get_mut(id)
-                .unwrap()
-                .content_mut()
-                .get_mut(pane_id)
-                .expect("polled pane exists")
-                .parts_mut();
-            let reply_read_limit = state.reply_read_limit();
-            let readable =
-                inner.intersects(PollFlags::POLLIN | PollFlags::POLLHUP | PollFlags::POLLERR);
-            if !state.eof && inner_events.contains(PollFlags::POLLIN) {
-                if readable {
-                    let mut bytes = [0; 8192];
-                    let read_limit = bytes.len().min(reply_read_limit);
-                    match shell.read(&mut bytes[..read_limit]) {
-                        Ok(0) => state.eof = true,
-                        Ok(n) => {
-                            state.semantic.advance(&bytes[..n]);
-                            parser.advance_with_replies(screen, &bytes[..n], &mut |reply| {
-                                if state.status.is_none() {
-                                    state.to_shell.extend(reply);
-                                }
-                            });
-                            debug_assert!(state.to_shell.len() <= LIMIT);
-                            state.dirty = true;
-                        }
-                        Err(e)
-                            if matches!(
-                                e.kind(),
-                                io::ErrorKind::Interrupted | io::ErrorKind::WouldBlock
-                            ) => {}
-                        Err(e) => return Err(e),
-                    }
-                } else if state.status.is_some() {
-                    // Descendants retaining the slave must not delay direct-child exit.
-                    state.eof = true;
-                }
-                if state.eof {
-                    parser.finish(screen);
-                    state.dirty = true; // Always flush the final model before normal exit.
-                    state.eof_at = Some(Instant::now());
-                }
-            }
-            if !state.eof && state.status.is_none() && inner.contains(PollFlags::POLLOUT) {
-                send(shell, &mut state.to_shell)?;
-            }
+            service_pane(
+                windows
+                    .get_mut(id)
+                    .unwrap()
+                    .content_mut()
+                    .get_mut(pane_id)
+                    .expect("polled pane exists"),
+                inner_events,
+                inner,
+            )?;
         }
     }
 }
@@ -1559,17 +1772,22 @@ fn send(writer: &mut impl Write, pending: &mut VecDeque<u8>) -> io::Result<()> {
 mod tests {
     use super::*;
     use crate::session::{
-        handshake::{self, ClientPeer},
-        protocol::ClientMessage,
+        handshake::{self, ClientPeer, ServerPeer},
+        protocol::{ClientMessage, ServerMessage},
     };
     use std::os::unix::net::UnixStream;
     use std::thread;
 
-    fn socket_frontend(rows: u16, columns: u16) -> (ClientPeer, ServerFrontend) {
+    fn socket_peers(rows: u16, columns: u16) -> (ClientPeer, ServerPeer) {
         let (client_stream, server_stream) = UnixStream::pair().unwrap();
         let server = thread::spawn(move || handshake::server(server_stream).unwrap());
         let client = handshake::client(client_stream, rows, columns).unwrap();
-        (client, ServerFrontend::new(server.join().unwrap()))
+        (client, server.join().unwrap())
+    }
+
+    fn socket_frontend(rows: u16, columns: u16) -> (ClientPeer, ServerFrontend) {
+        let (client, server) = socket_peers(rows, columns);
+        (client, ServerFrontend::new(server))
     }
 
     fn send_client_messages(client: &mut ClientPeer, messages: &[ClientMessage]) {
@@ -1638,6 +1856,101 @@ mod tests {
             ForwardExit::Process(0)
         );
         assert_eq!(session.outer_rows, 30);
+    }
+
+    #[test]
+    fn detached_session_drains_output_while_waiting_for_a_client() {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let name = crate::session::SessionName::new(format!(
+            "detached-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ))
+        .unwrap();
+        let endpoint = SessionEndpoint::bind(&name).unwrap();
+        let mut session = TerminalSession::new(OsStr::new("/bin/sh"), 24, 80).unwrap();
+        let signals = test_signals();
+
+        let (mut first_client, mut first_frontend) = socket_frontend(24, 80);
+        send_client_messages(
+            &mut first_client,
+            &[
+                ClientMessage::Input(b"printf 'detached-marker\\n'\n".to_vec()),
+                ClientMessage::Detach,
+            ],
+        );
+        assert_eq!(
+            session.attach(&mut first_frontend, &signals).unwrap(),
+            ForwardExit::Detached
+        );
+
+        let path = endpoint.path().to_owned();
+        let connector = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(100));
+            handshake::client(UnixStream::connect(path).unwrap(), 30, 90).unwrap()
+        });
+        let stream = match session.wait_for_client(&endpoint, &signals).unwrap() {
+            DetachedEvent::Client(stream) => stream,
+            DetachedEvent::Process(code) => panic!("shell exited with {code}"),
+        };
+        let peer = handshake::server(stream).unwrap();
+        let mut second_client = connector.join().unwrap();
+        let text = crate::history_view::export_text(
+            session
+                .windows
+                .active()
+                .unwrap()
+                .content()
+                .active()
+                .screen(),
+        );
+        assert!(text.contains("detached-marker"), "screen was {text:?}");
+
+        let mut second_frontend = ServerFrontend::new(peer);
+        send_client_messages(
+            &mut second_client,
+            &[ClientMessage::Input(b"exit\n".to_vec())],
+        );
+        assert_eq!(
+            session.attach(&mut second_frontend, &signals).unwrap(),
+            ForwardExit::Process(0)
+        );
+    }
+
+    #[test]
+    fn session_server_reports_the_final_status_to_its_client() {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let name = crate::session::SessionName::new(format!(
+            "serve-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ))
+        .unwrap();
+        let endpoint = SessionEndpoint::bind(&name).unwrap();
+        let (mut client, server) = socket_peers(24, 80);
+        send_client_messages(&mut client, &[ClientMessage::Input(b"exit 7\n".to_vec())]);
+
+        assert_eq!(
+            serve_session(OsStr::new("/bin/sh"), &endpoint, server).unwrap(),
+            7
+        );
+        let mut status = None;
+        let mut bytes = [0; 8192];
+        loop {
+            match client.stream_mut().read(&mut bytes) {
+                Ok(0) => break,
+                Ok(count) => {
+                    for message in client.decode(&bytes[..count]).unwrap() {
+                        if let ServerMessage::Exit { status: value } = message {
+                            status = Some(value);
+                        }
+                    }
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => continue,
+                Err(error) => panic!("client read failed: {error}"),
+            }
+        }
+        assert_eq!(status, Some(7));
     }
 
     #[test]

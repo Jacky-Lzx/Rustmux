@@ -3,6 +3,7 @@
 use std::collections::VecDeque;
 use std::io::{self, Read, Write};
 use std::os::fd::{AsFd, BorrowedFd};
+use std::time::Duration;
 
 use nix::pty::Winsize;
 
@@ -11,6 +12,7 @@ use super::protocol::{ClientMessage, MAX_FRAME_BYTES, ServerMessage};
 
 const READ_BYTES: usize = 8192;
 const MAX_BUFFERED_INPUT_BYTES: usize = 2 * MAX_FRAME_BYTES;
+const EXIT_WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Result of servicing the client side of an attached session.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -138,6 +140,34 @@ impl ServerFrontend {
 
     pub fn has_pending_output(&self) -> bool {
         !self.outbound.bytes.is_empty()
+    }
+
+    /// Finish an attached stream with the process status after rendered output drains.
+    pub fn send_exit(&mut self, status: i32) -> io::Result<()> {
+        if self.state != ConnectionState::Attached {
+            return Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "session client is no longer attached",
+            ));
+        }
+        if self.has_pending_output() {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "session output frame is still pending",
+            ));
+        }
+        let frame = ServerMessage::Exit { status }
+            .encode()
+            .map_err(|error| invalid_data(error.to_string()))?;
+        let stream = self.peer.stream_mut();
+        stream.set_nonblocking(false)?;
+        stream.set_write_timeout(Some(EXIT_WRITE_TIMEOUT))?;
+        let written = stream.write_all(&frame);
+        let timeout = stream.set_write_timeout(None);
+        let nonblocking = stream.set_nonblocking(true);
+        written?;
+        timeout?;
+        nonblocking
     }
 }
 
@@ -326,6 +356,18 @@ mod tests {
         }
         assert!(source.is_empty());
         assert_eq!(received, expected);
+    }
+
+    #[test]
+    fn sends_exit_after_output_has_drained() {
+        let (mut client, mut frontend) = connected(24, 80);
+        frontend.send_exit(-15).unwrap();
+        let mut bytes = [0; 64];
+        let count = client.stream_mut().read(&mut bytes).unwrap();
+        assert_eq!(
+            client.decode(&bytes[..count]).unwrap(),
+            [ServerMessage::Exit { status: -15 }]
+        );
     }
 
     #[test]

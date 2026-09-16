@@ -21,6 +21,9 @@ Rendered bytes are split into protocol payloads of at most 64 KiB. A source
 byte remains in the renderer queue until its complete `Output` frame has been
 written, including the header. This preserves backpressure across partial
 nonblocking writes and prevents either duplicated or missing terminal output.
+After the final rendered frame drains, the server temporarily applies a bounded
+blocking write to send the small `Exit` frame and then restores nonblocking
+mode. It refuses to insert `Exit` into a partially written output frame.
 
 Tests use real nonblocking Unix stream pairs for input, resize, detach, EOF and
 multi-frame output. A deliberately short writer verifies the partial-write
