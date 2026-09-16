@@ -1,5 +1,7 @@
 //! Secure local endpoints for persistent Rustmux sessions.
 
+pub mod protocol;
+
 use std::fmt;
 use std::fs;
 use std::io;

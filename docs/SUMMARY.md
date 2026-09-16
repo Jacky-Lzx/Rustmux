@@ -37,6 +37,7 @@
 
 - [Windows](reference/windows.md)
 - [Session Endpoints](reference/session-endpoints.md)
+- [Session Protocol](reference/session-protocol.md)
 
 - [Split Layout Model](reference/split-layout.md)
 - [Pane Contents and Layout Ownership](reference/pane-ownership.md)
