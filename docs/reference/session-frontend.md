@@ -5,6 +5,12 @@ into bounded terminal input, resize updates and framed renderer output. It is a
 server-side adapter; this step does not yet run the terminal event loop in a
 background process or add attach commands to the CLI.
 
+The adapter now satisfies the terminal loop's private `Frontend` boundary. The
+loop drains already decoded input before polling for more, requests socket reads
+only while the adapter has capacity and stops socket output after detach or
+disconnect. This keeps the local terminal and session socket on one event-loop
+implementation.
+
 The initial size from `Hello` is exposed as the first resize. Later `Resize`
 messages are coalesced so the event loop applies only the newest dimensions.
 `Input` payloads enter a bounded internal queue and can be drained without

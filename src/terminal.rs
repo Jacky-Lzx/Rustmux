@@ -27,6 +27,7 @@ use crate::{
     prompt::{EditResult, PromptKind, WindowPrompt},
     render::Renderer,
     screen::Screen,
+    session::frontend::{ConnectionState, ServerFrontend},
     window::Windows,
 };
 
@@ -110,7 +111,14 @@ pub fn run(shell_path: &OsStr) -> io::Result<u8> {
     drop(windows);
     match result {
         Err(error) => Err(error),
-        Ok(code) => restored.map(|()| code),
+        Ok(ForwardExit::Process(code)) => restored.map(|()| code),
+        Ok(ForwardExit::Detached | ForwardExit::Disconnected) => {
+            restored?;
+            Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "terminal input ended",
+            ))
+        }
     }
 }
 
@@ -131,7 +139,9 @@ fn window_size(file: &impl AsRawFd) -> io::Result<nix::pty::Winsize> {
 trait Frontend {
     fn poll_fd(&self) -> BorrowedFd<'_>;
     fn take_resize(&mut self) -> io::Result<Option<nix::pty::Winsize>>;
-    fn receive(&mut self, pending: &mut VecDeque<u8>) -> io::Result<bool>;
+    fn can_receive(&self) -> bool;
+    fn drain_input(&mut self, pending: &mut VecDeque<u8>);
+    fn receive(&mut self, pending: &mut VecDeque<u8>) -> io::Result<ConnectionState>;
     fn send(&mut self, pending: &mut VecDeque<u8>) -> io::Result<()>;
 }
 
@@ -213,12 +223,51 @@ impl Frontend for LocalFrontend {
         }
     }
 
-    fn receive(&mut self, pending: &mut VecDeque<u8>) -> io::Result<bool> {
-        receive(&mut self.file, pending)
+    fn can_receive(&self) -> bool {
+        true
+    }
+
+    fn drain_input(&mut self, _pending: &mut VecDeque<u8>) {}
+
+    fn receive(&mut self, pending: &mut VecDeque<u8>) -> io::Result<ConnectionState> {
+        if receive(&mut self.file, pending)? {
+            Ok(ConnectionState::Disconnected)
+        } else {
+            Ok(ConnectionState::Attached)
+        }
     }
 
     fn send(&mut self, pending: &mut VecDeque<u8>) -> io::Result<()> {
         send(&mut self.file, pending)
+    }
+}
+
+impl Frontend for ServerFrontend {
+    fn poll_fd(&self) -> BorrowedFd<'_> {
+        self.poll_fd()
+    }
+
+    fn take_resize(&mut self) -> io::Result<Option<nix::pty::Winsize>> {
+        Ok(self.take_resize())
+    }
+
+    fn can_receive(&self) -> bool {
+        self.state() == ConnectionState::Attached
+            && self.buffered_input_len() < crate::session::protocol::MAX_FRAME_BYTES
+    }
+
+    fn drain_input(&mut self, pending: &mut VecDeque<u8>) {
+        self.drain_input(pending, LIMIT);
+    }
+
+    fn receive(&mut self, pending: &mut VecDeque<u8>) -> io::Result<ConnectionState> {
+        let state = self.receive()?;
+        self.drain_input(pending, LIMIT);
+        Ok(state)
+    }
+
+    fn send(&mut self, pending: &mut VecDeque<u8>) -> io::Result<()> {
+        self.send_output(pending)
     }
 }
 
@@ -557,6 +606,24 @@ fn spawn_editor_window(text: &str, rows: u16, columns: u16) -> io::Result<PaneSe
     PaneSet::new(rows, columns, Pane::spawn_editor(text, rows, columns)?)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ForwardExit {
+    Process(u8),
+    Detached,
+    Disconnected,
+}
+
+fn frontend_exit(state: ConnectionState, input: &VecDeque<u8>) -> Option<ForwardExit> {
+    if !input.is_empty() {
+        return None;
+    }
+    match state {
+        ConnectionState::Attached => None,
+        ConnectionState::Detached => Some(ForwardExit::Detached),
+        ConnectionState::Disconnected => Some(ForwardExit::Disconnected),
+    }
+}
+
 fn forward(
     frontend: &mut impl Frontend,
     windows: &mut Windows<PaneSet<Pane>>,
@@ -564,7 +631,7 @@ fn forward(
     shell_path: &OsStr,
     mut outer_rows: u16,
     closed: &mut Option<crate::closed_pane::ClosedPane>,
-) -> io::Result<u8> {
+) -> io::Result<ForwardExit> {
     let mut renderer = Renderer::default();
     let mut to_terminal = VecDeque::new();
     let mut input = VecDeque::new();
@@ -576,10 +643,20 @@ fn forward(
     let mut prompt: Option<WindowPrompt> = None;
     let mut history: Option<crate::history_view::HistoryView> = None;
     let mut close_requested = None;
+    let mut connection = ConnectionState::Attached;
     loop {
+        frontend.drain_input(&mut input);
+        if connection != ConnectionState::Attached {
+            // No peer can consume an old physical frame. Dropping it also lets
+            // history-mode input that preceded Detach continue in order.
+            to_terminal.clear();
+        }
+        if let Some(exit) = frontend_exit(connection, &input) {
+            return Ok(exit);
+        }
         let received = signals.pending.load(Ordering::Relaxed);
         if received != 0 {
-            return Ok((128 + received) as u8);
+            return Ok(ForwardExit::Process((128 + received) as u8));
         }
         if let Some(saved) = closed.as_mut()
             && !saved.service()?
@@ -604,7 +681,7 @@ fn forward(
                     let sole_pane = window.content().iter().len() == 1;
                     if sole_pane && windows.iter().len() == 1 {
                         // run() restores the terminal, then cleans up visible and hidden shells.
-                        return Ok(0);
+                        return Ok(ForwardExit::Process(0));
                     }
                     windows
                         .get_mut(id)
@@ -632,7 +709,7 @@ fn forward(
                     });
                 } else {
                     if windows.iter().len() == 1 {
-                        return Ok(0);
+                        return Ok(ForwardExit::Process(0));
                     }
                     for (_, pane) in windows.get_mut(id).unwrap().content_mut().iter_mut() {
                         pane.shell_mut().terminate()?;
@@ -839,7 +916,7 @@ fn forward(
                 let was_focused = panes.layout().active() == pane_id;
                 if panes.iter().len() == 1 {
                     if windows.iter().len() == 1 {
-                        return Ok(code);
+                        return Ok(ForwardExit::Process(code));
                     }
                     drop(windows.close(id)?);
                 } else {
@@ -1251,6 +1328,9 @@ fn forward(
                 }
             }
         }
+        if let Some(exit) = frontend_exit(connection, &input) {
+            return Ok(exit);
+        }
         // A changed focus needs a frame before returning to a blocking poll.
         if (force_redraw || close_requested.is_some()) && to_terminal.is_empty() {
             continue;
@@ -1263,10 +1343,11 @@ fn forward(
                 && pane.io().dirty
         });
         let mut outer_events = PollFlags::empty();
-        if input.len() < LIMIT {
+        if connection == ConnectionState::Attached && input.len() < LIMIT && frontend.can_receive()
+        {
             outer_events |= PollFlags::POLLIN;
         }
-        if !to_terminal.is_empty() {
+        if connection == ConnectionState::Attached && !to_terminal.is_empty() {
             outer_events |= PollFlags::POLLOUT;
         }
         let timeout = if (active_dirty || bar_dirty) && !active_paused && to_terminal.is_empty() {
@@ -1331,13 +1412,18 @@ fn forward(
                     .collect::<Vec<_>>(),
             )
         };
-        if outer.intersects(PollFlags::POLLERR | PollFlags::POLLHUP | PollFlags::POLLNVAL) {
+        if outer.contains(PollFlags::POLLNVAL) {
             return Err(io::Error::new(
                 io::ErrorKind::BrokenPipe,
-                "controlling terminal disconnected",
+                "invalid frontend descriptor",
             ));
         }
-        if outer.contains(PollFlags::POLLOUT) {
+        if connection == ConnectionState::Attached
+            && outer.intersects(PollFlags::POLLIN | PollFlags::POLLHUP | PollFlags::POLLERR)
+        {
+            connection = frontend.receive(&mut input)?;
+        }
+        if connection == ConnectionState::Attached && outer.contains(PollFlags::POLLOUT) {
             frontend.send(&mut to_terminal)?;
         }
         // One bounded read/write per pane per iteration prevents a busy background
@@ -1396,12 +1482,6 @@ fn forward(
                 send(shell, &mut state.to_shell)?;
             }
         }
-        if outer.contains(PollFlags::POLLIN) && frontend.receive(&mut input)? {
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "terminal input ended",
-            ));
-        }
     }
 }
 
@@ -1452,6 +1532,33 @@ fn send(writer: &mut impl Write, pending: &mut VecDeque<u8>) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::{handshake, protocol::ClientMessage};
+    use std::os::unix::net::UnixStream;
+    use std::thread;
+
+    #[test]
+    fn socket_frontend_defers_detach_until_prior_input_is_consumed() {
+        let (client_stream, server_stream) = UnixStream::pair().unwrap();
+        let server = thread::spawn(move || handshake::server(server_stream).unwrap());
+        let mut client = handshake::client(client_stream, 24, 80).unwrap();
+        let mut frontend = ServerFrontend::new(server.join().unwrap());
+        let bytes: Vec<_> = [
+            ClientMessage::Input(b"ordered".to_vec()),
+            ClientMessage::Detach,
+        ]
+        .iter()
+        .flat_map(|message| message.encode().unwrap())
+        .collect();
+        client.stream_mut().write_all(&bytes).unwrap();
+
+        let mut input = VecDeque::new();
+        let state = Frontend::receive(&mut frontend, &mut input).unwrap();
+        assert_eq!(state, ConnectionState::Detached);
+        assert_eq!(input, b"ordered".to_vec());
+        assert_eq!(frontend_exit(state, &input), None);
+        input.clear();
+        assert_eq!(frontend_exit(state, &input), Some(ForwardExit::Detached));
+    }
 
     #[test]
     fn frame_and_screen_limits_reject_without_growing_output() {
