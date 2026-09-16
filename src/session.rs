@@ -1,5 +1,6 @@
 //! Secure local endpoints for persistent Rustmux sessions.
 
+pub mod handshake;
 pub mod protocol;
 
 use std::fmt;
@@ -84,7 +85,7 @@ impl SessionEndpoint {
 
     fn bind_in(directory: &Path, name: &SessionName) -> io::Result<Self> {
         ensure_private_directory(directory)?;
-        let path = directory.join(format!("{name}.sock"));
+        let path = socket_path_in(directory, name);
         remove_stale_socket(&path)?;
 
         let listener = UnixListener::bind(&path)?;
@@ -124,6 +125,15 @@ impl Drop for SessionEndpoint {
 /// Return the fixed, short runtime path used for this effective user.
 pub fn session_directory() -> PathBuf {
     PathBuf::from("/tmp").join(format!("rustmux-{}", effective_user_id()))
+}
+
+/// Return the socket path for a validated session name without creating it.
+pub fn session_socket_path(name: &SessionName) -> PathBuf {
+    socket_path_in(&session_directory(), name)
+}
+
+fn socket_path_in(directory: &Path, name: &SessionName) -> PathBuf {
+    directory.join(format!("{name}.sock"))
 }
 
 fn ensure_private_directory(directory: &Path) -> io::Result<()> {
