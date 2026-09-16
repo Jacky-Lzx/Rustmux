@@ -15,6 +15,7 @@ pub mod render;
 pub mod screen;
 mod scrollback;
 mod semantic;
+pub mod session;
 pub mod style;
 pub mod terminal;
 

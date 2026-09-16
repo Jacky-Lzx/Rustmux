@@ -36,6 +36,7 @@
 - [Rendering Measurements](reference/rendering-performance.md)
 
 - [Windows](reference/windows.md)
+- [Session Endpoints](reference/session-endpoints.md)
 
 - [Split Layout Model](reference/split-layout.md)
 - [Pane Contents and Layout Ownership](reference/pane-ownership.md)
