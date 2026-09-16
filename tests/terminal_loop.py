@@ -1952,12 +1952,13 @@ with tempfile.TemporaryDirectory(prefix="rustmux-command-editor-") as directory:
     with open(editor, "w") as script:
         script.write("#!/bin/sh\ncp \"$1\" \"$CAPTURE\"\nprintf '%s' \"$1\" > \"$PATH_CAPTURE\"\n")
     os.chmod(editor, 0o700)
-    s = Session(extra_env={
+    editor_env = {
         "VISUAL": "",
         "EDITOR": editor,
         "CAPTURE": capture,
         "PATH_CAPTURE": path_capture,
-    })
+    }
+    s = Session(extra_env=editor_env)
     try:
         s.expect(b"RUSTMUX_READY>")
         s.send(b"stty -echo; KEEP=semantic\n")
@@ -1987,6 +1988,34 @@ with tempfile.TemporaryDirectory(prefix="rustmux-command-editor-") as directory:
         s.finish(0)
     finally:
         s.close()
+
+    # Exercise fallback boundaries in a fresh shell whose command echo has not
+    # been changed by the exact OSC 133 scenario above.
+    os.remove(capture)
+    os.remove(path_capture)
+    fallback = Session(extra_env=editor_env)
+    try:
+        fallback.expect(b"RUSTMUX_READY>")
+        fallback.send(b"printf 'FALLBACK one\\nFALLBACK two\\n'\n")
+        fallback.expect(b"RUSTMUX_READY>")
+        fallback.send(b"\x02e")
+        end = time.monotonic() + 8
+        while not (os.path.exists(capture) and os.path.exists(path_capture)):
+            fallback.read()
+            assert time.monotonic() < end, bytes(fallback.output[-1000:])
+        with open(capture, "rb") as file:
+            exported = file.read()
+        assert exported == b"FALLBACK one\nFALLBACK two", exported
+        with open(path_capture) as file:
+            snapshot_path = file.read()
+        end = time.monotonic() + 3
+        while os.path.exists(snapshot_path):
+            fallback.read()
+            assert time.monotonic() < end, snapshot_path
+        fallback.send(b"exit 0\n")
+        fallback.finish(0)
+    finally:
+        fallback.close()
 
 
 # Without shell integration, the shell process cwd supplies the inherited directory.

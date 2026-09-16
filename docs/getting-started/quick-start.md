@@ -70,8 +70,9 @@ alternate-screen applications retain the clipping policy. See
 [Browsing History](../reference/history-view.md).
 Ctrl-B `E` opens the active pane's retained history and meaningful visible text
 in `$VISUAL`, `$EDITOR` or `vi` in a temporary `history` window.
-With OSC 133 shell integration, Ctrl-B `e` opens the last completed command's
-plain-text output in a temporary `output` window.
+Ctrl-B `e` opens the last completed command's plain-text output in a temporary
+`output` window. OSC 133 provides exact boundaries; without it, Rustmux uses
+command echo and the following prompt as best-effort boundaries.
 
 Only the documented terminal-control subset is supported. Full-screen editors,
 terminal queries and extended keyboard/mouse modes are not yet fully supported;

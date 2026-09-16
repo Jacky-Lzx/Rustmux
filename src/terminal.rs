@@ -517,6 +517,10 @@ fn active_directory(windows: &Windows<PaneSet<Pane>>) -> Option<PathBuf> {
         .inherited_directory()
 }
 
+fn submits_command(byte: u8, bracketed_paste: bool) -> bool {
+    matches!(byte, b'\r' | b'\n') && !bracketed_paste
+}
+
 fn spawn_editor_window(text: &str, rows: u16, columns: u16) -> io::Result<PaneSet<Pane>> {
     PaneSet::new(rows, columns, Pane::spawn_editor(text, rows, columns)?)
 }
@@ -957,15 +961,13 @@ fn forward(
                     windows.active().unwrap().content().layout().active(),
                 );
                 match action {
-                    WindowKey::Byte(byte) => windows
-                        .active_mut()
-                        .unwrap()
-                        .content_mut()
-                        .active_mut()
-                        .parts_mut()
-                        .3
-                        .to_shell
-                        .push_back(byte),
+                    WindowKey::Byte(byte) => {
+                        let pane = windows.active_mut().unwrap().content_mut().active_mut();
+                        if submits_command(byte, keys.paste) {
+                            pane.command_submitted();
+                        }
+                        pane.parts_mut().3.to_shell.push_back(byte);
+                    }
                     WindowKey::Split(axis) => {
                         let directory = active_directory(windows);
                         let panes = windows.active_mut().unwrap().content_mut();
@@ -1047,8 +1049,7 @@ fn forward(
                             .unwrap()
                             .content()
                             .active()
-                            .last_command_output()
-                            .map(str::to_owned);
+                            .last_command_output();
                         if windows.iter().len() == MAX_WINDOWS || text.is_none() {
                             if to_terminal.is_empty() {
                                 to_terminal.push_back(7);
@@ -1599,6 +1600,24 @@ mod window_input_tests {
             decoder.feed(byte, &mut result);
         }
         result
+    }
+
+    #[test]
+    fn only_newlines_outside_bracketed_paste_submit_commands() {
+        let mut decoder = WindowInput::default();
+        let mut actions = Vec::new();
+        let mut submissions = 0;
+        for &byte in b"\x1b[200~first\nsecond\x1b[201~\r" {
+            actions.clear();
+            decoder.feed(byte, &mut actions);
+            submissions += actions
+                .iter()
+                .filter(|action| {
+                    matches!(action, WindowKey::Byte(byte) if submits_command(*byte, decoder.paste))
+                })
+                .count();
+        }
+        assert_eq!(submissions, 1);
     }
 
     #[test]

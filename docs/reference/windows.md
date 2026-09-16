@@ -146,13 +146,14 @@ opens the file in a new `history` window using `$VISUAL`, then `$EDITOR`, then
 The source pane keeps running. Alternate-screen panes, the 16-window limit and
 editor startup failures leave existing windows unchanged and ring the bell.
 
-Ctrl-B, then `e` opens the most recently completed OSC 133 command-output region
-in a temporary `output` window. Capture starts at `OSC 133;C` and completes at
+Ctrl-B, then `e` opens the most recent command-output region in a temporary
+`output` window. With shell integration, capture starts at `OSC 133;C` and completes at
 `OSC 133;D` or the following `OSC 133;A`. ANSI control sequences are omitted
-from the plain-text snapshot. The command must have shell integration and finish
-before it can be opened; missing markers, an active command, output over 4 MiB,
-the window limit and editor startup failures ring the bell. Rustmux does not
-guess boundaries from prompt text.
+from the plain-text snapshot. Without OSC 133, an Enter outside bracketed paste
+starts best-effort capture: the first line is treated as command echo and the last
+line as the following prompt. A later OSC 133 marker replaces this heuristic with
+exact boundaries. Empty output, output over 4 MiB, the window limit and editor
+startup failures ring the bell.
 
 There are at most 16 windows. New windows and splits use the originally selected
 executable and inherit the active pane's latest valid OSC 7 working directory.

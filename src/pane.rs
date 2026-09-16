@@ -242,8 +242,12 @@ impl Pane {
         &self.screen
     }
 
-    pub(crate) fn last_command_output(&self) -> Option<&str> {
+    pub(crate) fn last_command_output(&self) -> Option<String> {
         self.io.semantic.last_output()
+    }
+
+    pub(crate) fn command_submitted(&mut self) {
+        self.io.semantic.command_submitted();
     }
 
     pub(crate) fn inherited_directory(&self) -> Option<PathBuf> {

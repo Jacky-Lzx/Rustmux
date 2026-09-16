@@ -11,6 +11,7 @@ const MAX_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
 pub(crate) struct SemanticOutput {
     state: State,
     capturing: bool,
+    semantic_boundaries: bool,
     overflowed: bool,
     current: Vec<u8>,
     last: Option<String>,
@@ -111,8 +112,16 @@ impl SemanticOutput {
         }
     }
 
-    pub fn last_output(&self) -> Option<&str> {
-        (!self.capturing).then_some(self.last.as_deref()).flatten()
+    pub fn last_output(&self) -> Option<String> {
+        if self.capturing && !self.semantic_boundaries {
+            (!self.overflowed)
+                .then(|| fallback_output(&self.current))
+                .filter(|output| !output.is_empty())
+        } else if self.capturing {
+            None
+        } else {
+            self.last.clone()
+        }
     }
 
     pub fn current_directory(&self) -> Option<&Path> {
@@ -125,8 +134,29 @@ impl SemanticOutput {
 
     pub fn cancel_current(&mut self) {
         self.capturing = false;
+        self.semantic_boundaries = false;
         self.overflowed = false;
         self.current = Vec::new();
+    }
+
+    /// Begin best-effort capture when input submits a command without OSC 133.
+    /// Exact semantic boundaries take precedence once a shell emits them.
+    pub fn command_submitted(&mut self) {
+        if self.capturing && self.semantic_boundaries {
+            return;
+        }
+        if self.capturing {
+            self.last = if self.overflowed {
+                None
+            } else {
+                let output = fallback_output(&self.current);
+                (!output.is_empty()).then_some(output)
+            };
+        }
+        self.current.clear();
+        self.capturing = true;
+        self.semantic_boundaries = false;
+        self.overflowed = false;
     }
 
     fn ground(&mut self, byte: u8) -> State {
@@ -162,6 +192,7 @@ impl SemanticOutput {
             Some(b"C") => {
                 self.current.clear();
                 self.capturing = true;
+                self.semantic_boundaries = true;
                 self.overflowed = false;
             }
             Some(b"D" | b"A") if self.capturing => self.complete(),
@@ -233,6 +264,21 @@ fn remove_last_scalar(bytes: &mut Vec<u8>) {
     }
 }
 
+fn fallback_output(bytes: &[u8]) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    let mut lines = text.lines().collect::<Vec<_>>();
+    if !lines.is_empty() {
+        lines.remove(0); // The terminal normally echoes the submitted command.
+    }
+    while lines.last().is_some_and(|line| line.trim().is_empty()) {
+        lines.pop();
+    }
+    if !lines.is_empty() {
+        lines.pop(); // The final line is the next prompt.
+    }
+    lines.join("\n").trim_end().to_owned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -248,22 +294,46 @@ mod tests {
         ] {
             output.advance(chunk);
         }
-        assert_eq!(output.last_output(), Some("red 中\nnext\tX"));
+        assert_eq!(output.last_output(), Some("red 中\nnext\tX".to_owned()));
+    }
+
+    #[test]
+    fn command_echo_and_prompt_bound_output_without_shell_integration() {
+        let mut output = SemanticOutput::default();
+        output.command_submitted();
+        output.advance(b"printf test\r\ntest\r\n$ ");
+        assert_eq!(output.last_output(), Some("test".to_owned()));
+
+        output.command_submitted();
+        output.advance(b"printf next\r\nnext\r\n$ ");
+        assert_eq!(output.last_output(), Some("next".to_owned()));
+    }
+
+    #[test]
+    fn osc133_replaces_an_active_heuristic_capture() {
+        let mut output = SemanticOutput::default();
+        output.command_submitted();
+        output.advance(b"echo ignored\r\n\x1b]133;C\x07exact\x1b]133;D\x07$ ");
+        assert_eq!(output.last_output(), Some("exact".to_owned()));
     }
 
     #[test]
     fn running_incomplete_and_oversized_commands_are_unavailable() {
         let mut output = SemanticOutput::default();
         output.advance(b"\x1b]133;C\x07old\x1b]133;D\x07");
-        assert_eq!(output.last_output(), Some("old"));
+        assert_eq!(output.last_output(), Some("old".to_owned()));
         output.advance(b"\x1b]133;C\x07running");
         assert_eq!(output.last_output(), None);
         output.advance(b"\x1b]133;C\x07new\x1b]133;A\x07");
-        assert_eq!(output.last_output(), Some("new"));
+        assert_eq!(output.last_output(), Some("new".to_owned()));
 
         output.advance(b"\x1b]133;C\x07");
         output.advance(&vec![b'x'; MAX_OUTPUT_BYTES + 1]);
         output.advance(b"\x1b]133;D\x07");
+        assert_eq!(output.last_output(), None);
+
+        output.command_submitted();
+        output.advance(&vec![b'x'; MAX_OUTPUT_BYTES + 1]);
         assert_eq!(output.last_output(), None);
     }
 
@@ -286,7 +356,7 @@ mod tests {
     fn backspace_removes_one_complete_utf8_scalar() {
         let mut output = SemanticOutput::default();
         output.advance(b"\x1b]133;C\x07A\xe4\xb8\xad\x08B\x1b]133;D\x07");
-        assert_eq!(output.last_output(), Some("AB"));
+        assert_eq!(output.last_output(), Some("AB".to_owned()));
     }
 
     #[test]
@@ -298,7 +368,7 @@ mod tests {
             Some(Path::new("/tmp/My Project"))
         );
         output.advance(b"\x1b]133;D\x07");
-        assert_eq!(output.last_output(), Some("beforeafter"));
+        assert_eq!(output.last_output(), Some("beforeafter".to_owned()));
     }
 
     #[test]
