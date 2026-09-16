@@ -38,6 +38,7 @@
 - [Windows](reference/windows.md)
 - [Session Endpoints](reference/session-endpoints.md)
 - [Session Protocol](reference/session-protocol.md)
+- [Frontend I/O Boundary](reference/frontend-io.md)
 
 - [Split Layout Model](reference/split-layout.md)
 - [Pane Contents and Layout Ownership](reference/pane-ownership.md)

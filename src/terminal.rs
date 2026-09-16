@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
 use std::io::{self, IsTerminal, Read, Write};
-use std::os::fd::{AsFd, AsRawFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
@@ -94,10 +94,10 @@ pub fn run(shell_path: &OsStr) -> io::Result<u8> {
         spawn_window(shell_path, None, pane_rows(size.ws_row), size.ws_col)?,
     )?;
     let signals = Signals::install()?;
-    let mut terminal = Terminal::enter(file)?;
+    let mut terminal = LocalFrontend::enter(file, signals.resize.clone())?;
     let mut closed = None;
     let result = forward(
-        &mut terminal.file,
+        &mut terminal,
         &mut windows,
         &signals,
         shell_path,
@@ -114,7 +114,7 @@ pub fn run(shell_path: &OsStr) -> io::Result<u8> {
     }
 }
 
-fn window_size(file: &File) -> io::Result<nix::pty::Winsize> {
+fn window_size(file: &impl AsRawFd) -> io::Result<nix::pty::Winsize> {
     let mut size = nix::pty::Winsize {
         ws_row: 0,
         ws_col: 0,
@@ -128,20 +128,29 @@ fn window_size(file: &File) -> io::Result<nix::pty::Winsize> {
     Ok(size)
 }
 
-struct Terminal {
+trait Frontend {
+    fn poll_fd(&self) -> BorrowedFd<'_>;
+    fn take_resize(&mut self) -> io::Result<Option<nix::pty::Winsize>>;
+    fn receive(&mut self, pending: &mut VecDeque<u8>) -> io::Result<bool>;
+    fn send(&mut self, pending: &mut VecDeque<u8>) -> io::Result<()>;
+}
+
+struct LocalFrontend {
     file: File,
     original: Termios,
+    resize: Arc<AtomicBool>,
     active: bool,
 }
 
-impl Terminal {
-    fn enter(file: File) -> io::Result<Self> {
+impl LocalFrontend {
+    fn enter(file: File, resize: Arc<AtomicBool>) -> io::Result<Self> {
         let original = termios::tcgetattr(&file)?;
         let mut raw = original.clone();
         termios::cfmakeraw(&mut raw);
         let mut terminal = Self {
             file,
             original,
+            resize,
             active: true,
         };
         termios::tcsetattr(&terminal.file, SetArg::TCSANOW, &raw)?;
@@ -190,7 +199,30 @@ impl Terminal {
     }
 }
 
-impl Drop for Terminal {
+impl Frontend for LocalFrontend {
+    fn poll_fd(&self) -> BorrowedFd<'_> {
+        self.file.as_fd()
+    }
+
+    fn take_resize(&mut self) -> io::Result<Option<nix::pty::Winsize>> {
+        if self.resize.swap(false, Ordering::Relaxed) {
+            let size = window_size(&self.file)?;
+            Ok((size.ws_row != 0 && size.ws_col != 0).then_some(size))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn receive(&mut self, pending: &mut VecDeque<u8>) -> io::Result<bool> {
+        receive(&mut self.file, pending)
+    }
+
+    fn send(&mut self, pending: &mut VecDeque<u8>) -> io::Result<()> {
+        send(&mut self.file, pending)
+    }
+}
+
+impl Drop for LocalFrontend {
     fn drop(&mut self) {
         let _ = self.restore();
     }
@@ -526,7 +558,7 @@ fn spawn_editor_window(text: &str, rows: u16, columns: u16) -> io::Result<PaneSe
 }
 
 fn forward(
-    terminal: &mut File,
+    frontend: &mut impl Frontend,
     windows: &mut Windows<PaneSet<Pane>>,
     signals: &Signals,
     shell_path: &OsStr,
@@ -625,21 +657,16 @@ fn forward(
             force_redraw = true;
         }
         let active = windows.active().expect("at least one window").id();
-        let resize = if signals.resize.swap(false, Ordering::Relaxed) {
-            let size = window_size(terminal)?;
-            if size.ws_row != 0 && size.ws_col != 0 {
-                check_size(size.ws_row, size.ws_col)?;
-                outer_rows = size.ws_row;
-                if history.take().is_some() {
-                    input.clear();
-                    keys = WindowInput::default();
-                }
-                renderer.invalidate();
-                force_redraw = true;
-                Some(size)
-            } else {
-                None
+        let resize = if let Some(size) = frontend.take_resize()? {
+            check_size(size.ws_row, size.ws_col)?;
+            outer_rows = size.ws_row;
+            if history.take().is_some() {
+                input.clear();
+                keys = WindowInput::default();
             }
+            renderer.invalidate();
+            force_redraw = true;
+            Some(size)
         } else {
             None
         };
@@ -1252,7 +1279,7 @@ fn forward(
         };
         let mut interests = Vec::new();
         let (outer, events) = {
-            let mut fds = vec![PollFd::new(terminal.as_fd(), outer_events)];
+            let mut fds = vec![PollFd::new(frontend.poll_fd(), outer_events)];
             for window in windows.iter() {
                 for (pane_id, pane) in window.content().iter() {
                     let state = pane.io();
@@ -1311,7 +1338,7 @@ fn forward(
             ));
         }
         if outer.contains(PollFlags::POLLOUT) {
-            send(terminal, &mut to_terminal)?;
+            frontend.send(&mut to_terminal)?;
         }
         // One bounded read/write per pane per iteration prevents a busy background
         // process from starving the other panes, keyboard or signal handling.
@@ -1369,7 +1396,7 @@ fn forward(
                 send(shell, &mut state.to_shell)?;
             }
         }
-        if outer.contains(PollFlags::POLLIN) && receive(terminal, &mut input)? {
+        if outer.contains(PollFlags::POLLIN) && frontend.receive(&mut input)? {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 "terminal input ended",
@@ -1443,7 +1470,8 @@ mod tests {
         let mut original = termios::tcgetattr(&pair.slave).unwrap();
         let observer = pair.slave.try_clone().unwrap();
         let result: io::Result<()> = (|| {
-            let terminal = Terminal::enter(pair.slave.into())?;
+            let terminal =
+                LocalFrontend::enter(pair.slave.into(), Arc::new(AtomicBool::new(false)))?;
             assert!(
                 !termios::tcgetattr(&terminal.file)?
                     .local_flags
