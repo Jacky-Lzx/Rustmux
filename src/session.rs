@@ -1,5 +1,6 @@
 //! Secure local endpoints for persistent Rustmux sessions.
 
+pub mod frontend;
 pub mod handshake;
 pub mod protocol;
 

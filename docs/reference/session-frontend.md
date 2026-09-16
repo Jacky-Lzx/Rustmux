@@ -1,0 +1,21 @@
+# Session Frontend Adapter
+
+`session::frontend::ServerFrontend` converts an accepted session connection
+into bounded terminal input, resize updates and framed renderer output. It is a
+server-side adapter; this step does not yet run the terminal event loop in a
+background process or add attach commands to the CLI.
+
+The initial size from `Hello` is exposed as the first resize. Later `Resize`
+messages are coalesced so the event loop applies only the newest dimensions.
+`Input` payloads enter a bounded internal queue and can be drained without
+exceeding the event loop's own input limit. `Detach` and a clean socket EOF are
+reported as different states because detaching must leave the session alive.
+
+Rendered bytes are split into protocol payloads of at most 64 KiB. A source
+byte remains in the renderer queue until its complete `Output` frame has been
+written, including the header. This preserves backpressure across partial
+nonblocking writes and prevents either duplicated or missing terminal output.
+
+Tests use real nonblocking Unix stream pairs for input, resize, detach, EOF and
+multi-frame output. A deliberately short writer verifies the partial-write
+ownership rule independently of socket buffer timing.

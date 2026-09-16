@@ -39,6 +39,7 @@
 - [Session Endpoints](reference/session-endpoints.md)
 - [Session Protocol](reference/session-protocol.md)
 - [Session Handshake](reference/session-handshake.md)
+- [Session Frontend Adapter](reference/session-frontend.md)
 - [Frontend I/O Boundary](reference/frontend-io.md)
 
 - [Split Layout Model](reference/split-layout.md)
