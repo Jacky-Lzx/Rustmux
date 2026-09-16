@@ -156,10 +156,11 @@ guess boundaries from prompt text.
 
 There are at most 16 windows. New windows and splits use the originally selected
 executable and inherit the active pane's latest valid OSC 7 working directory.
-Malformed OSC 7 leaves the previous directory unchanged; a missing or no-longer
-existing directory falls back to Rustmux's startup working directory. This step
-does not inspect foreground processes when shell integration is absent. A failed
-creation or the window limit preserves existing windows and focus, with a
+When OSC 7 is absent, macOS and Linux inspect the foreground process, then the
+shell process. Yazi's foreground directory overrides a stale OSC 7 value because
+navigation changes Yazi rather than its parent shell. Missing and invalid paths
+fall back to Rustmux's startup working directory. A failed creation or the window
+limit preserves existing windows and focus, with a
 best-effort bell when the output queue is empty. No creation-error dialog is provided yet.
 
 Each iteration performs at most one bounded read/write per ready pane. Inactive

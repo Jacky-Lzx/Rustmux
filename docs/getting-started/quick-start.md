@@ -31,8 +31,9 @@ for the previous one. Ctrl-B followed by `1`–`9` selects that window number;
 `0` selects window 10. Ctrl-B followed by Tab returns to the last active window;
 repeat it to toggle between two windows. Ctrl-B followed by `<` or `>` moves
 the current window one position left or right in the bar, wrapping at the edges. Ctrl-B twice sends a literal Ctrl-B to the child. Background
-shells continue running. New windows and splits inherit the active pane's OSC 7
-directory when shell integration reports one and it still exists. See
+shells continue running. New windows and splits inherit the active pane's valid
+OSC 7 directory. Without OSC 7, macOS and Linux query the foreground process,
+then the shell process; Yazi's foreground directory overrides stale OSC 7. See
 [Windows](../reference/windows.md#interactive-controls) for limits and input
 behavior. Ctrl-B followed by `,` opens the name editor:
 Enter saves, Esc cancels, and Ctrl-U clears the existing name.

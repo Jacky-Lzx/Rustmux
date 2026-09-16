@@ -3,7 +3,7 @@
 use crate::{parser::Parser, pty::PtyShell, screen::Screen, semantic::SemanticOutput};
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::{collections::VecDeque, ffi::OsStr, io, process::ExitStatus, time::Instant};
 use tempfile::{Builder, NamedTempFile};
 
@@ -246,8 +246,9 @@ impl Pane {
         self.io.semantic.last_output()
     }
 
-    pub(crate) fn current_directory(&self) -> Option<&Path> {
-        self.io.semantic.current_directory()
+    pub(crate) fn inherited_directory(&self) -> Option<PathBuf> {
+        self.shell
+            .inherited_directory(self.io.semantic.current_directory())
     }
 
     /// Consume child output and route terminal replies back to this same child.

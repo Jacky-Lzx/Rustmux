@@ -1,7 +1,7 @@
 # Interactive Splits
 
 Each window starts with one shell. Splitting creates an independent shell using
-Rustmux's startup executable and the active pane's valid OSC 7 working directory,
+Rustmux's startup executable and the active pane's resolved working directory,
 then selects the new pane. A missing directory falls back to Rustmux's startup
 directory.
 Existing processes, parser state and queued input stay attached to their pane IDs.

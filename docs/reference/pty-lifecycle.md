@@ -27,7 +27,7 @@ calls and allocation-free error construction; see Rust's
 
 The shell receives `-i`; its environment is inherited. The initial shell inherits
 Rustmux's working directory, while later windows and splits may select an OSC 7
-directory.
+directory or a macOS/Linux process working directory fallback.
 An explicit executable is required by the API; PATH lookup is handled by Command.
 Invalid paths fail without fallback. Shell selection reads the top-level `shell`
 value from `$XDG_CONFIG_HOME/rustmux/config.toml` or

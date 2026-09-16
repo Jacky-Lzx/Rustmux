@@ -514,9 +514,7 @@ fn active_directory(windows: &Windows<PaneSet<Pane>>) -> Option<PathBuf> {
         .unwrap()
         .content()
         .active()
-        .current_directory()
-        .filter(|path| path.is_dir())
-        .map(Path::to_owned)
+        .inherited_directory()
 }
 
 fn spawn_editor_window(text: &str, rows: u16, columns: u16) -> io::Result<PaneSet<Pane>> {

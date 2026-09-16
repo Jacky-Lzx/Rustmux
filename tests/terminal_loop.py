@@ -1989,6 +1989,28 @@ with tempfile.TemporaryDirectory(prefix="rustmux-command-editor-") as directory:
         s.close()
 
 
+# Without shell integration, the shell process cwd supplies the inherited directory.
+with tempfile.TemporaryDirectory(prefix="rustmux-process-cwd-") as directory:
+    target = os.path.join(directory, "cwd without osc")
+    os.mkdir(target)
+    quoted = shlex.quote(target)
+    s = Session()
+    try:
+        s.expect(b"RUSTMUX_READY>")
+        s.send(("cd " + quoted + " && printf 'PROCESS_CWD_READY\\n'\n").encode())
+        s.expect(b"PROCESS_CWD_READY")
+        s.send(b"\x02c")
+        s.expect(b"RUSTMUX_READY>")
+        s.send(("test \"$PWD\" = " + quoted + " && printf 'PROCESS_CWD_OK\\n'\n").encode())
+        s.expect(b"PROCESS_CWD_OK")
+        s.send(b"exit 0\n")
+        s.expect(b"RUSTMUX_READY>")
+        s.send(b"exit 0\n")
+        s.finish(0)
+    finally:
+        s.close()
+
+
 # OSC 7 directories are percent-decoded, isolated in pane metadata and inherited by new shells.
 with tempfile.TemporaryDirectory(prefix="rustmux-osc7-") as directory:
     target = os.path.join(directory, "cwd with spaces")

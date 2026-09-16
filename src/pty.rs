@@ -4,12 +4,14 @@ use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
+#[cfg(target_os = "macos")]
+use std::os::unix::ffi::OsStringExt;
 use std::os::unix::process::CommandExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 
 use nix::pty::{Winsize, openpty};
-use nix::unistd::setsid;
+use nix::unistd::{Pid, setsid, tcgetpgrp};
 
 /// Owns the master descriptor and the direct shell child.
 ///
@@ -114,6 +116,35 @@ impl PtyShell {
         self.master.as_ref().map(AsFd::as_fd)
     }
 
+    /// Choose a directory for a shell created from this PTY.
+    ///
+    /// A valid OSC 7 path normally wins. Yazi changes its own directory without
+    /// changing the parent shell, so its foreground process takes precedence.
+    /// When OSC 7 is absent, inspect the foreground process and then the shell.
+    pub(crate) fn inherited_directory(&self, tracked: Option<&Path>) -> Option<PathBuf> {
+        let tracked = tracked.filter(|path| path.is_dir()).map(Path::to_owned);
+        let foreground = self
+            .master_fd()
+            .and_then(|master| tcgetpgrp(master).ok())
+            .filter(|pid| pid.as_raw() > 0);
+        let foreground_name = foreground.and_then(process_name);
+        let inspect_process = tracked.is_none()
+            || foreground_name
+                .as_deref()
+                .is_some_and(|name| name.eq_ignore_ascii_case("yazi"));
+        let process_directory = inspect_process
+            .then(|| foreground.and_then(process_current_directory))
+            .flatten()
+            .filter(|path| path.is_dir())
+            .or_else(|| {
+                inspect_process
+                    .then(|| process_current_directory(Pid::from_raw(self.child.id() as i32)))
+                    .flatten()
+                    .filter(|path| path.is_dir())
+            });
+        preferred_directory(tracked, foreground_name.as_deref(), process_directory)
+    }
+
     /// Update character dimensions; the kernel notifies the PTY foreground process group.
     /// Zero dimensions are rejected. Returns NotConnected after termination.
     pub fn resize(&mut self, rows: u16, columns: u16) -> io::Result<()> {
@@ -206,6 +237,91 @@ fn private_fd(fd: OwnedFd) -> io::Result<OwnedFd> {
     fd.try_clone()
 }
 
+fn preferred_directory(
+    tracked: Option<PathBuf>,
+    foreground_name: Option<&str>,
+    process_directory: Option<PathBuf>,
+) -> Option<PathBuf> {
+    if foreground_name.is_some_and(|name| name.eq_ignore_ascii_case("yazi")) {
+        process_directory.or(tracked)
+    } else {
+        tracked.or(process_directory)
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn process_current_directory(pid: Pid) -> Option<PathBuf> {
+    // SAFETY: proc_vnodepathinfo is a plain C data structure that may be zero-initialized.
+    let mut info = unsafe { std::mem::zeroed::<nix::libc::proc_vnodepathinfo>() };
+    let size = std::mem::size_of_val(&info);
+    // SAFETY: proc_pidinfo writes at most `size` bytes to this valid buffer and does not retain it.
+    let length = unsafe {
+        nix::libc::proc_pidinfo(
+            pid.as_raw(),
+            nix::libc::PROC_PIDVNODEPATHINFO,
+            0,
+            (&mut info as *mut nix::libc::proc_vnodepathinfo).cast(),
+            size.try_into().ok()?,
+        )
+    };
+    if usize::try_from(length).ok()? < size {
+        return None;
+    }
+    let path = info
+        .pvi_cdir
+        .vip_path
+        .iter()
+        .flatten()
+        .map(|byte| *byte as u8)
+        .take_while(|byte| *byte != 0)
+        .collect::<Vec<_>>();
+    (!path.is_empty()).then(|| PathBuf::from(std::ffi::OsString::from_vec(path)))
+}
+
+#[cfg(target_os = "linux")]
+fn process_current_directory(pid: Pid) -> Option<PathBuf> {
+    std::fs::read_link(format!("/proc/{}/cwd", pid.as_raw())).ok()
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn process_current_directory(_: Pid) -> Option<PathBuf> {
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn process_name(pid: Pid) -> Option<String> {
+    let mut buffer = [0_u8; 256];
+    // SAFETY: proc_name writes at most the supplied buffer length and does not retain its pointer.
+    let length = unsafe {
+        nix::libc::proc_name(
+            pid.as_raw(),
+            buffer.as_mut_ptr().cast(),
+            buffer.len().try_into().ok()?,
+        )
+    };
+    if length <= 0 {
+        return None;
+    }
+    let length = usize::try_from(length).ok()?.min(buffer.len());
+    let end = buffer[..length]
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(length);
+    (!buffer[..end].is_empty()).then(|| String::from_utf8_lossy(&buffer[..end]).into_owned())
+}
+
+#[cfg(target_os = "linux")]
+fn process_name(pid: Pid) -> Option<String> {
+    let name = std::fs::read_to_string(format!("/proc/{}/comm", pid.as_raw())).ok()?;
+    let name = name.trim();
+    (!name.is_empty()).then(|| name.to_owned())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn process_name(_: Pid) -> Option<String> {
+    None
+}
+
 impl Read for PtyShell {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         match self.master()?.read(buf) {
@@ -228,5 +344,36 @@ impl Write for PtyShell {
 impl Drop for PtyShell {
     fn drop(&mut self) {
         let _ = self.terminate();
+    }
+}
+
+#[cfg(test)]
+mod directory_tests {
+    use super::*;
+
+    #[test]
+    fn tracked_directory_wins_except_for_yazi() {
+        let tracked = PathBuf::from("/tracked");
+        let process = PathBuf::from("/process");
+        assert_eq!(
+            preferred_directory(Some(tracked.clone()), Some("fish"), Some(process.clone())),
+            Some(tracked.clone())
+        );
+        assert_eq!(
+            preferred_directory(Some(tracked), Some("YAZI"), Some(process.clone())),
+            Some(process)
+        );
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn process_directory_resolves_this_process() {
+        assert_eq!(
+            process_current_directory(Pid::this()).and_then(|path| path.canonicalize().ok()),
+            std::env::current_dir()
+                .and_then(|path| path.canonicalize())
+                .ok()
+        );
+        assert!(process_name(Pid::this()).is_some());
     }
 }
