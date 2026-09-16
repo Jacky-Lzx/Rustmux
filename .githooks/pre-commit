@@ -1,0 +1,18 @@
+#!/bin/sh
+# rustmux-managed-hook
+set -eu
+
+echo "Checking Rust formatting..."
+if ! cargo fmt --all -- --check; then
+    echo "Formatting Rust code..."
+    cargo fmt --all
+    cat >&2 <<'EOF'
+
+rustfmt updated the working tree. Review and stage the result, then retry the
+commit.
+EOF
+    exit 1
+fi
+
+echo "Running Clippy..."
+cargo clippy --all-targets --locked --offline -- -D warnings

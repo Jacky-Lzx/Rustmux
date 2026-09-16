@@ -44,3 +44,10 @@ accepted.
 
 These are repository policies, not an assertion that GitHub protection rules or
 labels are configured. Configure those separately when publishing this track.
+
+## Local commit checks
+
+Run `./scripts/install-git-hooks.sh` once in any repository worktree. The
+installed pre-commit hook checks `cargo fmt` and runs Clippy with warnings
+denied before every commit. When rustfmt finds changes, it formats the working
+tree and blocks that commit so the result can be reviewed and staged explicitly.
