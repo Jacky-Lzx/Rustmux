@@ -1,6 +1,6 @@
 //! Per-pane process and terminal state. Polling and rendering belong to the caller.
 
-use crate::{parser::Parser, pty::PtyShell, screen::Screen};
+use crate::{parser::Parser, pty::PtyShell, screen::Screen, semantic::SemanticOutput};
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use std::io::Write;
 use std::{collections::VecDeque, ffi::OsStr, io, process::ExitStatus, time::Instant};
@@ -27,9 +27,9 @@ pub struct Pane {
 struct TemporaryFile(NamedTempFile);
 
 impl TemporaryFile {
-    fn history(text: &str) -> io::Result<Self> {
+    fn snapshot(text: &str) -> io::Result<Self> {
         let mut file = Builder::new()
-            .prefix("rustmux-history-")
+            .prefix("rustmux-snapshot-")
             .suffix(".txt")
             .tempfile()?;
         file.write_all(text.as_bytes())?;
@@ -82,6 +82,7 @@ pub(crate) struct PaneIo {
     pub eof: bool,
     pub eof_at: Option<Instant>,
     pub status: Option<ExitStatus>,
+    pub semantic: SemanticOutput,
 }
 
 impl Default for PaneIo {
@@ -93,6 +94,7 @@ impl Default for PaneIo {
             eof: false,
             eof_at: None,
             status: None,
+            semantic: SemanticOutput::default(),
         }
     }
 }
@@ -148,7 +150,7 @@ impl Pane {
             ));
         }
         let screen = Screen::new(usize::from(rows), usize::from(columns))?;
-        let temporary_file = TemporaryFile::history(text)?;
+        let temporary_file = TemporaryFile::snapshot(text)?;
         let shell = PtyShell::spawn_editor(temporary_file.0.path().as_os_str(), rows, columns)?;
         let master = shell.master_fd().expect("new PTY is open");
         let flags = OFlag::from_bits_truncate(fcntl(master, FcntlArg::F_GETFL)?);
@@ -164,7 +166,9 @@ impl Pane {
 
     /// Keep the shell but discard user input intended for the stopped foreground job.
     pub(crate) fn stop_for_hide(&mut self) -> io::Result<()> {
-        if self.shell.stop_foreground()? {
+        let stopped = self.shell.stop_foreground()?;
+        self.io.semantic.cancel_current();
+        if stopped {
             // A killed full-screen job cannot restore these modes itself.
             self.parser = Parser::new();
             self.screen.leave_alternate();
@@ -223,10 +227,15 @@ impl Pane {
         &self.screen
     }
 
+    pub(crate) fn last_command_output(&self) -> Option<&str> {
+        self.io.semantic.last_output()
+    }
+
     /// Consume child output and route terminal replies back to this same child.
     /// The caller must reserve reply capacity before reading (MAX_REPLY_BYTES).
     pub fn process_output(&mut self, bytes: &[u8], reply: &mut impl FnMut(&[u8])) {
         self.io.dirty = true;
+        self.io.semantic.advance(bytes);
         self.parser
             .advance_with_replies(&mut self.screen, bytes, reply);
     }

@@ -116,6 +116,7 @@ paths. These states now drive multi-window polling.
 | Ctrl-B, then % / " | Split the active pane left/right or top/bottom |
 | Ctrl-B, then [ | Browse current-pane history |
 | Ctrl-B, then E | Open current-pane history and visible text in `$VISUAL` or `$EDITOR` |
+| Ctrl-B, then e | Open the last completed command's output in `$VISUAL` or `$EDITOR` |
 | Ctrl-B, then Z | Toggle active-pane zoom |
 | Ctrl-B, then z | Restore the most recently closed pane |
 | Ctrl-B, then o | Select the next pane, wrapping |
@@ -144,6 +145,14 @@ opens the file in a new `history` window using `$VISUAL`, then `$EDITOR`, then
 `vi`; closing the editor returns to the original window and removes the file.
 The source pane keeps running. Alternate-screen panes, the 16-window limit and
 editor startup failures leave existing windows unchanged and ring the bell.
+
+Ctrl-B, then `e` opens the most recently completed OSC 133 command-output region
+in a temporary `output` window. Capture starts at `OSC 133;C` and completes at
+`OSC 133;D` or the following `OSC 133;A`. ANSI control sequences are omitted
+from the plain-text snapshot. The command must have shell integration and finish
+before it can be opened; missing markers, an active command, output over 4 MiB,
+the window limit and editor startup failures ring the bell. Rustmux does not
+guess boundaries from prompt text.
 
 There are at most 16 windows. New shells use the originally selected executable
 and Rustmux's startup working directory; active-shell cwd inheritance is not yet

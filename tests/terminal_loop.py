@@ -1942,3 +1942,48 @@ with tempfile.TemporaryDirectory(prefix="rustmux-history-editor-") as directory:
         s.finish(0)
     finally:
         s.close()
+
+
+# Open only a completed OSC 133 command-output region in a temporary editor window.
+with tempfile.TemporaryDirectory(prefix="rustmux-command-editor-") as directory:
+    capture = os.path.join(directory, "capture.txt")
+    path_capture = os.path.join(directory, "path.txt")
+    editor = os.path.join(directory, "editor.sh")
+    with open(editor, "w") as script:
+        script.write("#!/bin/sh\ncp \"$1\" \"$CAPTURE\"\nprintf '%s' \"$1\" > \"$PATH_CAPTURE\"\n")
+    os.chmod(editor, 0o700)
+    s = Session(extra_env={
+        "VISUAL": "",
+        "EDITOR": editor,
+        "CAPTURE": capture,
+        "PATH_CAPTURE": path_capture,
+    })
+    try:
+        s.expect(b"RUSTMUX_READY>")
+        s.send(b"stty -echo; KEEP=semantic\n")
+        s.expect(b"RUSTMUX_READY>")
+        s.send(
+            b"printf '\\033]133;C\\007'; "
+            b"printf 'FIRST \\033[31mred\\033[0m\\nSECOND\\n'; "
+            b"printf '\\033]133;D;0\\007'\n"
+        )
+        s.expect(b"SECOND")
+        s.send(b"\x02e")
+        end = time.monotonic() + 8
+        while not (os.path.exists(capture) and os.path.exists(path_capture)):
+            s.read()
+            assert time.monotonic() < end, bytes(s.output[-1000:])
+        with open(capture, "rb") as file:
+            assert file.read() == b"FIRST red\nSECOND\n"
+        with open(path_capture) as file:
+            snapshot_path = file.read()
+        end = time.monotonic() + 3
+        while os.path.exists(snapshot_path):
+            s.read()
+            assert time.monotonic() < end, snapshot_path
+        s.send(b"printf 'SOURCE_%s\\n' \"$KEEP\"\n")
+        s.expect(b"SOURCE_semantic")
+        s.send(b"exit 0\n")
+        s.finish(0)
+    finally:
+        s.close()

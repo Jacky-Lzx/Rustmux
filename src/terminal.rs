@@ -313,6 +313,7 @@ enum WindowKey {
     UndoClose,
     History,
     HistoryEditor,
+    LastCommandEditor,
     FocusPane(Direction),
     ResizePane(Direction),
     SwapPaneNext,
@@ -467,6 +468,7 @@ impl WindowInput {
                 b'z' => output.push(WindowKey::UndoClose),
                 b'[' => output.push(WindowKey::History),
                 b'E' => output.push(WindowKey::HistoryEditor),
+                b'e' => output.push(WindowKey::LastCommandEditor),
                 8 => output.push(WindowKey::ResizePane(Direction::Left)),
                 10 => output.push(WindowKey::ResizePane(Direction::Down)),
                 11 => output.push(WindowKey::ResizePane(Direction::Up)),
@@ -496,7 +498,7 @@ fn spawn_window(shell: &OsStr, rows: u16, columns: u16) -> io::Result<PaneSet<Pa
     PaneSet::new(rows, columns, Pane::spawn(shell, rows, columns)?)
 }
 
-fn spawn_history_editor(text: &str, rows: u16, columns: u16) -> io::Result<PaneSet<Pane>> {
+fn spawn_editor_window(text: &str, rows: u16, columns: u16) -> io::Result<PaneSet<Pane>> {
     PaneSet::new(rows, columns, Pane::spawn_editor(text, rows, columns)?)
 }
 
@@ -1003,9 +1005,36 @@ fn forward(
                         let text = crate::history_view::export_text(screen);
                         let (rows, columns) =
                             windows.active().unwrap().content().layout().dimensions();
-                        match spawn_history_editor(&text, rows, columns) {
+                        match spawn_editor_window(&text, rows, columns) {
                             Ok(pane) => {
                                 windows.create("history".into(), pane)?;
+                            }
+                            Err(_) => {
+                                if to_terminal.is_empty() {
+                                    to_terminal.push_back(7);
+                                }
+                            }
+                        }
+                    }
+                    WindowKey::LastCommandEditor => {
+                        let text = windows
+                            .active()
+                            .unwrap()
+                            .content()
+                            .active()
+                            .last_command_output()
+                            .map(str::to_owned);
+                        if windows.iter().len() == MAX_WINDOWS || text.is_none() {
+                            if to_terminal.is_empty() {
+                                to_terminal.push_back(7);
+                            }
+                            continue;
+                        }
+                        let (rows, columns) =
+                            windows.active().unwrap().content().layout().dimensions();
+                        match spawn_editor_window(text.as_deref().unwrap(), rows, columns) {
+                            Ok(pane) => {
+                                windows.create("output".into(), pane)?;
                             }
                             Err(_) => {
                                 if to_terminal.is_empty() {
@@ -1283,6 +1312,7 @@ fn forward(
                     match shell.read(&mut bytes[..read_limit]) {
                         Ok(0) => state.eof = true,
                         Ok(n) => {
+                            state.semantic.advance(&bytes[..n]);
                             parser.advance_with_replies(screen, &bytes[..n], &mut |reply| {
                                 if state.status.is_none() {
                                     state.to_shell.extend(reply);
@@ -1568,7 +1598,7 @@ mod window_input_tests {
     #[test]
     fn split_and_pane_focus_shortcuts_are_decoded() {
         assert_eq!(
-            decode(b"\x02%\x02\"\x02o\x02Z\x02[\x02E\x02h\x02j\x02k\x02l"),
+            decode(b"\x02%\x02\"\x02o\x02Z\x02[\x02E\x02e\x02h\x02j\x02k\x02l"),
             vec![
                 WindowKey::Split(SplitAxis::Columns),
                 WindowKey::Split(SplitAxis::Rows),
@@ -1576,6 +1606,7 @@ mod window_input_tests {
                 WindowKey::ToggleZoom,
                 WindowKey::History,
                 WindowKey::HistoryEditor,
+                WindowKey::LastCommandEditor,
                 WindowKey::FocusPane(Direction::Left),
                 WindowKey::FocusPane(Direction::Down),
                 WindowKey::FocusPane(Direction::Up),

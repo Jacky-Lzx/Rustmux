@@ -29,9 +29,12 @@ impl ClosedPane {
             let mut bytes = [0; MAX_REPLY_DRAIN_BYTES];
             match shell.read(&mut bytes[..limit]) {
                 Ok(0) => return Ok(false),
-                Ok(count) => parser.advance_with_replies(screen, &bytes[..count], &mut |reply| {
-                    state.to_shell.extend(reply)
-                }),
+                Ok(count) => {
+                    state.semantic.advance(&bytes[..count]);
+                    parser.advance_with_replies(screen, &bytes[..count], &mut |reply| {
+                        state.to_shell.extend(reply)
+                    })
+                }
                 Err(error)
                     if matches!(
                         error.kind(),

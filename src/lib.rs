@@ -13,6 +13,7 @@ pub mod pty;
 pub mod render;
 pub mod screen;
 mod scrollback;
+mod semantic;
 pub mod style;
 pub mod terminal;
 
