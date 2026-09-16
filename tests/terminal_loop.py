@@ -1,5 +1,6 @@
 """Run the real binary inside an outer PTY and inspect the outer termios."""
 import errno
+import base64
 import fcntl
 import json
 import os
@@ -1435,9 +1436,16 @@ try:
         assert b"\x1b[?1000h" in s.last_frame
         assert b"\x1b[?1006h" in s.last_frame
         assert any(b"HISTORY_LEFT" in row for row in s.last_rows)
-        s.send(b"y")
-        s.read(0.1)
-        assert b"\x1b]52;c;" in s.output
+        s.send(b"yyy")
+        deadline = time.monotonic() + 3
+        copies = []
+        while len(copies) < 3:
+            s.read()
+            copies = re.findall(rb"\x1b\]52;c;([A-Za-z0-9+/=]*)\x07", s.output)
+            assert time.monotonic() < deadline, bytes(s.output[-1000:])
+        decoded = [base64.b64decode(payload, validate=True) for payload in copies]
+        assert len(decoded) == 3 and all(text == decoded[0] for text in decoded)
+        assert b"HIST_00" in decoded[0] and b"HISTORY_LEFT" not in decoded[0]
         frozen = list(s.last_rows)
         with open(trigger, "w") as file:
             file.write("go")

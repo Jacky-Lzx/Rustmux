@@ -816,6 +816,11 @@ fn forward(
         // old child; following bytes target the newly selected one.
         while close_requested.is_none() && !input.is_empty() {
             if let Some(view) = &mut history {
+                // Finish any pending frame or OSC before accepting more history
+                // input. Repeated copy keys cannot grow the output queue unbounded.
+                if !to_terminal.is_empty() {
+                    break;
+                }
                 let exited = view.feed(input.pop_front().unwrap());
                 let copy = view.take_copy();
                 if exited {

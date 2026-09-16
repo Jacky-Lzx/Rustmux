@@ -135,6 +135,18 @@ normal terminal cleanup. Previously queued output frames always finish first.
 
 ## Current limits
 
+`y` copies only the active pane's visible snapshot rows, separated by newlines
+(including soft-wrapped rows). Explicit trailing spaces are preserved; unused
+padding and clipped wide glyphs are omitted. Styling, the bar and other panes
+are not copied. The operation stays in history mode.
+
+Copy text is limited to 32 KiB of UTF-8 before Base64 encoding. An oversized
+view displays `Copy too large` and sends no clipboard request, rather than
+silently copying a prefix. Ordinary navigation dismisses this message. Pending
+terminal output is drained before more history input is processed, so repeated
+copy keys cannot accumulate an unbounded output queue. Terminal clipboard
+acceptance is not acknowledged by this operation.
+
 Rows retain their original widths: shorter rows are padded and longer rows are
 clipped to the pane width, with clipped wide characters replaced by blank cells.
 There is no snapshot text reflow, text selection or disk persistence yet. Copying

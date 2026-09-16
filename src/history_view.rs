@@ -4,6 +4,8 @@ use base64::Engine;
 use std::io;
 
 const MAX_HISTORY_ESCAPE_BYTES: usize = 64;
+// Encoded OSC 52 output stays below the terminal's 64 KiB input/IO budget.
+const MAX_COPY_TEXT_BYTES: usize = 32 * 1024;
 mod search;
 use search::{Direction, Hit, QueryHistory, QueryInput};
 
@@ -27,6 +29,7 @@ pub(crate) struct HistoryView {
     hits: Vec<Hit>,
     selected: Option<usize>,
     copy_pending: Option<Vec<u8>>,
+    copy_too_large: bool,
 }
 
 impl HistoryView {
@@ -48,6 +51,7 @@ impl HistoryView {
             hits: Vec::new(),
             selected: None,
             copy_pending: None,
+            copy_too_large: false,
         })
     }
 
@@ -67,6 +71,9 @@ impl HistoryView {
     pub fn label(&self, columns: usize) -> String {
         if let Some(editor) = &self.editor {
             return editor.label(columns);
+        }
+        if self.copy_too_large {
+            return "Copy too large (32 KiB limit) · q:exit".to_owned();
         }
         let marker = self.direction.marker();
         let search = if self.query.is_empty() {
@@ -195,10 +202,14 @@ impl HistoryView {
             }
             return false;
         }
+        self.copy_too_large = false;
         match byte {
             b'/' => self.editor = Some(QueryInput::new(Direction::Forward)),
             b'?' => self.editor = Some(QueryInput::new(Direction::Backward)),
-            b'y' => self.copy_pending = Some(self.copy_sequence()),
+            b'y' => {
+                self.copy_pending = self.copy_sequence();
+                self.copy_too_large = self.copy_pending.is_none();
+            }
             b'n' => self.next(false),
             b'N' => self.next(true),
             b'q' | 3 => return true,
@@ -213,11 +224,17 @@ impl HistoryView {
         false
     }
 
-    fn copy_sequence(&self) -> Vec<u8> {
+    fn copy_sequence(&self) -> Option<Vec<u8>> {
         let (rows, columns) = self.source.dimensions();
         let history = self.source.history_len();
         let mut text = String::new();
         for row in 0..rows {
+            if row > 0 {
+                if text.len() == MAX_COPY_TEXT_BYTES {
+                    return None;
+                }
+                text.push('\n');
+            }
             let index = history - self.offset + row;
             let (cells, used) = if index < history {
                 (
@@ -231,27 +248,27 @@ impl HistoryView {
                     self.source.row_used_columns(screen_row).unwrap(),
                 )
             };
-            let mut line = String::new();
-            for cell in cells.iter().take(used.min(columns)) {
+            for (column, cell) in cells.iter().take(used.min(columns)).enumerate() {
                 if cell.width == 0 {
                     continue;
                 }
-                line.push(cell.character);
-                line.extend(cell.combining.iter());
+                // Rendering replaces a clipped wide glyph with blank padding.
+                if cell.width == 2 && column + 1 == columns {
+                    continue;
+                }
+                for character in std::iter::once(&cell.character).chain(&cell.combining) {
+                    if text.len() + character.len_utf8() > MAX_COPY_TEXT_BYTES {
+                        return None;
+                    }
+                    text.push(*character);
+                }
             }
-            while line.ends_with(' ') {
-                line.pop();
-            }
-            if row > 0 {
-                text.push('\n');
-            }
-            text.push_str(&line);
         }
         let encoded = base64(&text);
         let mut sequence = b"\x1b]52;c;".to_vec();
         sequence.extend(encoded);
         sequence.push(7);
-        sequence
+        Some(sequence)
     }
 
     fn wheel(&mut self) {
@@ -319,6 +336,7 @@ impl HistoryView {
     }
 
     fn up(&mut self, amount: usize) {
+        self.copy_too_large = false;
         self.offset = self
             .offset
             .saturating_add(amount)
@@ -326,6 +344,7 @@ impl HistoryView {
     }
 
     fn down(&mut self, amount: usize) {
+        self.copy_too_large = false;
         self.offset = self.offset.saturating_sub(amount);
     }
 
@@ -427,6 +446,48 @@ mod tests {
         assert_eq!(base64("fo"), b"Zm8=");
         assert_eq!(base64("foo"), b"Zm9v");
         assert_eq!(base64("中\n"), b"5LitCg==");
+    }
+
+    #[test]
+    fn copy_preserves_explicit_spaces_and_omits_padding_and_clipped_wide_glyphs() {
+        let mut source = Screen::new(2, 8).unwrap();
+        Parser::new().advance(&mut source, "中e\u{301}  \r\nnext\r\nlast".as_bytes());
+        let mut view = HistoryView::new(&source).unwrap();
+        let expected = [
+            b"\x1b]52;c;".as_slice(),
+            &base64("中e\u{301}  \nnext"),
+            b"\x07",
+        ]
+        .concat();
+        type_bytes(&mut view, b"y");
+        assert_eq!(view.take_copy().unwrap(), expected);
+        // The frozen history row retains its old width, but the viewport clips it.
+        source.resize_display(2, 1).unwrap();
+        let mut narrow = HistoryView::new(&source).unwrap();
+        type_bytes(&mut narrow, b"y");
+        assert_eq!(narrow.take_copy().unwrap(), b"\x1b]52;c;Cm4=\x07"); // "\nn"
+        type_bytes(&mut view, b"/y\x03\x1b[200~yyy\x1b[201~");
+        assert!(view.take_copy().is_none());
+    }
+
+    #[test]
+    fn copy_rejects_oversized_views_without_emitting_partial_clipboard_data() {
+        for rows in [254, 255] {
+            let mut source = Screen::new(rows, 128).unwrap();
+            let line = format!("{}\r\n", "x".repeat(128));
+            Parser::new().advance(&mut source, line.repeat(rows + 1).as_bytes());
+            let mut view = HistoryView::new(&source).unwrap();
+            type_bytes(&mut view, b"gy");
+            if rows == 254 {
+                let sequence = view.take_copy().unwrap();
+                assert!(sequence.len() < 64 * 1024);
+            } else {
+                assert!(view.take_copy().is_none());
+                assert!(view.label(80).contains("Copy too large"));
+                type_bytes(&mut view, b"j");
+                assert!(!view.label(80).contains("Copy too large"));
+            }
+        }
     }
 
     #[test]
