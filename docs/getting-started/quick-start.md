@@ -60,6 +60,8 @@ rows moved off the top. Growing restores the newest retained history above the
 current content. Width changes reflow primary text and retained history;
 alternate-screen applications retain the clipping policy. See
 [Browsing History](../reference/history-view.md).
+Ctrl-B `E` opens the active pane's retained history and meaningful visible text
+in `$VISUAL`, `$EDITOR` or `vi` in a temporary `history` window.
 
 Only the documented terminal-control subset is supported. Full-screen editors,
 terminal queries and extended keyboard/mouse modes are not yet fully supported;

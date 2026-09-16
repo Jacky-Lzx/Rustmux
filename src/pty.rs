@@ -30,6 +30,24 @@ impl PtyShell {
     /// openpty does not atomically set CLOEXEC, so concurrent unrelated process spawning could
     /// inherit its original descriptors before they are replaced with close-on-exec copies.
     pub fn spawn(shell: impl AsRef<OsStr>, rows: u16, columns: u16) -> io::Result<Self> {
+        let mut command = Command::new(shell);
+        command.arg("-i");
+        Self::spawn_command(command, rows, columns)
+    }
+
+    /// Start the configured visual editor on one snapshot file. A POSIX shell expands the
+    /// conventional editor variables so values such as `nvim -R` retain their arguments.
+    pub(crate) fn spawn_editor(path: &OsStr, rows: u16, columns: u16) -> io::Result<Self> {
+        let mut command = Command::new("/bin/sh");
+        command
+            .arg("-c")
+            .arg("exec ${VISUAL:-${EDITOR:-vi}} \"$1\"")
+            .arg("rustmux-history")
+            .arg(path);
+        Self::spawn_command(command, rows, columns)
+    }
+
+    fn spawn_command(mut command: Command, rows: u16, columns: u16) -> io::Result<Self> {
         if rows == 0 || columns == 0 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -47,9 +65,7 @@ impl PtyShell {
         // CLOEXEC prevents master/slave copies surviving a successful exec.
         let master = private_fd(pair.master)?;
         let slave = private_fd(pair.slave)?;
-        let mut command = Command::new(shell);
         command
-            .arg("-i")
             .stdin(Stdio::from(slave.try_clone()?))
             .stdout(Stdio::from(slave.try_clone()?))
             .stderr(Stdio::from(slave));

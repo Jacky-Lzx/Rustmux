@@ -2,7 +2,9 @@
 
 use crate::{parser::Parser, pty::PtyShell, screen::Screen};
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
+use std::io::Write;
 use std::{collections::VecDeque, ffi::OsStr, io, process::ExitStatus, time::Instant};
+use tempfile::{Builder, NamedTempFile};
 
 pub(crate) const INPUT_LIMIT: usize = 64 * 1024;
 
@@ -18,6 +20,21 @@ pub struct Pane {
     parser: Parser,
     screen: Screen,
     io: PaneIo,
+    _temporary_file: Option<TemporaryFile>,
+}
+
+#[derive(Debug)]
+struct TemporaryFile(NamedTempFile);
+
+impl TemporaryFile {
+    fn history(text: &str) -> io::Result<Self> {
+        let mut file = Builder::new()
+            .prefix("rustmux-history-")
+            .suffix(".txt")
+            .tempfile()?;
+        file.write_all(text.as_bytes())?;
+        Ok(Self(file))
+    }
 }
 
 /// Prepared screen storage with exclusive access to its originating pane.
@@ -118,6 +135,30 @@ impl Pane {
             parser: Parser::new(),
             screen,
             io: PaneIo::default(),
+            _temporary_file: None,
+        })
+    }
+
+    /// Start an editor in its own pane with a private, automatically removed snapshot file.
+    pub(crate) fn spawn_editor(text: &str, rows: u16, columns: u16) -> io::Result<Self> {
+        if usize::from(rows) * usize::from(columns) > MAX_CELLS {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "pane exceeds cell limit",
+            ));
+        }
+        let screen = Screen::new(usize::from(rows), usize::from(columns))?;
+        let temporary_file = TemporaryFile::history(text)?;
+        let shell = PtyShell::spawn_editor(temporary_file.0.path().as_os_str(), rows, columns)?;
+        let master = shell.master_fd().expect("new PTY is open");
+        let flags = OFlag::from_bits_truncate(fcntl(master, FcntlArg::F_GETFL)?);
+        fcntl(master, FcntlArg::F_SETFL(flags | OFlag::O_NONBLOCK))?;
+        Ok(Self {
+            shell,
+            parser: Parser::new(),
+            screen,
+            io: PaneIo::default(),
+            _temporary_file: Some(temporary_file),
         })
     }
 

@@ -40,6 +40,48 @@ fn ordered(first: (usize, usize), second: (usize, usize)) -> ((usize, usize), (u
     }
 }
 
+/// Flatten retained primary history and its meaningful visible tail into logical text.
+/// Automatic wraps are joined; hard row boundaries become newlines. Unused blank rows below
+/// the last visible text are omitted, while explicit spaces within a row are preserved.
+pub(crate) fn export_text(source: &Screen) -> String {
+    let history = source.history_len();
+    let visible = (0..source.dimensions().0)
+        .rfind(|&row| source.row_used_columns(row).unwrap() != 0)
+        .map_or(0, |row| row + 1);
+    let total = history + visible;
+    let mut text = String::new();
+    for index in 0..total {
+        let (cells, used, continued) = if index < history {
+            (
+                source.history_row(index).unwrap(),
+                source.history_row_used_columns(index).unwrap(),
+                source.history_row_continued(index).unwrap(),
+            )
+        } else {
+            let row = index - history;
+            (
+                source.row(row).unwrap(),
+                source.row_used_columns(row).unwrap(),
+                source.row_continued(row).unwrap(),
+            )
+        };
+        if index != 0 && !continued {
+            text.push('\n');
+        }
+        for cell in cells.iter().take(used) {
+            if cell.width == 0 {
+                continue;
+            }
+            text.push(cell.character);
+            text.extend(&cell.combining);
+        }
+    }
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text
+}
+
 pub(crate) struct HistoryView {
     source: Screen,
     offset: usize,
@@ -764,6 +806,13 @@ mod tests {
             cursor: (0, 2),
         });
         assert_eq!(view.copy_selection().unwrap(), osc52("cdEF\nha").unwrap());
+    }
+
+    #[test]
+    fn editor_export_joins_soft_wraps_and_omits_unused_screen_tail() {
+        let mut source = Screen::new(4, 4).unwrap();
+        Parser::new().advance(&mut source, b"abcdEF\r\nhard\r\nlast");
+        assert_eq!(export_text(&source), "abcdEF\nhard\nlast\n");
     }
 
     #[test]

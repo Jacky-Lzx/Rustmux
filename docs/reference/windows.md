@@ -115,7 +115,9 @@ paths. These states now drive multi-window polling.
 | Ctrl-B, then Ctrl-B | Send one literal Ctrl-B to the active child |
 | Ctrl-B, then % / " | Split the active pane left/right or top/bottom |
 | Ctrl-B, then [ | Browse current-pane history |
-| Ctrl-B, then z | Toggle active-pane zoom |
+| Ctrl-B, then E | Open current-pane history and visible text in `$VISUAL` or `$EDITOR` |
+| Ctrl-B, then Z | Toggle active-pane zoom |
+| Ctrl-B, then z | Restore the most recently closed pane |
 | Ctrl-B, then o | Select the next pane, wrapping |
 | Ctrl-B, then h / j / k / l | Select the pane left / down / up / right |
 | `exit` in the shell | Close that pane after draining its final output |
@@ -134,6 +136,14 @@ below. Bracketed paste markers and
 payload are forwarded unchanged, including Ctrl-B combinations inside the paste.
 Unbracketed pasted text is indistinguishable from typing and follows the same
 shortcut rules. Key bindings are fixed for this initial integration.
+
+Ctrl-B, then `E` writes a plain-text snapshot of the active pane's retained
+primary-screen history and meaningful visible rows to a private temporary file.
+Soft-wrapped rows are joined and hard row boundaries remain newlines. Rustmux
+opens the file in a new `history` window using `$VISUAL`, then `$EDITOR`, then
+`vi`; closing the editor returns to the original window and removes the file.
+The source pane keeps running. Alternate-screen panes, the 16-window limit and
+editor startup failures leave existing windows unchanged and ring the bell.
 
 There are at most 16 windows. New shells use the originally selected executable
 and Rustmux's startup working directory; active-shell cwd inheritance is not yet

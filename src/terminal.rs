@@ -312,6 +312,7 @@ enum WindowKey {
     ToggleZoom,
     UndoClose,
     History,
+    HistoryEditor,
     FocusPane(Direction),
     ResizePane(Direction),
     SwapPaneNext,
@@ -465,6 +466,7 @@ impl WindowInput {
                 b'Z' => output.push(WindowKey::ToggleZoom),
                 b'z' => output.push(WindowKey::UndoClose),
                 b'[' => output.push(WindowKey::History),
+                b'E' => output.push(WindowKey::HistoryEditor),
                 8 => output.push(WindowKey::ResizePane(Direction::Left)),
                 10 => output.push(WindowKey::ResizePane(Direction::Down)),
                 11 => output.push(WindowKey::ResizePane(Direction::Up)),
@@ -492,6 +494,10 @@ impl WindowInput {
 
 fn spawn_window(shell: &OsStr, rows: u16, columns: u16) -> io::Result<PaneSet<Pane>> {
     PaneSet::new(rows, columns, Pane::spawn(shell, rows, columns)?)
+}
+
+fn spawn_history_editor(text: &str, rows: u16, columns: u16) -> io::Result<PaneSet<Pane>> {
+    PaneSet::new(rows, columns, Pane::spawn_editor(text, rows, columns)?)
 }
 
 fn forward(
@@ -984,6 +990,28 @@ fn forward(
                         if history.is_some() {
                             renderer.invalidate();
                             force_redraw = true;
+                        }
+                    }
+                    WindowKey::HistoryEditor => {
+                        let screen = windows.active().unwrap().content().active().screen();
+                        if windows.iter().len() == MAX_WINDOWS || screen.is_alternate() {
+                            if to_terminal.is_empty() {
+                                to_terminal.push_back(7);
+                            }
+                            continue;
+                        }
+                        let text = crate::history_view::export_text(screen);
+                        let (rows, columns) =
+                            windows.active().unwrap().content().layout().dimensions();
+                        match spawn_history_editor(&text, rows, columns) {
+                            Ok(pane) => {
+                                windows.create("history".into(), pane)?;
+                            }
+                            Err(_) => {
+                                if to_terminal.is_empty() {
+                                    to_terminal.push_back(7);
+                                }
+                            }
                         }
                     }
                     WindowKey::UndoClose => {
@@ -1540,13 +1568,14 @@ mod window_input_tests {
     #[test]
     fn split_and_pane_focus_shortcuts_are_decoded() {
         assert_eq!(
-            decode(b"\x02%\x02\"\x02o\x02Z\x02[\x02h\x02j\x02k\x02l"),
+            decode(b"\x02%\x02\"\x02o\x02Z\x02[\x02E\x02h\x02j\x02k\x02l"),
             vec![
                 WindowKey::Split(SplitAxis::Columns),
                 WindowKey::Split(SplitAxis::Rows),
                 WindowKey::NextPane,
                 WindowKey::ToggleZoom,
                 WindowKey::History,
+                WindowKey::HistoryEditor,
                 WindowKey::FocusPane(Direction::Left),
                 WindowKey::FocusPane(Direction::Down),
                 WindowKey::FocusPane(Direction::Up),

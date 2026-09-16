@@ -39,11 +39,13 @@ if sys.argv[1] == "--supervisor":
 BINARY = sys.argv[1]
 
 class Session:
-    def __init__(self, shell="/bin/sh"):
+    def __init__(self, shell="/bin/sh", extra_env=None):
         self.master, self.slave = os.openpty()
         fcntl.ioctl(self.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
         self.original = termios.tcgetattr(self.slave)
         env = dict(os.environ, RUSTMUX_SHELL=shell, PS1="RUSTMUX_READY> ", ENV="", BASH_ENV="")
+        if extra_env:
+            env.update(extra_env)
         def child_setup():
             os.setsid()
             fcntl.ioctl(0, termios.TIOCSCTTY, 0)
@@ -1898,6 +1900,45 @@ with tempfile.TemporaryDirectory() as directory:
         s.send(b"\x02&")
         s.expect(b"Close window? Type yes:")
         s.send(b"yes\r")
+        s.finish(0)
+    finally:
+        s.close()
+
+# Export retained and visible primary text to an editor window without replacing the source shell.
+with tempfile.TemporaryDirectory(prefix="rustmux-history-editor-") as directory:
+    capture = os.path.join(directory, "capture.txt")
+    path_capture = os.path.join(directory, "path.txt")
+    editor = os.path.join(directory, "editor.sh")
+    with open(editor, "w") as script:
+        script.write("#!/bin/sh\ncp \"$1\" \"$CAPTURE\"\nprintf '%s' \"$1\" > \"$PATH_CAPTURE\"\n")
+    os.chmod(editor, 0o700)
+    s = Session(extra_env={
+        "VISUAL": "",
+        "EDITOR": editor,
+        "CAPTURE": capture,
+        "PATH_CAPTURE": path_capture,
+    })
+    try:
+        s.expect(b"RUSTMUX_READY>")
+        s.send(b"stty -echo; KEEP=alive; i=0; while [ $i -lt 30 ]; do printf 'EDIT_%02d\\n' $i; i=$((i+1)); done\n")
+        s.expect(b"EDIT_29")
+        s.send(b"\x02E")
+        end = time.monotonic() + 8
+        while not (os.path.exists(capture) and os.path.exists(path_capture)):
+            s.read()
+            assert time.monotonic() < end, bytes(s.output[-1000:])
+        with open(capture, "rb") as file:
+            exported = file.read()
+        assert b"EDIT_00\n" in exported and b"EDIT_29\n" in exported, exported
+        with open(path_capture) as file:
+            snapshot_path = file.read()
+        end = time.monotonic() + 3
+        while os.path.exists(snapshot_path):
+            s.read()
+            assert time.monotonic() < end, snapshot_path
+        s.send(b"printf 'ORIGINAL_%s\\n' \"$KEEP\"\n")
+        s.expect(b"ORIGINAL_alive")
+        s.send(b"exit 0\n")
         s.finish(0)
     finally:
         s.close()
