@@ -1,7 +1,7 @@
 //! Multi-window PTY polling, prefix input and model-based terminal rendering.
 
 use std::collections::VecDeque;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs::{File, OpenOptions};
 use std::io::{self, IsTerminal, Read, Write};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
@@ -88,27 +88,13 @@ pub fn run(shell_path: &OsStr) -> io::Result<u8> {
     let size = window_size(&file)?;
     // Start the shell before changing the outer terminal, so exec failures
     // cannot leave it raw. Signal registration below creates no worker threads.
-    check_size(size.ws_row, size.ws_col)?;
-    let mut windows = Windows::default();
-    windows.create(
-        "shell".into(),
-        spawn_window(shell_path, None, pane_rows(size.ws_row), size.ws_col)?,
-    )?;
+    let mut session = TerminalSession::new(shell_path, size.ws_row, size.ws_col)?;
     let signals = Signals::install()?;
     let mut terminal = LocalFrontend::enter(file, signals.resize.clone())?;
-    let mut closed = None;
-    let result = forward(
-        &mut terminal,
-        &mut windows,
-        &signals,
-        shell_path,
-        size.ws_row,
-        &mut closed,
-    );
+    let result = session.attach(&mut terminal, &signals);
     // Restore the user's terminal before potentially blocking child cleanup.
     let restored = terminal.restore();
-    drop(closed);
-    drop(windows);
+    drop(session);
     match result {
         Err(error) => Err(error),
         Ok(ForwardExit::Process(code)) => restored.map(|()| code),
@@ -119,6 +105,46 @@ pub fn run(shell_path: &OsStr) -> io::Result<u8> {
                 "terminal input ended",
             ))
         }
+    }
+}
+
+/// State that must survive one frontend disconnect and a later attachment.
+struct TerminalSession {
+    shell_path: OsString,
+    windows: Windows<PaneSet<Pane>>,
+    outer_rows: u16,
+    closed: Option<crate::closed_pane::ClosedPane>,
+}
+
+impl TerminalSession {
+    fn new(shell_path: &OsStr, rows: u16, columns: u16) -> io::Result<Self> {
+        check_size(rows, columns)?;
+        let mut windows = Windows::default();
+        windows.create(
+            "shell".into(),
+            spawn_window(shell_path, None, pane_rows(rows), columns)?,
+        )?;
+        Ok(Self {
+            shell_path: shell_path.to_owned(),
+            windows,
+            outer_rows: rows,
+            closed: None,
+        })
+    }
+
+    fn attach(
+        &mut self,
+        frontend: &mut impl Frontend,
+        signals: &Signals,
+    ) -> io::Result<ForwardExit> {
+        forward(
+            frontend,
+            &mut self.windows,
+            signals,
+            &self.shell_path,
+            &mut self.outer_rows,
+            &mut self.closed,
+        )
     }
 }
 
@@ -629,7 +655,7 @@ fn forward(
     windows: &mut Windows<PaneSet<Pane>>,
     signals: &Signals,
     shell_path: &OsStr,
-    mut outer_rows: u16,
+    outer_rows: &mut u16,
     closed: &mut Option<crate::closed_pane::ClosedPane>,
 ) -> io::Result<ForwardExit> {
     let mut renderer = Renderer::default();
@@ -736,7 +762,7 @@ fn forward(
         let active = windows.active().expect("at least one window").id();
         let resize = if let Some(size) = frontend.take_resize()? {
             check_size(size.ws_row, size.ws_col)?;
-            outer_rows = size.ws_row;
+            *outer_rows = size.ws_row;
             if history.take().is_some() {
                 input.clear();
                 keys = WindowInput::default();
@@ -848,9 +874,9 @@ fn forward(
                         })
                         .collect();
                     let content = pane_view::compose(panes.layout(), &screens)?;
-                    let mut view = compose(&content, outer_rows, &names, active_index)?;
+                    let mut view = compose(&content, *outer_rows, &names, active_index)?;
                     if let Some(history) = &history
-                        && outer_rows > 1
+                        && *outer_rows > 1
                     {
                         crate::chrome::prepare_row(&mut view, crate::chrome::bar_style(true));
                         for character in crate::chrome::clipped(
@@ -1052,7 +1078,7 @@ fn forward(
                 .find(|(id, _)| *id == set.layout().active())
                 .unwrap()
                 .1;
-            keys.pane_top = usize::from(outer_rows > 1) + usize::from(rect.row);
+            keys.pane_top = usize::from(*outer_rows > 1) + usize::from(rect.row);
             keys.pane_left = usize::from(rect.column);
             keys.pane_width = usize::from(rect.columns);
             keys.mouse_enabled =
@@ -1532,24 +1558,46 @@ fn send(writer: &mut impl Write, pending: &mut VecDeque<u8>) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::{handshake, protocol::ClientMessage};
+    use crate::session::{
+        handshake::{self, ClientPeer},
+        protocol::ClientMessage,
+    };
     use std::os::unix::net::UnixStream;
     use std::thread;
 
-    #[test]
-    fn socket_frontend_defers_detach_until_prior_input_is_consumed() {
+    fn socket_frontend(rows: u16, columns: u16) -> (ClientPeer, ServerFrontend) {
         let (client_stream, server_stream) = UnixStream::pair().unwrap();
         let server = thread::spawn(move || handshake::server(server_stream).unwrap());
-        let mut client = handshake::client(client_stream, 24, 80).unwrap();
-        let mut frontend = ServerFrontend::new(server.join().unwrap());
-        let bytes: Vec<_> = [
-            ClientMessage::Input(b"ordered".to_vec()),
-            ClientMessage::Detach,
-        ]
-        .iter()
-        .flat_map(|message| message.encode().unwrap())
-        .collect();
+        let client = handshake::client(client_stream, rows, columns).unwrap();
+        (client, ServerFrontend::new(server.join().unwrap()))
+    }
+
+    fn send_client_messages(client: &mut ClientPeer, messages: &[ClientMessage]) {
+        let bytes: Vec<_> = messages
+            .iter()
+            .flat_map(|message| message.encode().unwrap())
+            .collect();
         client.stream_mut().write_all(&bytes).unwrap();
+    }
+
+    fn test_signals() -> Signals {
+        Signals {
+            pending: Arc::new(AtomicUsize::new(0)),
+            resize: Arc::new(AtomicBool::new(false)),
+            ids: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn socket_frontend_defers_detach_until_prior_input_is_consumed() {
+        let (mut client, mut frontend) = socket_frontend(24, 80);
+        send_client_messages(
+            &mut client,
+            &[
+                ClientMessage::Input(b"ordered".to_vec()),
+                ClientMessage::Detach,
+            ],
+        );
 
         let mut input = VecDeque::new();
         let state = Frontend::receive(&mut frontend, &mut input).unwrap();
@@ -1558,6 +1606,38 @@ mod tests {
         assert_eq!(frontend_exit(state, &input), None);
         input.clear();
         assert_eq!(frontend_exit(state, &input), Some(ForwardExit::Detached));
+    }
+
+    #[test]
+    fn terminal_session_preserves_shell_across_socket_attachments() {
+        let mut session = TerminalSession::new(OsStr::new("/bin/sh"), 24, 80).unwrap();
+        let signals = test_signals();
+        let (mut first_client, mut first_frontend) = socket_frontend(24, 80);
+        send_client_messages(
+            &mut first_client,
+            &[
+                ClientMessage::Input(b"RUSTMUX_ATTACH_TEST=kept\n".to_vec()),
+                ClientMessage::Detach,
+            ],
+        );
+        assert_eq!(
+            session.attach(&mut first_frontend, &signals).unwrap(),
+            ForwardExit::Detached
+        );
+        assert_eq!(session.windows.iter().len(), 1);
+
+        let (mut second_client, mut second_frontend) = socket_frontend(30, 90);
+        send_client_messages(
+            &mut second_client,
+            &[ClientMessage::Input(
+                b"test \"$RUSTMUX_ATTACH_TEST\" = kept; exit $?\n".to_vec(),
+            )],
+        );
+        assert_eq!(
+            session.attach(&mut second_frontend, &signals).unwrap(),
+            ForwardExit::Process(0)
+        );
+        assert_eq!(session.outer_rows, 30);
     }
 
     #[test]
