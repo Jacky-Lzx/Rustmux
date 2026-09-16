@@ -1424,7 +1424,8 @@ try:
     with tempfile.TemporaryDirectory(prefix="rustmux-history-") as directory:
         trigger = os.path.join(directory, "continue")
         command = (
-            "stty -echo; i=0; while [ $i -lt 45 ]; do printf 'HIST_%02d\\n' $i; i=$((i+1)); done; "
+            "stty -echo; printf 'SELECT_%s\\n' TARGET; i=0; "
+            "while [ $i -lt 45 ]; do printf 'HIST_%02d\\n' $i; i=$((i+1)); done; "
             "(while [ ! -f " + shlex.quote(trigger) + " ]; do sleep 0.05; done; "
             "printf '\\nLATE_HISTORY_OUTPUT\\n') &\n"
         )
@@ -1446,6 +1447,18 @@ try:
         decoded = [base64.b64decode(payload, validate=True) for payload in copies]
         assert len(decoded) == 3 and all(text == decoded[0] for text in decoded)
         assert b"HIST_00" in decoded[0] and b"HISTORY_LEFT" not in decoded[0]
+        s.output.clear()
+        s.send(b"/SELECT_TARGET\r")
+        s.expect(b"1/1 /SELECT_TARGET")
+        s.output.clear()
+        s.send(b"vlllly")
+        deadline = time.monotonic() + 3
+        while not (selected := re.search(rb"\x1b\]52;c;([A-Za-z0-9+/=]*)\x07", s.output)):
+            s.read()
+            assert time.monotonic() < deadline, bytes(s.output[-1000:])
+        selected_text = base64.b64decode(selected.group(1), validate=True)
+        assert selected_text == b"SELEC", (selected_text, s.last_rows, bytes(s.output[-500:]))
+        assert b"1/1 /SELECT_TARGET" in s.last_rows[0]
         frozen = list(s.last_rows)
         with open(trigger, "w") as file:
             file.write("go")

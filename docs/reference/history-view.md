@@ -19,6 +19,7 @@ coordinates; exiting restores the live application's mouse modes.
 | `/` / `?` | Search toward newer / older text |
 | `n` / `N` | Repeat in the submitted search direction / opposite direction |
 | `y` | Copy the visible snapshot through OSC 52 |
+| `v` | Start or cancel keyboard text selection |
 | `q` / Ctrl-C | Exit to the live screen |
 
 Wheel events over the bar, separators or another pane are ignored. Clicking does
@@ -118,6 +119,27 @@ a text/cell index proportional to snapshot content and retains matching cell
 ranges until the next query or exit. New shell output is not searched until a
 new history snapshot is opened.
 
+## Keyboard text selection
+
+Press `v` to anchor a selection at the first meaningful cell in the viewport's
+top row. `h/j/k/l` or the arrow keys move its active end by one cell or row;
+horizontal movement wraps across row boundaries and skips wide-character
+placeholder cells. Ctrl-U/Ctrl-D and Page Up/Page Down move by one pane height,
+while `g`/`G` extend to the snapshot's first/last row. Movement scrolls the
+frozen viewport as needed. Wheel events and unrelated history/search commands
+are ignored until the selection is completed or cancelled.
+
+The endpoints are inclusive and either end may precede the anchor. Selected
+cells are highlighted instead of the current search result. Press `y` to copy
+the selected text through OSC 52, end selection and remain in history mode;
+press `v` again to cancel without copying. `q` or Ctrl-C exits history directly.
+After selection ends, plain `y` again copies the complete visible viewport.
+
+Selection copies complete wide glyphs and combining suffixes. It joins rows
+created by soft wrapping without a newline and inserts `\n` across explicit hard
+line boundaries. Unused padding, clipped glyphs, styles, the bar and other panes
+are omitted. The same 32 KiB all-or-nothing limit applies.
+
 ## Live processes and lifecycle
 
 Shells keep running, parsing output and answering terminal queries while the
@@ -149,7 +171,7 @@ acceptance is not acknowledged by this operation.
 
 Rows retain their original widths: shorter rows are padded and longer rows are
 clipped to the pane width, with clipped wide characters replaced by blank cells.
-There is no snapshot text reflow, text selection or disk persistence yet. Copying
+There is no snapshot text reflow, mouse-driven selection or disk persistence yet. Copying
 uses the outer terminal's OSC 52 clipboard support; terminals or multiplexers
 that disable OSC 52 will ignore it.
 This does not recover content previously discarded by resize. A one-row outer terminal has no bar, so the history indicator is hidden.
@@ -157,12 +179,12 @@ This does not recover content previously discarded by resize. A one-row outer te
 Unit tests cover snapshot independence, navigation, wide-cell clipping, paste
 isolation, logical-line and Unicode search, overlapping results, highlighting,
 Unicode cursor editing, narrow query views and bounded query recall with draft
-restoration, both search
+restoration, keyboard selection, both search
 directions and their row anchors, cancellation, result
 wraparound, wheel bounds, malformed mouse reports and modal
 input isolation. The nested-PTY suite checks browsing inside a split, the other pane's
 continued visibility, new background output while frozen, snapshot-bottom versus
-live output, OSC 52 copying, forward/backward search submission/result cycling/no-match/cancellation,
+live output, viewport and keyboard-selection OSC 52 copying, forward/backward search submission/result cycling/no-match/cancellation,
 query recall, middle editing, cursor visibility, query paste and draft restoration,
 navigation/paste
 isolation, wheel routing within a split, mouse-mode restoration and return to live

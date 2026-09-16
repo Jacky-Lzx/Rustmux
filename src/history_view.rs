@@ -1,5 +1,6 @@
 //! Read-only navigation over a frozen primary-screen snapshot.
 use crate::screen::{MouseTracking, Screen};
+use crate::style::Cell;
 use base64::Engine;
 use std::io;
 
@@ -9,10 +10,34 @@ const MAX_COPY_TEXT_BYTES: usize = 32 * 1024;
 mod search;
 use search::{Direction, Hit, QueryHistory, QueryInput};
 
+#[derive(Clone, Copy)]
+struct Selection {
+    anchor: (usize, usize),
+    cursor: (usize, usize),
+}
 fn base64(input: &str) -> Vec<u8> {
     base64::engine::general_purpose::STANDARD
         .encode(input)
         .into_bytes()
+}
+
+fn osc52(text: &str) -> Option<Vec<u8>> {
+    if text.len() > MAX_COPY_TEXT_BYTES {
+        return None;
+    }
+    let encoded = base64(text);
+    let mut sequence = b"\x1b]52;c;".to_vec();
+    sequence.extend(encoded);
+    sequence.push(7);
+    Some(sequence)
+}
+
+fn ordered(first: (usize, usize), second: (usize, usize)) -> ((usize, usize), (usize, usize)) {
+    if first <= second {
+        (first, second)
+    } else {
+        (second, first)
+    }
 }
 
 pub(crate) struct HistoryView {
@@ -30,6 +55,7 @@ pub(crate) struct HistoryView {
     selected: Option<usize>,
     copy_pending: Option<Vec<u8>>,
     copy_too_large: bool,
+    selection: Option<Selection>,
 }
 
 impl HistoryView {
@@ -52,6 +78,7 @@ impl HistoryView {
             selected: None,
             copy_pending: None,
             copy_too_large: false,
+            selection: None,
         })
     }
 
@@ -74,6 +101,16 @@ impl HistoryView {
         }
         if self.copy_too_large {
             return "Copy too large (32 KiB limit) · q:exit".to_owned();
+        }
+        if let Some(selection) = self.selection {
+            let (start, end) = ordered(selection.anchor, selection.cursor);
+            return format!(
+                "Select {}:{}–{}:{} · arrows/hjkl:extend y:copy v:cancel",
+                start.0 + 1,
+                start.1 + 1,
+                end.0 + 1,
+                end.1 + 1
+            );
         }
         let marker = self.direction.marker();
         let search = if self.query.is_empty() {
@@ -125,6 +162,8 @@ impl HistoryView {
                     b"\x1b[A" | b"\x1bOA" if !self.paste => {
                         if let Some(editor) = &mut self.editor {
                             editor.recall(&self.queries, true);
+                        } else if self.selection.is_some() {
+                            self.move_selection(0, -1);
                         } else {
                             self.up(1);
                         }
@@ -132,15 +171,31 @@ impl HistoryView {
                     b"\x1b[B" | b"\x1bOB" if !self.paste => {
                         if let Some(editor) = &mut self.editor {
                             editor.recall(&self.queries, false);
+                        } else if self.selection.is_some() {
+                            self.move_selection(0, 1);
                         } else {
                             self.down(1);
                         }
                     }
+                    b"\x1b[D" | b"\x1bOD" if !self.paste && self.selection.is_some() => {
+                        self.move_selection(-1, 0)
+                    }
+                    b"\x1b[C" | b"\x1bOC" if !self.paste && self.selection.is_some() => {
+                        self.move_selection(1, 0)
+                    }
                     b"\x1b[5~" if !self.paste && self.editor.is_none() => {
-                        self.up(self.source.dimensions().0)
+                        if self.selection.is_some() {
+                            self.move_selection(0, -(self.source.dimensions().0 as isize));
+                        } else {
+                            self.up(self.source.dimensions().0)
+                        }
                     }
                     b"\x1b[6~" if !self.paste && self.editor.is_none() => {
-                        self.down(self.source.dimensions().0)
+                        if self.selection.is_some() {
+                            self.move_selection(0, self.source.dimensions().0 as isize);
+                        } else {
+                            self.down(self.source.dimensions().0)
+                        }
                     }
                     _ if !self.paste => {
                         if let Some(editor) = &mut self.editor {
@@ -202,6 +257,30 @@ impl HistoryView {
             }
             return false;
         }
+        if self.selection.is_some() {
+            let height = self.source.dimensions().0.max(1) as isize;
+            match byte {
+                b'y' => {
+                    self.copy_pending = self.copy_selection();
+                    self.copy_too_large = self.copy_pending.is_none();
+                    self.selection = None;
+                }
+                b'v' => self.selection = None,
+                b'q' | 3 => return true,
+                b'h' => self.move_selection(-1, 0),
+                b'l' => self.move_selection(1, 0),
+                b'k' => self.move_selection(0, -1),
+                b'j' => self.move_selection(0, 1),
+                21 => self.move_selection(0, -height),
+                4 => self.move_selection(0, height),
+                b'g' => self.move_selection_to_row(0),
+                b'G' => self.move_selection_to_row(
+                    self.source.history_len() + self.source.dimensions().0 - 1,
+                ),
+                _ => {}
+            }
+            return false;
+        }
         self.copy_too_large = false;
         match byte {
             b'/' => self.editor = Some(QueryInput::new(Direction::Forward)),
@@ -210,6 +289,7 @@ impl HistoryView {
                 self.copy_pending = self.copy_sequence();
                 self.copy_too_large = self.copy_pending.is_none();
             }
+            b'v' => self.toggle_selection(),
             b'n' => self.next(false),
             b'N' => self.next(true),
             b'q' | 3 => return true,
@@ -264,15 +344,179 @@ impl HistoryView {
                 }
             }
         }
-        let encoded = base64(&text);
-        let mut sequence = b"\x1b]52;c;".to_vec();
-        sequence.extend(encoded);
-        sequence.push(7);
-        Some(sequence)
+        osc52(&text)
+    }
+
+    fn copy_selection(&self) -> Option<Vec<u8>> {
+        let selection = self.selection?;
+        let (start, end) = ordered(selection.anchor, selection.cursor);
+        let width = self.source.dimensions().1;
+        let mut text = String::new();
+        for row in start.0..=end.0 {
+            if row > start.0 && !self.row_data(row).2 {
+                if text.len() == MAX_COPY_TEXT_BYTES {
+                    return None;
+                }
+                text.push('\n');
+            }
+            let (cells, used, _) = self.row_data(row);
+            let first = if row == start.0 { start.1 } else { 0 };
+            let last = if row == end.0 {
+                end.1
+            } else {
+                width.saturating_sub(1)
+            };
+            for (column, cell) in cells
+                .iter()
+                .enumerate()
+                .take(used.min(width).min(last.saturating_add(1)))
+                .skip(first)
+            {
+                if cell.width == 0 || (cell.width == 2 && column + 1 == width) {
+                    continue;
+                }
+                for character in std::iter::once(&cell.character).chain(&cell.combining) {
+                    if text.len() + character.len_utf8() > MAX_COPY_TEXT_BYTES {
+                        return None;
+                    }
+                    text.push(*character);
+                }
+            }
+        }
+        osc52(&text)
+    }
+
+    fn row_data(&self, row: usize) -> (&[Cell], usize, bool) {
+        let history = self.source.history_len();
+        if row < history {
+            (
+                self.source.history_row(row).unwrap(),
+                self.source.history_row_used_columns(row).unwrap(),
+                self.source.history_row_continued(row).unwrap(),
+            )
+        } else {
+            let row = row - history;
+            (
+                self.source.row(row).unwrap(),
+                self.source.row_used_columns(row).unwrap(),
+                self.source.row_continued(row).unwrap(),
+            )
+        }
+    }
+
+    fn toggle_selection(&mut self) {
+        if self.selection.take().is_some() {
+            return;
+        }
+        let row = self.source.history_len() - self.offset;
+        let cursor = (row, self.first_cell(row).unwrap_or(0));
+        self.selection = Some(Selection {
+            anchor: cursor,
+            cursor,
+        });
+    }
+
+    fn move_selection(&mut self, columns: isize, rows: isize) {
+        let Some(mut selection) = self.selection else {
+            return;
+        };
+        let total_rows = self.source.history_len() + self.source.dimensions().0;
+        if rows != 0 {
+            selection.cursor.0 = selection
+                .cursor
+                .0
+                .saturating_add_signed(rows)
+                .min(total_rows.saturating_sub(1));
+            selection.cursor.1 = self.cell_at_or_before(selection.cursor.0, selection.cursor.1);
+        } else if columns < 0 {
+            selection.cursor = self.previous_cell(selection.cursor);
+        } else {
+            selection.cursor = self.next_cell(selection.cursor);
+        }
+        self.selection = Some(selection);
+        self.reveal(selection.cursor.0);
+    }
+
+    fn move_selection_to_row(&mut self, row: usize) {
+        let Some(mut selection) = self.selection else {
+            return;
+        };
+        selection.cursor = (row, self.cell_at_or_before(row, selection.cursor.1));
+        self.selection = Some(selection);
+        self.reveal(row);
+    }
+
+    fn first_cell(&self, row: usize) -> Option<usize> {
+        let (cells, used, _) = self.row_data(row);
+        cells
+            .iter()
+            .take(used.min(self.source.dimensions().1))
+            .position(|cell| cell.width != 0)
+    }
+
+    fn last_cell(&self, row: usize) -> usize {
+        let (cells, used, _) = self.row_data(row);
+        cells
+            .iter()
+            .take(used.min(self.source.dimensions().1))
+            .enumerate()
+            .rev()
+            .find(|(_, cell)| cell.width != 0)
+            .map_or(0, |(column, _)| column)
+    }
+
+    fn cell_at_or_before(&self, row: usize, column: usize) -> usize {
+        (0..=column.min(self.source.dimensions().1.saturating_sub(1)))
+            .rev()
+            .find(|&column| self.cell_is_base(row, column))
+            .unwrap_or(0)
+    }
+
+    fn previous_cell(&self, (row, column): (usize, usize)) -> (usize, usize) {
+        if let Some(column) = (0..column)
+            .rev()
+            .find(|&column| self.cell_is_base(row, column))
+        {
+            return (row, column);
+        }
+        if row == 0 {
+            (0, self.first_cell(0).unwrap_or(0))
+        } else {
+            (row - 1, self.last_cell(row - 1))
+        }
+    }
+
+    fn next_cell(&self, (row, column): (usize, usize)) -> (usize, usize) {
+        let width = self.source.dimensions().1;
+        if let Some(column) = (column + 1..width).find(|&column| self.cell_is_base(row, column)) {
+            return (row, column);
+        }
+        let last_row = self.source.history_len() + self.source.dimensions().0 - 1;
+        if row == last_row {
+            (row, self.last_cell(row))
+        } else {
+            (row + 1, self.first_cell(row + 1).unwrap_or(0))
+        }
+    }
+
+    fn cell_is_base(&self, row: usize, column: usize) -> bool {
+        let (cells, used, _) = self.row_data(row);
+        column < used.min(self.source.dimensions().1) && cells[column].width != 0
+    }
+
+    fn reveal(&mut self, row: usize) {
+        let history = self.source.history_len();
+        let height = self.source.dimensions().0;
+        let top = history - self.offset;
+        if row < top {
+            self.offset = history - row;
+        } else if row >= top + height {
+            self.offset = history.saturating_sub(row + 1 - height);
+        }
     }
 
     fn wheel(&mut self) {
-        if self.paste || self.editor.is_some() {
+        if self.paste || self.editor.is_some() || self.selection.is_some() {
             return;
         }
         let report = match self.escape.as_slice() {
@@ -376,10 +620,21 @@ impl HistoryView {
                     continue;
                 }
                 let mut cell = cell.clone();
-                if self.selected.is_some_and(|selected| {
-                    let hit = self.hits[selected];
-                    column < used && hit.start <= (index, column) && (index, column) < hit.end
-                }) {
+                let selected_by_range = self.selection.is_some_and(|selection| {
+                    let (start, end) = ordered(selection.anchor, selection.cursor);
+                    let position = if cell.width == 0 && column > 0 {
+                        (index, column - 1)
+                    } else {
+                        (index, column)
+                    };
+                    start <= position && position <= end
+                });
+                let selected_by_search = self.selection.is_none()
+                    && self.selected.is_some_and(|selected| {
+                        let hit = self.hits[selected];
+                        column < used && hit.start <= (index, column) && (index, column) < hit.end
+                    });
+                if selected_by_range || selected_by_search {
                     cell.style.inverse = !cell.style.inverse;
                 }
                 view.set_display_cell(row, column, cell);
@@ -488,6 +743,73 @@ mod tests {
                 assert!(!view.label(80).contains("Copy too large"));
             }
         }
+    }
+
+    #[test]
+    fn selection_copy_joins_soft_wraps_and_preserves_hard_line_breaks() {
+        let mut source = Screen::new(2, 4).unwrap();
+        Parser::new().advance(&mut source, b"abcdEF\r\nhard\r\nend");
+        let mut view = HistoryView::new(&source).unwrap();
+        assert!(view.row_data(1).2); // EF continues the full abcd row.
+        assert!(!view.row_data(2).2); // hard starts after an explicit CRLF.
+        view.selection = Some(Selection {
+            anchor: (0, 2),
+            cursor: (1, 1),
+        });
+        assert_eq!(view.copy_selection().unwrap(), osc52("cdEF").unwrap());
+        view.selection.as_mut().unwrap().cursor = (2, 1);
+        assert_eq!(view.copy_selection().unwrap(), osc52("cdEF\nha").unwrap());
+        view.selection = Some(Selection {
+            anchor: (2, 1),
+            cursor: (0, 2),
+        });
+        assert_eq!(view.copy_selection().unwrap(), osc52("cdEF\nha").unwrap());
+    }
+
+    #[test]
+    fn selection_navigation_scrolls_and_never_lands_on_wide_placeholders() {
+        let mut source = Screen::new(2, 4).unwrap();
+        Parser::new().advance(&mut source, "A中B\r\nnext\r\nlast".as_bytes());
+        let mut view = HistoryView::new(&source).unwrap();
+        type_bytes(&mut view, b"vll");
+        let selection = view.selection.unwrap();
+        assert_eq!(selection.anchor, (0, 0));
+        assert_eq!(selection.cursor, (0, 3)); // l skips the wide placeholder.
+        let rendered = view.render().unwrap();
+        assert!(
+            rendered.row(0).unwrap()[1..=2]
+                .iter()
+                .all(|cell| cell.style.inverse)
+        );
+        type_bytes(&mut view, b"jk");
+        assert_ne!(view.selection.unwrap().cursor.1, 2);
+        type_bytes(&mut view, b"G");
+        let last = source.history_len() + source.dimensions().0 - 1;
+        assert_eq!(view.selection.unwrap().cursor.0, last);
+        assert_eq!(view.offset, 0);
+        type_bytes(&mut view, b"g");
+        assert_eq!(view.selection.unwrap().cursor.0, 0);
+        assert_eq!(view.offset, source.history_len());
+        type_bytes(&mut view, b"v");
+        assert!(view.selection.is_none());
+    }
+
+    #[test]
+    fn selection_y_copies_and_returns_to_viewport_copy_mode() {
+        let mut source = Screen::new(2, 4).unwrap();
+        Parser::new().advance(&mut source, b"abcd\r\nnext\r\nlast");
+        let mut view = HistoryView::new(&source).unwrap();
+        type_bytes(&mut view, b"vly");
+        assert_eq!(view.take_copy().unwrap(), osc52("ab").unwrap());
+        assert!(view.selection.is_none());
+        type_bytes(&mut view, b"y");
+        assert!(view.take_copy().is_some());
+        type_bytes(&mut view, b"vy");
+        assert_eq!(view.take_copy().unwrap(), osc52("a").unwrap());
+        type_bytes(&mut view, b"v/");
+        assert!(view.editor.is_none());
+        assert!(view.selection.is_some());
+        assert!(view.feed(b'q'));
     }
 
     #[test]
