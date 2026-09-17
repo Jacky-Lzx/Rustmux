@@ -22,7 +22,7 @@ use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGWINCH};
 use crate::pane::{INPUT_LIMIT as LIMIT, MAX_CELLS, Pane};
 use crate::{
     chrome::{compose, pane_rows},
-    layout::{Direction, SplitAxis},
+    layout::{Direction, PaneId, Rect, SplitAxis},
     pane_set::PaneSet,
     pane_view,
     prompt::{EditResult, PromptKind, WindowPrompt},
@@ -513,6 +513,7 @@ enum WindowKey {
     Previous,
     Rename,
     Select(usize),
+    SelectPane(PaneId),
     Last,
     Close,
     ClosePane,
@@ -554,7 +555,10 @@ struct WindowInput {
     mouse_enabled: bool,
     bar_enabled: bool,
     bar_press: bool,
+    pane_press: bool,
     window_hitboxes: Vec<(usize, usize, usize)>,
+    active_pane: Option<PaneId>,
+    pane_hitboxes: Vec<(PaneId, Rect)>,
 }
 
 impl WindowInput {
@@ -620,6 +624,10 @@ impl WindowInput {
                 self.bar_press = false;
                 return;
             }
+            if release && self.pane_press {
+                self.pane_press = false;
+                return;
+            }
             if self.bar_enabled && row == 1 && !release {
                 if let Some(action) = bar_scroll(&bytes) {
                     output.push(action);
@@ -633,6 +641,22 @@ impl WindowInput {
                         output.push(WindowKey::Select(*index));
                     }
                 }
+                return;
+            }
+            if !release
+                && left_mouse_press(&bytes)
+                && let Some((id, _)) = self.pane_hitboxes.iter().find(|(_, rect)| {
+                    let row = row.saturating_sub(1 + usize::from(self.bar_enabled));
+                    let column = column.saturating_sub(1);
+                    row >= usize::from(rect.row)
+                        && row < usize::from(rect.row + rect.rows)
+                        && column >= usize::from(rect.column)
+                        && column < usize::from(rect.column + rect.columns)
+                })
+                && Some(*id) != self.active_pane
+            {
+                self.pane_press = true;
+                output.push(WindowKey::SelectPane(*id));
                 return;
             }
             if !self.mouse_enabled {
@@ -1358,6 +1382,8 @@ fn forward(
                     active_index,
                     keys.mode == InputMode::Normal,
                 );
+                keys.active_pane = Some(set.layout().active());
+                keys.pane_hitboxes = pane_view::hitboxes(set.layout());
             }
             actions.clear();
             let input_mode = keys.mode;
@@ -1582,6 +1608,9 @@ fn forward(
                         if let Some(id) = target {
                             windows.select(id)?;
                         }
+                    }
+                    WindowKey::SelectPane(id) => {
+                        windows.active_mut().unwrap().content_mut().select(id)?;
                     }
                     WindowKey::MoveLeft => {
                         bar_dirty |= windows.move_active_left();
@@ -2517,6 +2546,35 @@ mod window_input_tests {
 
         output.clear();
         for &byte in b"\x1b[<64;40;2M\x1b[<64;40;1m" {
+            keys.feed(byte, &mut output);
+        }
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn inactive_pane_click_selects_it_and_consumes_the_release() {
+        let mut layout = crate::layout::Layout::new(23, 80).unwrap();
+        let left = layout.active();
+        let right = layout.split_active(SplitAxis::Columns).unwrap();
+        let mut keys = WindowInput {
+            pane_height: 21,
+            pane_width: 38,
+            pane_top: 2,
+            pane_left: 41,
+            bar_enabled: true,
+            active_pane: Some(right),
+            pane_hitboxes: pane_view::hitboxes(&layout),
+            ..WindowInput::default()
+        };
+        let mut output = Vec::new();
+        for &byte in b"\x1b[<0;2;3M\x1b[<0;2;3m" {
+            keys.feed(byte, &mut output);
+        }
+        assert_eq!(output, [WindowKey::SelectPane(left)]);
+        assert!(!keys.pane_press);
+
+        output.clear();
+        for &byte in b"\x1b[<2;2;3M\x1b[<0;42;3M" {
             keys.feed(byte, &mut output);
         }
         assert!(output.is_empty());

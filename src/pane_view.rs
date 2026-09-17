@@ -134,6 +134,27 @@ fn frame_bounds(rect: Rect, rows: u16, columns: u16) -> (u16, u16, u16, u16) {
     (top, left, bottom, right)
 }
 
+pub(crate) fn hitboxes(layout: &Layout) -> Vec<(PaneId, Rect)> {
+    let (rows, columns) = layout.dimensions();
+    layout
+        .geometry()
+        .panes
+        .into_iter()
+        .map(|(id, rect)| {
+            let (top, left, bottom, right) = frame_bounds(rect, rows, columns);
+            (
+                id,
+                Rect {
+                    row: top,
+                    column: left,
+                    rows: bottom - top + 1,
+                    columns: right - left + 1,
+                },
+            )
+        })
+        .collect()
+}
+
 fn draw_frame(frame: &mut Screen, rect: Rect, rows: u16, columns: u16, style: crate::style::Style) {
     let (top, left, bottom, right) = frame_bounds(rect, rows, columns);
     if rows >= 3 {

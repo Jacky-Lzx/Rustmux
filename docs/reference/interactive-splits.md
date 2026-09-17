@@ -40,9 +40,10 @@ visible pane screens are composed into a frame. Normal updates wait while any
 visible pane in that window holds synchronized output, with the existing one-second hold
 limit. Explicit focus/layout changes force a frame. Queued frames finish before
 a replacement is written. Mouse coordinates are translated past the window bar
-and pane border into the active pane; other-pane/border presses are ignored, and
-releases clamp to its nearest cell.
-Mouse clicks do not change focus.
+and pane border into the active pane. Left-clicking another pane's content or
+border changes focus; Rustmux consumes the selection press and its matching
+release instead of sending them to either child. Other out-of-pane events are
+ignored, except that a child drag release clamps to the nearest active-pane cell.
 
 Use shell `exit` to close a pane. Its final output is drained before removal; in
 the active window its final frame is written first. Siblings expand to fill the

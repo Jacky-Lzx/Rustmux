@@ -1397,6 +1397,23 @@ try:
 finally:
     s.close()
 
+# Clicking an inactive pane focuses it without sending the click to either shell.
+s = Session()
+try:
+    s.expect(b"RUSTMUX_READY> ")
+    s.send(b"VAR=A\n\x02%")
+    s.expect(b"RUSTMUX_READY>")
+    s.send(b"VAR=B\n")
+    s.expect(b"RUSTMUX_READY>")
+    s.send(b"\x1b[M *%\x1b[M#*%printf '\nCLICK_PANE:%s\n' $VAR\n")
+    s.expect(b"CLICK_PANE:A")
+    s.send(b"\x1b[M f%\x1b[M#f%printf '\nCLICK_PANE:%s\n' $VAR\n")
+    s.expect(b"CLICK_PANE:B")
+    os.kill(s.app_pid, signal.SIGTERM)
+    s.finish(128 + signal.SIGTERM)
+finally:
+    s.close()
+
 # Zoom resizes only its target; changing targets preserves shells and restores tiling.
 s = Session()
 try:

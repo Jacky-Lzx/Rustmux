@@ -91,7 +91,8 @@ window label to select it, or scroll over the bar to move between windows.
 Use Ctrl-B followed by `%` to split left/right, or `"` to split top/bottom.
 The new pane is selected. Ctrl-B followed by lowercase `h/j/k/l` selects the pane
 to the left/down/up/right; `o` cycles through all panes. Directional selection
-stops at the boundary. Ctrl-B followed by `Z` enlarges the active pane to the
+stops at the boundary. You can also left-click a pane or its border to select it.
+Ctrl-B followed by `Z` enlarges the active pane to the
 content area; repeat to restore the split view. Focus shortcuts work while zoomed. Ctrl-B followed by Ctrl-h/j/k/l moves the
 nearest separator left/down/up/right by one cell. Ctrl-B `{` / `}` swaps the active
 pane with the previous/next layout position, wrapping at the edges and keeping

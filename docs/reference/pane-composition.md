@@ -26,7 +26,9 @@ styles. As with the existing window-bar composition, this view is for rendering,
 not a replacement parser model.
 
 Coordinates exclude the top window bar. The CLI adds that bar and routes input
-to its active pane, translating both mouse coordinates. Normal composite updates
+to its active pane, translating both mouse coordinates. Left-clicking any visible
+pane frame or content selects that pane; the selection click is consumed locally.
+Normal composite updates
 wait for every visible pane to release its synchronized-output hold, subject to the
 existing timeout. Explicit focus/layout changes force a redraw. These policies
 belong to the event loop; this function does not resize PTYs/screens, allocate

@@ -274,9 +274,10 @@ update, respecting any synchronized-output hold on the active child.
 
 When the child enables mouse reporting, complete SGR and classic X10 reports are translated
 from physical coordinates to active-pane coordinates, accounting for its column,
-row and the top bar. Press, wheel and motion reports outside that pane are
-ignored. Release reports are clamped to its nearest cell so a drag can end.
-Mouse clicks do not select other panes.
+row and the top bar. A left press in another pane selects it and consumes the
+matching release instead of reaching either child. Other press, wheel and motion
+reports outside the active pane are ignored. Releases from a child drag are
+clamped to its nearest cell so the drag can end outside that pane.
 Candidate reports use at most 64 buffered bytes; incomplete candidates are
 released after a 30ms minimum delay, subject to the event loop's polling and
 backpressure. Extremely delayed/split malformed reports may therefore be forwarded
