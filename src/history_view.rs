@@ -350,6 +350,16 @@ impl HistoryView {
                     b"\x1b[C" | b"\x1bOC" if !self.paste && self.keyboard_selection() => {
                         self.move_selection(1, 0)
                     }
+                    b"\x1b[H" | b"\x1bOH" | b"\x1b[1~" | b"\x1b[7~"
+                        if !self.paste && self.keyboard_selection() =>
+                    {
+                        self.move_selection_to_line_end(false)
+                    }
+                    b"\x1b[F" | b"\x1bOF" | b"\x1b[4~" | b"\x1b[8~"
+                        if !self.paste && self.keyboard_selection() =>
+                    {
+                        self.move_selection_to_line_end(true)
+                    }
                     b"\x1b[5~" if !self.paste && self.editor.is_none() => {
                         if self.keyboard_selection() {
                             self.move_selection(0, -(self.source.dimensions().0 as isize));
@@ -445,6 +455,8 @@ impl HistoryView {
                 b'l' => self.move_selection(1, 0),
                 b'k' => self.move_selection(0, -1),
                 b'j' => self.move_selection(0, 1),
+                1 => self.move_selection_to_line_end(false),
+                5 => self.move_selection_to_line_end(true),
                 21 => self.move_selection(0, -height),
                 4 => self.move_selection(0, height),
                 b'g' => self.move_selection_to_row(0),
@@ -650,6 +662,18 @@ impl HistoryView {
         selection.cursor = (row, self.cell_at_or_before(row, selection.cursor.1));
         self.selection = Some(selection);
         self.reveal(row);
+    }
+
+    fn move_selection_to_line_end(&mut self, end: bool) {
+        let Some(mut selection) = self.selection else {
+            return;
+        };
+        selection.cursor.1 = if end {
+            self.last_cell(selection.cursor.0)
+        } else {
+            self.first_cell(selection.cursor.0).unwrap_or(0)
+        };
+        self.selection = Some(selection);
     }
 
     fn first_cell(&self, row: usize) -> Option<usize> {
@@ -1187,6 +1211,30 @@ mod tests {
         assert_eq!(view.offset, source.history_len());
         type_bytes(&mut view, b"v");
         assert!(view.selection.is_none());
+    }
+
+    #[test]
+    fn selection_home_and_end_use_retained_row_extents() {
+        let mut source = Screen::new(2, 6).unwrap();
+        Parser::new().advance(&mut source, "A中B  \r\nnext\r\nlast".as_bytes());
+        let mut view = HistoryView::new(&source).unwrap();
+        type_bytes(&mut view, b"v\x1b[F");
+        assert_eq!(view.selection.unwrap().cursor, (0, 5));
+        type_bytes(&mut view, b"\x1b[H");
+        assert_eq!(view.selection.unwrap().cursor, (0, 0));
+        type_bytes(&mut view, b"\x1bOF\x1bOH");
+        assert_eq!(view.selection.unwrap().cursor, (0, 0));
+        type_bytes(&mut view, b"\x1b[4~\x1b[1~\x1b[8~\x1b[7~");
+        assert_eq!(view.selection.unwrap().cursor, (0, 0));
+        type_bytes(&mut view, &[5, 1]);
+        assert_eq!(view.selection.unwrap().cursor, (0, 0));
+
+        // End stops on the wide glyph's base when its placeholder is the row tail.
+        let mut wide = Screen::new(2, 3).unwrap();
+        Parser::new().advance(&mut wide, "A中\r\nend".as_bytes());
+        let mut wide = HistoryView::new(&wide).unwrap();
+        type_bytes(&mut wide, b"v\x1b[F");
+        assert_eq!(wide.selection.unwrap().cursor, (0, 1));
     }
 
     #[test]
