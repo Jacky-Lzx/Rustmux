@@ -5,13 +5,12 @@ use std::fs;
 use std::fs::OpenOptions;
 use std::io;
 use std::os::fd::{AsFd, AsRawFd};
-use std::os::unix::net::UnixStream;
 
 use nix::errno::Errno;
 use nix::poll::{PollFd, PollFlags, poll};
 use nix::unistd::{ForkResult, fork, setsid};
 
-use super::{SessionEndpoint, SessionName, client, connect, handshake};
+use super::{SessionEndpoint, SessionName, acquire_client, client, connect, handshake};
 
 const ACCEPT_POLL_MILLIS: u16 = 1000;
 
@@ -25,8 +24,8 @@ pub fn create(name: &SessionName, shell: &OsStr) -> io::Result<u8> {
     // cannot inherit locks held by another thread.
     match unsafe { fork() }? {
         ForkResult::Parent { .. } => {
-            let path = endpoint.relinquish();
-            client::run(UnixStream::connect(path)?)
+            drop(endpoint.relinquish());
+            attach(name)
         }
         ForkResult::Child => {
             let status = run_server(endpoint, shell).unwrap_or(1);
@@ -37,6 +36,7 @@ pub fn create(name: &SessionName, shell: &OsStr) -> io::Result<u8> {
 
 /// Attach this terminal to an existing named session.
 pub fn attach(name: &SessionName) -> io::Result<u8> {
+    let _lease = acquire_client(name)?;
     client::run(connect(name)?)
 }
 

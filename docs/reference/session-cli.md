@@ -27,7 +27,9 @@ lifetime and has no detachable background server.
 owned by the effective user with no group or other permissions. It then performs
 the normal versioned handshake before changing terminal modes. A session accepts
 one displayed client at a time; panes, screen state and scrollback continue while
-no client is attached.
+no client is attached. A second `attach` exits immediately with an error while
+the first client holds the session's advisory lock. The kernel releases that lock
+if the client exits or crashes, so reconnecting does not depend on manual cleanup.
 
 `list` prints one private session endpoint name per line in sorted order, making
 its output suitable for shell scripts. It does not enter terminal mode or connect

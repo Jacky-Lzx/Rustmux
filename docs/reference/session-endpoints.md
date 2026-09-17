@@ -14,6 +14,12 @@ ordinary file or symlink. A socket that refuses connections is treated as a
 stale endpoint left by an unclean exit and removed before binding. The listener
 is nonblocking for later event-loop polling.
 
+Each endpoint also owns a mode `0600` regular lock file with the same name and a
+`.lock` suffix. An attached client holds a nonblocking exclusive `flock` on this
+file. Competing clients fail before connecting to the session socket, and the
+kernel releases the lock automatically when its client exits. Normal endpoint
+cleanup removes both paths.
+
 `SessionEndpoint` records the socket device and inode. Dropping it removes the
 path only while that identity still matches, so an older owner cannot unlink a
 replacement endpoint. The listener and socket path otherwise remain owned by

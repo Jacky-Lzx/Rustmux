@@ -7,11 +7,14 @@ pub mod protocol;
 pub mod supervisor;
 
 use std::fmt;
-use std::fs;
+use std::fs::{self, File, OpenOptions};
 use std::io;
-use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
+
+use nix::errno::Errno;
+use nix::fcntl::{Flock, FlockArg};
 
 /// Maximum encoded length of a session name.
 pub const MAX_SESSION_NAME_BYTES: usize = 64;
@@ -104,6 +107,7 @@ impl SessionEndpoint {
         let configured = (|| {
             fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
             listener.set_nonblocking(true)?;
+            drop(open_lock_file(directory, name)?);
             let metadata = fs::symlink_metadata(&path)?;
             Ok((metadata.dev(), metadata.ino()))
         })();
@@ -140,6 +144,7 @@ impl Drop for SessionEndpoint {
             .unwrap_or(false);
         if owns_path {
             let _ = fs::remove_file(&self.path);
+            let _ = fs::remove_file(self.path.with_extension("lock"));
         }
     }
 }
@@ -157,6 +162,30 @@ pub fn session_socket_path(name: &SessionName) -> PathBuf {
 /// Connect only through an endpoint owned by this user in the private directory.
 pub fn connect(name: &SessionName) -> io::Result<UnixStream> {
     connect_in(&session_directory(), name)
+}
+
+/// Hold exclusive ownership of the one displayed client for a session.
+#[derive(Debug)]
+pub(crate) struct ClientLease {
+    _lock: Flock<File>,
+}
+
+pub(crate) fn acquire_client(name: &SessionName) -> io::Result<ClientLease> {
+    acquire_client_in(&session_directory(), name)
+}
+
+fn acquire_client_in(directory: &Path, name: &SessionName) -> io::Result<ClientLease> {
+    ensure_private_directory(directory)?;
+    validate_socket(name, &socket_path_in(directory, name))?;
+    let file = open_lock_file(directory, name)?;
+    match Flock::lock(file, FlockArg::LockExclusiveNonblock) {
+        Ok(lock) => Ok(ClientLease { _lock: lock }),
+        Err((_, error)) if error == Errno::EWOULDBLOCK => Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            format!("session '{name}' already has an attached client"),
+        )),
+        Err((_, error)) => Err(error.into()),
+    }
 }
 
 /// Return private session endpoints in stable name order.
@@ -211,7 +240,12 @@ fn list_in(directory: &Path) -> io::Result<Vec<SessionName>> {
 fn connect_in(directory: &Path, name: &SessionName) -> io::Result<UnixStream> {
     ensure_private_directory(directory)?;
     let path = socket_path_in(directory, name);
-    let metadata = fs::symlink_metadata(&path).map_err(|error| connect_error(name, error))?;
+    validate_socket(name, &path)?;
+    UnixStream::connect(path).map_err(|error| connect_error(name, error))
+}
+
+fn validate_socket(name: &SessionName, path: &Path) -> io::Result<()> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| connect_error(name, error))?;
     if !metadata.file_type().is_socket() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -224,7 +258,7 @@ fn connect_in(directory: &Path, name: &SessionName) -> io::Result<UnixStream> {
             format!("{} is not a private session socket", path.display()),
         ));
     }
-    UnixStream::connect(path).map_err(|error| connect_error(name, error))
+    Ok(())
 }
 
 fn connect_error(name: &SessionName, error: io::Error) -> io::Error {
@@ -240,6 +274,32 @@ fn connect_error(name: &SessionName, error: io::Error) -> io::Error {
 
 fn socket_path_in(directory: &Path, name: &SessionName) -> PathBuf {
     directory.join(format!("{name}.sock"))
+}
+
+fn lock_path_in(directory: &Path, name: &SessionName) -> PathBuf {
+    directory.join(format!("{name}.lock"))
+}
+
+fn open_lock_file(directory: &Path, name: &SessionName) -> io::Result<File> {
+    let path = lock_path_in(directory, name);
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .mode(0o600)
+        .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
+        .open(&path)?;
+    let metadata = file.metadata()?;
+    if !metadata.file_type().is_file()
+        || metadata.uid() != effective_user_id()
+        || metadata.permissions().mode() & 0o077 != 0
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("{} is not a private session lock", path.display()),
+        ));
+    }
+    Ok(file)
 }
 
 fn ensure_private_directory(directory: &Path) -> io::Result<()> {
@@ -424,6 +484,43 @@ mod tests {
             connect_in(&directory.0, &name).unwrap_err().kind(),
             io::ErrorKind::PermissionDenied
         );
+    }
+
+    #[test]
+    fn client_lease_is_exclusive_recoverable_and_removed_with_endpoint() {
+        let directory = TestDirectory::new();
+        let name = SessionName::new("attached").unwrap();
+        let endpoint = SessionEndpoint::bind_in(&directory.0, &name).unwrap();
+        let lock_path = lock_path_in(&directory.0, &name);
+        assert!(lock_path.exists());
+        assert_eq!(
+            fs::symlink_metadata(&lock_path)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+
+        let first = acquire_client_in(&directory.0, &name).unwrap();
+        let error = acquire_client_in(&directory.0, &name).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+        assert_eq!(
+            error.to_string(),
+            "session 'attached' already has an attached client"
+        );
+        drop(first);
+
+        fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o666)).unwrap();
+        assert_eq!(
+            acquire_client_in(&directory.0, &name).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o600)).unwrap();
+        drop(acquire_client_in(&directory.0, &name).unwrap());
+
+        drop(endpoint);
+        assert!(!lock_path.exists());
     }
 
     #[test]
