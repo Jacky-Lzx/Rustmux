@@ -27,7 +27,12 @@ pub enum Command {
         name: Option<SessionName>,
     },
     /// List named session endpoints.
-    List,
+    #[command(visible_alias = "ls")]
+    List {
+        /// Show connection state, server PID and last connection time.
+        #[arg(short, long)]
+        long: bool,
+    },
     /// Terminate a named session.
     Kill {
         /// Existing session name.
@@ -82,7 +87,13 @@ mod tests {
         );
         assert_eq!(
             Cli::try_parse_from(["rustmux", "list"]).unwrap().command,
-            Some(Command::List)
+            Some(Command::List { long: false })
+        );
+        assert_eq!(
+            Cli::try_parse_from(["rustmux", "ls", "--long"])
+                .unwrap()
+                .command,
+            Some(Command::List { long: true })
         );
         assert_eq!(
             Cli::try_parse_from(["rustmux", "kill", "work_2"])

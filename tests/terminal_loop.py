@@ -2231,6 +2231,16 @@ for name in (picker_helper, picker_target):
         env=background_env,
     )
     assert created.returncode == 0, created
+long_listing = subprocess.run(
+    [BINARY, "list", "--long"], check=True, capture_output=True, text=True,
+).stdout
+assert "SESSION" in long_listing, long_listing
+assert "STATUS" in long_listing, long_listing
+assert "PID" in long_listing, long_listing
+assert "LAST CONNECTED" in long_listing, long_listing
+assert picker_helper in long_listing, long_listing
+assert "DETACHED" in long_listing, long_listing
+assert "\x1b" not in long_listing, repr(long_listing)
 picker = None
 try:
     sessions = subprocess.run(

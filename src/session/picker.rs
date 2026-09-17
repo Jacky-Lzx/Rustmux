@@ -586,7 +586,7 @@ fn render(
                 &mut frame,
                 row,
                 column,
-                session_status(session, current),
+                &format!("[{}]", session.status(current)),
                 status_width,
                 if current == Some(&session.name) || session.attached {
                     PEACH
@@ -603,7 +603,7 @@ fn render(
                 &mut frame,
                 row,
                 column,
-                &last_connected_label(session, current, now),
+                &session.last_connected_label(current, now),
                 last_connected_width,
                 MUTED,
                 background,
@@ -667,10 +667,10 @@ fn draw_compact_sessions(
             box_row + 1 + offset,
             box_column + 1,
             &format!(
-                "{} {}  {}",
+                "{} {}  [{}]",
                 if selected { "›" } else { " " },
                 session.name,
-                session_status(session, view.current)
+                session.status(view.current)
             ),
             width.saturating_sub(2),
             if selected { BLUE } else { TEXT },
@@ -702,35 +702,6 @@ fn draw_compact_sessions(
             BASE,
             view.delete_armed.is_some(),
         );
-    }
-}
-
-fn session_status(session: &SessionInfo, current: Option<&SessionName>) -> &'static str {
-    if current == Some(&session.name) {
-        "[CURRENT]"
-    } else if session.attached {
-        "[ATTACHED]"
-    } else {
-        "[DETACHED]"
-    }
-}
-
-fn last_connected_label(session: &SessionInfo, current: Option<&SessionName>, now: u64) -> String {
-    if current == Some(&session.name) || session.attached {
-        return "Now".to_owned();
-    }
-    let Some(timestamp) = session.last_connected_at else {
-        return "—".to_owned();
-    };
-    let age = now.saturating_sub(timestamp) / 1_000;
-    if age < 60 {
-        format!("{age}s ago")
-    } else if age < 60 * 60 {
-        format!("{}m ago", age / 60)
-    } else if age < 24 * 60 * 60 {
-        format!("{}h ago", age / (60 * 60))
-    } else {
-        format!("{}d ago", age / (24 * 60 * 60))
     }
 }
 
@@ -1011,12 +982,12 @@ mod tests {
             server_pid: None,
             last_connected_at: None,
         };
-        assert_eq!(last_connected_label(&session, None, 100_000_000), "—");
+        assert_eq!(session.last_connected_label(None, 100_000_000), "—");
         session.last_connected_at = Some(99_955_000);
-        assert_eq!(last_connected_label(&session, None, 100_000_000), "45s ago");
+        assert_eq!(session.last_connected_label(None, 100_000_000), "45s ago");
         session.last_connected_at = Some(96_400_000);
-        assert_eq!(last_connected_label(&session, None, 100_000_000), "1h ago");
+        assert_eq!(session.last_connected_label(None, 100_000_000), "1h ago");
         session.attached = true;
-        assert_eq!(last_connected_label(&session, None, 100_000_000), "Now");
+        assert_eq!(session.last_connected_label(None, 100_000_000), "Now");
     }
 }

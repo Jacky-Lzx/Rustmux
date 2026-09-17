@@ -3,6 +3,7 @@
 pub mod client;
 pub mod frontend;
 pub mod handshake;
+mod listing;
 mod picker;
 pub mod protocol;
 pub mod supervisor;
@@ -279,12 +280,67 @@ pub fn list() -> io::Result<Vec<SessionName>> {
         .collect())
 }
 
+/// Format live sessions as a human-readable table.
+pub fn format_list() -> io::Result<String> {
+    listing::format_list()
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SessionInfo {
     pub(crate) name: SessionName,
     pub(crate) attached: bool,
     pub(crate) server_pid: Option<i32>,
     pub(crate) last_connected_at: Option<u64>,
+}
+
+impl SessionInfo {
+    fn status(&self, current: Option<&SessionName>) -> &'static str {
+        if current == Some(&self.name) {
+            "CURRENT"
+        } else if self.attached {
+            "ATTACHED"
+        } else {
+            "DETACHED"
+        }
+    }
+
+    fn last_connected_label(&self, current: Option<&SessionName>, now: u64) -> String {
+        if current == Some(&self.name) || self.attached {
+            return "Now".to_owned();
+        }
+        let Some(timestamp) = self.last_connected_at else {
+            return "—".to_owned();
+        };
+        let age = now.saturating_sub(timestamp) / 1_000;
+        if age < 60 {
+            format!("{age}s ago")
+        } else if age < 60 * 60 {
+            format!("{}m ago", age / 60)
+        } else if age < 24 * 60 * 60 {
+            format!("{}h ago", age / (60 * 60))
+        } else {
+            format!("{}d ago", age / (24 * 60 * 60))
+        }
+    }
+}
+
+pub(crate) fn order_info(sessions: &mut [SessionInfo], current: Option<&SessionName>) {
+    sessions.sort_unstable_by(|left, right| {
+        session_rank(left, current)
+            .cmp(&session_rank(right, current))
+            .then_with(|| right.last_connected_at.cmp(&left.last_connected_at))
+            .then_with(|| left.name.cmp(&right.name))
+    });
+}
+
+fn session_rank(session: &SessionInfo, current: Option<&SessionName>) -> u8 {
+    if current == Some(&session.name) {
+        0
+    } else if session.attached {
+        1
+    } else {
+        2
+    }
 }
 
 pub(crate) fn record_connection(name: &SessionName) -> io::Result<()> {

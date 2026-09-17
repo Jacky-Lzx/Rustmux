@@ -9,6 +9,7 @@ rustmux new --detached background
 rustmux attach work
 rustmux attach
 rustmux list
+rustmux list --long
 rustmux kill work
 rustmux kill-all --yes
 ```
@@ -90,8 +91,12 @@ fresh server with an old name clears stale connection metadata, and normal
 session cleanup removes the record with the socket, lock and PID sidecars.
 
 `list` prints one live session name per line in sorted order, making its output
-suitable for shell scripts. It does not enter terminal mode. An exclusive client
-lock proves an attached session is live without touching its socket. For an
+suitable for shell scripts. `list --long` (or `ls -l`) instead prints an aligned
+`SESSION`, `STATUS`, `PID` and `LAST CONNECTED` table. It uses the Session
+Manager order: attached sessions first, then detached sessions, with recent
+connections first in each group. Attached sessions show `Now`; sessions without
+a recorded connection show `—`. Neither form enters terminal mode. An exclusive
+client lock proves an attached session is live without touching its socket. For an
 unlocked session, `list` makes a short local connection that the detached server
 accepts and discards as an incomplete handshake. Invalid files, insecure
 endpoints and sockets left behind by terminated servers are omitted.

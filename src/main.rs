@@ -37,9 +37,16 @@ fn execute(command: Option<rustmux::cli::Command>) -> Result<u8, String> {
                 rustmux::session::supervisor::choose_and_attach().map_err(|error| error.to_string())
             }
         },
-        Some(rustmux::cli::Command::List) => {
-            for name in rustmux::session::list().map_err(|error| error.to_string())? {
-                println!("{name}");
+        Some(rustmux::cli::Command::List { long }) => {
+            if long {
+                print!(
+                    "{}",
+                    rustmux::session::format_list().map_err(|error| error.to_string())?
+                );
+            } else {
+                for name in rustmux::session::list().map_err(|error| error.to_string())? {
+                    println!("{name}");
+                }
             }
             Ok(0)
         }
@@ -190,7 +197,7 @@ mod tests {
                 name: name.clone(),
                 detached: true,
             }),
-            Some(Command::List),
+            Some(Command::List { long: false }),
             Some(Command::Kill { name: name.clone() }),
             Some(Command::KillAll { yes: true }),
         ] {

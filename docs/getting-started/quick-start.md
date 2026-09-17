@@ -30,6 +30,7 @@ session that survives terminal detachment, or reconnect to it later, use:
 ./target/debug/rustmux attach work
 ./target/debug/rustmux attach
 ./target/debug/rustmux list
+./target/debug/rustmux list --long
 ./target/debug/rustmux kill-all --yes
 ```
 
@@ -55,6 +56,10 @@ move through results, Tab to complete the selected name, and Esc to clear the
 search. Press `a` to enter a new session name and create it with Enter. Press `d`
 twice consecutively to terminate the selected session; any intervening key
 cancels the first `d`. A single running session is attached directly.
+
+`rustmux list` keeps its script-friendly name-only output. Use `rustmux list
+--long` or `rustmux ls -l` for a table containing connection state, server PID
+and last connection time.
 
 Starting another interactive Rustmux or attaching a session from inside a pane
 is rejected before terminal modes change. Session inspection and control commands,

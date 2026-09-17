@@ -158,22 +158,7 @@ fn manage_sessions(
 }
 
 fn order_sessions(sessions: &mut [super::SessionInfo], current: Option<&SessionName>) {
-    sessions.sort_unstable_by(|left, right| {
-        session_rank(left, current)
-            .cmp(&session_rank(right, current))
-            .then_with(|| right.last_connected_at.cmp(&left.last_connected_at))
-            .then_with(|| left.name.cmp(&right.name))
-    });
-}
-
-fn session_rank(session: &super::SessionInfo, current: Option<&SessionName>) -> u8 {
-    if current == Some(&session.name) {
-        0
-    } else if session.attached {
-        1
-    } else {
-        2
-    }
+    super::order_info(sessions, current);
 }
 
 /// Ask a live named-session server to terminate and wait for endpoint cleanup.
