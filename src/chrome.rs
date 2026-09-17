@@ -8,10 +8,11 @@ use unicode_width::UnicodeWidthChar;
 
 const PANE_BAR_ROWS: u16 = 1;
 const MIN_PANE_ROWS: u16 = 1;
+const POWERLINE_RIGHT: char = '';
+const BADGE_TEXT: Color = Color::Rgb(0x11, 0x11, 0x1b);
 const BASE: Color = Color::Rgb(0x1e, 0x1e, 0x2e);
-const MANTLE: Color = Color::Rgb(0x18, 0x18, 0x25);
 const SUBTEXT0: Color = Color::Rgb(0xa6, 0xad, 0xc8);
-const BLUE: Color = Color::Rgb(0x89, 0xb4, 0xfa);
+const TEXT: Color = Color::Rgb(0xcd, 0xd6, 0xf4);
 const GREEN: Color = Color::Rgb(0xa6, 0xe3, 0xa1);
 const PEACH: Color = Color::Rgb(0xfa, 0xb3, 0x87);
 
@@ -20,11 +21,27 @@ pub(crate) fn pane_rows(outer_rows: u16) -> u16 {
 }
 
 pub(crate) fn bar_style(active: bool) -> Style {
-    // Catppuccin Mocha: explicit RGB keeps chrome independent of indexed palettes.
+    // Match main's Catppuccin Mocha powerline badges.
     Style {
-        foreground: if active { BASE } else { SUBTEXT0 },
-        background: if active { BLUE } else { MANTLE },
-        bold: active,
+        foreground: BADGE_TEXT,
+        background: if active { GREEN } else { TEXT },
+        bold: true,
+        ..Style::default()
+    }
+}
+
+fn bar_background_style() -> Style {
+    Style {
+        foreground: TEXT,
+        background: BASE,
+        ..Style::default()
+    }
+}
+
+fn separator_style(foreground: Color, background: Color) -> Style {
+    Style {
+        foreground,
+        background,
         ..Style::default()
     }
 }
@@ -72,6 +89,46 @@ pub(crate) fn clipped(text: &str, width: usize) -> String {
     result
 }
 
+fn display_width(text: &str) -> usize {
+    text.chars()
+        .map(|character| character.width().unwrap_or(0))
+        .sum()
+}
+
+fn print(screen: &mut Screen, text: &str) {
+    for character in text.chars() {
+        screen.print(character);
+    }
+}
+
+fn powerline_label(index: usize, name: &str) -> String {
+    format!(" {} {} ", index + 1, name)
+}
+
+fn powerline_width(label: &str) -> usize {
+    display_width(label) + 2
+}
+
+fn draw_powerline_segment(screen: &mut Screen, label: &str, active: bool, remaining: &mut usize) {
+    if *remaining < 3 {
+        return;
+    }
+    let background = if active { GREEN } else { TEXT };
+    screen.set_style(separator_style(BASE, background));
+    screen.print(POWERLINE_RIGHT);
+    *remaining -= 1;
+
+    let label = clipped(label, remaining.saturating_sub(1));
+    let label_width = display_width(&label);
+    screen.set_style(bar_style(active));
+    print(screen, &label);
+    *remaining -= label_width;
+
+    screen.set_style(separator_style(background, BASE));
+    screen.print(POWERLINE_RIGHT);
+    *remaining -= 1;
+}
+
 pub(crate) fn compose(
     child: &Screen,
     outer_rows: u16,
@@ -86,37 +143,28 @@ pub(crate) fn compose(
     let (_, columns) = screen.dimensions();
     screen.prepend_display_row()?;
     screen.save_cursor();
-    prepare_row(&mut screen, bar_style(false));
+    prepare_row(&mut screen, bar_background_style());
     let labels: Vec<_> = names
         .iter()
         .enumerate()
-        .map(|(index, name)| {
-            clipped(
-                &format!(
-                    " {}{}:{} ",
-                    if index == active { "*" } else { "" },
-                    index + 1,
-                    name
-                ),
-                24,
-            )
-        })
+        .map(|(index, name)| powerline_label(index, name))
         .collect();
-    let widths: Vec<_> = labels
-        .iter()
-        .map(|s| s.chars().map(|c| c.width().unwrap_or(0)).sum::<usize>())
-        .collect();
+    let widths: Vec<_> = labels.iter().map(|label| powerline_width(label)).collect();
     let active_width = widths.get(active).copied().unwrap_or(0).min(columns);
     let session = session_name
-        .map(|name| clipped(&format!(" [{name}] "), columns.saturating_sub(active_width)))
+        .map(|name| {
+            clipped(
+                &format!(" Rustmux ({name}) "),
+                columns.saturating_sub(active_width),
+            )
+        })
         .unwrap_or_default();
-    let session_width = session
-        .chars()
-        .map(|character| character.width().unwrap_or(0))
-        .sum::<usize>();
-    for character in session.chars() {
-        screen.print(character);
-    }
+    let session_width = display_width(&session);
+    screen.set_style(Style {
+        bold: true,
+        ..bar_background_style()
+    });
+    print(&mut screen, &session);
     let available = columns.saturating_sub(session_width);
     let mut start = 0;
     while start < active && widths[start..=active].iter().sum::<usize>() > available {
@@ -124,12 +172,8 @@ pub(crate) fn compose(
     }
     let mut remaining = available;
     for (index, label) in labels.iter().enumerate().skip(start) {
-        screen.set_style(bar_style(index == active));
-        for character in clipped(label, remaining).chars() {
-            screen.print(character);
-            remaining -= character.width().unwrap_or(0);
-        }
-        if remaining == 0 {
+        draw_powerline_segment(&mut screen, label, index == active, &mut remaining);
+        if remaining < 3 {
             break;
         }
     }
@@ -183,13 +227,20 @@ mod tests {
             .filter(|c| c.width != 0)
             .map(|c| c.character)
             .collect();
-        assert!(bar.contains("1:first"));
-        assert!(bar.contains("*2:中文"));
+        assert!(bar.contains("1 first"));
+        assert!(bar.contains("2 中文"));
+        assert!(bar.contains(POWERLINE_RIGHT));
+        let row = view.row(0).unwrap();
+        assert_eq!(row[0].style, separator_style(BASE, TEXT));
+        assert_eq!(row[1].style, bar_style(false));
+        assert_eq!(row[10].style, separator_style(TEXT, BASE));
+        assert_eq!(row[11].style, separator_style(BASE, GREEN));
+        assert_eq!(row[12].style, bar_style(true));
     }
 
     #[test]
     fn narrow_bar_keeps_active_label_visible_and_does_not_split_wide_glyphs() {
-        for columns in [1, 2, 4, 7, 12] {
+        for columns in [3, 4, 7, 12] {
             let child = Screen::new(1, columns).unwrap();
             let view = compose(
                 &child,
@@ -200,7 +251,8 @@ mod tests {
             )
             .unwrap();
             let row = view.row(0).unwrap();
-            assert_eq!(row[0].style, bar_style(true));
+            assert_eq!(row[0].character, POWERLINE_RIGHT);
+            assert_eq!(row[0].style, separator_style(BASE, GREEN));
             for (index, cell) in row.iter().enumerate() {
                 if cell.width == 2 {
                     assert!(index + 1 < columns);
@@ -220,7 +272,7 @@ mod tests {
 
     #[test]
     fn named_session_precedes_windows_without_hiding_the_active_label() {
-        let child = Screen::new(2, 30).unwrap();
+        let child = Screen::new(2, 40).unwrap();
         let view = compose(
             &child,
             3,
@@ -236,8 +288,8 @@ mod tests {
             .filter(|cell| cell.width != 0)
             .map(|cell| cell.character)
             .collect();
-        assert!(bar.starts_with(" [personal] "));
-        assert!(bar.contains("*2:editor"));
+        assert!(bar.starts_with(" Rustmux (personal) "));
+        assert!(bar.contains("2 editor"));
 
         let narrow = Screen::new(2, 9).unwrap();
         let view = compose(&narrow, 3, Some("personal"), &["first".into()], 0).unwrap();
@@ -248,7 +300,7 @@ mod tests {
             .filter(|cell| cell.width != 0)
             .map(|cell| cell.character)
             .collect();
-        assert!(bar.contains("*1:first"), "bar was {bar:?}");
+        assert!(bar.contains("1 fir"), "bar was {bar:?}");
         assert!(!bar.contains("personal"));
     }
 }

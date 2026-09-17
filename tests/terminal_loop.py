@@ -1078,34 +1078,40 @@ def expect_bar(session, marker):
         session.read()
         assert time.monotonic() < end, session.last_rows
 
+def expect_bar_without(session, marker):
+    end = time.monotonic() + 3
+    while not session.last_rows or marker in session.last_rows[0]:
+        session.read()
+        assert time.monotonic() < end, session.last_rows
+
 s = Session()
 try:
     s.expect(b"RUSTMUX_READY> ")
-    expect_bar(s, b"*1:shell")
+    expect_bar(s, b"1 shell")
     s.send(b"printf '\\033[23;1H%s%s' LAST_ CONTENT\n")
     s.expect(b"LAST_CONTENT")
     assert b"LAST_CONTENT" in s.last_rows[21]
-    assert b"*1:shell" in s.last_rows[0]
+    assert b"1 shell" in s.last_rows[0]
     s.send(b"\x02c")
     s.expect(b"RUSTMUX_READY> ")
-    expect_bar(s, b"*2:shell")
+    expect_bar(s, b"2 shell")
     s.send("\x02,\x15中文\r".encode())
-    expect_bar(s, "*2:中文".encode())
+    expect_bar(s, "2 中文".encode())
     s.send(b"\x02p")
-    expect_bar(s, b"*1:shell")
-    assert "2:中文".encode() in s.last_rows[0]
+    expect_bar(s, b"1 shell")
+    assert "2 中文".encode() in s.last_rows[0]
     s.send(b"\x02n")
-    expect_bar(s, "*2:中文".encode())
+    expect_bar(s, "2 中文".encode())
     s.send(b"exit 0\n")
-    expect_bar(s, b"*1:shell")
-    assert "中文".encode() not in s.last_rows[0]
+    expect_bar_without(s, "2 中文".encode())
+    expect_bar(s, b"1 shell")
     fcntl.ioctl(s.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 1, 80, 0, 0))
     s.read(0.1)
     s.send(b"printf '\\033[2J\\033[H%s%s' ONE_ ROW\n")
     s.expect(b"ONE_ROW")
-    assert len(s.last_rows) == 1 and b"*1:shell" not in s.last_rows[0]
+    assert len(s.last_rows) == 1 and b"1 shell" not in s.last_rows[0]
     fcntl.ioctl(s.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 4, 80, 0, 0))
-    expect_bar(s, b"*1:shell")
+    expect_bar(s, b"1 shell")
     s.send(b"exit 0\n")
     s.finish(0)
 finally:
@@ -1152,22 +1158,22 @@ try:
     s.send(b"\x02")
     s.send(b"1printf '\\nSELECTED:%s\\n' $WIN\n")
     s.expect(b"SELECTED:1")
-    expect_bar(s, b"*1:shell")
+    expect_bar(s, b"1 shell")
     s.send(b"\x020printf '\\nSELECTED:%s\\n' $WIN\n")
     s.expect(b"SELECTED:10")
-    expect_bar(s, b"*10:shell")
+    expect_bar(s, b"10 shell")
     s.send(b"\x02\tprintf '\\nLAST:%s\\n' $WIN\n")
     s.expect(b"LAST:1")
-    expect_bar(s, b"*1:shell")
+    expect_bar(s, b"1 shell")
     s.send(b"\x02\tprintf '\\nBACK:%s\\n' $WIN\n")
     s.expect(b"BACK:10")
-    expect_bar(s, b"*10:shell")
+    expect_bar(s, b"10 shell")
     s.send(b"\x021exit 0\n")
     s.expect(b"\r\nREADY_2\r\n")
-    expect_bar(s, b"*1:shell")
+    expect_bar(s, b"1 shell")
     s.send(b"\x029printf '\\nSHIFTED:%s\\n' $WIN\n")
     s.expect(b"SHIFTED:10")
-    expect_bar(s, b"*9:shell")
+    expect_bar(s, b"9 shell")
     # Position ten is now absent. Both missing and current selections preserve input routing.
     s.send(b"\x020\x029printf '\\nSTILL:%s\\n' $WIN\n")
     s.expect(b"STILL:10")
@@ -1205,7 +1211,7 @@ with tempfile.TemporaryDirectory() as directory:
                 s.read()
                 assert time.monotonic() < end, s.last_rows
             os.kill(closing_pid, 0)
-            expect_bar(s, b"*2:shell")
+            expect_bar(s, b"2 shell")
         s.send(b"sleep 0.2; printf '\\033[2J\\033[H%s%s\\n' CLOSE_ BACKGROUND\n")
         s.send(b"\x02&")
         s.expect(b"Close window? Type yes:")
@@ -1215,7 +1221,7 @@ with tempfile.TemporaryDirectory() as directory:
         s.expect(b"Close window? Type yes: yes")
         os.kill(closing_pid, 0) # Pasted newline must not confirm.
         s.send(b"\rLEAK=1\n")
-        expect_bar(s, b"*1:shell")
+        expect_bar(s, b"1 shell")
         try:
             os.kill(closing_pid, 0)
         except ProcessLookupError:
@@ -1252,27 +1258,28 @@ try:
         s.send(("WIN=%s\n" % name).encode())
         s.expect(b"RUSTMUX_READY> ")
         s.send(("\x02,\x15%s\r" % name).encode())
-        expect_bar(s, ("*%d:%s" % (ord(name) - ord("A") + 1, name)).encode())
+        expect_bar(s, ("%d %s" % (ord(name) - ord("A") + 1, name)).encode())
     s.send(b"\x02<printf '\\nMOVED:%s\\n' $WIN\n")
     s.expect(b"MOVED:C")
-    expect_bar(s, b"1:A  *2:C  3:B")
+    expect_bar(s, b"2 C")
     s.send(b"\x02\tprintf '\\nLAST:%s\\n' $WIN\n")
     s.expect(b"LAST:B")
-    expect_bar(s, b"*3:B")
+    expect_bar(s, b"3 B")
     s.send(b"\x022\x02>\x02>printf '\\nRIGHT:%s\\n' $WIN\n")
     s.expect(b"RIGHT:C")
-    expect_bar(s, b"*1:C  2:A  3:B")
+    expect_bar(s, b"1 C")
     s.send(b"\x02<printf '\\nWRAPPED:%s\\n' $WIN\n")
     s.expect(b"WRAPPED:C")
-    expect_bar(s, b"1:A  2:B  *3:C")
+    expect_bar(s, b"3 C")
     s.send(b"\x02<\x02<printf '\\nLEFT:%s\\n' $WIN\n")
     s.expect(b"LEFT:C")
-    expect_bar(s, b"*1:C  2:A  3:B")
+    expect_bar(s, b"1 C")
     s.send(b"exit 0\n")
-    expect_bar(s, b"*1:A  2:B")
+    expect_bar_without(s, b"1 C")
+    expect_bar(s, b"1 A")
     s.send(b"\x02\tprintf '\\nSURVIVING:%s\\n' $WIN\n")
     s.expect(b"SURVIVING:B")
-    expect_bar(s, b"*2:B")
+    expect_bar(s, b"2 B")
     os.kill(s.app_pid, signal.SIGTERM)
     s.finish(128 + signal.SIGTERM)
 finally:
@@ -1565,7 +1572,7 @@ try:
         s.send(b"\x02[\x1b[5~")
         s.expect(b"History ")
         fcntl.ioctl(s.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
-        expect_bar(s, b"*1:shell")
+        expect_bar(s, b"1 shell")
         s.send(b"printf '\\n%s%s\\n' RESIZE_ LIVE\n")
         s.expect(b"RESIZE_LIVE")
     os.kill(s.app_pid, signal.SIGTERM)
@@ -1755,7 +1762,7 @@ with tempfile.TemporaryDirectory() as directory:
         s.send(b"\x02x")
         s.expect(b"Close pane? Type yes:")
         s.send(b"yes\r")
-        expect_bar(s, b"*1:shell")
+        expect_bar(s, b"1 shell")
         s.send(b"\x02x")
         s.expect(b"Close pane? Type yes:")
         s.send(b"yes\r")
@@ -1870,12 +1877,12 @@ with tempfile.TemporaryDirectory() as directory:
         s.expect(("JOB:%s:38" % moving_pid).encode())
         s.send(b"\x02!report\n")
         s.expect(("JOB:%s:78" % moving_pid).encode())
-        expect_bar(s, b"*2:shell")
+        expect_bar(s, b"2 shell")
         assert any(b"HISTORY_MOVED" in row for row in s.last_rows[1:])
         os.kill(moving_pid, 0)
         s.send(b"\x02\tprintf '\\nKEEP:%s_' $KEEP; stty size\n")
         s.expect(b"KEEP:source_21 78")
-        expect_bar(s, b"*1:shell")
+        expect_bar(s, b"1 shell")
         s.send(b"\x02\treport\n")
         s.expect(("JOB:%s:78" % moving_pid).encode())
         s.send(b"quit\n")
@@ -1883,7 +1890,8 @@ with tempfile.TemporaryDirectory() as directory:
         s.send(b"printf '\\nKEEP:%s\\n' $KEEP\n")
         s.expect(b"KEEP:moved")
         s.send(b"exit 0\n")
-        expect_bar(s, b"*1:shell")
+        expect_bar_without(s, b"2 shell")
+        expect_bar(s, b"1 shell")
         s.send(b"exit 0\n")
         s.finish(0)
     finally:
@@ -1905,7 +1913,7 @@ with tempfile.TemporaryDirectory() as directory:
             s.send(b"\x02m")
             s.expect(b"Move to window #:")
             s.send(answer)
-            expect_bar(s, b"*2:shell")
+            expect_bar(s, b"2 shell")
         script = ("import os; open(" + repr(record) + ", 'w').write(str(os.getpid())); "
                   "print('JOIN_JOB_READY', flush=True); "
                   "exec('while input() != \"quit\": print(\"JOINJOB:%s:%s\" % "
@@ -1919,8 +1927,8 @@ with tempfile.TemporaryDirectory() as directory:
         os.kill(pid, 0)
         s.send(b"\rreport\n")
         s.expect(("JOINJOB:%s:38" % pid).encode())
-        expect_bar(s, b"*1:shell")
-        assert b"2:shell" not in s.last_rows[0]
+        expect_bar_without(s, b"2 shell")
+        expect_bar(s, b"1 shell")
         assert any(b"JOIN_HISTORY" in row for row in s.last_rows[1:])
         s.send(b"\x02hprintf '\\nKEEP:%s_' $KEEP; stty size\n")
         s.expect(b"KEEP:target_21 38")
@@ -2106,7 +2114,8 @@ with tempfile.TemporaryDirectory(prefix="rustmux-osc7-") as directory:
         s.expect(b"RUSTMUX_READY>")
         s.frames.clear()
         s.send(b"exit 0\n")
-        expect_bar(s, b"*1:shell")
+        expect_bar_without(s, b"2 shell")
+        expect_bar(s, b"1 shell")
         s.send(b"printf 'SOURCE_%s\\n' \"$KEEP\"\n")
         s.expect(b"SOURCE_source")
         s.send(b"exit 0\n")
@@ -2132,7 +2141,7 @@ session_socket = f"/tmp/rustmux-{os.geteuid()}/{session_name}.sock"
 s = Session(arguments=("new", session_name))
 try:
     s.expect(b"RUSTMUX_READY>")
-    expect_bar(s, f"[{session_name}]".encode())
+    expect_bar(s, f"Rustmux ({session_name})".encode())
     s.send(b"stty -echo; KEEP=persistent\n")
     s.expect(b"RUSTMUX_READY>")
     assert session_name in subprocess.run(
@@ -2158,7 +2167,7 @@ assert session_name in listed, listed
 s = Session(arguments=("attach", session_name))
 try:
     s.expect(b"RUSTMUX_READY>")
-    expect_bar(s, f"[{session_name}]".encode())
+    expect_bar(s, f"Rustmux ({session_name})".encode())
     s.send(b"printf 'SESSION_%s\\n' \"$KEEP\"\n")
     s.expect(b"SESSION_persistent")
     s.send(b"exit 0\n")
@@ -2232,7 +2241,7 @@ assert background_name in subprocess.run(
 s = Session(arguments=("attach", background_name))
 try:
     s.expect(b"RUSTMUX_READY>")
-    expect_bar(s, f"[{background_name}]".encode())
+    expect_bar(s, f"Rustmux ({background_name})".encode())
     s.send(b"stty size\n")
     s.expect(b"21 78")
     s.send(b"exit 0\n")
@@ -2283,7 +2292,7 @@ try:
         assert time.monotonic() < end, bytes(picker.output[-2000:])
     picker.send(b"\r")
     picker.expect(b"RUSTMUX_READY>")
-    expect_bar(picker, f"[{picker_target}]".encode())
+    expect_bar(picker, f"Rustmux ({picker_target})".encode())
 
     # Ctrl-B Ctrl-W detaches only this client, opens the manager with the
     # current session selected, and attaches the chosen session. Cancelling a
@@ -2301,7 +2310,7 @@ try:
     target_to_helper = manager_order.index(picker_helper)
     picker.send(b"j" * target_to_helper + b"\r")
     picker.expect(b"RUSTMUX_READY>")
-    expect_bar(picker, f"[{picker_helper}]".encode())
+    expect_bar(picker, f"Rustmux ({picker_helper})".encode())
 
     picker.output.clear()
     picker.send(b"\x02\x17")
@@ -2311,7 +2320,7 @@ try:
         assert time.monotonic() < end, bytes(picker.output[-2000:])
     picker.send(b"q")
     picker.expect(b"RUSTMUX_READY>")
-    expect_bar(picker, f"[{picker_helper}]".encode())
+    expect_bar(picker, f"Rustmux ({picker_helper})".encode())
     picker.send(b"\x02d")
     picker.finish(0)
 
@@ -2359,7 +2368,7 @@ try:
         assert time.monotonic() < end, bytes(picker.output[-2000:])
     picker.send(b"a" + picker_created.encode() + b"\r")
     picker.expect(b"RUSTMUX_READY>")
-    expect_bar(picker, f"[{picker_created}]".encode())
+    expect_bar(picker, f"Rustmux ({picker_created})".encode())
     picker.send(b"exit 0\n")
     picker.finish(0)
 finally:

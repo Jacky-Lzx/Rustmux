@@ -230,16 +230,21 @@ The top row is reserved for window labels. The PTY and both screen grids use
 one row hides the bar and retains one content row. Resizing updates every pane;
 the outer 65,536-cell limit still includes the reserved row.
 
-Labels show a one-based position and name, for example `1:shell` and `*2:editor`.
+Labels show a one-based position and name, for example `1 shell` and `2 editor`.
+The active window uses a green Catppuccin Mocha badge; inactive windows use
+foreground-colored badges.
 The bar uses [Catppuccin Mocha](https://catppuccin.com/palette/) with explicit RGB
-colors: inactive labels use Subtext0 (`#a6adc8`) on Mantle (`#181825`); the active
-window and rename prompt use Base (`#1e1e2e`) on Blue (`#89b4fa`).
-The star also identifies the active window. New windows default to the name `shell`.
+colors. It draws dark badge text (`#11111b`) on Text (`#cdd6f4`) for inactive
+windows and Green (`#a6e3a1`) for the active window, with Powerline separators
+transitioning to the Base (`#1e1e2e`) bar background. Rename and history prompts
+use the active badge colors.
+The badge color identifies the active window. New windows default to the name `shell`.
 
-Each label is clipped to 24 display columns, excluding control characters and
-without splitting a wide glyph. If labels do not fit, the visible starting window
-advances enough to keep the active label in view. There are no click-to-select or
-mouse-scroll actions on the bar yet. On extremely narrow terminals the visible
+Each label is clipped to the available display columns, excluding control
+characters and without splitting a wide glyph. If labels do not fit, the visible
+starting window advances enough to keep the active label in view. There are no
+click-to-select or mouse-scroll actions on the bar yet. On extremely narrow
+terminals the visible
 label may consist only of its highlighted prefix.
 
 The renderer receives a composed copy of the active child screen plus the bar;
