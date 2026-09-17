@@ -10,10 +10,23 @@ const MAX_COPY_TEXT_BYTES: usize = 32 * 1024;
 mod search;
 use search::{Direction, Hit, QueryHistory, QueryInput};
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SelectionSource {
+    Keyboard,
+    Mouse,
+}
+
 #[derive(Clone, Copy)]
 struct Selection {
     anchor: (usize, usize),
     cursor: (usize, usize),
+    source: SelectionSource,
+}
+
+impl Selection {
+    fn spans_multiple_cells(self) -> bool {
+        self.anchor != self.cursor
+    }
 }
 fn base64(input: &str) -> Vec<u8> {
     base64::engine::general_purpose::STANDARD
@@ -102,7 +115,7 @@ pub(crate) struct HistoryView {
 
 impl HistoryView {
     pub fn new(source: &Screen) -> Option<Self> {
-        if source.is_alternate() || source.history_len() == 0 {
+        if source.is_alternate() {
             return None;
         }
         Some(Self {
@@ -144,7 +157,10 @@ impl HistoryView {
         if self.copy_too_large {
             return "Copy too large (32 KiB limit) · q:exit".to_owned();
         }
-        if let Some(selection) = self.selection {
+        if let Some(selection) = self
+            .selection
+            .filter(|selection| selection.source == SelectionSource::Keyboard)
+        {
             let (start, end) = ordered(selection.anchor, selection.cursor);
             return format!(
                 "Select {}:{}–{}:{} · arrows/hjkl:extend y:copy v:cancel",
@@ -191,20 +207,23 @@ impl HistoryView {
             // Those bytes may themselves be navigation keys or CSI final bytes.
             if self.escape.starts_with(b"\x1b[M") {
                 if self.escape.len() == 6 {
-                    self.wheel();
+                    self.mouse();
                     self.escape.clear();
                 }
                 return false;
             }
             if self.escape.len() == 2 || (0x40..=0x7e).contains(&byte) {
-                self.wheel();
+                let mouse = self.mouse();
+                if !mouse {
+                    self.clear_mouse_selection();
+                }
                 match self.escape.as_slice() {
                     b"\x1b[200~" => self.paste = true,
                     b"\x1b[201~" => self.paste = false,
                     b"\x1b[A" | b"\x1bOA" if !self.paste => {
                         if let Some(editor) = &mut self.editor {
                             editor.recall(&self.queries, true);
-                        } else if self.selection.is_some() {
+                        } else if self.keyboard_selection() {
                             self.move_selection(0, -1);
                         } else {
                             self.up(1);
@@ -213,27 +232,27 @@ impl HistoryView {
                     b"\x1b[B" | b"\x1bOB" if !self.paste => {
                         if let Some(editor) = &mut self.editor {
                             editor.recall(&self.queries, false);
-                        } else if self.selection.is_some() {
+                        } else if self.keyboard_selection() {
                             self.move_selection(0, 1);
                         } else {
                             self.down(1);
                         }
                     }
-                    b"\x1b[D" | b"\x1bOD" if !self.paste && self.selection.is_some() => {
+                    b"\x1b[D" | b"\x1bOD" if !self.paste && self.keyboard_selection() => {
                         self.move_selection(-1, 0)
                     }
-                    b"\x1b[C" | b"\x1bOC" if !self.paste && self.selection.is_some() => {
+                    b"\x1b[C" | b"\x1bOC" if !self.paste && self.keyboard_selection() => {
                         self.move_selection(1, 0)
                     }
                     b"\x1b[5~" if !self.paste && self.editor.is_none() => {
-                        if self.selection.is_some() {
+                        if self.keyboard_selection() {
                             self.move_selection(0, -(self.source.dimensions().0 as isize));
                         } else {
                             self.up(self.source.dimensions().0)
                         }
                     }
                     b"\x1b[6~" if !self.paste && self.editor.is_none() => {
-                        if self.selection.is_some() {
+                        if self.keyboard_selection() {
                             self.move_selection(0, self.source.dimensions().0 as isize);
                         } else {
                             self.down(self.source.dimensions().0)
@@ -268,6 +287,7 @@ impl HistoryView {
             }
             return false;
         }
+        self.clear_mouse_selection();
         if self.editor.is_some() {
             match byte {
                 3 | 7 => self.editor = None,
@@ -299,7 +319,7 @@ impl HistoryView {
             }
             return false;
         }
-        if self.selection.is_some() {
+        if self.keyboard_selection() {
             let height = self.source.dimensions().0.max(1) as isize;
             match byte {
                 b'y' => {
@@ -455,6 +475,7 @@ impl HistoryView {
         self.selection = Some(Selection {
             anchor: cursor,
             cursor,
+            source: SelectionSource::Keyboard,
         });
     }
 
@@ -557,9 +578,9 @@ impl HistoryView {
         }
     }
 
-    fn wheel(&mut self) {
-        if self.paste || self.editor.is_some() || self.selection.is_some() {
-            return;
+    fn mouse(&mut self) -> bool {
+        if self.paste || self.editor.is_some() || self.keyboard_selection() {
+            return self.escape.starts_with(b"\x1b[M") || self.escape.starts_with(b"\x1b[<");
         }
         let report = match self.escape.as_slice() {
             [27, b'[', b'M', button, column, row] => button
@@ -567,38 +588,112 @@ impl HistoryView {
                 .zip(column.checked_sub(32))
                 .zip(row.checked_sub(32))
                 .map(|((button, column), row)| {
-                    (usize::from(button), usize::from(column), usize::from(row))
+                    (
+                        usize::from(button),
+                        usize::from(column),
+                        usize::from(row),
+                        false,
+                    )
                 }),
-            [27, b'[', b'<', rest @ .., b'M'] => std::str::from_utf8(rest).ok().and_then(|text| {
-                let mut parts = text.split(';');
-                let mut number = || {
-                    let part = parts.next()?;
-                    if part.is_empty() || !part.bytes().all(|b| b.is_ascii_digit()) {
-                        return None;
-                    }
-                    part.parse::<usize>().ok()
-                };
-                let report = (number()?, number()?, number()?);
-                parts.next().is_none().then_some(report)
-            }),
-            _ => None,
+            [27, b'[', b'<', rest @ .., final_byte @ (b'M' | b'm')] => {
+                std::str::from_utf8(rest).ok().and_then(|text| {
+                    let mut parts = text.split(';');
+                    let mut number = || {
+                        let part = parts.next()?;
+                        if part.is_empty() || !part.bytes().all(|b| b.is_ascii_digit()) {
+                            return None;
+                        }
+                        part.parse::<usize>().ok()
+                    };
+                    let report = (number()?, number()?, number()?, *final_byte == b'm');
+                    parts.next().is_none().then_some(report)
+                })
+            }
+            _ => return false,
         };
-        let Some((button, column, row)) = report else {
-            return;
+        let Some((button, column, row, released)) = report else {
+            return true;
         };
         let (rows, columns) = self.source.dimensions();
         let local_row = row.checked_sub(self.origin.0);
         let local_column = column.checked_sub(self.origin.1);
-        if !local_row.is_some_and(|r| (1..=rows).contains(&r))
-            || !local_column.is_some_and(|c| (1..=columns).contains(&c))
-        {
-            return;
+        let inside = local_row.is_some_and(|value| (1..=rows).contains(&value))
+            && local_column.is_some_and(|value| (1..=columns).contains(&value));
+        let action = button & !0x1c;
+        if matches!(action, 64 | 65) {
+            if inside && !released {
+                self.clear_mouse_selection();
+                if action == 64 {
+                    self.up(3);
+                } else {
+                    self.down(3);
+                }
+            }
+            return true;
         }
-        // Ignore modifiers but reject motion, horizontal wheels and releases.
-        match button & !0x1c {
-            64 => self.up(3),
-            65 => self.down(3),
-            _ => {}
+        if action == 0 && !released {
+            if !inside {
+                self.clear_mouse_selection();
+                return true;
+            }
+            let position = self.mouse_position(local_row.unwrap() - 1, local_column.unwrap() - 1);
+            self.selection = Some(Selection {
+                anchor: position,
+                cursor: position,
+                source: SelectionSource::Mouse,
+            });
+            self.copy_too_large = false;
+            return true;
+        }
+        if !matches!(action, 32 | 0) {
+            return true;
+        }
+        let Some(mut selection) = self
+            .selection
+            .filter(|selection| selection.source == SelectionSource::Mouse)
+        else {
+            return true;
+        };
+        let local_row = row
+            .saturating_sub(self.origin.0 + 1)
+            .min(rows.saturating_sub(1));
+        let local_column = column
+            .saturating_sub(self.origin.1 + 1)
+            .min(columns.saturating_sub(1));
+        selection.cursor = self.mouse_position(local_row, local_column);
+        self.selection = Some(selection);
+        if released {
+            if selection.spans_multiple_cells() {
+                self.copy_pending = self.copy_selection();
+                self.copy_too_large = self.copy_pending.is_none();
+            }
+            self.selection = None;
+        }
+        true
+    }
+
+    fn mouse_position(&self, local_row: usize, local_column: usize) -> (usize, usize) {
+        let row = self.source.history_len() - self.offset + local_row;
+        let (cells, _, _) = self.row_data(row);
+        let column = if cells[local_column].width == 0 && local_column > 0 {
+            local_column - 1
+        } else {
+            local_column
+        };
+        (row, column)
+    }
+
+    fn keyboard_selection(&self) -> bool {
+        self.selection
+            .is_some_and(|selection| selection.source == SelectionSource::Keyboard)
+    }
+
+    fn clear_mouse_selection(&mut self) {
+        if self
+            .selection
+            .is_some_and(|selection| selection.source == SelectionSource::Mouse)
+        {
+            self.selection = None;
         }
     }
 
@@ -639,7 +734,7 @@ impl HistoryView {
         let mut view = Screen::new(rows, columns)?;
         view.set_cursor_visible(false);
         view.set_bracketed_paste(true);
-        view.set_mouse_tracking(MouseTracking::Button);
+        view.set_mouse_tracking(MouseTracking::Drag);
         view.set_sgr_mouse(true);
         let history = self.source.history_len();
         for row in 0..rows {
@@ -663,6 +758,11 @@ impl HistoryView {
                 }
                 let mut cell = cell.clone();
                 let selected_by_range = self.selection.is_some_and(|selection| {
+                    if selection.source == SelectionSource::Mouse
+                        && !selection.spans_multiple_cells()
+                    {
+                        return false;
+                    }
                     let (start, end) = ordered(selection.anchor, selection.cursor);
                     let position = if cell.width == 0 && column > 0 {
                         (index, column - 1)
@@ -719,6 +819,23 @@ mod tests {
         }
         assert_eq!(view.offset, 1);
         assert!(view.feed(b'q'));
+        assert!(HistoryView::new(&source).is_some());
+    }
+
+    #[test]
+    fn primary_screen_without_scrollback_still_opens_a_snapshot() {
+        let mut source = Screen::new(3, 8).unwrap();
+        Parser::new().advance(&mut source, b"short");
+        assert_eq!(source.history_len(), 0);
+
+        let mut view = HistoryView::new(&source).unwrap();
+        assert_eq!(view.offset, 0);
+        assert!(view.label(80).starts_with("History 0/0"));
+        assert_eq!(view.render().unwrap().row(0).unwrap()[0].character, 's');
+        type_bytes(&mut view, b"\x1b[<0;1;1M\x1b[<32;5;1M\x1b[<0;5;1m");
+        assert_eq!(view.take_copy().unwrap(), osc52("short").unwrap());
+
+        Parser::new().advance(&mut source, b"\x1b[?1049h");
         assert!(HistoryView::new(&source).is_none());
     }
 
@@ -797,6 +914,7 @@ mod tests {
         view.selection = Some(Selection {
             anchor: (0, 2),
             cursor: (1, 1),
+            source: SelectionSource::Keyboard,
         });
         assert_eq!(view.copy_selection().unwrap(), osc52("cdEF").unwrap());
         view.selection.as_mut().unwrap().cursor = (2, 1);
@@ -804,6 +922,7 @@ mod tests {
         view.selection = Some(Selection {
             anchor: (2, 1),
             cursor: (0, 2),
+            source: SelectionSource::Keyboard,
         });
         assert_eq!(view.copy_selection().unwrap(), osc52("cdEF\nha").unwrap());
     }
@@ -862,6 +981,69 @@ mod tests {
     }
 
     #[test]
+    fn mouse_drag_copies_reverse_soft_wrapped_selection_and_clears_highlight() {
+        let mut source = Screen::new(2, 4).unwrap();
+        Parser::new().advance(&mut source, b"abcdEF\r\nhard\r\nend");
+        let mut view = HistoryView::new(&source).unwrap();
+        view.offset = view.source.history_len();
+        view.set_origin(2, 10);
+
+        // Select backwards from row 2, column 2 to row 1, column 3.
+        type_bytes(&mut view, b"\x1b[<0;12;4M\x1b[<32;13;3M\x1b[<0;13;3m");
+        assert_eq!(view.take_copy().unwrap(), osc52("cdEF").unwrap());
+        assert!(view.selection.is_none());
+        let rendered = view.render().unwrap();
+        assert!(
+            rendered.row(0).unwrap()[2..]
+                .iter()
+                .all(|cell| !cell.style.inverse)
+        );
+        assert!(
+            rendered.row(1).unwrap()[..2]
+                .iter()
+                .all(|cell| !cell.style.inverse)
+        );
+        assert!(view.label(80).starts_with("History "));
+    }
+
+    #[test]
+    fn mouse_click_and_outside_press_do_not_copy_or_show_a_selection() {
+        let mut source = Screen::new(2, 4).unwrap();
+        Parser::new().advance(&mut source, b"abcd\r\nnext\r\nlast");
+        let mut view = HistoryView::new(&source).unwrap();
+        view.set_origin(2, 10);
+
+        type_bytes(&mut view, b"\x1b[<0;11;3M\x1b[<0;11;3m");
+        assert!(view.selection.is_none());
+        assert!(view.take_copy().is_none());
+        assert!(
+            view.render()
+                .unwrap()
+                .row(0)
+                .unwrap()
+                .iter()
+                .all(|cell| !cell.style.inverse)
+        );
+
+        type_bytes(&mut view, b"\x1b[<0;10;3M");
+        assert!(view.selection.is_none());
+        assert!(view.take_copy().is_none());
+    }
+
+    #[test]
+    fn mouse_drag_clamps_to_content_and_wide_glyph_base_cells() {
+        let mut source = Screen::new(2, 4).unwrap();
+        Parser::new().advance(&mut source, "A中B\r\nnext\r\nlast".as_bytes());
+        let mut view = HistoryView::new(&source).unwrap();
+        view.offset = view.source.history_len();
+
+        // Column 3 is the wide character's placeholder and maps back to its base.
+        type_bytes(&mut view, b"\x1b[<0;3;1M\x1b[<32;999;999M\x1b[<0;999;999m");
+        assert!(view.take_copy().is_some());
+        assert!(view.selection.is_none());
+    }
+
+    #[test]
     fn wheel_scrolls_only_inside_the_pane_and_clamps_at_both_ends() {
         let mut source = Screen::new(4, 12).unwrap();
         let mut parser = Parser::new();
@@ -871,7 +1053,7 @@ mod tests {
         let mut view = HistoryView::new(&source).unwrap();
         view.set_origin(5, 40);
         let rendered = view.render().unwrap();
-        assert_eq!(rendered.mouse_tracking(), MouseTracking::Button);
+        assert_eq!(rendered.mouse_tracking(), MouseTracking::Drag);
         assert!(rendered.sgr_mouse());
         assert_eq!(source.mouse_tracking(), MouseTracking::Off);
         type_bytes(&mut view, b"G\x1b[<64;41;6M");

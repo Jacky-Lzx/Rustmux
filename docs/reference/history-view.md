@@ -2,19 +2,21 @@
 
 Ctrl-B `[` opens a read-only snapshot of the active pane's retained primary
 history and current screen. It initially moves up one pane-height, clamped to
-available history. Empty history and alternate-screen applications ignore entry.
+available history. When no rows have scrolled out yet, it opens at `History 0/0`
+and still freezes the current visible screen. Alternate-screen applications ignore entry.
 Other panes continue displaying live output. The window bar shows `History`, the
 number of rows above the snapshot's bottom, and the snapshot history length.
 The browsed pane's complete border changes to Catppuccin Mocha Peach and returns
 to Catppuccin Mocha Green on exit.
 The cursor is hidden while browsing and shown in the bar while editing a query.
-History mode enables button-event mouse reporting with SGR
+History mode enables drag-event mouse reporting with SGR
 coordinates; exiting restores the live application's mouse modes.
 
 | Key in history mode | Action |
 | --- | --- |
 | `k` / `j`, Up / Down | One row older / newer |
 | Mouse wheel up / down inside the active pane | Three rows older / newer |
+| Left-button drag inside the active pane | Select and copy text through OSC 52 on release |
 | Ctrl-U / Ctrl-D | Half a pane older / newer |
 | Page Up / Page Down | One pane older / newer |
 | `g` / `G` | Oldest retained row / bottom of the snapshot |
@@ -24,9 +26,9 @@ coordinates; exiting restores the live application's mouse modes.
 | `v` | Start or cancel keyboard text selection |
 | `q` / Ctrl-C | Exit to the live screen |
 
-Wheel events over the bar, pane borders or another pane are ignored. Clicking does
-not change focus or select text. Modified vertical wheel events also scroll;
-horizontal wheel, motion and release events are ignored. Legacy mouse reports
+Wheel events over the bar, pane borders or another pane are ignored. A click
+without movement neither highlights nor copies a cell. Modified vertical wheel
+events also scroll; horizontal wheel events are ignored. Legacy mouse reports
 are consumed as complete reports so their payload cannot become keypresses.
 
 Navigation stops at both ends. `G` stays in history mode; it does not resume the
@@ -142,6 +144,21 @@ created by soft wrapping without a newline and inserts `\n` across explicit hard
 line boundaries. Unused padding, clipped glyphs, styles, the bar and other panes
 are omitted. The same 32 KiB all-or-nothing limit applies.
 
+## Mouse text selection
+
+Drag the left mouse button across the active pane in history mode to select
+text. Selection endpoints are inclusive and may be dragged in either direction.
+Releasing the button copies the selected text immediately through OSC 52 and
+clears its highlight. A press must begin inside the active pane; dragging beyond
+its content clamps the active endpoint to the nearest edge.
+
+Mouse selection uses the same logical-text rules and 32 KiB limit as keyboard
+selection. Wide-character placeholder columns select the complete character,
+soft-wrapped rows are joined, and hard line boundaries insert a newline. A
+single-cell click is treated as a click rather than a selection and sends no
+clipboard request. Mouse reports are ignored while editing a search query or
+extending a keyboard selection.
+
 ## Live processes and lifecycle
 
 Shells keep running, parsing output and answering terminal queries while the
@@ -173,7 +190,7 @@ acceptance is not acknowledged by this operation.
 
 Rows retain their original widths: shorter rows are padded and longer rows are
 clipped to the pane width, with clipped wide characters replaced by blank cells.
-There is no snapshot text reflow, mouse-driven selection or disk persistence yet. Copying
+There is no snapshot text reflow or disk persistence yet. Copying
 uses the outer terminal's OSC 52 clipboard support; terminals or multiplexers
 that disable OSC 52 will ignore it.
 This does not recover content previously discarded by resize. A one-row outer terminal has no bar, so the history indicator is hidden.
@@ -181,12 +198,12 @@ This does not recover content previously discarded by resize. A one-row outer te
 Unit tests cover snapshot independence, navigation, wide-cell clipping, paste
 isolation, logical-line and Unicode search, overlapping results, highlighting,
 Unicode cursor editing, narrow query views and bounded query recall with draft
-restoration, keyboard selection, both search
+restoration, keyboard and mouse selection, both search
 directions and their row anchors, cancellation, result
 wraparound, wheel bounds, malformed mouse reports and modal
 input isolation. The nested-PTY suite checks browsing inside a split, the other pane's
 continued visibility, new background output while frozen, snapshot-bottom versus
-live output, viewport and keyboard-selection OSC 52 copying, forward/backward search submission/result cycling/no-match/cancellation,
+live output, viewport and keyboard/mouse-selection OSC 52 copying, forward/backward search submission/result cycling/no-match/cancellation,
 query recall, middle editing, cursor visibility, query paste and draft restoration,
 navigation/paste
 isolation, wheel routing within a split, mouse-mode restoration and return to live

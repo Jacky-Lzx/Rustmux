@@ -127,6 +127,8 @@ in `$VISUAL`, `$EDITOR` or `vi` in a temporary `history` window.
 Ctrl-B `e` opens the last completed command's plain-text output in a temporary
 `output` window. OSC 133 provides exact boundaries; without it, Rustmux uses
 command echo and the following prompt as best-effort boundaries.
+While browsing history, drag the left mouse button across text to copy that
+selection through OSC 52 when the button is released.
 
 Only the documented terminal-control subset is supported. Full-screen editors,
 terminal queries and extended keyboard/mouse modes are not yet fully supported;

@@ -1519,6 +1519,21 @@ try:
 finally:
     s.close()
 
+# A partially filled primary screen can enter history before it has scrollback.
+s = Session()
+try:
+    s.expect(b"RUSTMUX_READY> ")
+    s.send(b"\x02[")
+    s.expect(b"History 0/0")
+    assert b"RUSTMUX_READY>" in b"".join(s.last_rows)
+    assert b"\x1b[?1002h" in s.last_frame
+    s.send(b"q")
+    s.expect(b"RUSTMUX_READY> ")
+    s.send(b"exit 0\n")
+    s.finish(0)
+finally:
+    s.close()
+
 # Browse a frozen pane snapshot while new output arrives; navigation never types into the shell.
 s = Session()
 try:
@@ -1565,6 +1580,18 @@ try:
         selected_text = base64.b64decode(selected.group(1), validate=True)
         assert selected_text == b"SELEC", (selected_text, s.last_rows, bytes(s.output[-500:]))
         assert b"1/1 /SELECT_TARGET" in s.last_rows[0]
+        s.send(b"g")
+        s.expect(b"HIST_00")
+        s.output.clear()
+        # HIST_00 begins at outer column 42, row 13 in this frozen split.
+        # Dragging over its first four cells copies HIST and leaves shell input untouched.
+        s.send(b"\x1b[<0;42;13M\x1b[<32;45;13M\x1b[<0;45;13m")
+        deadline = time.monotonic() + 3
+        while not (selected := re.search(rb"\x1b\]52;c;([A-Za-z0-9+/=]*)\x07", s.output)):
+            s.read()
+            assert time.monotonic() < deadline, bytes(s.output[-1000:])
+        selected_text = base64.b64decode(selected.group(1), validate=True)
+        assert selected_text == b"HIST", (selected_text, s.last_rows, bytes(s.output[-500:]))
         frozen = list(s.last_rows)
         with open(trigger, "w") as file:
             file.write("go")
