@@ -1623,6 +1623,23 @@ try:
         selected_text = base64.b64decode(selected.group(1), validate=True)
         assert selected_text == b"HIST", (selected_text, s.last_rows, bytes(s.output[-500:]))
         s.expect(b"Copy sent to terminal")
+        s.send(b"G")
+        s.expect(b"HIST_44")
+        s.output.clear()
+        s.send(b"\x1b[<0;42;13M" + b"\x1b[<32;42;1M" * 3)
+        deadline = time.monotonic() + 3
+        while not re.search(rb"History [1-9][0-9]*/", s.last_rows[0]):
+            s.read()
+            assert time.monotonic() < deadline, bytes(s.output[-1000:])
+        s.output.clear()
+        s.send(b"\x1b[<0;42;1m")
+        deadline = time.monotonic() + 3
+        while not (selected := re.search(rb"\x1b\]52;c;([A-Za-z0-9+/=]*)\x07", s.output)):
+            s.read()
+            assert time.monotonic() < deadline, bytes(s.output[-1000:])
+        selected_text = base64.b64decode(selected.group(1), validate=True)
+        assert b"\n" in selected_text, (selected_text, s.last_rows, bytes(s.output[-500:]))
+        s.expect(b"Copy sent to terminal")
         frozen = list(s.last_rows)
         with open(trigger, "w") as file:
             file.write("go")

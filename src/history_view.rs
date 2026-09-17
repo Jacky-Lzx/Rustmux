@@ -711,6 +711,11 @@ impl HistoryView {
         else {
             return true;
         };
+        if row <= self.origin.0 {
+            self.up(1);
+        } else if row > self.origin.0.saturating_add(rows) {
+            self.down(1);
+        }
         let local_row = row
             .saturating_sub(self.origin.0 + 1)
             .min(rows.saturating_sub(1));
@@ -1104,6 +1109,34 @@ mod tests {
         type_bytes(&mut view, b"\x1b[<0;3;1M\x1b[<32;999;999M\x1b[<0;999;999m");
         assert!(view.take_copy().is_some());
         assert!(view.selection.is_none());
+    }
+
+    #[test]
+    fn mouse_drag_outside_pane_scrolls_and_extends_selection() {
+        let mut source = Screen::new(2, 4).unwrap();
+        Parser::new().advance(&mut source, b"aa\r\nbb\r\ncc\r\ndd\r\nee");
+
+        let mut older = HistoryView::new(&source).unwrap();
+        older.offset = 0;
+        older.set_origin(1, 0); // Content occupies outer rows 2 and 3.
+        type_bytes(&mut older, b"\x1b[<0;2;2M");
+        for _ in 0..10 {
+            type_bytes(&mut older, b"\x1b[<32;1;1M");
+        }
+        assert_eq!(older.offset, source.history_len());
+        type_bytes(&mut older, b"\x1b[<0;1;2m");
+        assert_eq!(older.take_copy().unwrap(), osc52("aa\nbb\ncc\ndd").unwrap());
+
+        let mut newer = HistoryView::new(&source).unwrap();
+        newer.offset = source.history_len();
+        newer.set_origin(1, 0);
+        type_bytes(&mut newer, b"\x1b[<0;1;3M");
+        for _ in 0..10 {
+            type_bytes(&mut newer, b"\x1b[<32;1;4M");
+        }
+        assert_eq!(newer.offset, 0);
+        type_bytes(&mut newer, b"\x1b[<0;2;3m");
+        assert_eq!(newer.take_copy().unwrap(), osc52("bb\ncc\ndd\nee").unwrap());
     }
 
     #[test]

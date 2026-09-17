@@ -156,7 +156,9 @@ Releasing the button copies the selected text immediately through OSC 52 and
 clears its highlight. The bar reports `Copy sent to terminal` after a successful
 keyboard or mouse copy; the next navigation action restores the ordinary history
 status. A press must begin inside the active pane; dragging beyond its content
-clamps the active endpoint to the nearest edge.
+clamps the active endpoint to the nearest edge. Drag motion above or below the
+pane scrolls the frozen snapshot one row per report and continues extending the
+selection until the corresponding history boundary is reached.
 
 Mouse selection uses the same logical-text rules and 32 KiB limit as keyboard
 selection. Wide-character placeholder columns select the complete character,
