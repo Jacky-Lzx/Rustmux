@@ -104,7 +104,7 @@ pub fn attach(name: &SessionName) -> io::Result<u8> {
 
 fn attach_once(name: &SessionName) -> io::Result<client::ClientExit> {
     let _lease = acquire_client(name)?;
-    client::run(connect(name)?)
+    client::run(connect(name)?, name)
 }
 
 /// Attach directly when one session exists, or ask the user to choose among several.
@@ -161,6 +161,7 @@ fn order_sessions(sessions: &mut [super::SessionInfo], current: Option<&SessionN
     sessions.sort_unstable_by(|left, right| {
         session_rank(left, current)
             .cmp(&session_rank(right, current))
+            .then_with(|| right.last_connected_at.cmp(&left.last_connected_at))
             .then_with(|| left.name.cmp(&right.name))
     });
 }
@@ -267,13 +268,13 @@ mod tests {
     use crate::session::SessionInfo;
 
     #[test]
-    fn manager_orders_current_then_attached_then_detached_by_name() {
+    fn manager_orders_groups_by_recent_connection_then_name() {
         let mut sessions = [
-            info("z-detached", false),
-            info("z-attached", true),
-            info("current", false),
-            info("a-attached", true),
-            info("a-detached", false),
+            info("old-detached", false, Some(10)),
+            info("new-attached", true, Some(40)),
+            info("current", false, Some(5)),
+            info("old-attached", true, Some(20)),
+            info("new-detached", false, Some(30)),
         ];
         let current = SessionName::new("current").unwrap();
         order_sessions(&mut sessions, Some(&current));
@@ -284,19 +285,20 @@ mod tests {
                 .collect::<Vec<_>>(),
             [
                 "current",
-                "a-attached",
-                "z-attached",
-                "a-detached",
-                "z-detached",
+                "new-attached",
+                "old-attached",
+                "new-detached",
+                "old-detached",
             ]
         );
     }
 
-    fn info(name: &str, attached: bool) -> SessionInfo {
+    fn info(name: &str, attached: bool, last_connected_at: Option<u64>) -> SessionInfo {
         SessionInfo {
             name: SessionName::new(name).unwrap(),
             attached,
             server_pid: None,
+            last_connected_at,
         }
     }
 }

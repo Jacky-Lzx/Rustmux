@@ -43,12 +43,13 @@ Ctrl-B followed by Ctrl-W opens the Session Manager from an attached session.
 The current session is selected initially; choose another session with `j`/`k`
 and Enter, or press Esc or `q` to return to the current session. The current
 session stays first and is marked `CURRENT`; other attached sessions precede
-detached sessions, with names sorting each group.
+detached sessions. Recent connections sort first within each group.
 
 When more than one session is running, `rustmux attach` without a name opens a
 centered session window. It shows each session's attached/detached state and
 server PID. Attached sessions appear before detached sessions, with each group
-sorted by name. Move with Up/Down or `j`/`k`, attach with Enter, and cancel with Esc,
+ordered by most recent connection and then name. Wider terminals also show the
+last connection age. Move with Up/Down or `j`/`k`, attach with Enter, and cancel with Esc,
 `q` or Ctrl-C. Press `/` to search names without regard to case; use Up/Down to
 move through results, Tab to complete the selected name, and Esc to clear the
 search. Press `a` to enter a new session name and create it with Enter. Press `d`

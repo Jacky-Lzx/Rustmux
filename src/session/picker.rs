@@ -5,7 +5,7 @@ use std::io;
 use std::os::fd::AsFd;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use nix::errno::Errno;
 use nix::poll::{PollFd, PollFlags, poll};
@@ -491,7 +491,9 @@ fn render(
     let marker_width = 2;
     let status_width = if body_width >= 26 { 12 } else { 0 };
     let pid_width = if body_width >= 32 { 9 } else { 0 };
-    let name_width = body_width.saturating_sub(marker_width + status_width + pid_width);
+    let last_connected_width = if body_width >= 54 { 15 } else { 0 };
+    let name_width =
+        body_width.saturating_sub(marker_width + status_width + last_connected_width + pid_width);
     let header_row = box_row + 3;
     let mut column = box_column + 2;
     write_field(
@@ -522,12 +524,31 @@ fn render(
         );
         column += status_width;
     }
+    if last_connected_width > 0 {
+        write_field(
+            &mut frame,
+            header_row,
+            column,
+            "LAST CONNECTED",
+            last_connected_width,
+            MUTED,
+            BASE,
+            true,
+        );
+        column += last_connected_width;
+    }
     if pid_width > 0 {
         write_field(
             &mut frame, header_row, column, "PID", pid_width, MUTED, BASE, true,
         );
     }
 
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX);
     let visible = (height - 6).min(sessions.len());
     let start = selected
         .saturating_sub(visible.saturating_sub(1))
@@ -576,6 +597,19 @@ fn render(
                 true,
             );
             column += status_width;
+        }
+        if last_connected_width > 0 {
+            write_field(
+                &mut frame,
+                row,
+                column,
+                &last_connected_label(session, current, now),
+                last_connected_width,
+                MUTED,
+                background,
+                false,
+            );
+            column += last_connected_width;
         }
         if pid_width > 0 {
             write_field(
@@ -678,6 +712,25 @@ fn session_status(session: &SessionInfo, current: Option<&SessionName>) -> &'sta
         "[ATTACHED]"
     } else {
         "[DETACHED]"
+    }
+}
+
+fn last_connected_label(session: &SessionInfo, current: Option<&SessionName>, now: u64) -> String {
+    if current == Some(&session.name) || session.attached {
+        return "Now".to_owned();
+    }
+    let Some(timestamp) = session.last_connected_at else {
+        return "—".to_owned();
+    };
+    let age = now.saturating_sub(timestamp) / 1_000;
+    if age < 60 {
+        format!("{age}s ago")
+    } else if age < 60 * 60 {
+        format!("{}m ago", age / 60)
+    } else if age < 24 * 60 * 60 {
+        format!("{}h ago", age / (60 * 60))
+    } else {
+        format!("{}d ago", age / (24 * 60 * 60))
     }
 }
 
@@ -835,6 +888,7 @@ mod tests {
                 name: SessionName::new(name).unwrap(),
                 attached: index == 1,
                 server_pid: Some(100 + index as i32),
+                last_connected_at: None,
             })
             .collect();
         let frame =
@@ -851,11 +905,13 @@ mod tests {
                 name: SessionName::new("active").unwrap(),
                 attached: true,
                 server_pid: Some(4321),
+                last_connected_at: Some(900),
             },
             SessionInfo {
                 name: SessionName::new("idle").unwrap(),
                 attached: false,
                 server_pid: Some(9876),
+                last_connected_at: Some(500),
             },
         ];
         let frame =
@@ -869,6 +925,10 @@ mod tests {
         assert!(frame.contains("4321"));
         assert!(frame.contains("9876"));
         assert!(frame.contains("<Enter> Attach  <a> New  <dd> Kill"));
+        let wide =
+            String::from_utf8(render(&sessions, 1, (24, 160), None, None, None, None)).unwrap();
+        assert!(wide.contains("LAST CONNECTED"));
+        assert!(wide.contains("Now"));
         let create = String::from_utf8(render(
             &sessions,
             1,
@@ -902,6 +962,7 @@ mod tests {
                 name: SessionName::new(name).unwrap(),
                 attached: false,
                 server_pid: None,
+                last_connected_at: None,
             })
             .collect();
         let filtered = filtered_sessions(&sessions, Some("JU"));
@@ -926,6 +987,7 @@ mod tests {
             name: SessionName::new("work").unwrap(),
             attached: false,
             server_pid: Some(4321),
+            last_connected_at: Some(900),
         }];
         let frame = String::from_utf8(render(
             &sessions,
@@ -939,5 +1001,22 @@ mod tests {
         .unwrap();
         assert!(frame.contains("[CURRENT]"));
         assert!(!frame.contains("[DETACHED]"));
+    }
+
+    #[test]
+    fn last_connected_labels_use_compact_elapsed_units() {
+        let mut session = SessionInfo {
+            name: SessionName::new("work").unwrap(),
+            attached: false,
+            server_pid: None,
+            last_connected_at: None,
+        };
+        assert_eq!(last_connected_label(&session, None, 100_000_000), "—");
+        session.last_connected_at = Some(99_955_000);
+        assert_eq!(last_connected_label(&session, None, 100_000_000), "45s ago");
+        session.last_connected_at = Some(96_400_000);
+        assert_eq!(last_connected_label(&session, None, 100_000_000), "1h ago");
+        session.attached = true;
+        assert_eq!(last_connected_label(&session, None, 100_000_000), "Now");
     }
 }

@@ -14,6 +14,7 @@ use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGWINCH};
 
 use super::handshake::{self, ClientPeer};
 use super::protocol::{ClientMessage, MAX_FRAME_BYTES, ServerMessage};
+use super::{SessionName, record_connection};
 use crate::terminal_device::TerminalDevice;
 
 const READ_BYTES: usize = 8192;
@@ -24,10 +25,11 @@ const MAX_BUFFERED_OUTPUT_BYTES: usize = MAX_FRAME_BYTES + READ_BYTES;
 ///
 /// The terminal enters raw mode and the alternate screen only after the
 /// handshake succeeds. All return paths restore its termios and display modes.
-pub(crate) fn run(stream: UnixStream) -> io::Result<ClientExit> {
+pub(crate) fn run(stream: UnixStream, name: &SessionName) -> io::Result<ClientExit> {
     let file = TerminalDevice::open_controlling()?;
     let size = crate::terminal_device::window_size(&file)?;
     let peer = handshake::client(stream, size.ws_row, size.ws_col)?;
+    record_connection(name)?;
     let signals = ClientSignals::install()?;
     run_attached(file, peer, &signals)
 }

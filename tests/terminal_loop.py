@@ -2221,8 +2221,8 @@ finally:
 # Omitting the attach name opens a picker when several sessions are live. Its
 # selection is based on the same sorted list as the CLI and restores the outer
 # terminal before the selected session client takes over.
-picker_helper = f"picker-helper-{os.getpid()}"
-picker_target = f"picker-jtarget-{os.getpid()}"
+picker_helper = f"picker-zhelper-{os.getpid()}"
+picker_target = f"picker-atarget-{os.getpid()}"
 picker_second = f"picker-second-{os.getpid()}"
 picker_created = f"picker-created-{os.getpid()}"
 for name in (picker_helper, picker_target):
@@ -2243,8 +2243,8 @@ try:
     while b"Session Manager" not in picker.output:
         picker.read()
         assert time.monotonic() < end, bytes(picker.output[-2000:])
-    picker.send(b"/JTA\t")
-    visible_target = b"picker-jtarget"
+    picker.send(b"/ATA\t")
+    visible_target = b"picker-atarget"
     while visible_target not in picker.output:
         picker.read()
         assert time.monotonic() < end, bytes(picker.output[-2000:])
@@ -2282,22 +2282,21 @@ try:
     picker.send(b"\x02d")
     picker.finish(0)
 
-    # The first d only arms deletion. Another key cancels that confirmation;
-    # only a fresh consecutive dd terminates the selected session.
-    sessions = subprocess.run(
-        [BINARY, "list"], check=True, capture_output=True, text=True,
-    ).stdout.splitlines()
-    helper_index = sessions.index(picker_helper)
+    # The most recently attached detached session is selected first. The first
+    # d only arms deletion; another key cancels that confirmation, and only a
+    # fresh consecutive dd terminates the selected session.
     picker.close()
     picker = Session(arguments=("attach",))
+    fcntl.ioctl(picker.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 160, 0, 0))
     end = time.monotonic() + 8
-    while b"Session Manager" not in picker.output:
+    while b"Session Manager" not in picker.output or b"LAST CONNECTED" not in picker.output:
         picker.read()
         assert time.monotonic() < end, bytes(picker.output[-2000:])
-    picker.send(b"\x1b[B" * helper_index + b"d")
+    picker.send(b"d")
     while b"Press d again to kill" not in picker.output:
         picker.read()
         assert time.monotonic() < end, bytes(picker.output[-2000:])
+    assert picker_helper.encode() in picker.output
     assert picker_helper in subprocess.run(
         [BINARY, "list"], check=True, capture_output=True, text=True,
     ).stdout.splitlines()

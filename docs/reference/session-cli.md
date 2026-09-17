@@ -56,10 +56,12 @@ if the client exits or crashes, so reconnecting does not depend on manual cleanu
 When `attach` has no name, it reports an error if there are no live sessions and
 connects directly if there is exactly one. With several sessions it opens a
 centered session window on the temporary alternate screen. The manager groups
-attached sessions before detached sessions and orders names within each group;
-the script-oriented `list` command remains purely name-sorted. The table reports
-the reliable metadata available from the current endpoint format: connection
-state and server PID. Up/Down and `j`/`k` move cyclically, Enter attaches, and
+attached sessions before detached sessions and orders each group by newest
+connection, using the name as a stable tie-breaker; the script-oriented `list`
+command remains purely name-sorted. The table reports connection state and server
+PID, and adds `LAST CONNECTED` when width permits. Current and attached sessions
+show `Now`; detached sessions show a compact elapsed time or `—` before their
+first user attachment. Up/Down and `j`/`k` move cyclically, Enter attaches, and
 Esc, `q` or Ctrl-C cancels without starting a client. `/` enters a bounded,
 case-insensitive name search. Printable bytes are
 search text in that mode, including `j`, `k`, `a`, `d` and `q`; Up/Down select
@@ -78,8 +80,14 @@ client releases the current session lock before showing it, so selecting another
 detached session switches the terminal without stopping either server or its
 panes. That current session remains first, is selected initially and uses a
 distinct `[CURRENT]` status; other attached sessions follow, then detached
-sessions. Killing the session that opened the manager removes the cancel target;
+sessions, with recent connections first in both groups. Killing the session that
+opened the manager removes the cancel target;
 closing the manager then returns to the outer terminal.
+
+Each successful user attachment writes a private per-session timestamp record.
+The internal handshake used by `new --detached` does not create one. Starting a
+fresh server with an old name clears stale connection metadata, and normal
+session cleanup removes the record with the socket, lock and PID sidecars.
 
 `list` prints one live session name per line in sorted order, making its output
 suitable for shell scripts. It does not enter terminal mode. An exclusive client

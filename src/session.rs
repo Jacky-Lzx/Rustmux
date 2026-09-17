@@ -13,12 +13,14 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use nix::errno::Errno;
 use nix::fcntl::{Flock, FlockArg};
 use nix::unistd::Pid;
 
 const MAX_PID_BYTES: u64 = 32;
+const MAX_TIMESTAMP_BYTES: u64 = 32;
 
 /// Maximum encoded length of a session name.
 pub const MAX_SESSION_NAME_BYTES: usize = 64;
@@ -113,6 +115,11 @@ impl SessionEndpoint {
             listener.set_nonblocking(true)?;
             drop(open_lock_file(directory, name)?);
             drop(open_pid_file(directory, name, true)?);
+            match fs::remove_file(last_connected_path_in(directory, name)) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
             let metadata = fs::symlink_metadata(&path)?;
             Ok((metadata.dev(), metadata.ino()))
         })();
@@ -151,6 +158,7 @@ impl Drop for SessionEndpoint {
             let _ = fs::remove_file(&self.path);
             let _ = fs::remove_file(self.path.with_extension("lock"));
             let _ = fs::remove_file(self.path.with_extension("pid"));
+            let _ = fs::remove_file(self.path.with_extension("last"));
         }
     }
 }
@@ -276,6 +284,43 @@ pub(crate) struct SessionInfo {
     pub(crate) name: SessionName,
     pub(crate) attached: bool,
     pub(crate) server_pid: Option<i32>,
+    pub(crate) last_connected_at: Option<u64>,
+}
+
+pub(crate) fn record_connection(name: &SessionName) -> io::Result<()> {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?
+        .as_millis()
+        .try_into()
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "system time is too large"))?;
+    record_connection_in(&session_directory(), name, timestamp)
+}
+
+fn record_connection_in(directory: &Path, name: &SessionName, timestamp: u64) -> io::Result<()> {
+    ensure_private_directory(directory)?;
+    validate_socket(name, &socket_path_in(directory, name))?;
+    let path = last_connected_path_in(directory, name);
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .mode(0o600)
+        .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
+        .open(&path)?;
+    let metadata = file.metadata()?;
+    if !metadata.file_type().is_file()
+        || metadata.uid() != effective_user_id()
+        || metadata.permissions().mode() & 0o077 != 0
+        || metadata.nlink() != 1
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("{} is not a private connection record", path.display()),
+        ));
+    }
+    file.set_len(0)?;
+    writeln!(file, "{timestamp}")?;
+    file.sync_data()
 }
 
 pub(crate) fn list_info() -> io::Result<Vec<SessionInfo>> {
@@ -325,6 +370,7 @@ fn list_info_in(directory: &Path) -> io::Result<Vec<SessionInfo>> {
         };
         let server_pid = live_server_pid_in(directory, &name).ok().map(Pid::as_raw);
         sessions.push(SessionInfo {
+            last_connected_at: read_last_connected_in(directory, &name),
             name,
             attached,
             server_pid,
@@ -379,6 +425,33 @@ fn lock_path_in(directory: &Path, name: &SessionName) -> PathBuf {
 
 fn pid_path_in(directory: &Path, name: &SessionName) -> PathBuf {
     directory.join(format!("{name}.pid"))
+}
+
+fn last_connected_path_in(directory: &Path, name: &SessionName) -> PathBuf {
+    directory.join(format!("{name}.last"))
+}
+
+fn read_last_connected_in(directory: &Path, name: &SessionName) -> Option<u64> {
+    let path = last_connected_path_in(directory, name);
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
+        .open(path)
+        .ok()?;
+    let metadata = file.metadata().ok()?;
+    if !metadata.file_type().is_file()
+        || metadata.uid() != effective_user_id()
+        || metadata.permissions().mode() & 0o077 != 0
+        || metadata.nlink() != 1
+        || metadata.len() > MAX_TIMESTAMP_BYTES
+    {
+        return None;
+    }
+    let mut contents = String::new();
+    file.take(MAX_TIMESTAMP_BYTES + 1)
+        .read_to_string(&mut contents)
+        .ok()?;
+    contents.trim().parse().ok()
 }
 
 fn open_lock_file(directory: &Path, name: &SessionName) -> io::Result<File> {
@@ -681,6 +754,22 @@ mod tests {
 
         drop(endpoint);
         assert!(!lock_path.exists());
+    }
+
+    #[test]
+    fn connection_time_is_private_readable_and_removed_with_endpoint() {
+        let directory = TestDirectory::new();
+        let name = SessionName::new("recent").unwrap();
+        let endpoint = SessionEndpoint::bind_in(&directory.0, &name).unwrap();
+        record_connection_in(&directory.0, &name, 1_234).unwrap();
+        let path = last_connected_path_in(&directory.0, &name);
+        assert_eq!(read_last_connected_in(&directory.0, &name), Some(1_234));
+        assert_eq!(
+            fs::symlink_metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        drop(endpoint);
+        assert!(!path.exists());
     }
 
     #[test]
