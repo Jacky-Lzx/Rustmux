@@ -1626,7 +1626,8 @@ try:
         s.send(b"G")
         s.expect(b"HIST_44")
         s.output.clear()
-        s.send(b"\x1b[<0;42;13M" + b"\x1b[<32;42;1M" * 3)
+        # One motion report above the pane keeps scrolling while the button is held.
+        s.send(b"\x1b[<0;42;13M\x1b[<32;42;1M")
         deadline = time.monotonic() + 3
         while not re.search(rb"History [1-9][0-9]*/", s.last_rows[0]):
             s.read()

@@ -159,7 +159,9 @@ second. Navigation also clears the confirmation immediately. A press must begin
 inside the active pane; dragging beyond its content clamps the active endpoint
 to the nearest edge. Drag motion above or below the
 pane scrolls the frozen snapshot one row per report and continues extending the
-selection until the corresponding history boundary is reached.
+selection. Holding the pointer beyond either edge continues scrolling one row
+every 50 ms without requiring more motion reports, until the pointer returns,
+the button is released or the corresponding history boundary is reached.
 
 Mouse selection uses the same logical-text rules and 32 KiB limit as keyboard
 selection. Wide-character placeholder columns select the complete character,

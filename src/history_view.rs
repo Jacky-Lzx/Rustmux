@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 const MAX_HISTORY_ESCAPE_BYTES: usize = 64;
 const ESCAPE_TIMEOUT: Duration = Duration::from_millis(30);
 const COPY_STATUS_DURATION: Duration = Duration::from_secs(1);
+const DRAG_SCROLL_INTERVAL: Duration = Duration::from_millis(50);
 // Encoded OSC 52 output stays below the terminal's 64 KiB input/IO budget.
 const MAX_COPY_TEXT_BYTES: usize = 32 * 1024;
 mod search;
@@ -30,6 +31,13 @@ struct Selection {
     anchor: (usize, usize),
     cursor: (usize, usize),
     source: SelectionSource,
+}
+
+#[derive(Clone, Copy)]
+struct DragScroll {
+    older: bool,
+    column: usize,
+    due: Instant,
 }
 
 impl Selection {
@@ -123,6 +131,7 @@ pub(crate) struct HistoryView {
     copy_status: Option<CopyStatus>,
     copy_status_until: Option<Instant>,
     selection: Option<Selection>,
+    drag_scroll: Option<DragScroll>,
 }
 
 impl HistoryView {
@@ -149,6 +158,7 @@ impl HistoryView {
             copy_status: None,
             copy_status_until: None,
             selection: None,
+            drag_scroll: None,
         })
     }
 
@@ -178,6 +188,41 @@ impl HistoryView {
             return false;
         }
         self.clear_copy_status();
+        true
+    }
+
+    pub fn expire_drag_scroll(&mut self, now: Instant) -> bool {
+        let Some(scroll) = self.drag_scroll.filter(|scroll| now >= scroll.due) else {
+            return false;
+        };
+        let before = self.offset;
+        if scroll.older {
+            self.up(1);
+        } else {
+            self.down(1);
+        }
+        if self.offset == before {
+            self.drag_scroll = None;
+            return false;
+        }
+        let row = if scroll.older {
+            0
+        } else {
+            self.source.dimensions().0.saturating_sub(1)
+        };
+        let cursor = self.mouse_position(row, scroll.column);
+        if let Some(selection) = &mut self.selection {
+            selection.cursor = cursor;
+        }
+        let at_boundary = if scroll.older {
+            self.offset == self.source.history_len()
+        } else {
+            self.offset == 0
+        };
+        self.drag_scroll = (!at_boundary).then_some(DragScroll {
+            due: now + DRAG_SCROLL_INTERVAL,
+            ..scroll
+        });
         true
     }
 
@@ -720,6 +765,7 @@ impl HistoryView {
                 cursor: position,
                 source: SelectionSource::Mouse,
             });
+            self.drag_scroll = None;
             self.clear_copy_status();
             return true;
         }
@@ -732,9 +778,11 @@ impl HistoryView {
         else {
             return true;
         };
-        if row <= self.origin.0 {
+        let older = row <= self.origin.0;
+        let newer = row > self.origin.0.saturating_add(rows);
+        if older {
             self.up(1);
-        } else if row > self.origin.0.saturating_add(rows) {
+        } else if newer {
             self.down(1);
         }
         let local_row = row
@@ -746,11 +794,20 @@ impl HistoryView {
         selection.cursor = self.mouse_position(local_row, local_column);
         self.selection = Some(selection);
         if released {
+            self.drag_scroll = None;
             if selection.spans_multiple_cells() {
                 let sequence = self.copy_selection();
                 self.stage_copy(sequence);
             }
             self.selection = None;
+        } else if (older && self.offset < self.source.history_len()) || (newer && self.offset > 0) {
+            self.drag_scroll = Some(DragScroll {
+                older,
+                column: local_column,
+                due: Instant::now() + DRAG_SCROLL_INTERVAL,
+            });
+        } else {
+            self.drag_scroll = None;
         }
         true
     }
@@ -778,6 +835,7 @@ impl HistoryView {
         {
             self.selection = None;
         }
+        self.drag_scroll = None;
     }
 
     fn select(&mut self, index: usize) {
@@ -1178,6 +1236,49 @@ mod tests {
         assert_eq!(newer.offset, 0);
         type_bytes(&mut newer, b"\x1b[<0;2;3m");
         assert_eq!(newer.take_copy().unwrap(), osc52("bb\ncc\ndd\nee").unwrap());
+    }
+
+    #[test]
+    fn mouse_drag_continues_scrolling_while_held_outside_and_stops_at_boundary() {
+        let mut source = Screen::new(2, 4).unwrap();
+        Parser::new().advance(&mut source, b"aa\r\nbb\r\ncc\r\ndd\r\nee");
+        let mut view = HistoryView::new(&source).unwrap();
+        view.offset = 0;
+        view.set_origin(1, 0);
+
+        type_bytes(&mut view, b"\x1b[<0;1;2M\x1b[<32;1;1M");
+        assert_eq!(view.offset, 1);
+        let first_due = view.drag_scroll.unwrap().due;
+        assert!(!view.expire_drag_scroll(first_due - Duration::from_millis(1)));
+        assert!(view.expire_drag_scroll(first_due));
+        assert_eq!(view.offset, 2);
+        let second_due = view.drag_scroll.unwrap().due;
+        assert!(view.expire_drag_scroll(second_due));
+        assert_eq!(view.offset, source.history_len());
+        assert!(view.drag_scroll.is_none());
+
+        type_bytes(&mut view, b"\x1b[<0;2;2m");
+        assert_eq!(view.take_copy().unwrap(), osc52("a\nbb\ncc\nd").unwrap());
+    }
+
+    #[test]
+    fn mouse_drag_autoscroll_stops_on_reentry_or_release() {
+        let mut source = Screen::new(2, 4).unwrap();
+        Parser::new().advance(&mut source, b"aa\r\nbb\r\ncc\r\ndd\r\nee");
+        let mut view = HistoryView::new(&source).unwrap();
+        view.offset = 0;
+        view.set_origin(1, 0);
+
+        type_bytes(&mut view, b"\x1b[<0;2;2M\x1b[<32;2;1M");
+        assert!(view.drag_scroll.is_some());
+        type_bytes(&mut view, b"\x1b[<32;2;2M");
+        assert!(view.drag_scroll.is_none());
+
+        type_bytes(&mut view, b"\x1b[<32;2;1M");
+        let due = view.drag_scroll.unwrap().due;
+        type_bytes(&mut view, b"\x1b[<0;2;1m");
+        assert!(view.drag_scroll.is_none());
+        assert!(!view.expire_drag_scroll(due));
     }
 
     #[test]
