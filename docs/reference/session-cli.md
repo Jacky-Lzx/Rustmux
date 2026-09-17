@@ -1,12 +1,13 @@
 # Named Session Commands
 
-Rustmux keeps its existing foreground mode when started without arguments. Three
+Rustmux keeps its existing foreground mode when started without arguments. Four
 `clap` subcommands expose persistent sessions:
 
 ```sh
 rustmux new work
 rustmux attach work
 rustmux list
+rustmux kill work
 ```
 
 `new` validates and binds the private endpoint before forking. The child creates
@@ -38,6 +39,14 @@ unlocked session, `list` makes a short local connection that the detached server
 accepts and discards as an incomplete handshake. Invalid files, insecure
 endpoints and sockets left behind by terminated servers are omitted.
 
+`kill` terminates the named server whether its client is attached or detached.
+It verifies that the private PID record is currently locked by that server before
+sending `SIGTERM`, then waits for the socket and its sidecars to be removed. A
+stale PID file is rejected, so its numeric contents cannot target an unrelated
+process after a PID has been reused.
+
 The nested-PTY integration test creates a named session, records shell state,
 detaches, attaches through a second terminal, observes the retained state, exits
-the shell and checks terminal restoration and endpoint cleanup.
+the shell and checks terminal restoration and endpoint cleanup. It also kills
+attached and detached sessions, verifying client restoration and complete
+endpoint cleanup.

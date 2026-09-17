@@ -31,5 +31,9 @@ fn execute(command: Option<rustmux::cli::Command>) -> Result<u8, String> {
             }
             Ok(0)
         }
+        Some(rustmux::cli::Command::Kill { name }) => {
+            rustmux::session::supervisor::kill(&name).map_err(|error| error.to_string())?;
+            Ok(0)
+        }
     }
 }

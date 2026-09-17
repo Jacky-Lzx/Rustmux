@@ -25,6 +25,11 @@ pub enum Command {
     },
     /// List named session endpoints.
     List,
+    /// Terminate a named session.
+    Kill {
+        /// Existing session name.
+        name: SessionName,
+    },
 }
 
 #[cfg(test)]
@@ -33,7 +38,7 @@ mod tests {
     use clap::CommandFactory;
 
     #[test]
-    fn parses_local_new_attach_and_list() {
+    fn parses_local_new_attach_list_and_kill() {
         assert!(Cli::try_parse_from(["rustmux"]).unwrap().command.is_none());
         assert_eq!(
             Cli::try_parse_from(["rustmux", "new", "work"])
@@ -55,6 +60,14 @@ mod tests {
             Cli::try_parse_from(["rustmux", "list"]).unwrap().command,
             Some(Command::List)
         );
+        assert_eq!(
+            Cli::try_parse_from(["rustmux", "kill", "work_2"])
+                .unwrap()
+                .command,
+            Some(Command::Kill {
+                name: SessionName::new("work_2").unwrap()
+            })
+        );
     }
 
     #[test]
@@ -64,6 +77,8 @@ mod tests {
             &["rustmux", "new"][..],
             &["rustmux", "attach", "one", "two"][..],
             &["rustmux", "list", "extra"][..],
+            &["rustmux", "kill"][..],
+            &["rustmux", "kill", "one", "two"][..],
             &["rustmux", "new", "../escape"][..],
         ] {
             assert!(Cli::try_parse_from(arguments).is_err(), "{arguments:?}");

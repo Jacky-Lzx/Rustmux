@@ -8,13 +8,16 @@ pub mod supervisor;
 
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
-use std::io;
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 
 use nix::errno::Errno;
 use nix::fcntl::{Flock, FlockArg};
+use nix::unistd::Pid;
+
+const MAX_PID_BYTES: u64 = 32;
 
 /// Maximum encoded length of a session name.
 pub const MAX_SESSION_NAME_BYTES: usize = 64;
@@ -108,6 +111,7 @@ impl SessionEndpoint {
             fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
             listener.set_nonblocking(true)?;
             drop(open_lock_file(directory, name)?);
+            drop(open_pid_file(directory, name, true)?);
             let metadata = fs::symlink_metadata(&path)?;
             Ok((metadata.dev(), metadata.ino()))
         })();
@@ -145,6 +149,7 @@ impl Drop for SessionEndpoint {
         if owns_path {
             let _ = fs::remove_file(&self.path);
             let _ = fs::remove_file(self.path.with_extension("lock"));
+            let _ = fs::remove_file(self.path.with_extension("pid"));
         }
     }
 }
@@ -168,6 +173,75 @@ pub fn connect(name: &SessionName) -> io::Result<UnixStream> {
 #[derive(Debug)]
 pub(crate) struct ClientLease {
     _lock: Flock<File>,
+}
+
+/// Hold proof that the PID record belongs to the running session server.
+#[derive(Debug)]
+pub(crate) struct ServerLease {
+    _lock: Flock<File>,
+}
+
+pub(crate) fn acquire_server(name: &SessionName) -> io::Result<ServerLease> {
+    acquire_server_in(&session_directory(), name, std::process::id())
+}
+
+fn acquire_server_in(
+    directory: &Path,
+    name: &SessionName,
+    process_id: u32,
+) -> io::Result<ServerLease> {
+    ensure_private_directory(directory)?;
+    let file = open_pid_file(directory, name, true)?;
+    let mut lock = match Flock::lock(file, FlockArg::LockExclusiveNonblock) {
+        Ok(lock) => lock,
+        Err((_, error)) if error == Errno::EWOULDBLOCK => {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("session '{name}' already has a server"),
+            ));
+        }
+        Err((_, error)) => return Err(error.into()),
+    };
+    lock.set_len(0)?;
+    lock.seek(SeekFrom::Start(0))?;
+    writeln!(lock, "{process_id}")?;
+    lock.sync_data()?;
+    Ok(ServerLease { _lock: lock })
+}
+
+/// Return the PID only when a live server owns the PID record's lock.
+pub(crate) fn live_server_pid(name: &SessionName) -> io::Result<Pid> {
+    live_server_pid_in(&session_directory(), name)
+}
+
+fn live_server_pid_in(directory: &Path, name: &SessionName) -> io::Result<Pid> {
+    ensure_private_directory(directory)?;
+    validate_socket(name, &socket_path_in(directory, name))?;
+    let file = open_pid_file(directory, name, false).map_err(|error| {
+        if error.kind() == io::ErrorKind::NotFound {
+            session_not_running(name)
+        } else {
+            error
+        }
+    })?;
+    let mut file = match Flock::lock(file, FlockArg::LockSharedNonblock) {
+        Ok(_) => return Err(session_not_running(name)),
+        Err((file, error)) if error == Errno::EWOULDBLOCK => file,
+        Err((_, error)) => return Err(error.into()),
+    };
+    if file.metadata()?.len() > MAX_PID_BYTES {
+        return Err(invalid_pid_record(name));
+    }
+    file.seek(SeekFrom::Start(0))?;
+    let mut contents = String::new();
+    file.take(MAX_PID_BYTES + 1).read_to_string(&mut contents)?;
+    let process_id: i32 = contents
+        .trim()
+        .parse()
+        .ok()
+        .filter(|process_id| *process_id > 1)
+        .ok_or_else(|| invalid_pid_record(name))?;
+    Ok(Pid::from_raw(process_id))
 }
 
 pub(crate) fn acquire_client(name: &SessionName) -> io::Result<ClientLease> {
@@ -282,6 +356,10 @@ fn lock_path_in(directory: &Path, name: &SessionName) -> PathBuf {
     directory.join(format!("{name}.lock"))
 }
 
+fn pid_path_in(directory: &Path, name: &SessionName) -> PathBuf {
+    directory.join(format!("{name}.pid"))
+}
+
 fn open_lock_file(directory: &Path, name: &SessionName) -> io::Result<File> {
     open_lock_file_with(directory, name, true)
 }
@@ -306,6 +384,42 @@ fn open_lock_file_with(directory: &Path, name: &SessionName, create: bool) -> io
         ));
     }
     Ok(file)
+}
+
+fn open_pid_file(directory: &Path, name: &SessionName, create: bool) -> io::Result<File> {
+    let path = pid_path_in(directory, name);
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(create)
+        .mode(0o600)
+        .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
+        .open(&path)?;
+    let metadata = file.metadata()?;
+    if !metadata.file_type().is_file()
+        || metadata.uid() != effective_user_id()
+        || metadata.permissions().mode() & 0o077 != 0
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("{} is not a private session PID file", path.display()),
+        ));
+    }
+    Ok(file)
+}
+
+fn session_not_running(name: &SessionName) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::NotFound,
+        format!("session '{name}' is not running"),
+    )
+}
+
+fn invalid_pid_record(name: &SessionName) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!("session '{name}' has an invalid PID record"),
+    )
 }
 
 fn endpoint_is_live(directory: &Path, name: &SessionName, socket: &Path) -> bool {
@@ -546,6 +660,35 @@ mod tests {
 
         drop(endpoint);
         assert!(!lock_path.exists());
+    }
+
+    #[test]
+    fn server_pid_is_reported_only_while_its_exclusive_lease_is_held() {
+        let directory = TestDirectory::new();
+        let name = SessionName::new("server").unwrap();
+        let endpoint = SessionEndpoint::bind_in(&directory.0, &name).unwrap();
+        let pid_path = pid_path_in(&directory.0, &name);
+
+        let server = acquire_server_in(&directory.0, &name, 42).unwrap();
+        assert_eq!(
+            live_server_pid_in(&directory.0, &name).unwrap().as_raw(),
+            42
+        );
+        assert_eq!(
+            fs::symlink_metadata(&pid_path)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        drop(server);
+
+        let error = live_server_pid_in(&directory.0, &name).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+        assert_eq!(error.to_string(), "session 'server' is not running");
+        drop(endpoint);
+        assert!(!pid_path.exists());
     }
 
     #[test]

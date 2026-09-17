@@ -20,6 +20,13 @@ file. Competing clients fail before connecting to the session socket, and the
 kernel releases the lock automatically when its client exits. Normal endpoint
 cleanup removes both paths.
 
+The server also owns a mode `0600` regular `.pid` sidecar. After detaching, it
+takes an exclusive nonblocking `flock`, writes its process ID and keeps the lock
+for its lifetime. `rustmux kill` accepts that PID only while a competing shared
+lock proves the server still owns the record. Opening uses `O_NOFOLLOW`, and the
+file must remain a regular file owned by the effective user with no group or
+other permissions. Normal endpoint cleanup removes this sidecar as well.
+
 `SessionEndpoint` records the socket device and inode. Dropping it removes the
 path only while that identity still matches, so an older owner cannot unlink a
 replacement endpoint. The listener and socket path otherwise remain owned by

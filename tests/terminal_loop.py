@@ -2136,3 +2136,46 @@ end = time.monotonic() + 3
 while os.path.exists(session_socket):
     time.sleep(0.01)
     assert time.monotonic() < end, session_socket
+
+
+# Killing an attached named session stops its server, restores the client terminal,
+# and removes every endpoint sidecar.
+kill_name = f"kill-{os.getpid()}"
+session_directory = f"/tmp/rustmux-{os.geteuid()}"
+kill_paths = [
+    f"{session_directory}/{kill_name}.sock",
+    f"{session_directory}/{kill_name}.lock",
+    f"{session_directory}/{kill_name}.pid",
+]
+s = Session(arguments=("new", kill_name))
+try:
+    s.expect(b"RUSTMUX_READY>")
+    killed = subprocess.run(
+        [BINARY, "kill", kill_name], capture_output=True, text=True,
+    )
+    assert killed.returncode == 0, killed
+    s.finish(143)
+finally:
+    s.close()
+assert not [path for path in kill_paths if os.path.exists(path)], kill_paths
+
+
+# The same command terminates a server after its only client has detached.
+detached_name = f"kill-detached-{os.getpid()}"
+detached_paths = [
+    f"{session_directory}/{detached_name}.sock",
+    f"{session_directory}/{detached_name}.lock",
+    f"{session_directory}/{detached_name}.pid",
+]
+s = Session(arguments=("new", detached_name))
+try:
+    s.expect(b"RUSTMUX_READY>")
+    s.send(b"\x02d")
+    s.finish(0)
+finally:
+    s.close()
+killed = subprocess.run(
+    [BINARY, "kill", detached_name], capture_output=True, text=True,
+)
+assert killed.returncode == 0, killed
+assert not [path for path in detached_paths if os.path.exists(path)], detached_paths
