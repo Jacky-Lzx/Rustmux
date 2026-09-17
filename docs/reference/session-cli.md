@@ -59,13 +59,17 @@ centered session window on the temporary alternate screen, ordered the same way
 as `list`. The table reports the reliable metadata available from the current
 endpoint format: attached/detached state and server PID. Up/Down and `j`/`k` move
 cyclically, Enter attaches, and Esc, `q` or Ctrl-C cancels without starting a
-client. As in the `main` Session Manager, `a` opens a bounded session-name editor;
-Enter creates and attaches the new session, while Esc returns to the table.
-Pressing `d` once arms termination for the selected session and changes the
-footer to a warning. Only an immediately following `d` terminates it; every
-other key clears the pending confirmation. After termination, the refreshed
-table remains open. The window follows terminal resizes and restores the
-previous terminal modes and screen before attaching or returning.
+client. `/` enters a bounded, case-insensitive name search. Printable bytes are
+search text in that mode, including `j`, `k`, `a`, `d` and `q`; Up/Down select
+results, Tab completes the selected name, Enter attaches it, and Esc returns to
+the complete table. An empty result leaves Enter and Tab inactive. As in the
+`main` Session Manager, `a` opens a bounded session-name editor; Enter creates
+and attaches the new session, while Esc returns to the table. Pressing `d` once
+arms termination for the selected session and changes the footer to a warning.
+Only an immediately following `d` terminates it; every other key clears the
+pending confirmation. After termination, the refreshed table remains open. The
+window follows terminal resizes and restores the previous terminal modes and
+screen before attaching or returning.
 
 The same manager is available from an attached session with Ctrl-B Ctrl-W. The
 client releases the current session lock before showing it, so selecting another

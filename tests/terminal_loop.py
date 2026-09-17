@@ -2222,7 +2222,7 @@ finally:
 # selection is based on the same sorted list as the CLI and restores the outer
 # terminal before the selected session client takes over.
 picker_helper = f"picker-helper-{os.getpid()}"
-picker_target = f"picker-target-{os.getpid()}"
+picker_target = f"picker-jtarget-{os.getpid()}"
 picker_second = f"picker-second-{os.getpid()}"
 picker_created = f"picker-created-{os.getpid()}"
 for name in (picker_helper, picker_target):
@@ -2245,8 +2245,8 @@ try:
     while b"Session Manager" not in picker.output:
         picker.read()
         assert time.monotonic() < end, bytes(picker.output[-2000:])
-    picker.send(b"j" * target_index)
-    visible_target = b"picker-target"
+    picker.send(b"/JTA\t")
+    visible_target = b"picker-jtarget"
     while visible_target not in picker.output:
         picker.read()
         assert time.monotonic() < end, bytes(picker.output[-2000:])

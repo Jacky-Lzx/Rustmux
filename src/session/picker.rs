@@ -23,6 +23,7 @@ const ESCAPE_DELAY: Duration = Duration::from_millis(30);
 enum Key {
     Up,
     Down,
+    Tab,
     Enter,
     Escape,
     Interrupt,
@@ -48,6 +49,7 @@ impl InputDecoder {
                     }
                     3 => keys.push(Key::Interrupt),
                     8 | 127 => keys.push(Key::Backspace),
+                    b'\t' => keys.push(Key::Tab),
                     b'\r' | b'\n' => keys.push(Key::Enter),
                     _ => keys.push(Key::Character(byte)),
                 }
@@ -123,6 +125,7 @@ fn run_picker(
         .and_then(|name| sessions.iter().position(|session| &session.name == name))
         .unwrap_or(0);
     let mut create_input: Option<String> = None;
+    let mut search_input: Option<String> = None;
     let mut delete_armed: Option<SessionName> = None;
     let mut decoder = InputDecoder::default();
     let mut input = [0; 256];
@@ -140,11 +143,14 @@ fn run_picker(
         let size = terminal.size()?;
         let size = (size.ws_row, size.ws_col);
         if dirty || previous_size != Some(size) {
+            let visible = filtered_sessions(sessions, search_input.as_deref());
+            selected = selected.min(visible.len().saturating_sub(1));
             terminal.write_all(&render(
-                sessions,
+                &visible,
                 selected,
                 size,
                 create_input.as_deref(),
+                search_input.as_deref(),
                 delete_armed.as_ref(),
             ))?;
             previous_size = Some(size);
@@ -194,7 +200,52 @@ fn run_picker(
                     {
                         name.push(char::from(byte));
                     }
-                    Key::Up | Key::Down | Key::Character(_) => {}
+                    Key::Up | Key::Down | Key::Tab | Key::Character(_) => {}
+                }
+                dirty = true;
+                continue;
+            }
+
+            if let Some(query) = &mut search_input {
+                let visible = filtered_sessions(sessions, Some(query));
+                selected = selected.min(visible.len().saturating_sub(1));
+                if let Some(next) = search_navigation_target(selected, visible.len(), key) {
+                    selected = next;
+                    dirty = true;
+                    continue;
+                }
+                match key {
+                    Key::Enter if !visible.is_empty() => {
+                        return Ok(Choice::Attach(visible[selected].name.clone()));
+                    }
+                    Key::Tab if !visible.is_empty() => {
+                        *query = visible[selected].name.as_str().to_owned();
+                        selected = 0;
+                    }
+                    Key::Escape => {
+                        let selected_name =
+                            visible.get(selected).map(|session| session.name.clone());
+                        search_input = None;
+                        selected = selected_name
+                            .as_ref()
+                            .and_then(|name| {
+                                sessions.iter().position(|session| &session.name == name)
+                            })
+                            .unwrap_or(0);
+                    }
+                    Key::Interrupt => return Ok(Choice::Cancel),
+                    Key::Backspace => {
+                        query.pop();
+                        selected = 0;
+                    }
+                    Key::Character(byte)
+                        if byte.is_ascii_graphic()
+                            && query.len() < super::MAX_SESSION_NAME_BYTES =>
+                    {
+                        query.push(char::from(byte));
+                        selected = 0;
+                    }
+                    Key::Up | Key::Down | Key::Tab | Key::Enter | Key::Character(_) => {}
                 }
                 dirty = true;
                 continue;
@@ -211,6 +262,7 @@ fn run_picker(
                     return Ok(Choice::Attach(sessions[selected].name.clone()));
                 }
                 Key::Character(b'a') => create_input = Some(String::new()),
+                Key::Character(b'/') => search_input = Some(String::new()),
                 Key::Character(b'd') if !sessions.is_empty() => {
                     let name = sessions[selected].name.clone();
                     if armed.as_ref() == Some(&name) {
@@ -221,11 +273,25 @@ fn run_picker(
                 Key::Escape | Key::Interrupt | Key::Character(b'q') => {
                     return Ok(Choice::Cancel);
                 }
-                Key::Backspace | Key::Character(_) | Key::Up | Key::Down | Key::Enter => {}
+                Key::Backspace
+                | Key::Tab
+                | Key::Character(_)
+                | Key::Up
+                | Key::Down
+                | Key::Enter => {}
             }
             dirty = true;
         }
     }
+}
+
+fn filtered_sessions(sessions: &[SessionInfo], query: Option<&str>) -> Vec<SessionInfo> {
+    let query = query.unwrap_or_default().to_ascii_lowercase();
+    sessions
+        .iter()
+        .filter(|session| session.name.as_str().to_ascii_lowercase().contains(&query))
+        .cloned()
+        .collect()
 }
 
 fn navigation_target(selected: usize, session_count: usize, key: Key) -> Option<usize> {
@@ -237,6 +303,17 @@ fn navigation_target(selected: usize, session_count: usize, key: Key) -> Option<
             Some(selected.checked_sub(1).unwrap_or(session_count - 1))
         }
         Key::Down | Key::Character(b'j') => Some((selected + 1) % session_count),
+        _ => None,
+    }
+}
+
+fn search_navigation_target(selected: usize, session_count: usize, key: Key) -> Option<usize> {
+    if session_count == 0 {
+        return None;
+    }
+    match key {
+        Key::Up => Some(selected.checked_sub(1).unwrap_or(session_count - 1)),
+        Key::Down => Some((selected + 1) % session_count),
         _ => None,
     }
 }
@@ -253,6 +330,7 @@ struct PickerView<'a> {
     sessions: &'a [SessionInfo],
     selected: usize,
     create_input: Option<&'a str>,
+    search_input: Option<&'a str>,
     delete_armed: Option<&'a SessionName>,
 }
 
@@ -261,6 +339,7 @@ fn render(
     selected: usize,
     size: (u16, u16),
     create_input: Option<&str>,
+    search_input: Option<&str>,
     delete_armed: Option<&SessionName>,
 ) -> Vec<u8> {
     let (box_row, box_column, height, width) = picker_rect(size);
@@ -366,6 +445,7 @@ fn render(
             sessions,
             selected,
             create_input,
+            search_input,
             delete_armed,
         };
         draw_compact_sessions(&mut frame, &view, (box_row, box_column, height, width));
@@ -373,19 +453,26 @@ fn render(
     }
 
     let body_width = width - 4;
-    let navigation = create_input.map_or_else(
-        || "↑/↓/j/k Move  Esc/q Close".to_owned(),
-        |name| format!("New session: {name}_"),
-    );
+    let navigation = if let Some(name) = create_input {
+        format!("New session: {name}_")
+    } else if let Some(query) = search_input {
+        format!("Search: {query}_")
+    } else {
+        "↑/↓/j/k Move  / Search  Esc/q Close".to_owned()
+    };
     write_field(
         &mut frame,
         box_row + 1,
         box_column + 2,
         &navigation,
         body_width,
-        if create_input.is_some() { BLUE } else { MUTED },
+        if create_input.is_some() || search_input.is_some() {
+            BLUE
+        } else {
+            MUTED
+        },
         BASE,
-        create_input.is_some(),
+        create_input.is_some() || search_input.is_some(),
     );
     write_at(
         &mut frame,
@@ -504,6 +591,8 @@ fn render(
 
     let footer = if create_input.is_some() {
         "<Enter> Create  <Esc> Cancel".to_owned()
+    } else if search_input.is_some() {
+        "<Enter> Attach  <Tab> Complete  <Esc> Clear".to_owned()
     } else if let Some(name) = delete_armed {
         format!("Press d again to kill '{name}'")
     } else {
@@ -558,6 +647,8 @@ fn draw_compact_sessions(
     if height >= 3 {
         let footer = if let Some(name) = view.create_input {
             format!("New: {name}_  Enter create")
+        } else if let Some(query) = view.search_input {
+            format!("Search: {query}_  Enter attach")
         } else if let Some(name) = view.delete_armed {
             format!("d again: kill {name}")
         } else {
@@ -698,8 +789,14 @@ mod tests {
         let now = Instant::now();
         let mut decoder = InputDecoder::default();
         assert_eq!(
-            decoder.feed(b"\x1b[A\x1bOBj\r", now),
-            [Key::Up, Key::Down, Key::Character(b'j'), Key::Enter,]
+            decoder.feed(b"\x1b[A\x1bOBj\t\r", now),
+            [
+                Key::Up,
+                Key::Down,
+                Key::Character(b'j'),
+                Key::Tab,
+                Key::Enter,
+            ]
         );
         assert!(decoder.feed(b"\x1b", now).is_empty());
         assert_eq!(decoder.flush_due(now + ESCAPE_DELAY), Some(Key::Escape));
@@ -713,6 +810,10 @@ mod tests {
         assert_eq!(navigation_target(0, 3, Key::Up), Some(2));
         assert_eq!(navigation_target(0, 0, Key::Character(b'j')), None);
         assert_eq!(navigation_target(0, 3, Key::Character(b'x')), None);
+        assert_eq!(search_navigation_target(0, 3, Key::Down), Some(1));
+        assert_eq!(search_navigation_target(0, 3, Key::Up), Some(2));
+        assert_eq!(search_navigation_target(0, 3, Key::Character(b'j')), None);
+        assert_eq!(search_navigation_target(0, 3, Key::Character(b'k')), None);
     }
 
     #[test]
@@ -726,7 +827,7 @@ mod tests {
                 server_pid: Some(100 + index as i32),
             })
             .collect();
-        let frame = String::from_utf8(render(&sessions, 3, (5, 20), None, None)).unwrap();
+        let frame = String::from_utf8(render(&sessions, 3, (5, 20), None, None, None)).unwrap();
         assert!(frame.contains("› four  [DETACHED]"));
         assert!(!frame.contains("one"));
         assert!(frame.contains("Session Manager"));
@@ -746,7 +847,7 @@ mod tests {
                 server_pid: Some(9876),
             },
         ];
-        let frame = String::from_utf8(render(&sessions, 1, (24, 80), None, None)).unwrap();
+        let frame = String::from_utf8(render(&sessions, 1, (24, 80), None, None, None)).unwrap();
         assert!(frame.starts_with("\x1b[0m\x1b[2J"));
         assert!(!frame.contains("48;2;24;24;37"));
         assert!(frame.contains("\x1b[7;21H"));
@@ -756,7 +857,8 @@ mod tests {
         assert!(frame.contains("4321"));
         assert!(frame.contains("9876"));
         assert!(frame.contains("<Enter> Attach  <a> New  <dd> Kill"));
-        let create = String::from_utf8(render(&sessions, 1, (24, 80), Some("work"), None)).unwrap();
+        let create =
+            String::from_utf8(render(&sessions, 1, (24, 80), Some("work"), None, None)).unwrap();
         assert!(create.contains("New session: work_"));
         assert!(create.contains("<Enter> Create  <Esc> Cancel"));
         let delete = String::from_utf8(render(
@@ -764,9 +866,36 @@ mod tests {
             1,
             (24, 80),
             None,
+            None,
             Some(&sessions[1].name),
         ))
         .unwrap();
         assert!(delete.contains("Press d again to kill 'idle'"));
+    }
+
+    #[test]
+    fn search_filters_case_insensitively_and_renders_its_editor() {
+        let sessions: Vec<_> = ["alpha", "Jupiter", "jump-start"]
+            .into_iter()
+            .map(|name| SessionInfo {
+                name: SessionName::new(name).unwrap(),
+                attached: false,
+                server_pid: None,
+            })
+            .collect();
+        let filtered = filtered_sessions(&sessions, Some("JU"));
+        assert_eq!(
+            filtered
+                .iter()
+                .map(|session| session.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Jupiter", "jump-start"]
+        );
+
+        let frame =
+            String::from_utf8(render(&filtered, 0, (24, 80), None, Some("JU"), None)).unwrap();
+        assert!(frame.contains("Search: JU_"));
+        assert!(frame.contains("<Tab> Complete"));
+        assert!(!frame.contains("alpha"));
     }
 }

@@ -46,9 +46,11 @@ and Enter, or press Esc or `q` to return to the current session.
 When more than one session is running, `rustmux attach` without a name opens a
 centered session window. It shows each session's attached/detached state and
 server PID. Move with Up/Down or `j`/`k`, attach with Enter, and cancel with Esc,
-`q` or Ctrl-C. Press `a` to enter a new session name and create it with Enter.
-Press `d` twice consecutively to terminate the selected session; any intervening
-key cancels the first `d`. A single running session is attached directly.
+`q` or Ctrl-C. Press `/` to search names without regard to case; use Up/Down to
+move through results, Tab to complete the selected name, and Esc to clear the
+search. Press `a` to enter a new session name and create it with Enter. Press `d`
+twice consecutively to terminate the selected session; any intervening key
+cancels the first `d`. A single running session is attached directly.
 
 Starting another interactive Rustmux or attaching a session from inside a pane
 is rejected before terminal modes change. Session inspection and control commands,
