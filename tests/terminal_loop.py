@@ -2108,6 +2108,10 @@ try:
 finally:
     s.close()
 assert os.path.exists(session_socket), session_socket
+listed = subprocess.run(
+    [BINARY, "list"], check=True, capture_output=True, text=True,
+).stdout.splitlines()
+assert session_name in listed, listed
 
 s = Session(arguments=("attach", session_name))
 try:

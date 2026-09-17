@@ -27,6 +27,7 @@ session that survives terminal detachment, or reconnect to it later, use:
 ```sh
 ./target/debug/rustmux new work
 ./target/debug/rustmux attach work
+./target/debug/rustmux list
 ```
 
 Inside a named session, Ctrl-B followed by `d` detaches and restores the outer

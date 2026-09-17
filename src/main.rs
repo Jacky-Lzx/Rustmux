@@ -25,5 +25,11 @@ fn execute(command: Option<rustmux::cli::Command>) -> Result<u8, String> {
         Some(rustmux::cli::Command::Attach { name }) => {
             rustmux::session::supervisor::attach(&name).map_err(|error| error.to_string())
         }
+        Some(rustmux::cli::Command::List) => {
+            for name in rustmux::session::list().map_err(|error| error.to_string())? {
+                println!("{name}");
+            }
+            Ok(0)
+        }
     }
 }

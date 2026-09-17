@@ -1,11 +1,12 @@
 # Named Session Commands
 
-Rustmux keeps its existing foreground mode when started without arguments. Two
+Rustmux keeps its existing foreground mode when started without arguments. Three
 `clap` subcommands expose persistent sessions:
 
 ```sh
 rustmux new work
 rustmux attach work
+rustmux list
 ```
 
 `new` validates and binds the private endpoint before forking. The child creates
@@ -27,6 +28,12 @@ owned by the effective user with no group or other permissions. It then performs
 the normal versioned handshake before changing terminal modes. A session accepts
 one displayed client at a time; panes, screen state and scrollback continue while
 no client is attached.
+
+`list` prints one private session endpoint name per line in sorted order, making
+its output suitable for shell scripts. It does not enter terminal mode or connect
+to the sessions it finds. Invalid files and insecure endpoints are omitted. A
+socket left behind by an abruptly terminated server can remain visible until
+`new` with the same name identifies and removes it.
 
 The nested-PTY integration test creates a named session, records shell state,
 detaches, attaches through a second terminal, observes the retained state, exits

@@ -159,6 +159,55 @@ pub fn connect(name: &SessionName) -> io::Result<UnixStream> {
     connect_in(&session_directory(), name)
 }
 
+/// Return private session endpoints in stable name order.
+pub fn list() -> io::Result<Vec<SessionName>> {
+    list_in(&session_directory())
+}
+
+fn list_in(directory: &Path) -> io::Result<Vec<SessionName>> {
+    let entries = match fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
+    let metadata = fs::symlink_metadata(directory)?;
+    if !metadata.file_type().is_dir()
+        || metadata.uid() != effective_user_id()
+        || metadata.permissions().mode() & 0o077 != 0
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("{} is not a private session directory", directory.display()),
+        ));
+    }
+
+    let mut sessions = Vec::new();
+    for entry in entries {
+        let Ok(entry) = entry else { continue };
+        let Some(file_name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        let Some(name) = file_name.strip_suffix(".sock") else {
+            continue;
+        };
+        let Ok(name) = SessionName::new(name) else {
+            continue;
+        };
+        let Ok(metadata) = fs::symlink_metadata(entry.path()) else {
+            continue;
+        };
+        if !metadata.file_type().is_socket()
+            || metadata.uid() != effective_user_id()
+            || metadata.permissions().mode() & 0o077 != 0
+        {
+            continue;
+        }
+        sessions.push(name);
+    }
+    sessions.sort_unstable();
+    Ok(sessions)
+}
+
 fn connect_in(directory: &Path, name: &SessionName) -> io::Result<UnixStream> {
     ensure_private_directory(directory)?;
     let path = socket_path_in(directory, name);
@@ -373,6 +422,51 @@ mod tests {
         fs::set_permissions(endpoint.path(), fs::Permissions::from_mode(0o666)).unwrap();
         assert_eq!(
             connect_in(&directory.0, &name).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+    }
+
+    #[test]
+    fn listing_returns_only_private_session_endpoints_in_name_order() {
+        let directory = TestDirectory::new();
+        fs::create_dir(&directory.0).unwrap();
+        fs::set_permissions(&directory.0, fs::Permissions::from_mode(0o700)).unwrap();
+
+        let beta =
+            SessionEndpoint::bind_in(&directory.0, &SessionName::new("beta").unwrap()).unwrap();
+        let alpha =
+            SessionEndpoint::bind_in(&directory.0, &SessionName::new("alpha").unwrap()).unwrap();
+        let stale_path = directory.0.join("stale.sock");
+        let stale = UnixListener::bind(&stale_path).unwrap();
+        fs::set_permissions(&stale_path, fs::Permissions::from_mode(0o600)).unwrap();
+        drop(stale);
+        let insecure_path = directory.0.join("insecure.sock");
+        let insecure = UnixListener::bind(&insecure_path).unwrap();
+        fs::set_permissions(&insecure_path, fs::Permissions::from_mode(0o666)).unwrap();
+        drop(insecure);
+        fs::write(directory.0.join("note.sock"), b"not a socket").unwrap();
+        fs::write(directory.0.join("ignored"), b"not an endpoint").unwrap();
+
+        assert_eq!(
+            list_in(&directory.0).unwrap(),
+            vec![
+                SessionName::new("alpha").unwrap(),
+                SessionName::new("beta").unwrap(),
+                SessionName::new("stale").unwrap(),
+            ]
+        );
+        drop((alpha, beta));
+    }
+
+    #[test]
+    fn listing_missing_directory_is_empty_and_rejects_public_directory() {
+        let directory = TestDirectory::new();
+        assert!(list_in(&directory.0).unwrap().is_empty());
+
+        fs::create_dir(&directory.0).unwrap();
+        fs::set_permissions(&directory.0, fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(
+            list_in(&directory.0).unwrap_err().kind(),
             io::ErrorKind::PermissionDenied
         );
     }
