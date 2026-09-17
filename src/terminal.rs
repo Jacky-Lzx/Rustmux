@@ -1098,6 +1098,18 @@ fn forward(
             renderer.invalidate();
             force_redraw = true;
         }
+        if history
+            .as_ref()
+            .is_some_and(|view| view.escape_expired(Instant::now()))
+        {
+            let exited = history.as_mut().unwrap().expire_escape();
+            if exited {
+                history = None;
+                keys = WindowInput::default();
+            }
+            renderer.invalidate();
+            force_redraw = true;
+        }
         let active = windows.active().expect("at least one window").id();
         let resize = if let Some(size) = frontend.take_resize()? {
             check_size(size.ws_row, size.ws_col)?;

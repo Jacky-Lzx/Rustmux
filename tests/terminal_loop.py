@@ -1527,8 +1527,38 @@ try:
     s.expect(b"History 0/0")
     assert b"RUSTMUX_READY>" in b"".join(s.last_rows)
     assert b"\x1b[?1002h" in s.last_frame
-    s.send(b"q")
-    s.expect(b"RUSTMUX_READY> ")
+    s.output.clear()
+    s.send(b"/RUSTMUX_READY\r")
+    s.expect(b"1/1 /RUSTMUX_READY")
+    s.output.clear()
+    s.send(b"\x1b")
+    deadline = time.monotonic() + 3
+    while b"/RUSTMUX_READY" in s.last_rows[0]:
+        s.read()
+        assert time.monotonic() < deadline, bytes(s.output[-1000:])
+    assert b"History 0/0" in s.last_rows[0]
+    s.output.clear()
+    s.send(b"/draft")
+    s.expect(b"/draft")
+    s.output.clear()
+    s.send(b"\x1b")
+    deadline = time.monotonic() + 3
+    while b"/draft" in s.last_rows[0]:
+        s.read()
+        assert time.monotonic() < deadline, bytes(s.output[-1000:])
+    assert b"History 0/0" in s.last_rows[0]
+    s.send(b"/still-in-history")
+    s.expect(b"Search /still-in-history")
+    s.send(b"\x03")
+    s.expect(b"History 0/0")
+    s.output.clear()
+    s.send(b"\x1b")
+    deadline = time.monotonic() + 3
+    while b"\x1b[?1002l" not in s.output:
+        s.read()
+        assert time.monotonic() < deadline, bytes(s.output[-1000:])
+    s.send(b"printf 'ESCAPE_HISTORY_OK\\n'\n")
+    s.expect(b"ESCAPE_HISTORY_OK")
     s.send(b"exit 0\n")
     s.finish(0)
 finally:

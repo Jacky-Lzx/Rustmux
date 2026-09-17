@@ -24,7 +24,7 @@ coordinates; exiting restores the live application's mouse modes.
 | `n` / `N` | Repeat in the submitted search direction / opposite direction |
 | `y` | Copy the visible snapshot through OSC 52 |
 | `v` | Start or cancel keyboard text selection |
-| `q` / Ctrl-C | Exit to the live screen |
+| `q` / Ctrl-C / Esc | Exit to the live screen |
 
 Wheel events over the bar, pane borders or another pane are ignored. A click
 without movement neither highlights nor copies a cell. Modified vertical wheel
@@ -35,8 +35,9 @@ Navigation stops at both ends. `G` stays in history mode; it does not resume the
 live display. Window/pane shortcuts are unavailable until exit. Other input is
 consumed locally. Bracketed paste is ignored while browsing; inside the query
 editor it inserts text as described below. Plain unbracketed paste cannot be distinguished from
-keypresses. Escape sequences are consumed with a 64-byte bound; standalone Esc
-is not an exit key in this version.
+keypresses. Escape sequences are consumed with a 64-byte bound. A standalone Esc
+is distinguished from a CSI/SS3 sequence with a 30 ms timeout; incomplete
+multi-byte sequences are discarded when that timeout expires.
 
 ## Literal search
 
@@ -77,11 +78,14 @@ the next word and its following separator. At the beginning or end of the query,
 these operations are no-ops.
 Combining marks are separate scalars, not grapheme clusters. Long queries scroll
 horizontally to keep the insertion cursor visible. A steady bar cursor appears
-in the search row; it is hidden again on submission or cancellation. Ctrl-C or Ctrl-G cancels editing and retains
-the previous search, selected result and direction; it does not exit history.
+in the search row; it is hidden again on submission or cancellation. Ctrl-C or
+Ctrl-G cancels editing and retains the previous search, selected result and
+direction. Esc clears both the editor and any active query or result highlight,
+but remains in history mode.
 Enter with an empty query clears search highlighting. While editing, `q`, `j`, `k`, `n`, and other printable keys
 are query text. Up/Down recall search terms; page sequences and mouse events are ignored.
-Use Ctrl-C to cancel rather than Esc. Searches and query edits never reach a shell.
+Press Esc again after the search state clears to exit history. Searches and query
+edits never reach a shell.
 
 ### Pasting a query
 

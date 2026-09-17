@@ -3,8 +3,10 @@ use crate::screen::{MouseTracking, Screen};
 use crate::style::Cell;
 use base64::Engine;
 use std::io;
+use std::time::{Duration, Instant};
 
 const MAX_HISTORY_ESCAPE_BYTES: usize = 64;
+const ESCAPE_TIMEOUT: Duration = Duration::from_millis(30);
 // Encoded OSC 52 output stays below the terminal's 64 KiB input/IO budget.
 const MAX_COPY_TEXT_BYTES: usize = 32 * 1024;
 mod search;
@@ -105,6 +107,8 @@ pub(crate) struct HistoryView {
     source: Screen,
     offset: usize,
     escape: Vec<u8>,
+    escape_since: Option<Instant>,
+    escape_started_in_search: bool,
     discard_escape: bool,
     origin: (usize, usize),
     paste: bool,
@@ -128,6 +132,8 @@ impl HistoryView {
             source: source.clone(),
             offset: source.history_len().min(source.dimensions().0),
             escape: Vec::new(),
+            escape_since: None,
+            escape_started_in_search: false,
             discard_escape: false,
             origin: (0, 0),
             paste: false,
@@ -154,6 +160,31 @@ impl HistoryView {
 
     pub fn query_cursor(&self, columns: usize) -> Option<usize> {
         self.editor.as_ref().map(|editor| editor.display(columns).1)
+    }
+
+    pub fn escape_expired(&self, now: Instant) -> bool {
+        self.escape_since
+            .is_some_and(|started| now.saturating_duration_since(started) >= ESCAPE_TIMEOUT)
+    }
+
+    /// Resolve a timed-out escape prefix. A standalone Escape clears active search state first
+    /// and otherwise exits history mode; incomplete multi-byte sequences are only discarded.
+    pub fn expire_escape(&mut self) -> bool {
+        let standalone = self.escape.as_slice() == b"\x1b";
+        let cancel_search = standalone && self.escape_started_in_search;
+        self.escape.clear();
+        self.escape_since = None;
+        self.escape_started_in_search = false;
+        self.discard_escape = false;
+        if cancel_search {
+            self.editor = None;
+            self.query.clear();
+            self.hits.clear();
+            self.selected = None;
+            false
+        } else {
+            standalone
+        }
     }
 
     pub fn label(&self, columns: usize) -> String {
@@ -218,6 +249,8 @@ impl HistoryView {
                 if self.escape.len() == 6 {
                     self.mouse();
                     self.escape.clear();
+                    self.escape_since = None;
+                    self.escape_started_in_search = false;
                 }
                 return false;
             }
@@ -275,8 +308,12 @@ impl HistoryView {
                     _ => {}
                 }
                 self.escape.clear();
+                self.escape_since = None;
+                self.escape_started_in_search = false;
             } else if self.escape.len() >= MAX_HISTORY_ESCAPE_BYTES {
                 self.escape.clear();
+                self.escape_since = None;
+                self.escape_started_in_search = false;
                 self.discard_escape = true;
             }
             return false;
@@ -286,6 +323,8 @@ impl HistoryView {
                 editor.feed(byte); // Discard an incomplete UTF-8 character.
             }
             self.escape.push(byte);
+            self.escape_since = Some(Instant::now());
+            self.escape_started_in_search = self.editor.is_some() || !self.query.is_empty();
             return false;
         }
         if self.paste {
@@ -1132,6 +1171,71 @@ mod tests {
         assert_eq!(view.offset, 0);
         type_bytes(&mut view, b"\x1b[<64;1;1M");
         assert_eq!(view.offset, source.history_len());
+    }
+
+    #[test]
+    fn standalone_escape_times_out_without_breaking_complete_sequences() {
+        let mut source = Screen::new(2, 8).unwrap();
+        Parser::new().advance(&mut source, b"old\r\nnext\r\nlast");
+        let mut view = HistoryView::new(&source).unwrap();
+
+        assert!(!view.feed(27));
+        let started = view.escape_since.unwrap();
+        assert!(!view.escape_expired(started + ESCAPE_TIMEOUT - Duration::from_millis(1)));
+        assert!(view.escape_expired(started + ESCAPE_TIMEOUT));
+        assert!(view.expire_escape());
+
+        let mut view = HistoryView::new(&source).unwrap();
+        let offset = view.offset;
+        type_bytes(&mut view, b"\x1b[B");
+        assert!(view.escape_since.is_none());
+        assert_eq!(view.offset, offset.saturating_sub(1));
+
+        type_bytes(&mut view, b"/draft");
+        assert!(!view.feed(27));
+        let started = view.escape_since.unwrap();
+        assert!(view.escape_expired(started + ESCAPE_TIMEOUT));
+        assert!(!view.expire_escape());
+        assert!(view.editor.is_none());
+        assert!(view.label(80).starts_with("History "));
+
+        assert!(!view.feed(27));
+        let started = view.escape_since.unwrap();
+        assert!(view.escape_expired(started + ESCAPE_TIMEOUT));
+        assert!(view.expire_escape());
+
+        let mut view = HistoryView::new(&source).unwrap();
+        type_bytes(&mut view, b"\x1b[");
+        let started = view.escape_since.unwrap();
+        assert!(view.escape_expired(started + ESCAPE_TIMEOUT));
+        assert!(!view.expire_escape());
+        assert!(view.escape.is_empty());
+    }
+
+    #[test]
+    fn escape_clears_submitted_search_before_exiting_history() {
+        let mut source = Screen::new(2, 8).unwrap();
+        Parser::new().advance(&mut source, b"old\r\nnext\r\nlast");
+        let mut view = HistoryView::new(&source).unwrap();
+        type_bytes(&mut view, b"/next\r");
+        assert_eq!(view.query, "next");
+        assert!(!view.hits.is_empty());
+        assert!(view.selected.is_some());
+
+        assert!(!view.feed(27));
+        assert!(view.escape_started_in_search);
+        let started = view.escape_since.unwrap();
+        assert!(view.escape_expired(started + ESCAPE_TIMEOUT));
+        assert!(!view.expire_escape());
+        assert!(view.query.is_empty());
+        assert!(view.hits.is_empty());
+        assert!(view.selected.is_none());
+        assert!(view.label(80).starts_with("History "));
+
+        assert!(!view.feed(27));
+        let started = view.escape_since.unwrap();
+        assert!(view.escape_expired(started + ESCAPE_TIMEOUT));
+        assert!(view.expire_escape());
     }
 
     fn type_bytes(view: &mut HistoryView, text: &[u8]) {
