@@ -1,6 +1,6 @@
 //! Top-row window chrome, composed separately from child terminal state.
 use crate::{
-    screen::{EraseMode, Screen},
+    screen::{EraseMode, MouseTracking, Screen},
     style::{Color, Style},
 };
 use std::io;
@@ -154,22 +154,22 @@ fn draw_mode(screen: &mut Screen, columns: usize, width: usize, normal: bool) {
     screen.print(POWERLINE_RIGHT);
 }
 
-pub(crate) fn compose(
-    child: &Screen,
-    outer_rows: u16,
+struct BarLayout {
+    labels: Vec<String>,
+    session: String,
+    session_width: usize,
+    label_columns: usize,
+    start: usize,
+    mode_width: usize,
+}
+
+fn bar_layout(
+    columns: usize,
     session_name: Option<&str>,
     names: &[String],
     active: usize,
     normal_mode: bool,
-) -> io::Result<Screen> {
-    let mut screen = child.clone();
-    if outer_rows <= 1 {
-        return Ok(screen);
-    }
-    let (_, columns) = screen.dimensions();
-    screen.prepend_display_row()?;
-    screen.save_cursor();
-    prepare_row(&mut screen, bar_background_style());
+) -> BarLayout {
     let labels: Vec<_> = names
         .iter()
         .enumerate()
@@ -193,25 +193,79 @@ pub(crate) fn compose(
         })
         .unwrap_or_default();
     let session_width = display_width(&session);
-    screen.set_style(Style {
-        bold: true,
-        ..bar_background_style()
-    });
-    print(&mut screen, &session);
     let available = label_columns.saturating_sub(session_width);
     let mut start = 0;
     while start < active && widths[start..=active].iter().sum::<usize>() > available {
         start += 1;
     }
-    let mut remaining = available;
-    for (index, label) in labels.iter().enumerate().skip(start) {
+    BarLayout {
+        labels,
+        session,
+        session_width,
+        label_columns,
+        start,
+        mode_width,
+    }
+}
+
+pub(crate) fn window_hitboxes(
+    columns: usize,
+    session_name: Option<&str>,
+    names: &[String],
+    active: usize,
+    normal_mode: bool,
+) -> Vec<(usize, usize, usize)> {
+    let layout = bar_layout(columns, session_name, names, active, normal_mode);
+    let mut hitboxes = Vec::new();
+    let mut used = layout.session_width;
+    let mut remaining = layout.label_columns.saturating_sub(used);
+    for (index, label) in layout.labels.iter().enumerate().skip(layout.start) {
+        if remaining < 3 {
+            break;
+        }
+        let label_width = display_width(&clipped(label, remaining - 2));
+        let segment_width = label_width + 2;
+        hitboxes.push((used + 1, used + segment_width + 1, index));
+        used += segment_width;
+        remaining -= segment_width;
+    }
+    hitboxes
+}
+
+pub(crate) fn compose(
+    child: &Screen,
+    outer_rows: u16,
+    session_name: Option<&str>,
+    names: &[String],
+    active: usize,
+    normal_mode: bool,
+) -> io::Result<Screen> {
+    let mut screen = child.clone();
+    if outer_rows <= 1 {
+        return Ok(screen);
+    }
+    let (_, columns) = screen.dimensions();
+    if screen.mouse_tracking() == MouseTracking::Off {
+        screen.set_mouse_tracking(MouseTracking::Button);
+    }
+    screen.prepend_display_row()?;
+    screen.save_cursor();
+    prepare_row(&mut screen, bar_background_style());
+    let layout = bar_layout(columns, session_name, names, active, normal_mode);
+    screen.set_style(Style {
+        bold: true,
+        ..bar_background_style()
+    });
+    print(&mut screen, &layout.session);
+    let mut remaining = layout.label_columns.saturating_sub(layout.session_width);
+    for (index, label) in layout.labels.iter().enumerate().skip(layout.start) {
         draw_powerline_segment(&mut screen, label, index == active, &mut remaining);
         if remaining < 3 {
             break;
         }
     }
-    if mode_width != 0 {
-        draw_mode(&mut screen, columns, mode_width, normal_mode);
+    if layout.mode_width != 0 {
+        draw_mode(&mut screen, columns, layout.mode_width, normal_mode);
     }
     screen.restore_cursor();
     Ok(screen)
@@ -256,6 +310,8 @@ mod tests {
         assert_eq!(view.cursor(), (child.cursor().0 + 1, child.cursor().1));
         assert_eq!(view.bracketed_paste(), child.bracketed_paste());
         assert_eq!(view.cursor_shape(), child.cursor_shape());
+        assert_eq!(child.mouse_tracking(), MouseTracking::Off);
+        assert_eq!(view.mouse_tracking(), MouseTracking::Button);
         let bar: String = view
             .row(0)
             .unwrap()
@@ -272,6 +328,13 @@ mod tests {
         assert_eq!(row[10].style, separator_style(TEXT, BASE));
         assert_eq!(row[11].style, separator_style(BASE, GREEN));
         assert_eq!(row[12].style, bar_style(true));
+
+        let mut mouse_child = Screen::new(2, 20).unwrap();
+        mouse_child.set_mouse_tracking(MouseTracking::Drag);
+        mouse_child.set_sgr_mouse(true);
+        let view = compose(&mouse_child, 3, None, &["shell".into()], 0, false).unwrap();
+        assert_eq!(view.mouse_tracking(), MouseTracking::Drag);
+        assert!(view.sgr_mouse());
     }
 
     #[test]
@@ -366,5 +429,22 @@ mod tests {
             .collect();
         assert!(bar.contains("1 she"), "bar was {bar:?}");
         assert!(!bar.contains("NORMAL"));
+    }
+
+    #[test]
+    fn window_hitboxes_follow_the_rendered_segments_only() {
+        let names = vec!["first".into(), "second".into(), "third".into()];
+        assert_eq!(
+            window_hitboxes(80, None, &names, 0, false),
+            vec![(1, 12, 0), (12, 24, 1), (24, 35, 2)]
+        );
+
+        let session = window_hitboxes(80, Some("work"), &names, 0, false);
+        assert_eq!(session[0], (17, 28, 0));
+        assert!(session.iter().all(|(_, end, _)| *end <= 71));
+
+        let narrow = window_hitboxes(12, None, &names, 2, false);
+        assert_eq!(narrow.len(), 1);
+        assert_eq!(narrow[0].2, 2);
     }
 }

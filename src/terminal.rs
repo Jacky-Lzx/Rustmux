@@ -552,6 +552,9 @@ struct WindowInput {
     pane_left: usize,
     pane_width: usize,
     mouse_enabled: bool,
+    bar_enabled: bool,
+    bar_press: bool,
+    window_hitboxes: Vec<(usize, usize, usize)>,
 }
 
 impl WindowInput {
@@ -559,8 +562,7 @@ impl WindowInput {
     // completed non-mouse sequences are forwarded as soon as they are known.
     fn feed(&mut self, byte: u8, output: &mut Vec<WindowKey>) {
         if self.paste
-            || (self.mouse.is_empty()
-                && (!self.mouse_enabled || byte != 27 || self.mode == InputMode::Normal))
+            || (self.mouse.is_empty() && (!(self.mouse_enabled || self.bar_enabled) || byte != 27))
         {
             self.plain(byte, output);
             return;
@@ -608,11 +610,31 @@ impl WindowInput {
         };
         let mut bytes = self.take_mouse();
         if let Some((column, row)) = coordinates {
+            self.mode = InputMode::Locked;
             let release = (bytes.starts_with(b"\x1b[<") && bytes.last() == Some(&b'm'))
                 || (bytes.starts_with(b"\x1b[M")
                     && bytes[3]
                         .checked_sub(32)
                         .is_some_and(|button| button & 0x63 == 3));
+            if release && self.bar_press {
+                self.bar_press = false;
+                return;
+            }
+            if self.bar_enabled && row == 1 && !release {
+                self.bar_press = true;
+                if left_mouse_press(&bytes)
+                    && let Some((_, _, index)) = self
+                        .window_hitboxes
+                        .iter()
+                        .find(|(start, end, _)| column >= *start && column < *end)
+                {
+                    output.push(WindowKey::Select(*index));
+                }
+                return;
+            }
+            if !self.mouse_enabled {
+                return;
+            }
             let child_row = row.saturating_sub(self.pane_top);
             let child_column = column.saturating_sub(self.pane_left);
             if (child_row == 0
@@ -713,6 +735,21 @@ impl WindowInput {
             output.push(WindowKey::Byte(byte));
         }
     }
+}
+
+fn left_mouse_press(bytes: &[u8]) -> bool {
+    let button = if bytes.starts_with(b"\x1b[<") && bytes.last() == Some(&b'M') {
+        bytes[3..]
+            .iter()
+            .position(|&byte| byte == b';')
+            .and_then(|length| std::str::from_utf8(&bytes[3..3 + length]).ok())
+            .and_then(|button| button.parse::<u8>().ok())
+    } else if bytes.starts_with(b"\x1b[M") {
+        bytes.get(3).and_then(|button| button.checked_sub(32))
+    } else {
+        None
+    };
+    button.is_some_and(|button| button & 0b1110_0011 == 0)
 }
 
 fn spawn_window(
@@ -1166,6 +1203,12 @@ fn forward(
             let pane = windows.active_mut().unwrap().content_mut().active_mut();
             let (_, _, _, state) = pane.parts_mut();
             if state.accepts_input() && state.to_shell.len() <= LIMIT - 64 {
+                if keys.mode == InputMode::Normal {
+                    keys.mode = InputMode::Locked;
+                    state.to_shell.push_back(2);
+                    bar_dirty = true;
+                    force_redraw = true;
+                }
                 state.to_shell.extend(keys.take_mouse());
             }
         }
@@ -1279,6 +1322,26 @@ fn forward(
             keys.pane_width = usize::from(rect.columns);
             keys.mouse_enabled =
                 pane.screen().mouse_tracking() != crate::screen::MouseTracking::Off;
+            keys.bar_enabled = *outer_rows > 1;
+            if keys.mouse.is_empty() && input.front() == Some(&27) {
+                let active = windows.active().unwrap().id();
+                let names: Vec<_> = windows
+                    .iter()
+                    .map(|window| window.name().to_owned())
+                    .collect();
+                let active_index = windows
+                    .iter()
+                    .position(|window| window.id() == active)
+                    .unwrap();
+                let columns = windows.active().unwrap().content().layout().dimensions().1;
+                keys.window_hitboxes = crate::chrome::window_hitboxes(
+                    usize::from(columns),
+                    session_name,
+                    &names,
+                    active_index,
+                    keys.mode == InputMode::Normal,
+                );
+            }
             actions.clear();
             let input_mode = keys.mode;
             keys.feed(input.pop_front().unwrap(), &mut actions);
@@ -2377,5 +2440,37 @@ mod window_input_tests {
                 .collect::<Vec<_>>()
         );
         assert_eq!(decode(b"\x1b"), vec![WindowKey::Byte(27)]);
+    }
+
+    #[test]
+    fn bar_clicks_select_windows_without_reaching_a_child() {
+        let mut keys = WindowInput {
+            pane_height: 23,
+            pane_width: 80,
+            pane_top: 1,
+            bar_enabled: true,
+            window_hitboxes: vec![(1, 11, 0), (11, 22, 1)],
+            ..WindowInput::default()
+        };
+        let mut output = Vec::new();
+        for &byte in b"\x1b[<0;12;1M\x1b[<0;12;1m" {
+            keys.feed(byte, &mut output);
+        }
+        assert_eq!(output, [WindowKey::Select(1)]);
+        assert_eq!(keys.mode, InputMode::Locked);
+
+        output.clear();
+        keys.mode = InputMode::Normal;
+        for &byte in b"\x1b[M %!\x1b[M#%!" {
+            keys.feed(byte, &mut output);
+        }
+        assert_eq!(output, [WindowKey::Select(0)]);
+        assert_eq!(keys.mode, InputMode::Locked);
+
+        output.clear();
+        for &byte in b"\x1b[<0;30;1M\x1b[<0;30;1m\x1b[<0;12;2M\x1b[<0;12;2m" {
+            keys.feed(byte, &mut output);
+        }
+        assert!(output.is_empty());
     }
 }

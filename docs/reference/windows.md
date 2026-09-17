@@ -250,9 +250,18 @@ The badge color identifies the active window. New windows default to the name `s
 Each label is clipped to the available display columns, excluding control
 characters and without splitting a wide glyph. If labels do not fit, the visible
 starting window advances enough to keep the active label in view. There are no
-click-to-select or mouse-scroll actions on the bar yet. On extremely narrow
-terminals the visible
-label may consist only of its highlighted prefix.
+mouse-scroll actions on the bar yet. Left-clicking either Powerline arrow or the
+label between them selects that visible window and returns input to `LOCKED` mode.
+Session text, empty space and the mode badge are not clickable. A press that begins
+on the bar consumes its release;
+a drag that begins in a mouse-aware child can still release on the bar. On
+extremely narrow terminals the visible label may consist only of its highlighted
+prefix.
+
+When the bar is visible, Rustmux requests basic outer-terminal button reports
+even if the child has mouse tracking disabled. In that case content-area events
+are consumed instead of reaching the shell. If the child enables mouse tracking,
+content events retain its encoding and are translated to pane-local coordinates.
 
 The renderer receives a composed copy of the active child screen plus the bar;
 child cells and cursor are shifted down one physical row; the child model and

@@ -706,7 +706,7 @@ for terminate in (False, True):
             s.send(payload[:3])
             s.send(payload[3:])
         s.expect(b"\r\nMOUSE_OFF\r\n")
-        assert b"\x1b[?1000l" in s.last_frame
+        assert b"\x1b[?1000l" not in s.last_frame
         s.send(b"x")
         s.expect(b"\r\nMOUSE_EXIT\r\n")
         if terminate:
@@ -1126,7 +1126,7 @@ bar_mouse = r"""
 import os, select, time, tty
 tty.setraw(0)
 os.write(1, b"\x1b[?1000;1006h\x1b[2J\x1b[HBAR_MOUSE_READY")
-expected = b"\x1b[<0;2;1m\x1b[<0;2;21Mx"
+expected = b"\x1b[<0;2;21M\x1b[<0;2;1mx"
 data = bytearray()
 end = time.monotonic() + 4
 while len(data) < len(expected):
@@ -1144,9 +1144,27 @@ try:
         source.flush()
         s.send(("exec python3 " + shlex.quote(source.name) + "\n").encode())
         s.expect(b"BAR_MOUSE_READY")
-        s.send(b"\x1b[<0;3;1M\x1b[<0;3;1m\x1b[<0;3;23Mx")
+        s.send(b"\x1b[<0;3;23M\x1b[<0;3;1mx")
         s.finish(0)
         assert any(b"BAR_MOUSE_OK" in row for row in s.last_rows)
+finally:
+    s.close()
+
+# Window labels remain clickable when the child itself has mouse reporting off.
+s = Session()
+try:
+    s.expect(b"RUSTMUX_READY> ")
+    s.send(b"WIN=1\n\x02c")
+    s.expect(b"RUSTMUX_READY> ")
+    s.send(b"WIN=2\n")
+    s.expect(b"RUSTMUX_READY> ")
+    # Legacy button reports match the encoding selected for a shell with mouse off.
+    s.send(b"\x1b[M -!\x1b[M#-!printf '\nCLICKED:%s\n' $WIN\n")
+    s.expect(b"CLICKED:2")
+    s.send(b"\x1b[M \"!\x1b[M#\"!printf '\nCLICKED:%s\n' $WIN\n")
+    s.expect(b"CLICKED:1")
+    os.kill(s.app_pid, signal.SIGTERM)
+    s.finish(128 + signal.SIGTERM)
 finally:
     s.close()
 
@@ -1343,7 +1361,7 @@ split_mouse = r"""
 import os, select, time, tty
 tty.setraw(0)
 os.write(1, b"\x1b[?1000;1006h\x1b[2J\x1b[HSPLIT_MOUSE_READY")
-expected = b'\x1b[<0;1;2M\x1b[<0;1;1mx'
+expected = b'\x1b[<0;1;2Mx'
 data = bytearray()
 end = time.monotonic() + 4
 while len(data) < len(expected):
@@ -1412,8 +1430,8 @@ finally:
 
 # Zoomed mouse coordinates have no tiled column offset.
 zoom_mouse = split_mouse.replace(
-    "expected = b'\\x1b[<0;1;2M\\x1b[<0;1;1mx'",
-    "expected = b'\\x1b[<0;2;2M\\x1b[<0;1;1m\\x1b[M !\"x'",
+    "expected = b'\\x1b[<0;1;2Mx'",
+    "expected = b'\\x1b[<0;2;2M\\x1b[M !\"x'",
 )
 s = Session()
 try:
@@ -1570,7 +1588,7 @@ try:
         s.expect(b"History 0/")
         s.send(b"q")
         s.expect(b"LATE_HISTORY_OUTPUT")
-        assert b"\x1b[?1000l" in s.last_frame
+        assert b"\x1b[?1000h" in s.last_frame
         assert b"\x1b[?1006l" in s.last_frame
         s.send(b"printf '\\n%s%s\\n' INPUT_ INTACT\n")
         s.expect(b"INPUT_INTACT")
