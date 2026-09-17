@@ -2103,6 +2103,9 @@ try:
     s.expect(b"RUSTMUX_READY>")
     s.send(b"stty -echo; KEEP=persistent\n")
     s.expect(b"RUSTMUX_READY>")
+    assert session_name in subprocess.run(
+        [BINARY, "list"], check=True, capture_output=True, text=True,
+    ).stdout.splitlines()
     occupied = subprocess.run(
         [BINARY, "attach", session_name], capture_output=True, text=True,
     )

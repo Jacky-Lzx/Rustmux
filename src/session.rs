@@ -231,7 +231,9 @@ fn list_in(directory: &Path) -> io::Result<Vec<SessionName>> {
         {
             continue;
         }
-        sessions.push(name);
+        if endpoint_is_live(directory, &name, &entry.path()) {
+            sessions.push(name);
+        }
     }
     sessions.sort_unstable();
     Ok(sessions)
@@ -281,11 +283,15 @@ fn lock_path_in(directory: &Path, name: &SessionName) -> PathBuf {
 }
 
 fn open_lock_file(directory: &Path, name: &SessionName) -> io::Result<File> {
+    open_lock_file_with(directory, name, true)
+}
+
+fn open_lock_file_with(directory: &Path, name: &SessionName, create: bool) -> io::Result<File> {
     let path = lock_path_in(directory, name);
     let file = OpenOptions::new()
         .read(true)
         .write(true)
-        .create(true)
+        .create(create)
         .mode(0o600)
         .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
         .open(&path)?;
@@ -300,6 +306,25 @@ fn open_lock_file(directory: &Path, name: &SessionName) -> io::Result<File> {
         ));
     }
     Ok(file)
+}
+
+fn endpoint_is_live(directory: &Path, name: &SessionName, socket: &Path) -> bool {
+    let file = match open_lock_file_with(directory, name, false) {
+        Ok(file) => file,
+        // Endpoints created before client locking have no sidecar file.
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return UnixStream::connect(socket).is_ok();
+        }
+        Err(_) => return false,
+    };
+    match Flock::lock(file, FlockArg::LockSharedNonblock) {
+        // An exclusive client lock proves that the server still has an attachment.
+        Err((_, error)) if error == Errno::EWOULDBLOCK => true,
+        // Without an attached client, probe the listening server while holding a
+        // shared lock so an attachment cannot begin between these observations.
+        Ok(_lock) => UnixStream::connect(socket).is_ok(),
+        Err(_) => false,
+    }
 }
 
 fn ensure_private_directory(directory: &Path) -> io::Result<()> {
@@ -524,7 +549,7 @@ mod tests {
     }
 
     #[test]
-    fn listing_returns_only_private_session_endpoints_in_name_order() {
+    fn listing_returns_only_live_private_sessions_in_name_order() {
         let directory = TestDirectory::new();
         fs::create_dir(&directory.0).unwrap();
         fs::set_permissions(&directory.0, fs::Permissions::from_mode(0o700)).unwrap();
@@ -533,10 +558,12 @@ mod tests {
             SessionEndpoint::bind_in(&directory.0, &SessionName::new("beta").unwrap()).unwrap();
         let alpha =
             SessionEndpoint::bind_in(&directory.0, &SessionName::new("alpha").unwrap()).unwrap();
+        let attached = acquire_client_in(&directory.0, &SessionName::new("beta").unwrap()).unwrap();
         let stale_path = directory.0.join("stale.sock");
         let stale = UnixListener::bind(&stale_path).unwrap();
         fs::set_permissions(&stale_path, fs::Permissions::from_mode(0o600)).unwrap();
         drop(stale);
+        drop(open_lock_file(&directory.0, &SessionName::new("stale").unwrap()).unwrap());
         let insecure_path = directory.0.join("insecure.sock");
         let insecure = UnixListener::bind(&insecure_path).unwrap();
         fs::set_permissions(&insecure_path, fs::Permissions::from_mode(0o666)).unwrap();
@@ -549,9 +576,14 @@ mod tests {
             vec![
                 SessionName::new("alpha").unwrap(),
                 SessionName::new("beta").unwrap(),
-                SessionName::new("stale").unwrap(),
             ]
         );
+        drop(alpha.listener().accept().unwrap().0);
+        assert_eq!(
+            beta.listener().accept().unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+        drop(attached);
         drop((alpha, beta));
     }
 

@@ -31,11 +31,12 @@ no client is attached. A second `attach` exits immediately with an error while
 the first client holds the session's advisory lock. The kernel releases that lock
 if the client exits or crashes, so reconnecting does not depend on manual cleanup.
 
-`list` prints one private session endpoint name per line in sorted order, making
-its output suitable for shell scripts. It does not enter terminal mode or connect
-to the sessions it finds. Invalid files and insecure endpoints are omitted. A
-socket left behind by an abruptly terminated server can remain visible until
-`new` with the same name identifies and removes it.
+`list` prints one live session name per line in sorted order, making its output
+suitable for shell scripts. It does not enter terminal mode. An exclusive client
+lock proves an attached session is live without touching its socket. For an
+unlocked session, `list` makes a short local connection that the detached server
+accepts and discards as an incomplete handshake. Invalid files, insecure
+endpoints and sockets left behind by terminated servers are omitted.
 
 The nested-PTY integration test creates a named session, records shell state,
 detaches, attaches through a second terminal, observes the retained state, exits
