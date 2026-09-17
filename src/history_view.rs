@@ -16,6 +16,12 @@ enum SelectionSource {
     Mouse,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CopyStatus {
+    Sent,
+    TooLarge,
+}
+
 #[derive(Clone, Copy)]
 struct Selection {
     anchor: (usize, usize),
@@ -109,7 +115,7 @@ pub(crate) struct HistoryView {
     hits: Vec<Hit>,
     selected: Option<usize>,
     copy_pending: Option<Vec<u8>>,
-    copy_too_large: bool,
+    copy_status: Option<CopyStatus>,
     selection: Option<Selection>,
 }
 
@@ -132,7 +138,7 @@ impl HistoryView {
             hits: Vec::new(),
             selected: None,
             copy_pending: None,
-            copy_too_large: false,
+            copy_status: None,
             selection: None,
         })
     }
@@ -154,8 +160,11 @@ impl HistoryView {
         if let Some(editor) = &self.editor {
             return editor.label(columns);
         }
-        if self.copy_too_large {
-            return "Copy too large (32 KiB limit) · q:exit".to_owned();
+        if let Some(status) = self.copy_status {
+            return match status {
+                CopyStatus::Sent => "Copy sent to terminal · q:exit".to_owned(),
+                CopyStatus::TooLarge => "Copy too large (32 KiB limit) · q:exit".to_owned(),
+            };
         }
         if let Some(selection) = self
             .selection
@@ -323,8 +332,8 @@ impl HistoryView {
             let height = self.source.dimensions().0.max(1) as isize;
             match byte {
                 b'y' => {
-                    self.copy_pending = self.copy_selection();
-                    self.copy_too_large = self.copy_pending.is_none();
+                    let sequence = self.copy_selection();
+                    self.stage_copy(sequence);
                     self.selection = None;
                 }
                 b'v' => self.selection = None,
@@ -343,13 +352,13 @@ impl HistoryView {
             }
             return false;
         }
-        self.copy_too_large = false;
+        self.copy_status = None;
         match byte {
             b'/' => self.editor = Some(QueryInput::new(Direction::Forward)),
             b'?' => self.editor = Some(QueryInput::new(Direction::Backward)),
             b'y' => {
-                self.copy_pending = self.copy_sequence();
-                self.copy_too_large = self.copy_pending.is_none();
+                let sequence = self.copy_sequence();
+                self.stage_copy(sequence);
             }
             b'v' => self.toggle_selection(),
             b'n' => self.next(false),
@@ -407,6 +416,15 @@ impl HistoryView {
             }
         }
         osc52(&text)
+    }
+
+    fn stage_copy(&mut self, sequence: Option<Vec<u8>>) {
+        self.copy_status = Some(if sequence.is_some() {
+            CopyStatus::Sent
+        } else {
+            CopyStatus::TooLarge
+        });
+        self.copy_pending = sequence;
     }
 
     fn copy_selection(&self) -> Option<Vec<u8>> {
@@ -642,7 +660,7 @@ impl HistoryView {
                 cursor: position,
                 source: SelectionSource::Mouse,
             });
-            self.copy_too_large = false;
+            self.copy_status = None;
             return true;
         }
         if !matches!(action, 32 | 0) {
@@ -664,8 +682,8 @@ impl HistoryView {
         self.selection = Some(selection);
         if released {
             if selection.spans_multiple_cells() {
-                self.copy_pending = self.copy_selection();
-                self.copy_too_large = self.copy_pending.is_none();
+                let sequence = self.copy_selection();
+                self.stage_copy(sequence);
             }
             self.selection = None;
         }
@@ -717,7 +735,7 @@ impl HistoryView {
     }
 
     fn up(&mut self, amount: usize) {
-        self.copy_too_large = false;
+        self.copy_status = None;
         self.offset = self
             .offset
             .saturating_add(amount)
@@ -725,7 +743,7 @@ impl HistoryView {
     }
 
     fn down(&mut self, amount: usize) {
-        self.copy_too_large = false;
+        self.copy_status = None;
         self.offset = self.offset.saturating_sub(amount);
     }
 
@@ -848,7 +866,10 @@ mod tests {
         let sequence = view.take_copy().unwrap();
         assert!(sequence.starts_with(b"\x1b]52;c;"));
         assert_eq!(sequence.last(), Some(&7));
+        assert!(view.label(80).contains("Copy sent to terminal"));
         assert!(view.take_copy().is_none());
+        assert!(!view.feed(b'j'));
+        assert!(view.label(80).starts_with("History "));
         assert!(!view.feed(b"y"[0]));
         assert!(view.take_copy().is_some());
     }
@@ -969,6 +990,7 @@ mod tests {
         let mut view = HistoryView::new(&source).unwrap();
         type_bytes(&mut view, b"vly");
         assert_eq!(view.take_copy().unwrap(), osc52("ab").unwrap());
+        assert!(view.label(80).contains("Copy sent to terminal"));
         assert!(view.selection.is_none());
         type_bytes(&mut view, b"y");
         assert!(view.take_copy().is_some());
@@ -991,6 +1013,7 @@ mod tests {
         // Select backwards from row 2, column 2 to row 1, column 3.
         type_bytes(&mut view, b"\x1b[<0;12;4M\x1b[<32;13;3M\x1b[<0;13;3m");
         assert_eq!(view.take_copy().unwrap(), osc52("cdEF").unwrap());
+        assert!(view.label(80).contains("Copy sent to terminal"));
         assert!(view.selection.is_none());
         let rendered = view.render().unwrap();
         assert!(
@@ -1003,6 +1026,7 @@ mod tests {
                 .iter()
                 .all(|cell| !cell.style.inverse)
         );
+        type_bytes(&mut view, b"j");
         assert!(view.label(80).starts_with("History "));
     }
 

@@ -149,8 +149,10 @@ are omitted. The same 32 KiB all-or-nothing limit applies.
 Drag the left mouse button across the active pane in history mode to select
 text. Selection endpoints are inclusive and may be dragged in either direction.
 Releasing the button copies the selected text immediately through OSC 52 and
-clears its highlight. A press must begin inside the active pane; dragging beyond
-its content clamps the active endpoint to the nearest edge.
+clears its highlight. The bar reports `Copy sent to terminal` after a successful
+keyboard or mouse copy; the next navigation action restores the ordinary history
+status. A press must begin inside the active pane; dragging beyond its content
+clamps the active endpoint to the nearest edge.
 
 Mouse selection uses the same logical-text rules and 32 KiB limit as keyboard
 selection. Wide-character placeholder columns select the complete character,
