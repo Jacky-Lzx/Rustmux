@@ -8,6 +8,11 @@ use unicode_width::UnicodeWidthChar;
 
 const PANE_BAR_ROWS: u16 = 1;
 const MIN_PANE_ROWS: u16 = 1;
+const BASE: Color = Color::Rgb(0x1e, 0x1e, 0x2e);
+const MANTLE: Color = Color::Rgb(0x18, 0x18, 0x25);
+const SUBTEXT0: Color = Color::Rgb(0xa6, 0xad, 0xc8);
+const BLUE: Color = Color::Rgb(0x89, 0xb4, 0xfa);
+const PEACH: Color = Color::Rgb(0xfa, 0xb3, 0x87);
 
 pub(crate) fn pane_rows(outer_rows: u16) -> u16 {
     outer_rows.saturating_sub(PANE_BAR_ROWS).max(MIN_PANE_ROWS)
@@ -15,14 +20,19 @@ pub(crate) fn pane_rows(outer_rows: u16) -> u16 {
 
 pub(crate) fn bar_style(active: bool) -> Style {
     // Catppuccin Mocha: explicit RGB keeps chrome independent of indexed palettes.
-    const BASE: Color = Color::Rgb(0x1e, 0x1e, 0x2e);
-    const MANTLE: Color = Color::Rgb(0x18, 0x18, 0x25);
-    const SUBTEXT0: Color = Color::Rgb(0xa6, 0xad, 0xc8);
-    const BLUE: Color = Color::Rgb(0x89, 0xb4, 0xfa);
     Style {
         foreground: if active { BASE } else { SUBTEXT0 },
         background: if active { BLUE } else { MANTLE },
         bold: active,
+        ..Style::default()
+    }
+}
+
+pub(crate) fn separator_style(history: bool) -> Style {
+    Style {
+        foreground: if history { PEACH } else { SUBTEXT0 },
+        background: MANTLE,
+        bold: history,
         ..Style::default()
     }
 }

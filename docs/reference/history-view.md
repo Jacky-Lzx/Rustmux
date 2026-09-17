@@ -5,6 +5,8 @@ history and current screen. It initially moves up one pane-height, clamped to
 available history. Empty history and alternate-screen applications ignore entry.
 Other panes continue displaying live output. The window bar shows `History`, the
 number of rows above the snapshot's bottom, and the snapshot history length.
+In a split layout, separators bordering the browsed pane change to Catppuccin
+Mocha Peach and return to their normal color on exit.
 The cursor is hidden while browsing and shown in the bar while editing a query.
 History mode enables button-event mouse reporting with SGR
 coordinates; exiting restores the live application's mouse modes.

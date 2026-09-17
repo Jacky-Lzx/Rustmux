@@ -1033,7 +1033,11 @@ fn forward(
                             (pane_id, screen)
                         })
                         .collect();
-                    let content = pane_view::compose(panes.layout(), &screens)?;
+                    let content = pane_view::compose_with_highlight(
+                        panes.layout(),
+                        &screens,
+                        history.as_ref().map(|_| focused),
+                    )?;
                     let mut view =
                         compose(&content, *outer_rows, session_name, &names, active_index)?;
                     if let Some(history) = &history
