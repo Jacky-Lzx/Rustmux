@@ -455,7 +455,12 @@ impl HistoryView {
             b'/' => self.editor = Some(QueryInput::new(Direction::Forward)),
             b'?' => self.editor = Some(QueryInput::new(Direction::Backward)),
             b'y' => {
-                let sequence = self.copy_sequence();
+                let sequence =
+                    if let Some(hit) = self.selected.and_then(|index| self.hits.get(index)) {
+                        self.copy_range(hit.start, self.previous_cell(hit.end))
+                    } else {
+                        self.copy_sequence()
+                    };
                 self.stage_copy(sequence);
             }
             b'v' => self.toggle_selection(),
@@ -535,6 +540,10 @@ impl HistoryView {
     fn copy_selection(&self) -> Option<Vec<u8>> {
         let selection = self.selection?;
         let (start, end) = ordered(selection.anchor, selection.cursor);
+        self.copy_range(start, end)
+    }
+
+    fn copy_range(&self, start: (usize, usize), end: (usize, usize)) -> Option<Vec<u8>> {
         let width = self.source.dimensions().1;
         let mut text = String::new();
         for row in start.0..=end.0 {
@@ -995,6 +1004,26 @@ mod tests {
         assert!(view.label(80).starts_with("History "));
         assert!(!view.feed(b"y"[0]));
         assert!(view.take_copy().is_some());
+    }
+
+    #[test]
+    fn y_copies_the_current_search_match_and_no_match_falls_back_to_the_viewport() {
+        let mut source = Screen::new(2, 4).unwrap();
+        Parser::new().advance(&mut source, b"abcdEF\r\nhard\r\nend");
+        let mut view = HistoryView::new(&source).unwrap();
+
+        type_bytes(&mut view, b"/cdEF\r");
+        assert_eq!(view.selected, Some(0));
+        type_bytes(&mut view, b"y");
+        assert_eq!(view.take_copy().unwrap(), osc52("cdEF").unwrap());
+        assert_eq!(view.selected, Some(0));
+        assert_eq!(view.query, "cdEF");
+
+        type_bytes(&mut view, b"/missing\r");
+        assert!(view.selected.is_none());
+        let viewport = view.copy_sequence().unwrap();
+        type_bytes(&mut view, b"y");
+        assert_eq!(view.take_copy().unwrap(), viewport);
     }
 
     #[test]

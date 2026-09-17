@@ -1602,6 +1602,13 @@ try:
         s.send(b"/SELECT_TARGET\r")
         s.expect(b"1/1 /SELECT_TARGET")
         s.output.clear()
+        s.send(b"y")
+        deadline = time.monotonic() + 3
+        while not (matched := re.search(rb"\x1b\]52;c;([A-Za-z0-9+/=]*)\x07", s.output)):
+            s.read()
+            assert time.monotonic() < deadline, bytes(s.output[-1000:])
+        assert base64.b64decode(matched.group(1), validate=True) == b"SELECT_TARGET"
+        s.output.clear()
         s.send(b"vlllly")
         deadline = time.monotonic() + 3
         while not (selected := re.search(rb"\x1b\]52;c;([A-Za-z0-9+/=]*)\x07", s.output)):

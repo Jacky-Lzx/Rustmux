@@ -22,7 +22,7 @@ coordinates; exiting restores the live application's mouse modes.
 | `g` / `G` | Oldest retained row / bottom of the snapshot |
 | `/` / `?` | Search toward newer / older text |
 | `n` / `N` | Repeat in the submitted search direction / opposite direction |
-| `y` | Copy the visible snapshot through OSC 52 |
+| `y` | Copy the current search match, or the visible snapshot when no match is active, through OSC 52 |
 | `v` | Start or cancel keyboard text selection |
 | `q` / Ctrl-C / Esc | Exit to the live screen |
 
@@ -64,6 +64,9 @@ both columns of wide glyphs and entire
 cells when matching a combining suffix. The original snapshot is unchanged.
 A match taller than the pane is only partially visible; use ordinary navigation
 to inspect the remainder. Navigation preserves the selected result.
+Press `y` to copy only the selected match through OSC 52 while retaining the
+query, result number and highlight. The ordinary visible-viewport copy remains
+available whenever no search match is active, including after a no-match query.
 
 The query editor accepts at most 128 UTF-8 bytes. Left/Right (or Ctrl-B/Ctrl-F)
 move by Unicode scalar; Ctrl-Left/Ctrl-Right move by word. Home/End (or
@@ -187,10 +190,12 @@ normal terminal cleanup. Previously queued output frames always finish first.
 
 ## Current limits
 
-`y` copies only the active pane's visible snapshot rows, separated by newlines
-(including soft-wrapped rows). Explicit trailing spaces are preserved; unused
-padding and clipped wide glyphs are omitted. Styling, the bar and other panes
-are not copied. The operation stays in history mode.
+Without an active search match, `y` copies only the active pane's visible
+snapshot rows, separated by newlines (including soft-wrapped rows). With an
+active match, it copies only that match, joining soft wraps and retaining hard
+line breaks. Explicit trailing spaces are preserved; unused padding and clipped
+wide glyphs are omitted. Styling, the bar and other panes are not copied. The
+operation stays in history mode.
 
 Copy text is limited to 32 KiB of UTF-8 before Base64 encoding. An oversized
 view displays `Copy too large` and sends no clipboard request, rather than
