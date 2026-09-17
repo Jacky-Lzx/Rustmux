@@ -122,7 +122,8 @@ fn manage_sessions(
     let mut return_to = return_to.cloned();
     let mut changed = false;
     loop {
-        let sessions = super::list_info()?;
+        let mut sessions = super::list_info()?;
+        order_sessions(&mut sessions, return_to.as_ref());
         match sessions.as_slice() {
             [] if changed || return_to.is_some() => return Ok(None),
             [] => {
@@ -153,6 +154,24 @@ fn manage_sessions(
             }
             super::picker::Choice::Cancel => return Ok(return_to),
         }
+    }
+}
+
+fn order_sessions(sessions: &mut [super::SessionInfo], current: Option<&SessionName>) {
+    sessions.sort_unstable_by(|left, right| {
+        session_rank(left, current)
+            .cmp(&session_rank(right, current))
+            .then_with(|| left.name.cmp(&right.name))
+    });
+}
+
+fn session_rank(session: &super::SessionInfo, current: Option<&SessionName>) -> u8 {
+    if current == Some(&session.name) {
+        0
+    } else if session.attached {
+        1
+    } else {
+        2
     }
 }
 
@@ -238,6 +257,46 @@ fn accept_peer(endpoint: &SessionEndpoint) -> io::Result<handshake::ServerPeer> 
             }
             Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
             Err(error) => return Err(error),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session::SessionInfo;
+
+    #[test]
+    fn manager_orders_current_then_attached_then_detached_by_name() {
+        let mut sessions = [
+            info("z-detached", false),
+            info("z-attached", true),
+            info("current", false),
+            info("a-attached", true),
+            info("a-detached", false),
+        ];
+        let current = SessionName::new("current").unwrap();
+        order_sessions(&mut sessions, Some(&current));
+        assert_eq!(
+            sessions
+                .iter()
+                .map(|session| session.name.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "current",
+                "a-attached",
+                "z-attached",
+                "a-detached",
+                "z-detached",
+            ]
+        );
+    }
+
+    fn info(name: &str, attached: bool) -> SessionInfo {
+        SessionInfo {
+            name: SessionName::new(name).unwrap(),
+            attached,
+            server_pid: None,
         }
     }
 }

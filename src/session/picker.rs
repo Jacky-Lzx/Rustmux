@@ -152,6 +152,7 @@ fn run_picker(
                 create_input.as_deref(),
                 search_input.as_deref(),
                 delete_armed.as_ref(),
+                initially_selected,
             ))?;
             previous_size = Some(size);
             dirty = false;
@@ -332,6 +333,7 @@ struct PickerView<'a> {
     create_input: Option<&'a str>,
     search_input: Option<&'a str>,
     delete_armed: Option<&'a SessionName>,
+    current: Option<&'a SessionName>,
 }
 
 fn render(
@@ -341,6 +343,7 @@ fn render(
     create_input: Option<&str>,
     search_input: Option<&str>,
     delete_armed: Option<&SessionName>,
+    current: Option<&SessionName>,
 ) -> Vec<u8> {
     let (box_row, box_column, height, width) = picker_rect(size);
     // Clear with the terminal's default background so emulator transparency is
@@ -447,6 +450,7 @@ fn render(
             create_input,
             search_input,
             delete_armed,
+            current,
         };
         draw_compact_sessions(&mut frame, &view, (box_row, box_column, height, width));
         return frame.into_bytes();
@@ -561,13 +565,13 @@ fn render(
                 &mut frame,
                 row,
                 column,
-                if session.attached {
-                    "[ATTACHED]"
-                } else {
-                    "[DETACHED]"
-                },
+                session_status(session, current),
                 status_width,
-                if session.attached { PEACH } else { MUTED },
+                if current == Some(&session.name) || session.attached {
+                    PEACH
+                } else {
+                    MUTED
+                },
                 background,
                 true,
             );
@@ -632,11 +636,7 @@ fn draw_compact_sessions(
                 "{} {}  {}",
                 if selected { "›" } else { " " },
                 session.name,
-                if session.attached {
-                    "[ATTACHED]"
-                } else {
-                    "[DETACHED]"
-                }
+                session_status(session, view.current)
             ),
             width.saturating_sub(2),
             if selected { BLUE } else { TEXT },
@@ -668,6 +668,16 @@ fn draw_compact_sessions(
             BASE,
             view.delete_armed.is_some(),
         );
+    }
+}
+
+fn session_status(session: &SessionInfo, current: Option<&SessionName>) -> &'static str {
+    if current == Some(&session.name) {
+        "[CURRENT]"
+    } else if session.attached {
+        "[ATTACHED]"
+    } else {
+        "[DETACHED]"
     }
 }
 
@@ -827,7 +837,8 @@ mod tests {
                 server_pid: Some(100 + index as i32),
             })
             .collect();
-        let frame = String::from_utf8(render(&sessions, 3, (5, 20), None, None, None)).unwrap();
+        let frame =
+            String::from_utf8(render(&sessions, 3, (5, 20), None, None, None, None)).unwrap();
         assert!(frame.contains("› four  [DETACHED]"));
         assert!(!frame.contains("one"));
         assert!(frame.contains("Session Manager"));
@@ -847,7 +858,8 @@ mod tests {
                 server_pid: Some(9876),
             },
         ];
-        let frame = String::from_utf8(render(&sessions, 1, (24, 80), None, None, None)).unwrap();
+        let frame =
+            String::from_utf8(render(&sessions, 1, (24, 80), None, None, None, None)).unwrap();
         assert!(frame.starts_with("\x1b[0m\x1b[2J"));
         assert!(!frame.contains("48;2;24;24;37"));
         assert!(frame.contains("\x1b[7;21H"));
@@ -857,8 +869,16 @@ mod tests {
         assert!(frame.contains("4321"));
         assert!(frame.contains("9876"));
         assert!(frame.contains("<Enter> Attach  <a> New  <dd> Kill"));
-        let create =
-            String::from_utf8(render(&sessions, 1, (24, 80), Some("work"), None, None)).unwrap();
+        let create = String::from_utf8(render(
+            &sessions,
+            1,
+            (24, 80),
+            Some("work"),
+            None,
+            None,
+            None,
+        ))
+        .unwrap();
         assert!(create.contains("New session: work_"));
         assert!(create.contains("<Enter> Create  <Esc> Cancel"));
         let delete = String::from_utf8(render(
@@ -868,6 +888,7 @@ mod tests {
             None,
             None,
             Some(&sessions[1].name),
+            None,
         ))
         .unwrap();
         assert!(delete.contains("Press d again to kill 'idle'"));
@@ -892,10 +913,31 @@ mod tests {
             ["Jupiter", "jump-start"]
         );
 
-        let frame =
-            String::from_utf8(render(&filtered, 0, (24, 80), None, Some("JU"), None)).unwrap();
+        let frame = String::from_utf8(render(&filtered, 0, (24, 80), None, Some("JU"), None, None))
+            .unwrap();
         assert!(frame.contains("Search: JU_"));
         assert!(frame.contains("<Tab> Complete"));
         assert!(!frame.contains("alpha"));
+    }
+
+    #[test]
+    fn current_session_has_a_distinct_status() {
+        let sessions = [SessionInfo {
+            name: SessionName::new("work").unwrap(),
+            attached: false,
+            server_pid: Some(4321),
+        }];
+        let frame = String::from_utf8(render(
+            &sessions,
+            0,
+            (24, 80),
+            None,
+            None,
+            None,
+            Some(&sessions[0].name),
+        ))
+        .unwrap();
+        assert!(frame.contains("[CURRENT]"));
+        assert!(!frame.contains("[DETACHED]"));
     }
 }

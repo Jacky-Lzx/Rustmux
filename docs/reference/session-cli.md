@@ -55,11 +55,13 @@ if the client exits or crashes, so reconnecting does not depend on manual cleanu
 
 When `attach` has no name, it reports an error if there are no live sessions and
 connects directly if there is exactly one. With several sessions it opens a
-centered session window on the temporary alternate screen, ordered the same way
-as `list`. The table reports the reliable metadata available from the current
-endpoint format: attached/detached state and server PID. Up/Down and `j`/`k` move
-cyclically, Enter attaches, and Esc, `q` or Ctrl-C cancels without starting a
-client. `/` enters a bounded, case-insensitive name search. Printable bytes are
+centered session window on the temporary alternate screen. The manager groups
+attached sessions before detached sessions and orders names within each group;
+the script-oriented `list` command remains purely name-sorted. The table reports
+the reliable metadata available from the current endpoint format: connection
+state and server PID. Up/Down and `j`/`k` move cyclically, Enter attaches, and
+Esc, `q` or Ctrl-C cancels without starting a client. `/` enters a bounded,
+case-insensitive name search. Printable bytes are
 search text in that mode, including `j`, `k`, `a`, `d` and `q`; Up/Down select
 results, Tab completes the selected name, Enter attaches it, and Esc returns to
 the complete table. An empty result leaves Enter and Tab inactive. As in the
@@ -74,7 +76,9 @@ screen before attaching or returning.
 The same manager is available from an attached session with Ctrl-B Ctrl-W. The
 client releases the current session lock before showing it, so selecting another
 detached session switches the terminal without stopping either server or its
-panes. Killing the session that opened the manager removes the cancel target;
+panes. That current session remains first, is selected initially and uses a
+distinct `[CURRENT]` status; other attached sessions follow, then detached
+sessions. Killing the session that opened the manager removes the cancel target;
 closing the manager then returns to the outer terminal.
 
 `list` prints one live session name per line in sorted order, making its output

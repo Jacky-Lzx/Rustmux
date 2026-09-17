@@ -2236,8 +2236,6 @@ try:
     sessions = subprocess.run(
         [BINARY, "list"], check=True, capture_output=True, text=True,
     ).stdout.splitlines()
-    helper_index = sessions.index(picker_helper)
-    target_index = sessions.index(picker_target)
     assert len(sessions) > 1, sessions
 
     picker = Session(arguments=("attach",))
@@ -2263,7 +2261,11 @@ try:
     while b"Session Manager" not in picker.output:
         picker.read()
         assert time.monotonic() < end, bytes(picker.output[-2000:])
-    target_to_helper = (helper_index - target_index) % len(sessions)
+    while b"[CURRENT]" not in picker.output:
+        picker.read()
+        assert time.monotonic() < end, bytes(picker.output[-2000:])
+    manager_order = [picker_target] + [name for name in sessions if name != picker_target]
+    target_to_helper = manager_order.index(picker_helper)
     picker.send(b"j" * target_to_helper + b"\r")
     picker.expect(b"RUSTMUX_READY>")
     expect_bar(picker, f"[{picker_helper}]".encode())
