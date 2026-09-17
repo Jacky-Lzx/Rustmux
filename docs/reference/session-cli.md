@@ -25,6 +25,12 @@ performs the initial handshake, requests detach and waits until the server has
 created its shell and entered detached operation. The first real attachment
 replaces that bootstrap size with its current terminal dimensions.
 
+Every pane process inherits `RUSTMUX=1`. Invoking foreground Rustmux, ordinary
+`new`, or `attach` under that marker fails with `nested Rustmux sessions are not
+supported` before opening or changing a terminal. `list`, `kill`, `kill-all` and
+`new --detached` remain usable because they do not attach another interactive
+client to the current pane.
+
 While attached to a named session, Ctrl-B followed by `d` sends the protocol
 `Detach` message and restores the outer terminal. Input earlier in the same read
 is delivered first. The shortcut is disabled inside bracketed paste, and all

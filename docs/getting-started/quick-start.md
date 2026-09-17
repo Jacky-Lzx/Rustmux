@@ -38,6 +38,10 @@ a time. Its name appears before the window labels in the top bar and remains the
 same after reattachment. The endpoint is removed when the last pane exits. See
 [Named Session Commands](../reference/session-cli.md).
 
+Starting another interactive Rustmux or attaching a session from inside a pane
+is rejected before terminal modes change. Session inspection and control commands,
+and `new --detached`, remain available inside panes.
+
 Type commands normally. Ctrl-C reaches the inner terminal rather than terminating
 Rustmux itself. Type `exit` or use the shell's EOF key to close the current pane. Its final pane closes the window. When the last
 window closes, its exit status is returned to the caller. Shell output is drained before normal exit, and

@@ -191,6 +191,14 @@ try:
     s.expect(b"RUSTMUX_READY> ")
     raw = termios.tcgetattr(s.slave)
     assert not raw[3] & (termios.ECHO | termios.ICANON | termios.ISIG)
+    # Pane children carry an environment marker. Interactive nested entry fails
+    # before touching terminal modes and returns control to the existing shell.
+    nested = shlex.quote(BINARY) + "; printf 'NESTED_STATUS:%s\\n' \"$?\"\n"
+    s.send(nested.encode())
+    s.expect(b"NESTED_STATUS:1")
+    assert any(b"rustmux: nested Rustmux sessions are not supported" in row
+               for row in s.last_rows), s.last_rows
+    assert any(b"RUSTMUX_READY>" in row for row in s.last_rows), s.last_rows
     s.send("printf '\\n%s\\n' '中文输入'\n".encode())
     s.expect("\r\n中文输入\r\n".encode())
     s.send(b"printf '\\n%s\\n' 'backspacX\x7fe'\n")

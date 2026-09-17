@@ -16,6 +16,9 @@ fn main() -> ExitCode {
 }
 
 fn execute(command: Option<rustmux::cli::Command>) -> Result<u8, String> {
+    if std::env::var_os(rustmux::RUSTMUX_ENV).is_some() && starts_interactive_session(&command) {
+        return Err("nested Rustmux sessions are not supported".to_owned());
+    }
     match command {
         None => {
             let shell = rustmux::config::shell()?;
@@ -41,6 +44,17 @@ fn execute(command: Option<rustmux::cli::Command>) -> Result<u8, String> {
         }
         Some(rustmux::cli::Command::KillAll { yes }) => kill_all(yes),
     }
+}
+
+fn starts_interactive_session(command: &Option<rustmux::cli::Command>) -> bool {
+    matches!(
+        command,
+        None | Some(rustmux::cli::Command::Attach { .. })
+            | Some(rustmux::cli::Command::New {
+                detached: false,
+                ..
+            })
+    )
 }
 
 fn kill_all(skip_confirmation: bool) -> Result<u8, String> {
@@ -147,5 +161,33 @@ mod tests {
             error,
             "failed to terminate 2 session(s): one: already gone; three: timed out"
         );
+    }
+
+    #[test]
+    fn nested_guard_applies_only_to_interactive_session_entry() {
+        use rustmux::{cli::Command, session::SessionName};
+
+        let name = SessionName::new("work").unwrap();
+        for command in [
+            None,
+            Some(Command::New {
+                name: name.clone(),
+                detached: false,
+            }),
+            Some(Command::Attach { name: name.clone() }),
+        ] {
+            assert!(starts_interactive_session(&command));
+        }
+        for command in [
+            Some(Command::New {
+                name: name.clone(),
+                detached: true,
+            }),
+            Some(Command::List),
+            Some(Command::Kill { name: name.clone() }),
+            Some(Command::KillAll { yes: true }),
+        ] {
+            assert!(!starts_interactive_session(&command));
+        }
     }
 }

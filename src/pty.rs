@@ -81,6 +81,7 @@ impl PtyShell {
         let master = private_fd(pair.master)?;
         let slave = private_fd(pair.slave)?;
         command
+            .env(crate::RUSTMUX_ENV, "1")
             .stdin(Stdio::from(slave.try_clone()?))
             .stdout(Stdio::from(slave.try_clone()?))
             .stderr(Stdio::from(slave));

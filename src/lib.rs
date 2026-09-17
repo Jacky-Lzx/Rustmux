@@ -22,3 +22,7 @@ pub mod terminal;
 mod terminal_device;
 
 pub mod window;
+
+/// Marks processes started inside a Rustmux pane.
+#[doc(hidden)]
+pub const RUSTMUX_ENV: &str = "RUSTMUX";
