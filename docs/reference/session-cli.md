@@ -1,6 +1,6 @@
 # Named Session Commands
 
-Rustmux keeps its existing foreground mode when started without arguments. Four
+Rustmux keeps its existing foreground mode when started without arguments. Five
 `clap` subcommands expose persistent sessions:
 
 ```sh
@@ -8,6 +8,7 @@ rustmux new work
 rustmux attach work
 rustmux list
 rustmux kill work
+rustmux kill-all --yes
 ```
 
 `new` validates and binds the private endpoint before forking. The child creates
@@ -47,6 +48,13 @@ It verifies that the private PID record is currently locked by that server befor
 sending `SIGTERM`, then waits for the socket and its sidecars to be removed. A
 stale PID file is rejected, so its numeric contents cannot target an unrelated
 process after a PID has been reused.
+
+`kill-all` applies the same verified termination path to every live session.
+Without an option it prints the number of running sessions and accepts only `y`
+or `yes` as confirmation; EOF and every other response abort without changing a
+session. `--yes` (or `-y`) skips the prompt for scripts, and `ka` is a short alias.
+The command attempts every session even if one termination fails and reports the
+individual failures. With no live sessions it prints `no sessions` and succeeds.
 
 The nested-PTY integration test creates a named session, records shell state,
 detaches, attaches through a second terminal, observes the retained state, exits

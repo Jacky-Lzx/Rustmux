@@ -30,6 +30,13 @@ pub enum Command {
         /// Existing session name.
         name: SessionName,
     },
+    /// Terminate every running named session.
+    #[command(visible_alias = "ka")]
+    KillAll {
+        /// Skip the confirmation prompt.
+        #[arg(short, long)]
+        yes: bool,
+    },
 }
 
 #[cfg(test)]
@@ -68,6 +75,18 @@ mod tests {
                 name: SessionName::new("work_2").unwrap()
             })
         );
+        assert_eq!(
+            Cli::try_parse_from(["rustmux", "ka", "--yes"])
+                .unwrap()
+                .command,
+            Some(Command::KillAll { yes: true })
+        );
+        assert_eq!(
+            Cli::try_parse_from(["rustmux", "kill-all"])
+                .unwrap()
+                .command,
+            Some(Command::KillAll { yes: false })
+        );
     }
 
     #[test]
@@ -79,6 +98,7 @@ mod tests {
             &["rustmux", "list", "extra"][..],
             &["rustmux", "kill"][..],
             &["rustmux", "kill", "one", "two"][..],
+            &["rustmux", "kill-all", "extra"][..],
             &["rustmux", "new", "../escape"][..],
         ] {
             assert!(Cli::try_parse_from(arguments).is_err(), "{arguments:?}");
