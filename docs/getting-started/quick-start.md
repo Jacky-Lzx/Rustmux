@@ -86,7 +86,7 @@ Enter saves, Esc cancels, and Ctrl-U clears the existing name.
 Ctrl-B followed by `&` asks to close the active window: type `yes` and Enter to
 force close, or Esc to cancel. Unsaved work in that window can be lost. The top
 bar shows the saved name and highlights the active window; left-click a visible
-window label to select it.
+window label to select it, or scroll over the bar to move between windows.
 
 Use Ctrl-B followed by `%` to split left/right, or `"` to split top/bottom.
 The new pane is selected. Ctrl-B followed by lowercase `h/j/k/l` selects the pane

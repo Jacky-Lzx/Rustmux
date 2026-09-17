@@ -1150,7 +1150,8 @@ try:
 finally:
     s.close()
 
-# Window labels remain clickable when the child itself has mouse reporting off.
+# Window labels remain clickable and the bar remains scrollable when the child
+# itself has mouse reporting off.
 s = Session()
 try:
     s.expect(b"RUSTMUX_READY> ")
@@ -1163,6 +1164,12 @@ try:
     s.expect(b"CLICKED:2")
     s.send(b"\x1b[M \"!\x1b[M#\"!printf '\nCLICKED:%s\n' $WIN\n")
     s.expect(b"CLICKED:1")
+    # Legacy wheel reports use button codes 64 (up) and 65 (down). The column
+    # is deliberately outside both labels: the complete bar is scrollable.
+    s.send(b"\x1b[Ma>!printf '\nSCROLLED:%s\n' $WIN\n")
+    s.expect(b"SCROLLED:2")
+    s.send(b"\x1b[M`>!printf '\nSCROLLED:%s\n' $WIN\n")
+    s.expect(b"SCROLLED:1")
     os.kill(s.app_pid, signal.SIGTERM)
     s.finish(128 + signal.SIGTERM)
 finally:

@@ -621,14 +621,17 @@ impl WindowInput {
                 return;
             }
             if self.bar_enabled && row == 1 && !release {
-                self.bar_press = true;
-                if left_mouse_press(&bytes)
-                    && let Some((_, _, index)) = self
+                if let Some(action) = bar_scroll(&bytes) {
+                    output.push(action);
+                } else if left_mouse_press(&bytes) {
+                    self.bar_press = true;
+                    if let Some((_, _, index)) = self
                         .window_hitboxes
                         .iter()
                         .find(|(start, end, _)| column >= *start && column < *end)
-                {
-                    output.push(WindowKey::Select(*index));
+                    {
+                        output.push(WindowKey::Select(*index));
+                    }
                 }
                 return;
             }
@@ -738,18 +741,32 @@ impl WindowInput {
 }
 
 fn left_mouse_press(bytes: &[u8]) -> bool {
-    let button = if bytes.starts_with(b"\x1b[<") && bytes.last() == Some(&b'M') {
+    mouse_button(bytes).is_some_and(|button| button & 0b1110_0011 == 0)
+}
+
+fn mouse_button(bytes: &[u8]) -> Option<u16> {
+    if bytes.starts_with(b"\x1b[<") && bytes.last() == Some(&b'M') {
         bytes[3..]
             .iter()
             .position(|&byte| byte == b';')
             .and_then(|length| std::str::from_utf8(&bytes[3..3 + length]).ok())
-            .and_then(|button| button.parse::<u8>().ok())
+            .and_then(|button| button.parse().ok())
     } else if bytes.starts_with(b"\x1b[M") {
-        bytes.get(3).and_then(|button| button.checked_sub(32))
+        bytes
+            .get(3)
+            .and_then(|button| button.checked_sub(32))
+            .map(u16::from)
     } else {
         None
-    };
-    button.is_some_and(|button| button & 0b1110_0011 == 0)
+    }
+}
+
+fn bar_scroll(bytes: &[u8]) -> Option<WindowKey> {
+    match mouse_button(bytes)? & 0b1100_0011 {
+        64 => Some(WindowKey::Previous),
+        65 => Some(WindowKey::Next),
+        _ => None,
+    }
 }
 
 fn spawn_window(
@@ -2469,6 +2486,37 @@ mod window_input_tests {
 
         output.clear();
         for &byte in b"\x1b[<0;30;1M\x1b[<0;30;1m\x1b[<0;12;2M\x1b[<0;12;2m" {
+            keys.feed(byte, &mut output);
+        }
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn bar_scrolls_through_windows_without_starting_a_click() {
+        let mut keys = WindowInput {
+            pane_height: 23,
+            pane_width: 80,
+            pane_top: 1,
+            bar_enabled: true,
+            ..WindowInput::default()
+        };
+        let mut output = Vec::new();
+        for &byte in b"\x1b[<64;40;1M\x1b[<69;40;1M\x1b[M`(!\x1b[Ma(!" {
+            keys.feed(byte, &mut output);
+        }
+        assert_eq!(
+            output,
+            [
+                WindowKey::Previous,
+                WindowKey::Next,
+                WindowKey::Previous,
+                WindowKey::Next
+            ]
+        );
+        assert!(!keys.bar_press);
+
+        output.clear();
+        for &byte in b"\x1b[<64;40;2M\x1b[<64;40;1m" {
             keys.feed(byte, &mut output);
         }
         assert!(output.is_empty());

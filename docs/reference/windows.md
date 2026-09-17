@@ -249,9 +249,10 @@ The badge color identifies the active window. New windows default to the name `s
 
 Each label is clipped to the available display columns, excluding control
 characters and without splitting a wide glyph. If labels do not fit, the visible
-starting window advances enough to keep the active label in view. There are no
-mouse-scroll actions on the bar yet. Left-clicking either Powerline arrow or the
-label between them selects that visible window and returns input to `LOCKED` mode.
+starting window advances enough to keep the active label in view. Scrolling up
+anywhere on the bar selects the previous window; scrolling down selects the next,
+wrapping at either end. Left-clicking either Powerline arrow or the label between
+them selects that visible window. Both actions return input to `LOCKED` mode.
 Session text, empty space and the mode badge are not clickable. A press that begins
 on the bar consumes its release;
 a drag that begins in a mouse-aware child can still release on the bar. On
