@@ -24,7 +24,8 @@ coordinates; exiting restores the live application's mouse modes.
 | `n` / `N` | Repeat in the submitted search direction / opposite direction |
 | `y` | Copy the current search match, or the visible snapshot when no match is active, through OSC 52 |
 | `v` | Start or cancel keyboard text selection |
-| `q` / Ctrl-C / Esc | Exit to the live screen |
+| `q` / Ctrl-C | Exit to the live screen |
+| Esc | Cancel selection, then search; exit when neither is active |
 
 Wheel events over the bar, pane borders or another pane are ignored. A click
 without movement neither highlights nor copies a cell. Modified vertical wheel
@@ -132,8 +133,10 @@ new history snapshot is opened.
 
 ## Keyboard text selection
 
-Press `v` to anchor a selection at the first meaningful cell in the viewport's
-top row. `h/j/k/l` or the arrow keys move its active end by one cell or row;
+Press `v` to begin keyboard selection. With an active search result, the whole
+match becomes the initial selection, which makes it possible to extend the
+result before copying it. Otherwise the selection is anchored at the first
+meaningful cell in the viewport's top row. `h/j/k/l` or the arrow keys move its active end by one cell or row;
 horizontal movement wraps across row boundaries and skips wide-character
 placeholder cells. Ctrl-U/Ctrl-D and Page Up/Page Down move by one pane height,
 while `g`/`G` extend to the snapshot's first/last row. Movement scrolls the
@@ -143,8 +146,10 @@ are ignored until the selection is completed or cancelled.
 The endpoints are inclusive and either end may precede the anchor. Selected
 cells are highlighted instead of the current search result. Press `y` to copy
 the selected text through OSC 52, end selection and remain in history mode;
-press `v` again to cancel without copying. `q` or Ctrl-C exits history directly.
-After selection ends, plain `y` again copies the complete visible viewport.
+press `v` or Esc to cancel without copying. Cancelling or copying a selection
+that began from a match restores the retained search highlight. `q` or Ctrl-C exits history directly.
+After selection ends, plain `y` again copies the retained search match when one
+is active, or the complete visible viewport otherwise.
 
 Selection copies complete wide glyphs and combining suffixes. It joins rows
 created by soft wrapping without a newline and inserts `\n` across explicit hard

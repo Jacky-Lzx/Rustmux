@@ -226,16 +226,21 @@ impl HistoryView {
         true
     }
 
-    /// Resolve a timed-out escape prefix. A standalone Escape clears active search state first
-    /// and otherwise exits history mode; incomplete multi-byte sequences are only discarded.
+    /// Resolve a timed-out escape prefix. A standalone Escape clears an active selection, then
+    /// active search state, before it exits history; incomplete multi-byte sequences are discarded.
     pub fn expire_escape(&mut self) -> bool {
         let standalone = self.escape.as_slice() == b"\x1b";
+        let cancel_selection = standalone && self.selection.is_some();
         let cancel_search = standalone && self.escape_started_in_search;
         self.escape.clear();
         self.escape_since = None;
         self.escape_started_in_search = false;
         self.discard_escape = false;
-        if cancel_search {
+        if cancel_selection {
+            self.selection = None;
+            self.drag_scroll = None;
+            false
+        } else if cancel_search {
             self.editor = None;
             self.query.clear();
             self.hits.clear();
@@ -602,10 +607,16 @@ impl HistoryView {
         if self.selection.take().is_some() {
             return;
         }
-        let row = self.source.history_len() - self.offset;
-        let cursor = (row, self.first_cell(row).unwrap_or(0));
+        let (anchor, cursor) =
+            if let Some(hit) = self.selected.and_then(|index| self.hits.get(index)) {
+                (hit.start, self.previous_cell(hit.end))
+            } else {
+                let row = self.source.history_len() - self.offset;
+                let cursor = (row, self.first_cell(row).unwrap_or(0));
+                (cursor, cursor)
+            };
         self.selection = Some(Selection {
-            anchor: cursor,
+            anchor,
             cursor,
             source: SelectionSource::Keyboard,
         });
@@ -1121,6 +1132,29 @@ mod tests {
     }
 
     #[test]
+    fn keyboard_selection_starts_with_the_current_search_match() {
+        let mut source = Screen::new(2, 4).unwrap();
+        Parser::new().advance(&mut source, b"abcdEF\r\nhard\r\nend");
+        let mut view = HistoryView::new(&source).unwrap();
+
+        type_bytes(&mut view, b"/cdEF\rv");
+        let selection = view.selection.unwrap();
+        assert_eq!(selection.anchor, (0, 2));
+        assert_eq!(selection.cursor, (1, 1));
+        type_bytes(&mut view, b"v");
+        assert!(view.selection.is_none());
+        assert_eq!(view.selected, Some(0));
+
+        type_bytes(&mut view, b"vly");
+        assert_eq!(view.take_copy().unwrap(), osc52("cdEF\nh").unwrap());
+        assert!(view.selection.is_none());
+        assert_eq!(view.selected, Some(0));
+        assert_eq!(view.query, "cdEF");
+        assert!(view.expire_copy_status(Instant::now() + COPY_STATUS_DURATION));
+        assert!(view.label(80).contains("1/1 /cdEF"));
+    }
+
+    #[test]
     fn editor_export_joins_soft_wraps_and_omits_unused_screen_tail() {
         let mut source = Screen::new(4, 4).unwrap();
         Parser::new().advance(&mut source, b"abcdEF\r\nhard\r\nlast");
@@ -1435,6 +1469,46 @@ mod tests {
         assert!(view.hits.is_empty());
         assert!(view.selected.is_none());
         assert!(view.label(80).starts_with("History "));
+
+        assert!(!view.feed(27));
+        let started = view.escape_since.unwrap();
+        assert!(view.escape_expired(started + ESCAPE_TIMEOUT));
+        assert!(view.expire_escape());
+    }
+
+    #[test]
+    fn escape_cancels_selection_before_search_or_history() {
+        let mut source = Screen::new(2, 8).unwrap();
+        Parser::new().advance(&mut source, b"old\r\nnext\r\nlast");
+        let mut plain = HistoryView::new(&source).unwrap();
+        type_bytes(&mut plain, b"v");
+        assert!(!plain.feed(27));
+        let started = plain.escape_since.unwrap();
+        assert!(plain.escape_expired(started + ESCAPE_TIMEOUT));
+        assert!(!plain.expire_escape());
+        assert!(plain.selection.is_none());
+        assert!(!plain.feed(27));
+        let started = plain.escape_since.unwrap();
+        assert!(plain.escape_expired(started + ESCAPE_TIMEOUT));
+        assert!(plain.expire_escape());
+
+        let mut view = HistoryView::new(&source).unwrap();
+        type_bytes(&mut view, b"/next\rv");
+        assert!(view.selection.is_some());
+
+        assert!(!view.feed(27));
+        let started = view.escape_since.unwrap();
+        assert!(view.escape_expired(started + ESCAPE_TIMEOUT));
+        assert!(!view.expire_escape());
+        assert!(view.selection.is_none());
+        assert_eq!(view.query, "next");
+        assert!(view.selected.is_some());
+
+        assert!(!view.feed(27));
+        let started = view.escape_since.unwrap();
+        assert!(view.escape_expired(started + ESCAPE_TIMEOUT));
+        assert!(!view.expire_escape());
+        assert!(view.query.is_empty());
 
         assert!(!view.feed(27));
         let started = view.escape_since.unwrap();

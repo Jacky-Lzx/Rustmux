@@ -1609,6 +1609,33 @@ try:
             assert time.monotonic() < deadline, bytes(s.output[-1000:])
         assert base64.b64decode(matched.group(1), validate=True) == b"SELECT_TARGET"
         s.output.clear()
+        s.send(b"v")
+        s.expect(b"Select ")
+        s.output.clear()
+        s.send(b"\x1b")
+        deadline = time.monotonic() + 3
+        while b"/SELECT_TARGET" not in s.last_rows[0] or b"Select " in s.last_rows[0]:
+            s.read()
+            assert time.monotonic() < deadline, bytes(s.output[-1000:])
+        s.output.clear()
+        s.send(b"vy")
+        deadline = time.monotonic() + 3
+        while not (selected := re.search(rb"\x1b\]52;c;([A-Za-z0-9+/=]*)\x07", s.output)):
+            s.read()
+            assert time.monotonic() < deadline, bytes(s.output[-1000:])
+        selected_text = base64.b64decode(selected.group(1), validate=True)
+        assert selected_text == b"SELECT_TARGET", (selected_text, s.last_rows, bytes(s.output[-500:]))
+        s.expect(b"Copy sent to terminal")
+        s.output.clear()
+        s.send(b"\x1b")
+        deadline = time.monotonic() + 3
+        while not (
+            s.last_rows[0].startswith(b"History ")
+            and b"/SELECT_TARGET" not in s.last_rows[0]
+        ):
+            s.read()
+            assert time.monotonic() < deadline, bytes(s.output[-1000:])
+        s.output.clear()
         s.send(b"vlllly")
         deadline = time.monotonic() + 3
         while not (selected := re.search(rb"\x1b\]52;c;([A-Za-z0-9+/=]*)\x07", s.output)):
@@ -1616,7 +1643,6 @@ try:
             assert time.monotonic() < deadline, bytes(s.output[-1000:])
         selected_text = base64.b64decode(selected.group(1), validate=True)
         assert selected_text == b"SELEC", (selected_text, s.last_rows, bytes(s.output[-500:]))
-        s.expect(b"Copy sent to terminal")
         s.send(b"g")
         s.expect(b"HIST_00")
         s.output.clear()
