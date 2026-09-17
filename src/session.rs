@@ -4,6 +4,7 @@ pub mod client;
 pub mod frontend;
 pub mod handshake;
 pub mod protocol;
+pub mod supervisor;
 
 use std::fmt;
 use std::fs;
@@ -63,12 +64,21 @@ impl fmt::Display for InvalidSessionName {
 
 impl std::error::Error for InvalidSessionName {}
 
+impl std::str::FromStr for SessionName {
+    type Err = InvalidSessionName;
+
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
+        Self::new(name)
+    }
+}
+
 /// A nonblocking listener and the socket pathname it owns.
 #[derive(Debug)]
 pub struct SessionEndpoint {
     listener: UnixListener,
     path: PathBuf,
     identity: (u64, u64),
+    unlink_on_drop: bool,
 }
 
 impl SessionEndpoint {
@@ -109,12 +119,22 @@ impl SessionEndpoint {
             listener,
             path,
             identity,
+            unlink_on_drop: true,
         })
+    }
+
+    /// Close this process's listener copy without unlinking a forked server's path.
+    pub(crate) fn relinquish(mut self) -> PathBuf {
+        self.unlink_on_drop = false;
+        self.path.clone()
     }
 }
 
 impl Drop for SessionEndpoint {
     fn drop(&mut self) {
+        if !self.unlink_on_drop {
+            return;
+        }
         let owns_path = fs::symlink_metadata(&self.path)
             .map(|metadata| (metadata.dev(), metadata.ino()) == self.identity)
             .unwrap_or(false);
@@ -132,6 +152,41 @@ pub fn session_directory() -> PathBuf {
 /// Return the socket path for a validated session name without creating it.
 pub fn session_socket_path(name: &SessionName) -> PathBuf {
     socket_path_in(&session_directory(), name)
+}
+
+/// Connect only through an endpoint owned by this user in the private directory.
+pub fn connect(name: &SessionName) -> io::Result<UnixStream> {
+    connect_in(&session_directory(), name)
+}
+
+fn connect_in(directory: &Path, name: &SessionName) -> io::Result<UnixStream> {
+    ensure_private_directory(directory)?;
+    let path = socket_path_in(directory, name);
+    let metadata = fs::symlink_metadata(&path).map_err(|error| connect_error(name, error))?;
+    if !metadata.file_type().is_socket() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{} is not a session socket", path.display()),
+        ));
+    }
+    if metadata.uid() != effective_user_id() || metadata.permissions().mode() & 0o077 != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("{} is not a private session socket", path.display()),
+        ));
+    }
+    UnixStream::connect(path).map_err(|error| connect_error(name, error))
+}
+
+fn connect_error(name: &SessionName, error: io::Error) -> io::Error {
+    if error.kind() == io::ErrorKind::NotFound {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("session '{name}' does not exist"),
+        )
+    } else {
+        error
+    }
 }
 
 fn socket_path_in(directory: &Path, name: &SessionName) -> PathBuf {
@@ -292,5 +347,33 @@ mod tests {
         drop(endpoint);
         assert!(path.exists());
         drop(replacement);
+    }
+
+    #[test]
+    fn relinquishing_closes_one_listener_without_removing_the_socket() {
+        let directory = TestDirectory::new();
+        let name = SessionName::new("forked").unwrap();
+        let endpoint = SessionEndpoint::bind_in(&directory.0, &name).unwrap();
+        let path = endpoint.relinquish();
+        assert!(path.exists());
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn connecting_requires_a_private_socket() {
+        let directory = TestDirectory::new();
+        let name = SessionName::new("connect").unwrap();
+        assert_eq!(
+            connect_in(&directory.0, &name).unwrap_err().to_string(),
+            "session 'connect' does not exist"
+        );
+        let endpoint = SessionEndpoint::bind_in(&directory.0, &name).unwrap();
+        drop(connect_in(&directory.0, &name).unwrap());
+
+        fs::set_permissions(endpoint.path(), fs::Permissions::from_mode(0o666)).unwrap();
+        assert_eq!(
+            connect_in(&directory.0, &name).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
     }
 }

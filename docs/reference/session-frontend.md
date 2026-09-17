@@ -1,9 +1,8 @@
 # Session Frontend Adapter
 
 `session::frontend::ServerFrontend` converts an accepted session connection
-into bounded terminal input, resize updates and framed renderer output. It is a
-server-side adapter; this step does not yet run the terminal event loop in a
-background process or add attach commands to the CLI.
+into bounded terminal input, resize updates and framed renderer output. The
+background session server uses this adapter for every attached client.
 
 The adapter now satisfies the terminal loop's private `Frontend` boundary. The
 loop drains already decoded input before polling for more, requests socket reads

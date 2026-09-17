@@ -40,6 +40,7 @@
 - [Session Protocol](reference/session-protocol.md)
 - [Session Handshake](reference/session-handshake.md)
 - [Session Client Bridge](reference/session-client.md)
+- [Named Session Commands](reference/session-cli.md)
 - [Session Frontend Adapter](reference/session-frontend.md)
 - [Session Runtime State](reference/session-runtime.md)
 - [Frontend I/O Boundary](reference/frontend-io.md)

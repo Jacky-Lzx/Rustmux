@@ -51,6 +51,8 @@ fn bridge(
     let mut to_terminal = VecDeque::new();
     let mut pending_resize = signals.resize.swap(false, Ordering::Relaxed);
     let mut exit = None;
+    let mut input = ClientInput::default();
+    let mut detaching = false;
 
     apply_server_messages(peer.decode(&[])?, &mut to_terminal, &mut exit)?;
     loop {
@@ -59,10 +61,10 @@ fn bridge(
             return Ok((128 + signal) as u8);
         }
         pending_resize |= signals.resize.swap(false, Ordering::Relaxed);
-        if pending_resize && outbound.is_empty() {
+        if pending_resize && outbound.is_empty() && !detaching {
             let size = terminal.size()?;
             if size.ws_row != 0 && size.ws_col != 0 {
-                outbound.set(ClientMessage::Resize {
+                outbound.push(ClientMessage::Resize {
                     rows: size.ws_row,
                     columns: size.ws_col,
                 })?;
@@ -74,17 +76,20 @@ fn bridge(
         {
             return exit_status(status);
         }
+        if detaching && outbound.is_empty() {
+            return Ok(0);
+        }
 
         let (terminal_ready, socket_ready) = {
             let mut terminal_flags = PollFlags::empty();
-            if exit.is_none() && outbound.is_empty() && !pending_resize {
+            if exit.is_none() && !detaching && outbound.is_empty() && !pending_resize {
                 terminal_flags |= PollFlags::POLLIN;
             }
             if !to_terminal.is_empty() {
                 terminal_flags |= PollFlags::POLLOUT;
             }
             let mut socket_flags = PollFlags::empty();
-            if exit.is_none() && to_terminal.is_empty() {
+            if exit.is_none() && !detaching && to_terminal.is_empty() {
                 socket_flags |= PollFlags::POLLIN;
             }
             if !outbound.is_empty() {
@@ -108,6 +113,7 @@ fn bridge(
         reject_invalid_fd(socket_ready, "session socket")?;
         if terminal_ready.intersects(PollFlags::POLLIN | PollFlags::POLLHUP | PollFlags::POLLERR)
             && exit.is_none()
+            && !detaching
             && outbound.is_empty()
         {
             let mut bytes = [0; READ_BYTES];
@@ -118,7 +124,16 @@ fn bridge(
                         "terminal input ended",
                     ));
                 }
-                Ok(count) => outbound.set(ClientMessage::Input(bytes[..count].to_vec()))?,
+                Ok(count) => {
+                    let mut forwarded = Vec::with_capacity(count);
+                    detaching = input.feed(&bytes[..count], &mut forwarded);
+                    if !forwarded.is_empty() {
+                        outbound.push(ClientMessage::Input(forwarded))?;
+                    }
+                    if detaching {
+                        outbound.push(ClientMessage::Detach)?;
+                    }
+                }
                 Err(error)
                     if matches!(
                         error.kind(),
@@ -132,6 +147,7 @@ fn bridge(
         }
         if socket_ready.intersects(PollFlags::POLLIN | PollFlags::POLLHUP | PollFlags::POLLERR)
             && exit.is_none()
+            && !detaching
             && to_terminal.is_empty()
         {
             let mut bytes = [0; READ_BYTES];
@@ -235,21 +251,21 @@ fn exit_status(status: i32) -> io::Result<u8> {
 
 #[derive(Debug, Default)]
 struct Outbound {
-    bytes: Vec<u8>,
+    frames: VecDeque<Vec<u8>>,
     written: usize,
 }
 
 impl Outbound {
     fn is_empty(&self) -> bool {
-        self.bytes.is_empty()
+        self.frames.is_empty()
     }
 
-    fn set(&mut self, message: ClientMessage) -> io::Result<()> {
-        debug_assert!(self.is_empty());
-        self.bytes = message
-            .encode()
-            .map_err(|error| invalid_data(error.to_string()))?;
-        self.written = 0;
+    fn push(&mut self, message: ClientMessage) -> io::Result<()> {
+        self.frames.push_back(
+            message
+                .encode()
+                .map_err(|error| invalid_data(error.to_string()))?,
+        );
         Ok(())
     }
 
@@ -257,7 +273,8 @@ impl Outbound {
         if self.is_empty() {
             return Ok(());
         }
-        match writer.write(&self.bytes[self.written..]) {
+        let frame = self.frames.front().expect("nonempty outbound queue");
+        match writer.write(&frame[self.written..]) {
             Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
             Ok(count) => self.written += count,
             Err(error)
@@ -270,11 +287,50 @@ impl Outbound {
             }
             Err(error) => return Err(error),
         }
-        if self.written == self.bytes.len() {
-            self.bytes.clear();
+        if self.written == frame.len() {
+            self.frames.pop_front();
             self.written = 0;
         }
         Ok(())
+    }
+}
+
+#[derive(Debug, Default)]
+struct ClientInput {
+    prefix: bool,
+    paste: bool,
+    tail: VecDeque<u8>,
+}
+
+impl ClientInput {
+    fn feed(&mut self, bytes: &[u8], forwarded: &mut Vec<u8>) -> bool {
+        for &byte in bytes {
+            self.tail.push_back(byte);
+            if self.tail.len() > 6 {
+                self.tail.pop_front();
+            }
+            let was_paste = self.paste;
+            if self.tail.iter().copied().eq(b"\x1b[200~".iter().copied()) {
+                self.paste = true;
+            }
+            if self.tail.iter().copied().eq(b"\x1b[201~".iter().copied()) {
+                self.paste = false;
+            }
+            if was_paste {
+                forwarded.push(byte);
+            } else if self.prefix {
+                self.prefix = false;
+                if byte == b'd' {
+                    return true;
+                }
+                forwarded.extend([2, byte]);
+            } else if byte == 2 {
+                self.prefix = true;
+            } else {
+                forwarded.push(byte);
+            }
+        }
+        false
     }
 }
 
@@ -433,5 +489,29 @@ mod tests {
             exit_status(256).unwrap_err().kind(),
             io::ErrorKind::InvalidData
         );
+    }
+
+    #[test]
+    fn detach_shortcut_preserves_prior_input_and_ignores_paste_contents() {
+        let mut input = ClientInput::default();
+        let mut forwarded = Vec::new();
+        assert!(!input.feed(b"before\x02", &mut forwarded));
+        assert!(input.feed(b"dafter", &mut forwarded));
+        assert_eq!(forwarded, b"before");
+
+        let mut input = ClientInput::default();
+        let mut forwarded = Vec::new();
+        assert!(!input.feed(b"\x1b[200~paste\x02d\x1b[201~", &mut forwarded));
+        assert_eq!(forwarded, b"\x1b[200~paste\x02d\x1b[201~");
+        assert!(input.feed(b"\x02d", &mut forwarded));
+    }
+
+    #[test]
+    fn non_detach_prefixes_are_forwarded_for_the_server_parser() {
+        let mut input = ClientInput::default();
+        let mut forwarded = Vec::new();
+        assert!(!input.feed(b"\x02", &mut forwarded));
+        assert!(!input.feed(b"c\x02\x02", &mut forwarded));
+        assert_eq!(forwarded, b"\x02c\x02\x02");
     }
 }

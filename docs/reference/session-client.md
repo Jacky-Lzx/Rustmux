@@ -19,10 +19,9 @@ focus, paste, style and alternate-screen modes before returning. A server socket
 that closes without `Exit` is reported as an incomplete session rather than a
 successful command.
 
-The bridge deliberately does not interpret Rustmux prefix keys. Window and pane
-commands remain server-side, so ordinary child input has one parser and one
-meaning. Command-line session creation, attachment, background startup and an
-explicit detach shortcut belong to the following orchestration layer.
+The bridge forwards Rustmux prefix keys to the server-side window parser except
+for Ctrl-B `d`, which queues `Detach` after any earlier bytes and returns once the
+frame is written. Bracketed paste contents never trigger this shortcut.
 
 The PTY unit test exercises the real raw-mode boundary: initial dimensions and
 resize propagation, keyboard input, rendered output, final status and exact

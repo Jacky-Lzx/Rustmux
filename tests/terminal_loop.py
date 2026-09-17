@@ -21,7 +21,7 @@ if sys.argv[1] == "--supervisor":
     # macOS revokes the slave when its controlling session leader exits.
     report = int(sys.argv[3])
     original = termios.tcgetattr(0)
-    app = subprocess.Popen([sys.argv[2]])
+    app = subprocess.Popen([sys.argv[2], *sys.argv[4:]])
     os.write(report, (json.dumps({"pid": app.pid}) + "\n").encode())
     try:
         code = app.wait(timeout=12)
@@ -39,7 +39,7 @@ if sys.argv[1] == "--supervisor":
 BINARY = sys.argv[1]
 
 class Session:
-    def __init__(self, shell="/bin/sh", extra_env=None):
+    def __init__(self, shell="/bin/sh", extra_env=None, arguments=()):
         self.master, self.slave = os.openpty()
         fcntl.ioctl(self.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
         self.original = termios.tcgetattr(self.slave)
@@ -51,7 +51,7 @@ class Session:
             fcntl.ioctl(0, termios.TIOCSCTTY, 0)
         read_report, write_report = os.pipe()
         self.child = subprocess.Popen(
-            [sys.executable, __file__, "--supervisor", BINARY, str(write_report)],
+            [sys.executable, __file__, "--supervisor", BINARY, str(write_report), *arguments],
             stdin=self.slave, stdout=self.slave, stderr=self.slave, env=env,
             preexec_fn=child_setup, pass_fds=(write_report,))
         os.close(write_report)
@@ -2082,3 +2082,43 @@ with tempfile.TemporaryDirectory(prefix="rustmux-osc7-") as directory:
         s.finish(0)
     finally:
         s.close()
+
+
+# Attaching to an unknown name reports the missing session instead of its socket path.
+missing_name = f"missing-{os.getpid()}"
+missing = subprocess.run(
+    [BINARY, "attach", missing_name], capture_output=True, text=True,
+)
+assert missing.returncode == 1, missing
+assert missing.stderr.endswith(
+    f"rustmux: session '{missing_name}' does not exist\n"
+), missing.stderr
+
+
+# A named server survives client detach and preserves its shell for reattachment.
+session_name = f"integration-{os.getpid()}"
+session_socket = f"/tmp/rustmux-{os.geteuid()}/{session_name}.sock"
+s = Session(arguments=("new", session_name))
+try:
+    s.expect(b"RUSTMUX_READY>")
+    s.send(b"stty -echo; KEEP=persistent\n")
+    s.expect(b"RUSTMUX_READY>")
+    s.send(b"\x02d")
+    s.finish(0)
+finally:
+    s.close()
+assert os.path.exists(session_socket), session_socket
+
+s = Session(arguments=("attach", session_name))
+try:
+    s.expect(b"RUSTMUX_READY>")
+    s.send(b"printf 'SESSION_%s\\n' \"$KEEP\"\n")
+    s.expect(b"SESSION_persistent")
+    s.send(b"exit 0\n")
+    s.finish(0)
+finally:
+    s.close()
+end = time.monotonic() + 3
+while os.path.exists(session_socket):
+    time.sleep(0.01)
+    assert time.monotonic() < end, session_socket

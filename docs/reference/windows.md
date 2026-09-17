@@ -1,9 +1,9 @@
 # Windows
 
 The CLI supports multiple terminal windows, each with one or more shell panes. `window::Windows<T>` owns their ordered collection and stable identities.
-A top window bar shows names and focus. Basic [interactive splitting](interactive-splits.md) is available; persistent
-sessions are not implemented. Window renaming uses the same bar
-row as a temporary input prompt.
+A top window bar shows names and focus. Basic [interactive splitting](interactive-splits.md)
+and [named persistent sessions](session-cli.md) are available. Window renaming
+uses the same bar row as a temporary input prompt.
 
 ## Identity and focus
 

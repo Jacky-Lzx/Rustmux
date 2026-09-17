@@ -1,6 +1,7 @@
 //! Building blocks for the human-reviewed Rustmux implementation.
 
 mod chrome;
+pub mod cli;
 mod closed_pane;
 pub mod config;
 mod history_view;

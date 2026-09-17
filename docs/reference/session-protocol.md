@@ -1,8 +1,7 @@
 # Session Protocol
 
-`session::protocol` defines the bounded local framing used by future persistent
-session clients and servers. This is the second noninteractive part of H13. It
-does not yet start a server or move the terminal event loop behind a socket.
+`session::protocol` defines the bounded local framing used by persistent session
+clients and servers.
 
 Each frame has a one-byte message type, a four-byte big-endian payload length
 and the payload. A payload is limited to 64 KiB. Decoders accept fragmented and

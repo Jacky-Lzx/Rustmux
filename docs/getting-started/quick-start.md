@@ -21,6 +21,19 @@ shell = "/opt/homebrew/bin/fish"
 `RUSTMUX_SHELL=/bin/sh ./target/debug/rustmux` remains available as a temporary
 override. Changes take effect the next time Rustmux starts.
 
+Running without arguments keeps the foreground-only behavior. To create a named
+session that survives terminal detachment, or reconnect to it later, use:
+
+```sh
+./target/debug/rustmux new work
+./target/debug/rustmux attach work
+```
+
+Inside a named session, Ctrl-B followed by `d` detaches and restores the outer
+terminal while its panes continue running. Only one client displays a session at
+a time. The endpoint is removed when the last pane exits. See
+[Named Session Commands](../reference/session-cli.md).
+
 Type commands normally. Ctrl-C reaches the inner terminal rather than terminating
 Rustmux itself. Type `exit` or use the shell's EOF key to close the current pane. Its final pane closes the window. When the last
 window closes, its exit status is returned to the caller. Shell output is drained before normal exit, and

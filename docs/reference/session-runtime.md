@@ -32,7 +32,7 @@ connections do not terminate the existing session. When an attached session
 finishes after its rendered output drains, the server sends the protocol `Exit`
 status before closing the connection.
 
-This library path is now complete enough for a CLI supervisor to invoke. The
-next step is process and command orchestration: create a named endpoint, start
-the server independently of the launching terminal, and provide attach and
-detach commands.
+The CLI supervisor binds a named endpoint, forks before terminal mode changes,
+starts the server in a new process session and connects the original process as
+its first client. Later `attach` commands use the same runtime after Ctrl-B `d`
+detaches the current client.

@@ -1,10 +1,10 @@
 # Rustmux: main-human
 
 This documentation describes the implementation on `main-human`. The branch
-provides multiple shell windows with prefix-key switching, parsed screen rendering,
-dynamic resize propagation and outer-terminal restoration. The terminal protocol
-subset is documented in the [input and rendering loop](reference/input-loop.md).
-Split panes and session persistence are not yet implemented.
+provides multiple shell windows and split panes with prefix-key switching, parsed
+screen rendering, named persistent sessions, dynamic resize propagation and
+outer-terminal restoration. The terminal protocol subset is documented in the
+[input and rendering loop](reference/input-loop.md).
 
 Developers can review the [PTY lifecycle module](reference/pty-lifecycle.md), which
 starts an interactive shell on a controlling terminal and owns its cleanup.
