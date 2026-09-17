@@ -2101,6 +2101,7 @@ session_socket = f"/tmp/rustmux-{os.geteuid()}/{session_name}.sock"
 s = Session(arguments=("new", session_name))
 try:
     s.expect(b"RUSTMUX_READY>")
+    expect_bar(s, f"[{session_name}]".encode())
     s.send(b"stty -echo; KEEP=persistent\n")
     s.expect(b"RUSTMUX_READY>")
     assert session_name in subprocess.run(
@@ -2126,6 +2127,7 @@ assert session_name in listed, listed
 s = Session(arguments=("attach", session_name))
 try:
     s.expect(b"RUSTMUX_READY>")
+    expect_bar(s, f"[{session_name}]".encode())
     s.send(b"printf 'SESSION_%s\\n' \"$KEEP\"\n")
     s.expect(b"SESSION_persistent")
     s.send(b"exit 0\n")

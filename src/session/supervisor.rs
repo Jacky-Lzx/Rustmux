@@ -67,7 +67,7 @@ fn run_server(endpoint: SessionEndpoint, name: &SessionName, shell: &OsStr) -> i
     detach_process(endpoint.listener().as_raw_fd())?;
     let _server = acquire_server(name)?;
     let peer = accept_peer(&endpoint)?;
-    crate::terminal::serve_session(shell, &endpoint, peer)
+    crate::terminal::serve_session(shell, name, &endpoint, peer)
 }
 
 fn detach_process(listener: i32) -> io::Result<()> {

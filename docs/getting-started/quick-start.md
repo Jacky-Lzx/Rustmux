@@ -32,7 +32,8 @@ session that survives terminal detachment, or reconnect to it later, use:
 
 Inside a named session, Ctrl-B followed by `d` detaches and restores the outer
 terminal while its panes continue running. Only one client displays a session at
-a time. The endpoint is removed when the last pane exits. See
+a time. Its name appears before the window labels in the top bar and remains the
+same after reattachment. The endpoint is removed when the last pane exits. See
 [Named Session Commands](../reference/session-cli.md).
 
 Type commands normally. Ctrl-C reaches the inner terminal rather than terminating

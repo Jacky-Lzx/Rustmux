@@ -21,8 +21,11 @@ While attached to a named session, Ctrl-B followed by `d` sends the protocol
 `Detach` message and restores the outer terminal. Input earlier in the same read
 is delivered first. The shortcut is disabled inside bracketed paste, and all
 other prefix combinations remain byte-for-byte input for the server-side command
-parser. Starting Rustmux without a subcommand retains the original foreground
-lifetime and has no detachable background server.
+parser. The top window bar prefixes its window labels with the session name and
+shows the same identity after reattachment. When horizontal space is limited,
+the prefix is clipped before the active window label. Starting Rustmux without a
+subcommand retains the original foreground lifetime, has no detachable background
+server and does not show a session prefix.
 
 `attach` validates the private runtime directory and requires the socket to be
 owned by the effective user with no group or other permissions. It then performs

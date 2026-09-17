@@ -53,7 +53,7 @@ pub fn run(shell_path: &OsStr) -> io::Result<u8> {
     let size = window_size(&file)?;
     // Start the shell before changing the outer terminal, so exec failures
     // cannot leave it raw. Signal registration below creates no worker threads.
-    let mut session = TerminalSession::new(shell_path, size.ws_row, size.ws_col)?;
+    let mut session = TerminalSession::new(shell_path, size.ws_row, size.ws_col, None)?;
     let signals = Signals::install()?;
     let mut terminal = LocalFrontend::enter(file, signals.resize.clone())?;
     let result = session.attach(&mut terminal, &signals);
@@ -76,11 +76,12 @@ pub fn run(shell_path: &OsStr) -> io::Result<u8> {
 /// Run one persistent session, preserving panes while clients detach and reconnect.
 pub fn serve_session(
     shell_path: &OsStr,
+    name: &crate::session::SessionName,
     endpoint: &SessionEndpoint,
     mut peer: ServerPeer,
 ) -> io::Result<u8> {
     let (rows, columns) = peer.size();
-    let mut session = TerminalSession::new(shell_path, rows, columns)?;
+    let mut session = TerminalSession::new(shell_path, rows, columns, Some(name.as_str()))?;
     let signals = Signals::install()?;
     loop {
         let mut frontend = ServerFrontend::new(peer);
@@ -114,13 +115,19 @@ pub fn serve_session(
 /// State that must survive one frontend disconnect and a later attachment.
 struct TerminalSession {
     shell_path: OsString,
+    session_name: Option<String>,
     windows: Windows<PaneSet<Pane>>,
     outer_rows: u16,
     closed: Option<crate::closed_pane::ClosedPane>,
 }
 
 impl TerminalSession {
-    fn new(shell_path: &OsStr, rows: u16, columns: u16) -> io::Result<Self> {
+    fn new(
+        shell_path: &OsStr,
+        rows: u16,
+        columns: u16,
+        session_name: Option<&str>,
+    ) -> io::Result<Self> {
         check_size(rows, columns)?;
         let mut windows = Windows::default();
         windows.create(
@@ -129,6 +136,7 @@ impl TerminalSession {
         )?;
         Ok(Self {
             shell_path: shell_path.to_owned(),
+            session_name: session_name.map(str::to_owned),
             windows,
             outer_rows: rows,
             closed: None,
@@ -145,6 +153,7 @@ impl TerminalSession {
             &mut self.windows,
             signals,
             &self.shell_path,
+            self.session_name.as_deref(),
             &mut self.outer_rows,
             &mut self.closed,
         )
@@ -804,6 +813,7 @@ fn forward(
     windows: &mut Windows<PaneSet<Pane>>,
     signals: &Signals,
     shell_path: &OsStr,
+    session_name: Option<&str>,
     outer_rows: &mut u16,
     closed: &mut Option<crate::closed_pane::ClosedPane>,
 ) -> io::Result<ForwardExit> {
@@ -1023,7 +1033,8 @@ fn forward(
                         })
                         .collect();
                     let content = pane_view::compose(panes.layout(), &screens)?;
-                    let mut view = compose(&content, *outer_rows, &names, active_index)?;
+                    let mut view =
+                        compose(&content, *outer_rows, session_name, &names, active_index)?;
                     if let Some(history) = &history
                         && *outer_rows > 1
                     {
@@ -1722,7 +1733,7 @@ mod tests {
 
     #[test]
     fn terminal_session_preserves_shell_across_socket_attachments() {
-        let mut session = TerminalSession::new(OsStr::new("/bin/sh"), 24, 80).unwrap();
+        let mut session = TerminalSession::new(OsStr::new("/bin/sh"), 24, 80, None).unwrap();
         let signals = test_signals();
         let (mut first_client, mut first_frontend) = socket_frontend(24, 80);
         send_client_messages(
@@ -1762,7 +1773,7 @@ mod tests {
         ))
         .unwrap();
         let endpoint = SessionEndpoint::bind(&name).unwrap();
-        let mut session = TerminalSession::new(OsStr::new("/bin/sh"), 24, 80).unwrap();
+        let mut session = TerminalSession::new(OsStr::new("/bin/sh"), 24, 80, None).unwrap();
         let signals = test_signals();
 
         let (mut first_client, mut first_frontend) = socket_frontend(24, 80);
@@ -1825,7 +1836,7 @@ mod tests {
         send_client_messages(&mut client, &[ClientMessage::Input(b"exit 7\n".to_vec())]);
 
         assert_eq!(
-            serve_session(OsStr::new("/bin/sh"), &endpoint, server).unwrap(),
+            serve_session(OsStr::new("/bin/sh"), &name, &endpoint, server).unwrap(),
             7
         );
         let mut status = None;
