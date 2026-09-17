@@ -1110,6 +1110,13 @@ fn forward(
             renderer.invalidate();
             force_redraw = true;
         }
+        if history
+            .as_mut()
+            .is_some_and(|view| view.expire_copy_status(Instant::now()))
+        {
+            renderer.invalidate();
+            force_redraw = true;
+        }
         let active = windows.active().expect("at least one window").id();
         let resize = if let Some(size) = frontend.take_resize()? {
             check_size(size.ws_row, size.ws_col)?;

@@ -1640,6 +1640,11 @@ try:
         selected_text = base64.b64decode(selected.group(1), validate=True)
         assert b"\n" in selected_text, (selected_text, s.last_rows, bytes(s.output[-500:]))
         s.expect(b"Copy sent to terminal")
+        deadline = time.monotonic() + 3
+        while b"Copy sent to terminal" in s.last_rows[0]:
+            s.read()
+            assert time.monotonic() < deadline, (s.last_rows, bytes(s.output[-1000:]))
+        assert s.last_rows[0].startswith(b"History "), s.last_rows
         frozen = list(s.last_rows)
         with open(trigger, "w") as file:
             file.write("go")

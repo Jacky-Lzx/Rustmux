@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 const MAX_HISTORY_ESCAPE_BYTES: usize = 64;
 const ESCAPE_TIMEOUT: Duration = Duration::from_millis(30);
+const COPY_STATUS_DURATION: Duration = Duration::from_secs(1);
 // Encoded OSC 52 output stays below the terminal's 64 KiB input/IO budget.
 const MAX_COPY_TEXT_BYTES: usize = 32 * 1024;
 mod search;
@@ -120,6 +121,7 @@ pub(crate) struct HistoryView {
     selected: Option<usize>,
     copy_pending: Option<Vec<u8>>,
     copy_status: Option<CopyStatus>,
+    copy_status_until: Option<Instant>,
     selection: Option<Selection>,
 }
 
@@ -145,6 +147,7 @@ impl HistoryView {
             selected: None,
             copy_pending: None,
             copy_status: None,
+            copy_status_until: None,
             selection: None,
         })
     }
@@ -165,6 +168,17 @@ impl HistoryView {
     pub fn escape_expired(&self, now: Instant) -> bool {
         self.escape_since
             .is_some_and(|started| now.saturating_duration_since(started) >= ESCAPE_TIMEOUT)
+    }
+
+    pub fn expire_copy_status(&mut self, now: Instant) -> bool {
+        if !self
+            .copy_status_until
+            .is_some_and(|deadline| now >= deadline)
+        {
+            return false;
+        }
+        self.clear_copy_status();
+        true
     }
 
     /// Resolve a timed-out escape prefix. A standalone Escape clears active search state first
@@ -391,7 +405,7 @@ impl HistoryView {
             }
             return false;
         }
-        self.copy_status = None;
+        self.clear_copy_status();
         match byte {
             b'/' => self.editor = Some(QueryInput::new(Direction::Forward)),
             b'?' => self.editor = Some(QueryInput::new(Direction::Backward)),
@@ -459,11 +473,18 @@ impl HistoryView {
 
     fn stage_copy(&mut self, sequence: Option<Vec<u8>>) {
         self.copy_status = Some(if sequence.is_some() {
+            self.copy_status_until = Some(Instant::now() + COPY_STATUS_DURATION);
             CopyStatus::Sent
         } else {
+            self.copy_status_until = None;
             CopyStatus::TooLarge
         });
         self.copy_pending = sequence;
+    }
+
+    fn clear_copy_status(&mut self) {
+        self.copy_status = None;
+        self.copy_status_until = None;
     }
 
     fn copy_selection(&self) -> Option<Vec<u8>> {
@@ -699,7 +720,7 @@ impl HistoryView {
                 cursor: position,
                 source: SelectionSource::Mouse,
             });
-            self.copy_status = None;
+            self.clear_copy_status();
             return true;
         }
         if !matches!(action, 32 | 0) {
@@ -779,7 +800,7 @@ impl HistoryView {
     }
 
     fn up(&mut self, amount: usize) {
-        self.copy_status = None;
+        self.clear_copy_status();
         self.offset = self
             .offset
             .saturating_add(amount)
@@ -787,7 +808,7 @@ impl HistoryView {
     }
 
     fn down(&mut self, amount: usize) {
-        self.copy_status = None;
+        self.clear_copy_status();
         self.offset = self.offset.saturating_sub(amount);
     }
 
@@ -916,6 +937,26 @@ mod tests {
         assert!(view.label(80).starts_with("History "));
         assert!(!view.feed(b"y"[0]));
         assert!(view.take_copy().is_some());
+    }
+
+    #[test]
+    fn successful_copy_status_expires_but_copy_errors_remain_visible() {
+        let mut source = Screen::new(2, 8).unwrap();
+        Parser::new().advance(&mut source, b"old\r\nnext\r\nlast");
+        let mut view = HistoryView::new(&source).unwrap();
+
+        type_bytes(&mut view, b"y");
+        let deadline = view.copy_status_until.unwrap();
+        assert!(!view.expire_copy_status(deadline - Duration::from_millis(1)));
+        assert!(view.label(80).contains("Copy sent to terminal"));
+        assert!(view.expire_copy_status(deadline));
+        assert!(view.label(80).starts_with("History "));
+        assert!(view.copy_status_until.is_none());
+
+        view.stage_copy(None);
+        assert!(view.label(80).contains("Copy too large"));
+        assert!(!view.expire_copy_status(Instant::now() + COPY_STATUS_DURATION * 2));
+        assert!(view.label(80).contains("Copy too large"));
     }
 
     #[test]

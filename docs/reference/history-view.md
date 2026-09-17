@@ -154,9 +154,10 @@ Drag the left mouse button across the active pane in history mode to select
 text. Selection endpoints are inclusive and may be dragged in either direction.
 Releasing the button copies the selected text immediately through OSC 52 and
 clears its highlight. The bar reports `Copy sent to terminal` after a successful
-keyboard or mouse copy; the next navigation action restores the ordinary history
-status. A press must begin inside the active pane; dragging beyond its content
-clamps the active endpoint to the nearest edge. Drag motion above or below the
+keyboard or mouse copy, then restores the ordinary history status after one
+second. Navigation also clears the confirmation immediately. A press must begin
+inside the active pane; dragging beyond its content clamps the active endpoint
+to the nearest edge. Drag motion above or below the
 pane scrolls the frozen snapshot one row per report and continues extending the
 selection until the corresponding history boundary is reached.
 
