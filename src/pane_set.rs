@@ -74,6 +74,10 @@ impl<T> PaneSet<T> {
         self.layout.resize_active(direction)
     }
 
+    pub(crate) fn resize_separator(&mut self, index: usize, delta: i32) -> bool {
+        self.layout.resize_separator(index, delta)
+    }
+
     /// Move the active identity to the next layout slot without replacing contents.
     pub fn swap_active_next(&mut self) -> bool {
         self.layout.swap_active_next()

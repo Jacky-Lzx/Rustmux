@@ -89,6 +89,12 @@ subtree and shrinks the right subtree. Nested sibling panes may resize together.
 Movement stops at the subtree minimum; it does not continue into an outer split.
 With no matching split or while zoomed, the shortcut is a no-op.
 
+You can also drag either cell of a pane separator with the left mouse button.
+The separator selected by the initial press remains the target throughout the
+drag, including in nested layouts. Movement clamps at the same subtree minima as
+the keyboard controls, keeps pane focus unchanged and resizes the affected PTYs
+as the pointer moves. Separator dragging is disabled while zoomed.
+
 Focus, shell processes, parser state and queued input are retained. The CLI
 synchronizes all affected PTYs and screen models before redrawing. Primary text
 uses the existing resize/reflow policy. Ratios are retained across outer resizing
@@ -243,8 +249,7 @@ with a best-effort bell. A later PTY resize/I/O error ends the CLI and restores
 the terminal; operating-system changes are not rolled back.
 
 Resizing the outer terminal below any window's layout minimum currently ends the
-CLI with terminal cleanup. There is no small-terminal placeholder or mouse-drag
-resizing yet.
+CLI with terminal cleanup. There is no small-terminal placeholder yet.
 
 `cargo test` runs the nested-PTY suite. It checks nested splits, retained shell
 variables, child-observed dimensions, lowercase directional and cyclic focus,

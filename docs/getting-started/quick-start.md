@@ -94,7 +94,8 @@ to the left/down/up/right; `o` cycles through all panes. Directional selection
 stops at the boundary. You can also left-click a pane or its border to select it.
 Ctrl-B followed by `Z` enlarges the active pane to the
 content area; repeat to restore the split view. Focus shortcuts work while zoomed. Ctrl-B followed by Ctrl-h/j/k/l moves the
-nearest separator left/down/up/right by one cell. Ctrl-B `{` / `}` swaps the active
+nearest separator left/down/up/right by one cell; you can also drag a separator
+with the left mouse button. Ctrl-B `{` / `}` swaps the active
 pane with the previous/next layout position, wrapping at the edges and keeping
 focus on the same shell. Resizing and swapping are disabled while zoomed.
 Ctrl-B `!` moves the active pane into a new window without restarting its shell

@@ -701,8 +701,9 @@ for terminate in (False, True):
             (1000, 0, b"\x1b[M +&\x1b[M#+&"),
         ]:
             s.expect(("\r\nMOUSE_%d_%d\r\n" % (mode, encoding)).encode())
-            assert ("\x1b[?%dh" % mode).encode() in s.last_frame
-            assert (b"\x1b[?1006h" if encoding else b"\x1b[?1006l") in s.last_frame
+            outer_mode = 1003 if mode == 1003 else 1002
+            assert s.private_modes.get(outer_mode)
+            assert s.private_modes.get(1006, False) == bool(encoding)
             s.send(payload[:3])
             s.send(payload[3:])
         s.expect(b"\r\nMOUSE_OFF\r\n")
@@ -1414,6 +1415,25 @@ try:
 finally:
     s.close()
 
+# Dragging a separator resizes that split and keeps focus on the active pane.
+s = Session()
+try:
+    s.expect(b"RUSTMUX_READY> ")
+    s.send(b"VAR=A\n\x02%")
+    s.expect(b"RUSTMUX_READY>")
+    s.send(b"VAR=B; count=0; trap 'count=$((count+1))' WINCH\n")
+    s.expect(b"RUSTMUX_READY>")
+    # Intermediate mouse positions are coalesced before the final PTY resize.
+    # This prevents prompt-redrawing shells from processing stale dimensions.
+    s.send(b"\x1b[M H%\x1b[M@M%\x1b[M@W%\x1b[M@R%\x1b[M#R%printf 'DRAG:%s:%s:%s\n' $VAR $count \"$(stty size)\"\n")
+    s.expect(b"DRAG:B:1:21 28")
+    s.send(b"\x02hprintf 'DRAG:%s:%s\n' $VAR \"$(stty size)\"\n")
+    s.expect(b"DRAG:A:21 48")
+    os.kill(s.app_pid, signal.SIGTERM)
+    s.finish(128 + signal.SIGTERM)
+finally:
+    s.close()
+
 # Zoom resizes only its target; changing targets preserves shells and restores tiling.
 s = Session()
 try:
@@ -1520,7 +1540,7 @@ try:
         s.send(b"\x02[g")
         s.expect(b"HIST_00")
         assert b"History " in s.last_rows[0]
-        assert b"\x1b[?1000h" in s.last_frame
+        assert b"\x1b[?1002h" in s.last_frame
         assert b"\x1b[?1006h" in s.last_frame
         assert any(b"HISTORY_LEFT" in row for row in s.last_rows)
         s.send(b"yyy")
@@ -1612,7 +1632,7 @@ try:
         s.expect(b"History 0/")
         s.send(b"q")
         s.expect(b"LATE_HISTORY_OUTPUT")
-        assert b"\x1b[?1000h" in s.last_frame
+        assert b"\x1b[?1002h" in s.last_frame
         assert b"\x1b[?1006l" in s.last_frame
         s.send(b"printf '\\n%s%s\\n' INPUT_ INTACT\n")
         s.expect(b"INPUT_INTACT")

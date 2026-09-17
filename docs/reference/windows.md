@@ -278,6 +278,8 @@ row and the top bar. A left press in another pane selects it and consumes the
 matching release instead of reaching either child. Other press, wheel and motion
 reports outside the active pane are ignored. Releases from a child drag are
 clamped to its nearest cell so the drag can end outside that pane.
+Dragging a pane separator is handled locally and resizes that split; these motion
+events are never forwarded to a child.
 Candidate reports use at most 64 buffered bytes; incomplete candidates are
 released after a 30ms minimum delay, subject to the event loop's polling and
 backpressure. Extremely delayed/split malformed reports may therefore be forwarded

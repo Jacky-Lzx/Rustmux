@@ -27,14 +27,14 @@ use crate::{
     pane_view,
     prompt::{EditResult, PromptKind, WindowPrompt},
     render::Renderer,
-    screen::Screen,
+    screen::{MouseTracking, Screen},
     session::{
         SessionEndpoint,
         frontend::{ConnectionState, ServerFrontend},
         handshake::{self, ServerPeer},
     },
     terminal_device::{TerminalDevice, window_size},
-    window::Windows,
+    window::{WindowId, Windows},
 };
 
 // Bound pending keyboard input to 64 KiB; output retains at most one frame.
@@ -44,6 +44,7 @@ const MAX_MOUSE_SEQUENCE_BYTES: usize = 64;
 const MAX_FRAME: usize = 16 * 1024 * 1024;
 const SYNC_TIMEOUT: Duration = Duration::from_secs(1);
 const FRAME_INTERVAL: Duration = Duration::from_millis(6);
+const PANE_DRAG_RESIZE_INTERVAL: Duration = Duration::from_millis(33);
 
 /// Run on the controlling terminal during single-threaded program startup.
 /// Returns the shell exit code, or 128 + signal for termination by signal.
@@ -514,6 +515,8 @@ enum WindowKey {
     Rename,
     Select(usize),
     SelectPane(PaneId),
+    ResizeSeparator(usize, i32),
+    FinishSeparatorResize,
     Last,
     Close,
     ClosePane,
@@ -552,13 +555,22 @@ struct WindowInput {
     pane_top: usize,
     pane_left: usize,
     pane_width: usize,
-    mouse_enabled: bool,
+    mouse_tracking: MouseTracking,
     bar_enabled: bool,
     bar_press: bool,
     pane_press: bool,
     window_hitboxes: Vec<(usize, usize, usize)>,
     active_pane: Option<PaneId>,
     pane_hitboxes: Vec<(PaneId, Rect)>,
+    separator_hitboxes: Vec<(usize, SplitAxis, Rect)>,
+    pane_drag: Option<PaneDrag>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PaneDrag {
+    separator: usize,
+    axis: SplitAxis,
+    position: usize,
 }
 
 impl WindowInput {
@@ -566,7 +578,11 @@ impl WindowInput {
     // completed non-mouse sequences are forwarded as soon as they are known.
     fn feed(&mut self, byte: u8, output: &mut Vec<WindowKey>) {
         if self.paste
-            || (self.mouse.is_empty() && (!(self.mouse_enabled || self.bar_enabled) || byte != 27))
+            || (self.mouse.is_empty()
+                && (!(self.mouse_tracking != MouseTracking::Off
+                    || self.bar_enabled
+                    || self.pane_hitboxes.len() > 1)
+                    || byte != 27))
         {
             self.plain(byte, output);
             return;
@@ -620,9 +636,52 @@ impl WindowInput {
                     && bytes[3]
                         .checked_sub(32)
                         .is_some_and(|button| button & 0x63 == 3));
+            if let Some(mut drag) = self.pane_drag {
+                if release {
+                    self.pane_drag = None;
+                    output.push(WindowKey::FinishSeparatorResize);
+                    return;
+                }
+                if left_mouse_drag_motion(&bytes) {
+                    let position = match drag.axis {
+                        SplitAxis::Columns => column,
+                        SplitAxis::Rows => row,
+                    };
+                    let delta = position as i32 - drag.position as i32;
+                    drag.position = position;
+                    self.pane_drag = Some(drag);
+                    if delta != 0 {
+                        output.push(WindowKey::ResizeSeparator(drag.separator, delta));
+                    }
+                    return;
+                }
+                return;
+            }
             if release && self.bar_press {
                 self.bar_press = false;
                 return;
+            }
+            if !release && left_mouse_press(&bytes) {
+                let layout_row = row.saturating_sub(1 + usize::from(self.bar_enabled));
+                let layout_column = column.saturating_sub(1);
+                if let Some((separator, axis, _)) =
+                    self.separator_hitboxes.iter().find(|(_, _, rect)| {
+                        layout_row >= usize::from(rect.row)
+                            && layout_row < usize::from(rect.row + rect.rows)
+                            && layout_column >= usize::from(rect.column)
+                            && layout_column < usize::from(rect.column + rect.columns)
+                    })
+                {
+                    self.pane_drag = Some(PaneDrag {
+                        separator: *separator,
+                        axis: *axis,
+                        position: match axis {
+                            SplitAxis::Columns => column,
+                            SplitAxis::Rows => row,
+                        },
+                    });
+                    return;
+                }
             }
             if release && self.pane_press {
                 self.pane_press = false;
@@ -659,7 +718,16 @@ impl WindowInput {
                 output.push(WindowKey::SelectPane(*id));
                 return;
             }
-            if !self.mouse_enabled {
+            if self.mouse_tracking == MouseTracking::Off {
+                return;
+            }
+            if mouse_motion(&bytes)
+                && match self.mouse_tracking {
+                    MouseTracking::Off | MouseTracking::Button => true,
+                    MouseTracking::Drag => !motion_has_button(&bytes),
+                    MouseTracking::Any => false,
+                }
+            {
                 return;
             }
             let child_row = row.saturating_sub(self.pane_top);
@@ -791,6 +859,18 @@ fn bar_scroll(bytes: &[u8]) -> Option<WindowKey> {
         65 => Some(WindowKey::Next),
         _ => None,
     }
+}
+
+fn mouse_motion(bytes: &[u8]) -> bool {
+    mouse_button(bytes).is_some_and(|button| button & 32 != 0)
+}
+
+fn motion_has_button(bytes: &[u8]) -> bool {
+    mouse_button(bytes).is_some_and(|button| matches!(button & 0b1110_0011, 32..=34))
+}
+
+fn left_mouse_drag_motion(bytes: &[u8]) -> bool {
+    mouse_button(bytes).is_some_and(|button| button & 0b1110_0011 == 32)
 }
 
 fn spawn_window(
@@ -928,6 +1008,7 @@ fn forward(
     let mut history: Option<crate::history_view::HistoryView> = None;
     let mut close_requested = None;
     let mut connection = ConnectionState::Attached;
+    let mut pane_resize_pending: Option<(WindowId, Instant)> = None;
     loop {
         frontend.drain_input(&mut input);
         if connection != ConnectionState::Attached {
@@ -1070,6 +1151,15 @@ fn forward(
             for resize in prepared {
                 resize.commit()?;
             }
+            pane_resize_pending = None;
+        }
+        if pane_resize_pending.is_some_and(|(_, due)| Instant::now() >= due) {
+            let (id, _) = pane_resize_pending.take().unwrap();
+            if let Some(window) = windows.get_mut(id) {
+                window.content_mut().synchronize_sizes()?;
+                renderer.invalidate();
+                force_redraw = true;
+            }
         }
         let names: Vec<_> = windows
             .iter()
@@ -1115,6 +1205,7 @@ fn forward(
                 active_paused = paused;
                 if close_requested.is_none()
                     && (dirty || force_redraw || bar_dirty)
+                    && pane_resize_pending.is_none()
                     && (!paused || force_redraw)
                     && to_terminal.is_empty()
                     && (eof || force_redraw || Instant::now() >= next_frame)
@@ -1361,8 +1452,7 @@ fn forward(
             keys.pane_top = usize::from(*outer_rows > 1) + usize::from(rect.row);
             keys.pane_left = usize::from(rect.column);
             keys.pane_width = usize::from(rect.columns);
-            keys.mouse_enabled =
-                pane.screen().mouse_tracking() != crate::screen::MouseTracking::Off;
+            keys.mouse_tracking = pane.screen().mouse_tracking();
             keys.bar_enabled = *outer_rows > 1;
             if keys.mouse.is_empty() && input.front() == Some(&27) {
                 let active = windows.active().unwrap().id();
@@ -1384,6 +1474,7 @@ fn forward(
                 );
                 keys.active_pane = Some(set.layout().active());
                 keys.pane_hitboxes = pane_view::hitboxes(set.layout());
+                keys.separator_hitboxes = set.layout().separator_hitboxes();
             }
             actions.clear();
             let input_mode = keys.mode;
@@ -1612,6 +1703,23 @@ fn forward(
                     WindowKey::SelectPane(id) => {
                         windows.active_mut().unwrap().content_mut().select(id)?;
                     }
+                    WindowKey::ResizeSeparator(index, delta) => {
+                        let window = windows.active_mut().unwrap();
+                        if window.content_mut().resize_separator(index, delta) {
+                            pane_resize_pending.get_or_insert_with(|| {
+                                (window.id(), Instant::now() + PANE_DRAG_RESIZE_INTERVAL)
+                            });
+                        }
+                    }
+                    WindowKey::FinishSeparatorResize => {
+                        if let Some((id, _)) = pane_resize_pending.take()
+                            && let Some(window) = windows.get_mut(id)
+                        {
+                            window.content_mut().synchronize_sizes()?;
+                            renderer.invalidate();
+                            force_redraw = true;
+                        }
+                    }
                     WindowKey::MoveLeft => {
                         bar_dirty |= windows.move_active_left();
                     }
@@ -1668,7 +1776,10 @@ fn forward(
             return Ok(exit);
         }
         // A changed focus needs a frame before returning to a blocking poll.
-        if (force_redraw || close_requested.is_some()) && to_terminal.is_empty() {
+        if (force_redraw || close_requested.is_some())
+            && to_terminal.is_empty()
+            && pane_resize_pending.is_none()
+        {
             continue;
         }
         let active = windows.active().unwrap().id();
@@ -1686,7 +1797,8 @@ fn forward(
         if connection == ConnectionState::Attached && !to_terminal.is_empty() {
             outer_events |= PollFlags::POLLOUT;
         }
-        let timeout = if (active_dirty || bar_dirty) && !active_paused && to_terminal.is_empty() {
+        let mut timeout = if (active_dirty || bar_dirty) && !active_paused && to_terminal.is_empty()
+        {
             next_frame
                 .saturating_duration_since(Instant::now())
                 .as_millis()
@@ -1694,6 +1806,13 @@ fn forward(
         } else {
             50
         };
+        if let Some((_, due)) = pane_resize_pending {
+            timeout = timeout.min(
+                due.saturating_duration_since(Instant::now())
+                    .as_millis()
+                    .clamp(1, u128::from(POLL_TIMEOUT_MILLIS)) as u16,
+            );
+        }
         let mut interests = Vec::new();
         let (outer, events) = {
             let mut fds = vec![PollFd::new(frontend.poll_fd(), outer_events)];
@@ -2433,7 +2552,7 @@ mod window_input_tests {
         input.extend(b"\x02c");
         assert_eq!(decode(&input).last(), Some(&WindowKey::Create));
         let mut keys = WindowInput {
-            mouse_enabled: true,
+            mouse_tracking: MouseTracking::Button,
             ..WindowInput::default()
         };
         keys.feed(27, &mut Vec::new());
@@ -2445,7 +2564,7 @@ mod window_input_tests {
             pane_height: 1,
             pane_width: 80,
             pane_top: 0,
-            mouse_enabled: true,
+            mouse_tracking: MouseTracking::Button,
             ..WindowInput::default()
         };
         let bytes = b"\x1b[<0;2;1M\x1b[<0;2;1m\x1b[M !!\x1b[M#!!";
@@ -2469,7 +2588,7 @@ mod window_input_tests {
             pane_height: 23,
             pane_width: 80,
             pane_top: 1,
-            mouse_enabled: true,
+            mouse_tracking: MouseTracking::Button,
             ..WindowInput::default()
         };
         let mut output = Vec::new();
@@ -2578,5 +2697,44 @@ mod window_input_tests {
             keys.feed(byte, &mut output);
         }
         assert!(output.is_empty());
+    }
+
+    #[test]
+    fn separator_drag_is_locked_by_index_and_child_motion_is_filtered() {
+        let mut layout = crate::layout::Layout::new(23, 80).unwrap();
+        layout.split_active(SplitAxis::Columns).unwrap();
+        let mut keys = WindowInput {
+            pane_height: 21,
+            pane_width: 38,
+            pane_top: 2,
+            pane_left: 41,
+            bar_enabled: true,
+            active_pane: Some(layout.active()),
+            pane_hitboxes: pane_view::hitboxes(&layout),
+            separator_hitboxes: layout.separator_hitboxes(),
+            ..WindowInput::default()
+        };
+        let mut output = Vec::new();
+        for &byte in b"\x1b[<0;40;5M\x1b[<32;45;5M\x1b[<0;45;5m" {
+            keys.feed(byte, &mut output);
+        }
+        assert_eq!(
+            output,
+            [
+                WindowKey::ResizeSeparator(0, 5),
+                WindowKey::FinishSeparatorResize,
+            ]
+        );
+        assert!(keys.pane_drag.is_none());
+
+        keys.mouse_tracking = MouseTracking::Button;
+        keys.separator_hitboxes.clear();
+        output.clear();
+        for &byte in b"\x1b[<32;50;5M" {
+            keys.feed(byte, &mut output);
+        }
+        assert!(output.is_empty());
+        assert!(motion_has_button(b"\x1b[<32;50;5M"));
+        assert!(!motion_has_button(b"\x1b[<35;50;5M"));
     }
 }

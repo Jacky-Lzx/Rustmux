@@ -245,28 +245,57 @@ impl Node {
         if result.is_some() || *split_axis != axis {
             return result;
         }
-        let (extent, available, minimum, other_minimum) = match axis {
-            SplitAxis::Columns => (
-                a.columns,
-                rect.columns - SPLIT_BORDER_CELLS,
-                first.minimum().1,
-                second.minimum().1,
-            ),
-            SplitAxis::Rows => (
-                a.rows,
-                rect.rows - SPLIT_BORDER_CELLS,
-                first.minimum().0,
-                second.minimum().0,
-            ),
+        Some(adjust_share(
+            *split_axis,
+            share,
+            first.minimum(),
+            second.minimum(),
+            rect,
+            delta,
+        ))
+    }
+
+    fn adjust_separator(&mut self, remaining: &mut usize, rect: Rect, delta: i32) -> Option<bool> {
+        let Self::Split {
+            axis,
+            share,
+            first,
+            second,
+        } = self
+        else {
+            return None;
         };
-        let next = (i32::from(extent) + delta)
-            .clamp(i32::from(minimum), i32::from(available - other_minimum))
-            as u16;
-        if next == extent {
-            return Some(false);
+        let (a, b, _) = split_rects(*axis, *share, first.minimum(), second.minimum(), rect);
+        if *remaining == 0 {
+            return Some(adjust_share(
+                *axis,
+                share,
+                first.minimum(),
+                second.minimum(),
+                rect,
+                delta,
+            ));
         }
-        *share = (next, available);
-        Some(true)
+        *remaining -= 1;
+        first
+            .adjust_separator(remaining, a, delta)
+            .or_else(|| second.adjust_separator(remaining, b, delta))
+    }
+
+    fn separator_hitboxes(&self, rect: Rect, hitboxes: &mut Vec<(usize, SplitAxis, Rect)>) {
+        let Self::Split {
+            axis,
+            share,
+            first,
+            second,
+        } = self
+        else {
+            return;
+        };
+        let (a, b, separator) = split_rects(*axis, *share, first.minimum(), second.minimum(), rect);
+        hitboxes.push((hitboxes.len(), *axis, separator));
+        first.separator_hitboxes(a, hitboxes);
+        second.separator_hitboxes(b, hitboxes);
     }
 
     fn place(&self, rect: Rect, geometry: &mut Geometry) {
@@ -530,6 +559,45 @@ impl Layout {
             .unwrap_or(false)
     }
 
+    /// Move one visible separator by a signed number of cells. Separator indexes
+    /// use the pre-order returned by `separator_hitboxes` and remain stable while
+    /// only ratios change. Invalid indexes, zoom and size limits are no-ops.
+    pub(crate) fn resize_separator(&mut self, index: usize, delta: i32) -> bool {
+        if self.zoomed || delta == 0 {
+            return false;
+        }
+        let mut remaining = index;
+        self.root
+            .adjust_separator(
+                &mut remaining,
+                Rect {
+                    row: 0,
+                    column: 0,
+                    rows: self.rows,
+                    columns: self.columns,
+                },
+                delta,
+            )
+            .unwrap_or(false)
+    }
+
+    pub(crate) fn separator_hitboxes(&self) -> Vec<(usize, SplitAxis, Rect)> {
+        if self.zoomed {
+            return Vec::new();
+        }
+        let mut hitboxes = Vec::with_capacity(self.count - 1);
+        self.root.separator_hitboxes(
+            Rect {
+                row: 0,
+                column: 0,
+                rows: self.rows,
+                columns: self.columns,
+            },
+            &mut hitboxes,
+        );
+        hitboxes
+    }
+
     /// Split only if the active rectangle can contain content plus both pane borders.
     /// Rejected requests leave IDs, focus, dimensions and the entire tree unchanged.
     pub fn split_active(&mut self, axis: SplitAxis) -> io::Result<PaneId> {
@@ -640,6 +708,41 @@ fn split_rects(
     (a, b, separator)
 }
 
+fn adjust_share(
+    axis: SplitAxis,
+    share: &mut (u16, u16),
+    first_minimum: (u16, u16),
+    second_minimum: (u16, u16),
+    rect: Rect,
+    delta: i32,
+) -> bool {
+    let (extent, available, minimum, other_minimum) = match axis {
+        SplitAxis::Columns => (
+            split_rects(axis, *share, first_minimum, second_minimum, rect)
+                .0
+                .columns,
+            rect.columns - SPLIT_BORDER_CELLS,
+            first_minimum.1,
+            second_minimum.1,
+        ),
+        SplitAxis::Rows => (
+            split_rects(axis, *share, first_minimum, second_minimum, rect)
+                .0
+                .rows,
+            rect.rows - SPLIT_BORDER_CELLS,
+            first_minimum.0,
+            second_minimum.0,
+        ),
+    };
+    let next = (i32::from(extent) + delta)
+        .clamp(i32::from(minimum), i32::from(available - other_minimum)) as u16;
+    if next == extent {
+        return false;
+    }
+    *share = (next, available);
+    true
+}
+
 fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message)
 }
@@ -718,5 +821,34 @@ mod tests {
         assert_eq!(restored.geometry().panes.len(), 3);
         assert_eq!(restored.geometry().panes[0], edited.panes[0]);
         assert_eq!(restored.active(), id);
+    }
+
+    #[test]
+    fn indexed_separator_resize_targets_the_clicked_nested_split() {
+        let mut layout = Layout::new(11, 31).unwrap();
+        let left = layout.active();
+        layout.split_active(SplitAxis::Columns).unwrap();
+        layout.select(left).unwrap();
+        layout.split_active(SplitAxis::Columns).unwrap();
+        let hitboxes = layout.separator_hitboxes();
+        assert_eq!(hitboxes.len(), 2);
+        assert_eq!(hitboxes[0].0, 0);
+        assert_eq!(hitboxes[1].0, 1);
+        assert_eq!(hitboxes[0].1, SplitAxis::Columns);
+        assert_eq!(hitboxes[1].1, SplitAxis::Columns);
+
+        let outer = layout.geometry().separators[0];
+        assert!(layout.resize_separator(0, 3));
+        assert_eq!(layout.geometry().separators[0].column, outer.column + 3);
+        let outer = layout.geometry().separators[0];
+        let inner = layout.geometry().separators[1];
+        assert!(layout.resize_separator(1, -2));
+        assert_eq!(layout.geometry().separators[0], outer);
+        assert_eq!(layout.geometry().separators[1].column, inner.column - 2);
+
+        assert!(!layout.resize_separator(99, 1));
+        layout.toggle_zoom();
+        assert!(!layout.resize_separator(0, 1));
+        assert!(layout.separator_hitboxes().is_empty());
     }
 }

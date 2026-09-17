@@ -245,8 +245,10 @@ pub(crate) fn compose(
         return Ok(screen);
     }
     let (_, columns) = screen.dimensions();
-    if screen.mouse_tracking() == MouseTracking::Off {
-        screen.set_mouse_tracking(MouseTracking::Button);
+    if screen.mouse_tracking() != MouseTracking::Any {
+        // The chrome needs drag reports for pane separators. WindowInput filters
+        // motion back down to the tracking mode requested by the active child.
+        screen.set_mouse_tracking(MouseTracking::Drag);
     }
     screen.prepend_display_row()?;
     screen.save_cursor();
@@ -311,7 +313,7 @@ mod tests {
         assert_eq!(view.bracketed_paste(), child.bracketed_paste());
         assert_eq!(view.cursor_shape(), child.cursor_shape());
         assert_eq!(child.mouse_tracking(), MouseTracking::Off);
-        assert_eq!(view.mouse_tracking(), MouseTracking::Button);
+        assert_eq!(view.mouse_tracking(), MouseTracking::Drag);
         let bar: String = view
             .row(0)
             .unwrap()
@@ -335,6 +337,10 @@ mod tests {
         let view = compose(&mouse_child, 3, None, &["shell".into()], 0, false).unwrap();
         assert_eq!(view.mouse_tracking(), MouseTracking::Drag);
         assert!(view.sgr_mouse());
+
+        mouse_child.set_mouse_tracking(MouseTracking::Any);
+        let view = compose(&mouse_child, 3, None, &["shell".into()], 0, false).unwrap();
+        assert_eq!(view.mouse_tracking(), MouseTracking::Any);
     }
 
     #[test]

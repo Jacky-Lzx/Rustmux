@@ -18,7 +18,12 @@ mode and SGR encoding state. Focus reporting remains independent.
 ## Event path
 
 Renderer synchronizes mouse settings on the first frame and subsequent changes,
-clearing old tracking and selecting encoding before enabling the new mode.
+clearing old tracking and selecting encoding before enabling the new mode. With
+the Rustmux bar visible, the composed outer view requests drag tracking for pane
+selection and separator resizing. Input filtering still exposes only the mode
+requested by the active child: button-only children do not receive motion, drag
+children receive motion with a held button, and any-motion children receive all
+motion.
 Ordinary redraws do not toggle tracking. The existing exit cleanup disables all
 supported tracking modes and SGR encoding on normal exit and handled signals.
 
@@ -32,8 +37,8 @@ and final m for release; coordinates are one-based. Without SGR, the legacy
 CSI M format and its coordinate limitations apply. See
 [XTerm mouse tracking](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h2-Mouse-Tracking).
 
-This does not add pane hit testing, mouse-based selection, alternate scrolling,
-X10 mode 9, highlight tracking, UTF-8/urxvt encoding or pixel coordinates. Arbitrary
+This does not add alternate scrolling, X10 mode 9, highlight tracking,
+UTF-8/urxvt encoding or pixel coordinates. Arbitrary
 pre-existing outer modes are not captured. Already queued input is not discarded
 when an application disables reporting.
 
