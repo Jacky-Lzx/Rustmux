@@ -26,6 +26,7 @@ session that survives terminal detachment, or reconnect to it later, use:
 
 ```sh
 ./target/debug/rustmux new work
+./target/debug/rustmux new --detached background
 ./target/debug/rustmux attach work
 ./target/debug/rustmux list
 ./target/debug/rustmux kill-all --yes

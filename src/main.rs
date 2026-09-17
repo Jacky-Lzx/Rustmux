@@ -21,9 +21,10 @@ fn execute(command: Option<rustmux::cli::Command>) -> Result<u8, String> {
             let shell = rustmux::config::shell()?;
             rustmux::terminal::run(&shell).map_err(|error| error.to_string())
         }
-        Some(rustmux::cli::Command::New { name }) => {
+        Some(rustmux::cli::Command::New { name, detached }) => {
             let shell = rustmux::config::shell()?;
-            rustmux::session::supervisor::create(&name, &shell).map_err(|error| error.to_string())
+            rustmux::session::supervisor::create(&name, &shell, detached)
+                .map_err(|error| error.to_string())
         }
         Some(rustmux::cli::Command::Attach { name }) => {
             rustmux::session::supervisor::attach(&name).map_err(|error| error.to_string())

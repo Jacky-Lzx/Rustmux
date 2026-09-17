@@ -94,6 +94,7 @@ pub fn serve_session(
             }
             ForwardExit::Detached | ForwardExit::Disconnected => {}
         }
+        drop(frontend);
 
         loop {
             match session.wait_for_client(endpoint, &signals)? {

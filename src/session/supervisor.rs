@@ -3,8 +3,9 @@
 use std::ffi::OsStr;
 use std::fs;
 use std::fs::OpenOptions;
-use std::io;
+use std::io::{self, Read, Write};
 use std::os::fd::{AsFd, AsRawFd};
+use std::time::Duration;
 
 use nix::errno::Errno;
 use nix::poll::{PollFd, PollFlags, poll};
@@ -13,29 +14,77 @@ use nix::unistd::{ForkResult, fork, setsid};
 
 use super::{
     SessionEndpoint, SessionName, acquire_client, acquire_server, client, connect, handshake,
-    live_server_pid, session_socket_path,
+    live_server_pid, protocol::ClientMessage, session_socket_path,
 };
 
 const ACCEPT_POLL_MILLIS: u16 = 1000;
+const DETACHED_ROWS: u16 = 24;
+const DETACHED_COLUMNS: u16 = 80;
+const DETACHED_START_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Start a detached server for `name` and attach this terminal to it.
 ///
 /// This must run during single-threaded process startup because the child is
 /// created with `fork` and continues in Rust before starting any other threads.
-pub fn create(name: &SessionName, shell: &OsStr) -> io::Result<u8> {
+pub fn create(name: &SessionName, shell: &OsStr, detached: bool) -> io::Result<u8> {
     let endpoint = SessionEndpoint::bind(name)?;
     // SAFETY: the CLI calls this during single-threaded startup, so the child
     // cannot inherit locks held by another thread.
     match unsafe { fork() }? {
         ForkResult::Parent { .. } => {
             drop(endpoint.relinquish());
-            attach(name)
+            if detached {
+                start_detached(name)
+            } else {
+                attach(name)
+            }
         }
         ForkResult::Child => {
             let status = run_server(endpoint, name, shell).unwrap_or(1);
             std::process::exit(i32::from(status));
         }
     }
+}
+
+fn start_detached(name: &SessionName) -> io::Result<u8> {
+    let mut peer = handshake::client(connect(name)?, DETACHED_ROWS, DETACHED_COLUMNS)?;
+    peer.stream().set_nonblocking(false)?;
+    peer.stream()
+        .set_read_timeout(Some(DETACHED_START_TIMEOUT))?;
+    peer.stream()
+        .set_write_timeout(Some(DETACHED_START_TIMEOUT))?;
+    let detach = ClientMessage::Detach
+        .encode()
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    peer.stream_mut().write_all(&detach)?;
+
+    let mut discard = [0; 1024];
+    loop {
+        match peer.stream_mut().read(&mut discard) {
+            Ok(0) => break,
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) =>
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!("session '{name}' did not finish detached startup"),
+                ));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    live_server_pid(name).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!("session '{name}' failed to start: {error}"),
+        )
+    })?;
+    Ok(0)
 }
 
 /// Attach this terminal to an existing named session.

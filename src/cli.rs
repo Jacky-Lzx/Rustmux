@@ -13,10 +13,13 @@ pub struct Cli {
 
 #[derive(Clone, Debug, Eq, PartialEq, Subcommand)]
 pub enum Command {
-    /// Create a detached named session and attach to it.
+    /// Create a named session and attach to it.
     New {
         /// Session name: ASCII letters, numbers, '-' or '_'.
         name: SessionName,
+        /// Leave the new session running without attaching this terminal.
+        #[arg(short, long)]
+        detached: bool,
     },
     /// Attach to an existing named session.
     Attach {
@@ -52,7 +55,17 @@ mod tests {
                 .unwrap()
                 .command,
             Some(Command::New {
-                name: SessionName::new("work").unwrap()
+                name: SessionName::new("work").unwrap(),
+                detached: false,
+            })
+        );
+        assert_eq!(
+            Cli::try_parse_from(["rustmux", "new", "work", "--detached"])
+                .unwrap()
+                .command,
+            Some(Command::New {
+                name: SessionName::new("work").unwrap(),
+                detached: true,
             })
         );
         assert_eq!(

@@ -5,6 +5,7 @@ Rustmux keeps its existing foreground mode when started without arguments. Five
 
 ```sh
 rustmux new work
+rustmux new --detached background
 rustmux attach work
 rustmux list
 rustmux kill work
@@ -17,6 +18,12 @@ redirects its standard streams to `/dev/null`, closes inherited descriptors and
 owns the listener until the final pane exits. The parent closes its listener copy
 without unlinking the child's socket, then enters the ordinary session client.
 An already active name is rejected before another server starts.
+
+`new --detached` (or `new -d`) creates the same server without putting the
+calling terminal into raw or alternate-screen mode. An internal `24×80` client
+performs the initial handshake, requests detach and waits until the server has
+created its shell and entered detached operation. The first real attachment
+replaces that bootstrap size with its current terminal dimensions.
 
 While attached to a named session, Ctrl-B followed by `d` sends the protocol
 `Detach` message and restores the outer terminal. Input earlier in the same read

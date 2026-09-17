@@ -2181,3 +2181,30 @@ killed = subprocess.run(
 )
 assert killed.returncode == 0, killed
 assert not [path for path in detached_paths if os.path.exists(path)], detached_paths
+
+
+# Detached creation works without a controlling terminal, becomes listable before
+# returning, and adopts the dimensions of its first real attachment.
+background_name = f"background-{os.getpid()}"
+background_env = dict(
+    os.environ, RUSTMUX_SHELL="/bin/sh", PS1="RUSTMUX_READY> ", ENV="", BASH_ENV="",
+)
+created = subprocess.run(
+    [BINARY, "new", "--detached", background_name], capture_output=True, text=True,
+    env=background_env,
+)
+assert created.returncode == 0, created
+assert created.stdout == "", created.stdout
+assert background_name in subprocess.run(
+    [BINARY, "list"], check=True, capture_output=True, text=True,
+).stdout.splitlines()
+s = Session(arguments=("attach", background_name))
+try:
+    s.expect(b"RUSTMUX_READY>")
+    expect_bar(s, f"[{background_name}]".encode())
+    s.send(b"stty size\n")
+    s.expect(b"23 80")
+    s.send(b"exit 0\n")
+    s.finish(0)
+finally:
+    s.close()
