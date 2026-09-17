@@ -103,11 +103,11 @@ The CLI now parses shell output and renders its own screen model. Window changes
 resize both model grids and the PTY in every window. The bar reserves one row;
 panes share the remaining content area, with one-cell separators. The bar
 is hidden when only one row is available. Outer dimensions must fit within
-65,536 cells.
+65,536 cells. In split layouts, Blue separators outline the focused pane.
 Primary-screen rows scrolled out of the grid enter bounded
 [history storage](../reference/scrollback.md). Use Ctrl-B `[` to browse a frozen snapshot; `k/j` move, `g/G` jump, and `q`
-returns to live output. With split panes, a Peach separator outline identifies
-the pane whose history is open. In history mode, `/` opens literal search; Enter searches,
+returns to live output. Its Blue separator outline changes to Peach while history
+is open. In history mode, `/` opens literal search; Enter searches,
 `n/N` cycle matches, and Ctrl-C cancels query editing. Height shrink keeps the primary cursor visible and archives
 rows moved off the top. Growing restores the newest retained history above the
 current content. Width changes reflow primary text and retained history;

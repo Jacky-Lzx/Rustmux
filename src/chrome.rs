@@ -28,11 +28,17 @@ pub(crate) fn bar_style(active: bool) -> Style {
     }
 }
 
-pub(crate) fn separator_style(history: bool) -> Style {
+pub(crate) fn separator_style(active: bool, history: bool) -> Style {
     Style {
-        foreground: if history { PEACH } else { SUBTEXT0 },
+        foreground: if history {
+            PEACH
+        } else if active {
+            BLUE
+        } else {
+            SUBTEXT0
+        },
         background: MANTLE,
-        bold: history,
+        bold: active || history,
         ..Style::default()
     }
 }

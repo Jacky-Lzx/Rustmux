@@ -21,6 +21,8 @@ reaches the shell; these commands only apply after Ctrl-B. Bracketed paste paylo
 is forwarded unchanged, including shortcut bytes.
 
 New splits share space approximately equally and reserve a one-cell separator.
+Separators bordering the focused pane use Catppuccin Mocha Blue; unrelated
+separators retain the muted Subtext color.
 The [layout model](split-layout.md) describes odd sizes and nested minimum sizes.
 The CLI synchronizes each child PTY and screen with its rectangle after splitting,
 outer resize and pane removal. New windows use the full content area even when

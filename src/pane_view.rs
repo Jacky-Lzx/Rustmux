@@ -158,6 +158,7 @@ pub(crate) fn compose_with_highlight(
             Cell {
                 character,
                 style: separator_style(
+                    borders(*active_rect, row as u16, column as u16),
                     highlighted.is_some_and(|rect| borders(rect, row as u16, column as u16)),
                 ),
                 ..Cell::default()
@@ -193,8 +194,9 @@ mod tests {
     use crate::layout::SplitAxis;
 
     #[test]
-    fn history_highlight_follows_only_the_selected_pane_border() {
+    fn active_and_history_highlights_follow_only_the_selected_pane_border() {
         let mut layout = Layout::new(5, 9).unwrap();
+        let left = layout.active();
         layout.split_active(SplitAxis::Columns).unwrap();
         let selected = layout.split_active(SplitAxis::Rows).unwrap();
         let screens: Vec<_> = layout
@@ -212,14 +214,36 @@ mod tests {
 
         let ordinary = compose_with_highlight(&layout, &references, None).unwrap();
         let highlighted = compose_with_highlight(&layout, &references, Some(selected)).unwrap();
-        assert_eq!(ordinary.row(0).unwrap()[4].style, separator_style(false));
-        assert_eq!(highlighted.row(0).unwrap()[4].style, separator_style(false));
+        assert_eq!(
+            ordinary.row(0).unwrap()[4].style,
+            separator_style(false, false)
+        );
+        assert_eq!(
+            highlighted.row(0).unwrap()[4].style,
+            separator_style(false, false)
+        );
         for (row, column) in [(2, 4), (2, 7), (3, 4), (4, 4)] {
             assert_eq!(
+                ordinary.row(row).unwrap()[column].style,
+                separator_style(true, false),
+                "active separator at {row},{column} was not highlighted"
+            );
+            assert_eq!(
                 highlighted.row(row).unwrap()[column].style,
-                separator_style(true),
-                "separator at {row},{column} was not highlighted"
+                separator_style(true, true),
+                "history separator at {row},{column} was not highlighted"
             );
         }
+
+        layout.select(left).unwrap();
+        let focused_left = compose_with_highlight(&layout, &references, None).unwrap();
+        assert_eq!(
+            focused_left.row(0).unwrap()[4].style,
+            separator_style(true, false)
+        );
+        assert_eq!(
+            focused_left.row(2).unwrap()[7].style,
+            separator_style(false, false)
+        );
     }
 }
