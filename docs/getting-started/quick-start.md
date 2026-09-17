@@ -79,7 +79,9 @@ shells continue running. New windows and splits inherit the active pane's valid
 OSC 7 directory. Without OSC 7, macOS and Linux query the foreground process,
 then the shell process; Yazi's foreground directory overrides stale OSC 7. See
 [Windows](../reference/windows.md#interactive-controls) for limits and input
-behavior. Ctrl-B followed by `,` opens the name editor:
+behavior. The right side of the bar changes from red `LOCKED` to green `NORMAL`
+after Ctrl-B and returns to `LOCKED` after the shortcut. Ctrl-B followed by `,`
+opens the name editor:
 Enter saves, Esc cancels, and Ctrl-U clears the existing name.
 Ctrl-B followed by `&` asks to close the active window: type `yes` and Enter to
 force close, or Esc to cancel. Unsaved work in that window can be lost. The top bar shows the saved name and highlights the active window.

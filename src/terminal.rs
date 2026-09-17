@@ -533,9 +533,16 @@ enum WindowKey {
     SwapPanePrevious,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum InputMode {
+    #[default]
+    Locked,
+    Normal,
+}
+
 #[derive(Default)]
 struct WindowInput {
-    prefix: bool,
+    mode: InputMode,
     paste: bool,
     tail: VecDeque<u8>,
     mouse: Vec<u8>,
@@ -552,7 +559,8 @@ impl WindowInput {
     // completed non-mouse sequences are forwarded as soon as they are known.
     fn feed(&mut self, byte: u8, output: &mut Vec<WindowKey>) {
         if self.paste
-            || (self.mouse.is_empty() && (!self.mouse_enabled || byte != 27 || self.prefix))
+            || (self.mouse.is_empty()
+                && (!self.mouse_enabled || byte != 27 || self.mode == InputMode::Normal))
         {
             self.plain(byte, output);
             return;
@@ -659,8 +667,8 @@ impl WindowInput {
         }
         if was_paste {
             output.push(WindowKey::Byte(byte));
-        } else if self.prefix {
-            self.prefix = false;
+        } else if self.mode == InputMode::Normal {
+            self.mode = InputMode::Locked;
             match byte {
                 b'c' => output.push(WindowKey::Create),
                 b'n' => output.push(WindowKey::Next),
@@ -700,7 +708,7 @@ impl WindowInput {
                 }
             }
         } else if byte == 2 {
-            self.prefix = true;
+            self.mode = InputMode::Normal;
         } else {
             output.push(WindowKey::Byte(byte));
         }
@@ -1055,8 +1063,14 @@ fn forward(
                         history.as_ref().map(|_| focused),
                         &titles,
                     )?;
-                    let mut view =
-                        compose(&content, *outer_rows, session_name, &names, active_index)?;
+                    let mut view = compose(
+                        &content,
+                        *outer_rows,
+                        session_name,
+                        &names,
+                        active_index,
+                        keys.mode == InputMode::Normal,
+                    )?;
                     if let Some(history) = &history
                         && *outer_rows > 1
                     {
@@ -1266,7 +1280,12 @@ fn forward(
             keys.mouse_enabled =
                 pane.screen().mouse_tracking() != crate::screen::MouseTracking::Off;
             actions.clear();
+            let input_mode = keys.mode;
             keys.feed(input.pop_front().unwrap(), &mut actions);
+            if keys.mode != input_mode {
+                bar_dirty = true;
+                force_redraw = true;
+            }
             for action in actions.drain(..) {
                 let old = (
                     windows.active().unwrap().id(),
@@ -2078,6 +2097,19 @@ mod window_input_tests {
             decoder.feed(byte, &mut result);
         }
         result
+    }
+
+    #[test]
+    fn prefix_enters_normal_mode_until_one_command_is_decoded() {
+        let mut decoder = WindowInput::default();
+        let mut actions = Vec::new();
+        assert_eq!(decoder.mode, InputMode::Locked);
+        decoder.feed(2, &mut actions);
+        assert!(actions.is_empty());
+        assert_eq!(decoder.mode, InputMode::Normal);
+        decoder.feed(b'n', &mut actions);
+        assert_eq!(actions, [WindowKey::Next]);
+        assert_eq!(decoder.mode, InputMode::Locked);
     }
 
     #[test]

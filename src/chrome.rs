@@ -13,6 +13,7 @@ const BADGE_TEXT: Color = Color::Rgb(0x11, 0x11, 0x1b);
 const BASE: Color = Color::Rgb(0x1e, 0x1e, 0x2e);
 const SUBTEXT0: Color = Color::Rgb(0xa6, 0xad, 0xc8);
 const TEXT: Color = Color::Rgb(0xcd, 0xd6, 0xf4);
+const RED: Color = Color::Rgb(0xf3, 0x8b, 0xa8);
 const GREEN: Color = Color::Rgb(0xa6, 0xe3, 0xa1);
 const PEACH: Color = Color::Rgb(0xfa, 0xb3, 0x87);
 
@@ -129,12 +130,37 @@ fn draw_powerline_segment(screen: &mut Screen, label: &str, active: bool, remain
     *remaining -= 1;
 }
 
+fn mode_label(normal: bool) -> &'static str {
+    if normal { " NORMAL " } else { " LOCKED " }
+}
+
+fn draw_mode(screen: &mut Screen, columns: usize, width: usize, normal: bool) {
+    if width < 3 {
+        return;
+    }
+    let background = if normal { GREEN } else { RED };
+    screen.position(0, columns - width);
+    screen.set_style(separator_style(BASE, background));
+    screen.print(POWERLINE_RIGHT);
+    let label = clipped(mode_label(normal), width - 2);
+    screen.set_style(Style {
+        foreground: BADGE_TEXT,
+        background,
+        bold: true,
+        ..Style::default()
+    });
+    print(screen, &label);
+    screen.set_style(separator_style(background, BASE));
+    screen.print(POWERLINE_RIGHT);
+}
+
 pub(crate) fn compose(
     child: &Screen,
     outer_rows: u16,
     session_name: Option<&str>,
     names: &[String],
     active: usize,
+    normal_mode: bool,
 ) -> io::Result<Screen> {
     let mut screen = child.clone();
     if outer_rows <= 1 {
@@ -151,11 +177,18 @@ pub(crate) fn compose(
         .collect();
     let widths: Vec<_> = labels.iter().map(|label| powerline_width(label)).collect();
     let active_width = widths.get(active).copied().unwrap_or(0).min(columns);
+    let full_mode_width = powerline_width(mode_label(normal_mode));
+    let mode_width = if columns >= active_width.saturating_add(full_mode_width) {
+        full_mode_width
+    } else {
+        0
+    };
+    let label_columns = columns.saturating_sub(mode_width);
     let session = session_name
         .map(|name| {
             clipped(
                 &format!(" Rustmux ({name}) "),
-                columns.saturating_sub(active_width),
+                label_columns.saturating_sub(active_width),
             )
         })
         .unwrap_or_default();
@@ -165,7 +198,7 @@ pub(crate) fn compose(
         ..bar_background_style()
     });
     print(&mut screen, &session);
-    let available = columns.saturating_sub(session_width);
+    let available = label_columns.saturating_sub(session_width);
     let mut start = 0;
     while start < active && widths[start..=active].iter().sum::<usize>() > available {
         start += 1;
@@ -176,6 +209,9 @@ pub(crate) fn compose(
         if remaining < 3 {
             break;
         }
+    }
+    if mode_width != 0 {
+        draw_mode(&mut screen, columns, mode_width, normal_mode);
     }
     screen.restore_cursor();
     Ok(screen)
@@ -212,7 +248,7 @@ mod tests {
         let mut child = Screen::new(3, 40).unwrap();
         Parser::new().advance(&mut child, b"content\x1b[2;3r\x1b[?6h\x1b(0\x1b[?2004h");
         let before = child.clone();
-        let view = compose(&child, 4, None, &["first".into(), "中文".into()], 1).unwrap();
+        let view = compose(&child, 4, None, &["first".into(), "中文".into()], 1, false).unwrap();
         assert_eq!(child, before);
         for row in 0..3 {
             assert_eq!(view.row(row + 1), child.row(row));
@@ -248,6 +284,7 @@ mod tests {
                 None,
                 &["very long".into(), "中e\u{301}\x1b[31m".into()],
                 1,
+                false,
             )
             .unwrap();
             let row = view.row(0).unwrap();
@@ -265,20 +302,21 @@ mod tests {
         assert_eq!(pane_rows(24), 23);
         let child = Screen::new(1, 10).unwrap();
         assert_eq!(
-            compose(&child, 1, None, &["hidden".into()], 0).unwrap(),
+            compose(&child, 1, None, &["hidden".into()], 0, false).unwrap(),
             child
         );
     }
 
     #[test]
     fn named_session_precedes_windows_without_hiding_the_active_label() {
-        let child = Screen::new(2, 40).unwrap();
+        let child = Screen::new(2, 50).unwrap();
         let view = compose(
             &child,
             3,
             Some("personal"),
             &["first".into(), "editor".into()],
             1,
+            false,
         )
         .unwrap();
         let bar: String = view
@@ -292,7 +330,7 @@ mod tests {
         assert!(bar.contains("2 editor"));
 
         let narrow = Screen::new(2, 9).unwrap();
-        let view = compose(&narrow, 3, Some("personal"), &["first".into()], 0).unwrap();
+        let view = compose(&narrow, 3, Some("personal"), &["first".into()], 0, false).unwrap();
         let bar: String = view
             .row(0)
             .unwrap()
@@ -302,5 +340,31 @@ mod tests {
             .collect();
         assert!(bar.contains("1 fir"), "bar was {bar:?}");
         assert!(!bar.contains("personal"));
+    }
+
+    #[test]
+    fn mode_badge_is_right_aligned_and_yields_to_the_active_window() {
+        let child = Screen::new(2, 40).unwrap();
+        let locked = compose(&child, 3, None, &["shell".into()], 0, false).unwrap();
+        let normal = compose(&child, 3, None, &["shell".into()], 0, true).unwrap();
+        let locked_row = locked.row(0).unwrap();
+        let normal_row = normal.row(0).unwrap();
+        assert_eq!(locked_row[30].style, separator_style(BASE, RED));
+        assert_eq!(normal_row[30].style, separator_style(BASE, GREEN));
+        assert_eq!(locked_row[31].character, ' ');
+        assert_eq!(locked_row[32].character, 'L');
+        assert_eq!(normal_row[32].character, 'N');
+
+        let narrow = Screen::new(2, 8).unwrap();
+        let view = compose(&narrow, 3, None, &["shell".into()], 0, true).unwrap();
+        let bar: String = view
+            .row(0)
+            .unwrap()
+            .iter()
+            .filter(|cell| cell.width != 0)
+            .map(|cell| cell.character)
+            .collect();
+        assert!(bar.contains("1 she"), "bar was {bar:?}");
+        assert!(!bar.contains("NORMAL"));
     }
 }

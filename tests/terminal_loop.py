@@ -1088,6 +1088,11 @@ s = Session()
 try:
     s.expect(b"RUSTMUX_READY> ")
     expect_bar(s, b"1 shell")
+    expect_bar(s, b"LOCKED")
+    s.send(b"\x02")
+    expect_bar(s, b"NORMAL")
+    s.send(b"n")
+    expect_bar(s, b"LOCKED")
     s.send(b"printf '\\033[23;1H%s%s' LAST_ CONTENT\n")
     s.expect(b"LAST_CONTENT")
     assert b"LAST_CONTENT" in s.last_rows[21]
@@ -2142,6 +2147,11 @@ s = Session(arguments=("new", session_name))
 try:
     s.expect(b"RUSTMUX_READY>")
     expect_bar(s, f"Rustmux ({session_name})".encode())
+    expect_bar(s, b"LOCKED")
+    s.send(b"\x02")
+    expect_bar(s, b"NORMAL")
+    s.send(b"n")
+    expect_bar(s, b"LOCKED")
     s.send(b"stty -echo; KEEP=persistent\n")
     s.expect(b"RUSTMUX_READY>")
     assert session_name in subprocess.run(

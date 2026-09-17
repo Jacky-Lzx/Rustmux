@@ -138,6 +138,13 @@ payload are forwarded unchanged, including Ctrl-B combinations inside the paste.
 Unbracketed pasted text is indistinguishable from typing and follows the same
 shortcut rules. Key bindings are fixed for this initial integration.
 
+The right side of the window bar shows `LOCKED` in red during ordinary child
+input. Pressing Ctrl-B changes it to green `NORMAL` while Rustmux waits for the
+second shortcut byte; completing the shortcut returns it to `LOCKED`. Attached
+session clients forward Ctrl-B immediately, so the server displays the same mode
+transition as a foreground-only run. The mode badge yields to the active window
+label when the terminal is too narrow to show both.
+
 Ctrl-B, then `E` writes a plain-text snapshot of the active pane's retained
 primary-screen history and meaningful visible rows to a private temporary file.
 Soft-wrapped rows are joined and hard row boundaries remain newlines. Rustmux

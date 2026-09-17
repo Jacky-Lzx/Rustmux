@@ -338,9 +338,12 @@ impl ClientInput {
                 if byte == 23 {
                     return Some(ClientExit::SessionManager);
                 }
-                forwarded.extend([2, byte]);
+                forwarded.push(byte);
             } else if byte == 2 {
                 self.prefix = true;
+                // Forward the prefix immediately so the session server can show
+                // NORMAL mode while this client waits for the command byte.
+                forwarded.push(byte);
             } else {
                 forwarded.push(byte);
             }
@@ -515,7 +518,7 @@ mod tests {
             input.feed(b"dafter", &mut forwarded),
             Some(ClientExit::Detached)
         );
-        assert_eq!(forwarded, b"before");
+        assert_eq!(forwarded, b"before\x02");
 
         let mut input = ClientInput::default();
         let mut forwarded = Vec::new();
@@ -528,6 +531,7 @@ mod tests {
             input.feed(b"\x02d", &mut forwarded),
             Some(ClientExit::Detached)
         );
+        assert_eq!(forwarded.last(), Some(&2));
     }
 
     #[test]
@@ -538,7 +542,7 @@ mod tests {
             input.feed(b"before\x02\x17after", &mut forwarded),
             Some(ClientExit::SessionManager)
         );
-        assert_eq!(forwarded, b"before");
+        assert_eq!(forwarded, b"before\x02");
 
         let mut input = ClientInput::default();
         let mut forwarded = Vec::new();
@@ -554,6 +558,7 @@ mod tests {
         let mut input = ClientInput::default();
         let mut forwarded = Vec::new();
         assert_eq!(input.feed(b"\x02", &mut forwarded), None);
+        assert_eq!(forwarded, b"\x02");
         assert_eq!(input.feed(b"c\x02\x02", &mut forwarded), None);
         assert_eq!(forwarded, b"\x02c\x02\x02");
     }
