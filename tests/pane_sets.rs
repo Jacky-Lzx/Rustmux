@@ -26,14 +26,14 @@ fn assert_membership<T>(panes: &PaneSet<T>) {
 
 #[test]
 fn split_failure_preserves_layout_zoom_contents_and_does_not_consume_id() {
-    let mut panes = PaneSet::new(3, 3, String::from("first")).unwrap();
+    let mut panes = PaneSet::new(7, 7, String::from("first")).unwrap();
     let first = panes.layout().active();
     let second = panes
         .split_with(SplitAxis::Columns, |id, rect| {
             assert_eq!(id.get(), 1);
             assert_eq!(
                 (rect.row, rect.column, rect.rows, rect.columns),
-                (0, 2, 3, 1)
+                (1, 4, 5, 2)
             );
             Ok("second".into())
         })
@@ -61,7 +61,7 @@ fn split_failure_preserves_layout_zoom_contents_and_does_not_consume_id() {
     let third = panes
         .split_with(SplitAxis::Rows, |id, rect| {
             assert_eq!(id.get(), 2);
-            assert_eq!((rect.rows, rect.columns), (1, 1));
+            assert_eq!((rect.rows, rect.columns), (2, 2));
             Ok("third".into())
         })
         .unwrap();

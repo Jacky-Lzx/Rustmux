@@ -101,12 +101,15 @@ stopped foreground program is lost. Closing the last visible pane exits the appl
 
 The CLI now parses shell output and renders its own screen model. Window changes
 resize both model grids and the PTY in every window. The bar reserves one row;
-panes share the remaining content area, with one-cell separators. The bar
-is hidden when only one row is available. Outer dimensions must fit within
-65,536 cells. In split layouts, Blue separators outline the focused pane.
+panes share the remaining area inside box-drawing frames, with a separate border
+for each pane on both sides of a split. Pane titles follow OSC 0/2 and otherwise
+read `shell`.
+The bar is hidden when only one row is available, and outer borders are omitted
+along dimensions too small to contain them. Outer dimensions must fit within
+65,536 cells. Green borders outline the focused pane.
 Primary-screen rows scrolled out of the grid enter bounded
 [history storage](../reference/scrollback.md). Use Ctrl-B `[` to browse a frozen snapshot; `k/j` move, `g/G` jump, and `q`
-returns to live output. Its Blue separator outline changes to Peach while history
+returns to live output. Its Green border changes to Peach while history
 is open. In history mode, `/` opens literal search; Enter searches,
 `n/N` cycle matches, and Ctrl-C cancels query editing. Height shrink keeps the primary cursor visible and archives
 rows moved off the top. Growing restores the newest retained history above the

@@ -47,8 +47,8 @@ fn nested_splits_have_exact_rectangles_and_preserve_ids_on_resize() {
                 Rect {
                     row: 0,
                     column: 0,
-                    rows: 3,
-                    columns: 5
+                    rows: 2,
+                    columns: 4
                 }
             ),
             (
@@ -57,7 +57,7 @@ fn nested_splits_have_exact_rectangles_and_preserve_ids_on_resize() {
                     row: 4,
                     column: 0,
                     rows: 3,
-                    columns: 5
+                    columns: 4
                 }
             ),
             (
@@ -71,9 +71,9 @@ fn nested_splits_have_exact_rectangles_and_preserve_ids_on_resize() {
             ),
         ]
     );
-    assert_eq!(layout.minimum_size(), (3, 3));
-    for rows in 3..12 {
-        for columns in 3..18 {
+    assert_eq!(layout.minimum_size(), (4, 4));
+    for rows in 4..12 {
+        for columns in 4..18 {
             layout.resize(rows, columns).unwrap();
             assert_partition(&layout);
             assert_eq!(layout.active(), bottom);
@@ -92,13 +92,13 @@ fn nested_splits_have_exact_rectangles_and_preserve_ids_on_resize() {
 
 #[test]
 fn resize_respects_asymmetric_subtree_minima_and_rejects_without_mutation() {
-    let mut layout = Layout::new(1, 7).unwrap();
+    let mut layout = Layout::new(1, 10).unwrap();
     let first = layout.active();
     layout.split_active(SplitAxis::Columns).unwrap();
     layout.select(first).unwrap();
     layout.split_active(SplitAxis::Columns).unwrap();
-    assert_eq!(layout.minimum_size(), (1, 5));
-    layout.resize(1, 5).unwrap(); // Equal root halves would leave the left subtree too small.
+    assert_eq!(layout.minimum_size(), (1, 7));
+    layout.resize(1, 7).unwrap(); // Equal root halves would leave the left subtree too small.
     assert_eq!(
         layout
             .geometry()
@@ -106,15 +106,15 @@ fn resize_respects_asymmetric_subtree_minima_and_rejects_without_mutation() {
             .iter()
             .map(|(_, r)| r.column)
             .collect::<Vec<_>>(),
-        vec![0, 2, 4]
+        vec![0, 3, 6]
     );
     assert_partition(&layout);
     let before = layout.clone();
-    for (rows, columns) in [(0, 5), (1, 0), (1, 4)] {
+    for (rows, columns) in [(0, 7), (1, 0), (1, 6)] {
         assert!(layout.resize(rows, columns).is_err());
         assert_eq!(layout, before);
     }
-    layout.resize(1, 5).unwrap();
+    layout.resize(1, 7).unwrap();
     assert_eq!(layout, before);
 }
 
@@ -128,7 +128,7 @@ fn failed_splits_do_not_change_focus_or_consume_ids() {
         assert!(layout.split_active(axis).is_err());
         assert_eq!(layout, before);
     }
-    layout.resize(3, 3).unwrap();
+    layout.resize(4, 4).unwrap();
     let second = layout.split_active(SplitAxis::Columns).unwrap();
     assert_eq!(second.get(), 1);
     let third = layout.split_active(SplitAxis::Rows).unwrap();
@@ -186,7 +186,7 @@ fn closing_promotes_sibling_subtree_and_preserves_its_ids() {
                 Rect {
                     row: 0,
                     column: 0,
-                    rows: 3,
+                    rows: 2,
                     columns: 11
                 }
             ),
@@ -201,7 +201,7 @@ fn closing_promotes_sibling_subtree_and_preserves_its_ids() {
             ),
         ]
     );
-    assert_eq!(layout.minimum_size(), (3, 1));
+    assert_eq!(layout.minimum_size(), (4, 1));
     assert_partition(&layout);
     assert_eq!(layout.close(bottom).unwrap(), top);
     assert_eq!(layout.minimum_size(), (1, 1));
@@ -225,7 +225,7 @@ fn closing_promotes_sibling_subtree_and_preserves_its_ids() {
     assert_eq!(layout, before);
     let new = layout.split_active(SplitAxis::Columns).unwrap();
     assert!(new.get() > bottom.get());
-    layout.resize(1, 3).unwrap();
+    layout.resize(1, 4).unwrap();
     assert_partition(&layout);
 }
 
@@ -371,7 +371,7 @@ fn zoom_resize_preserves_tree_and_requires_space_for_restoration() {
     let before = layout.clone();
     assert!(layout.resize(1, 1).is_err());
     assert_eq!(layout, before);
-    for (rows, columns) in [(3, 3), (7, 19), (20, 30)] {
+    for (rows, columns) in [(4, 4), (7, 19), (20, 30)] {
         layout.resize(rows, columns).unwrap();
         unzoomed.resize(rows, columns).unwrap();
         assert!(layout.is_zoomed());
@@ -384,7 +384,7 @@ fn zoom_resize_preserves_tree_and_requires_space_for_restoration() {
 
 #[test]
 fn structural_changes_exit_zoom_only_after_success() {
-    let mut layout = Layout::new(3, 3).unwrap();
+    let mut layout = Layout::new(4, 4).unwrap();
     let first = layout.active();
     let second = layout.split_active(SplitAxis::Columns).unwrap();
     layout.toggle_zoom();
@@ -508,20 +508,20 @@ fn manual_resize_moves_separator_and_retains_ratio_across_outer_resize() {
     let left = layout.active();
     let right = layout.split_active(SplitAxis::Columns).unwrap();
     assert!(layout.resize_active(Direction::Right));
-    assert_eq!(layout.geometry().panes[0].1.columns, 6);
+    assert_eq!(layout.geometry().panes[0].1.columns, 5);
     assert_eq!(layout.geometry().panes[1].1.columns, 4);
     assert_eq!(layout.active(), right);
     let original = layout.geometry();
     layout.resize(7, 21).unwrap();
-    assert_eq!(layout.geometry().panes[0].1.columns, 12);
-    assert_eq!(layout.geometry().panes[1].1.columns, 8);
-    layout.resize(1, 3).unwrap();
+    assert_eq!(layout.geometry().panes[0].1.columns, 10);
+    assert_eq!(layout.geometry().panes[1].1.columns, 9);
+    layout.resize(1, 4).unwrap();
     assert_partition(&layout);
     layout.resize(7, 11).unwrap();
     assert_eq!(layout.geometry(), original);
     layout.select(left).unwrap();
     assert!(layout.resize_active(Direction::Left));
-    assert_eq!(layout.geometry().panes[0].1.columns, 5);
+    assert_eq!(layout.geometry().panes[0].1.columns, 4);
     assert_eq!(layout.active(), left);
 }
 
@@ -534,7 +534,7 @@ fn nearest_matching_separator_stops_at_minimum_without_moving_ancestor() {
     layout.split_active(SplitAxis::Columns).unwrap();
     let outer = layout.geometry().separators[0];
     assert!(layout.resize_active(Direction::Right));
-    assert_eq!(layout.geometry().panes[0].1.columns, 8);
+    assert_eq!(layout.geometry().panes[0].1.columns, 7);
     assert_eq!(layout.geometry().separators[0], outer);
     for _ in 0..30 {
         layout.resize_active(Direction::Right);
@@ -582,8 +582,8 @@ fn manual_resize_respects_nested_minima_and_zoom_and_preserves_partition() {
         assert_eq!(layout, before);
     }
     layout.toggle_zoom();
-    for rows in 3..17 {
-        for columns in 5..35 {
+    for rows in 4..17 {
+        for columns in 7..35 {
             layout.resize(rows, columns).unwrap();
             assert_partition(&layout);
         }
@@ -598,10 +598,10 @@ fn manual_resize_is_noop_for_single_pane_and_safe_at_maximum_dimension() {
     assert_eq!(layout, before);
     layout.split_active(SplitAxis::Columns).unwrap();
     assert!(layout.resize_active(Direction::Right));
-    assert_eq!(layout.geometry().panes[0].1.columns, 32768);
-    layout.resize(1, 3).unwrap();
+    assert_eq!(layout.geometry().panes[0].1.columns, 32767);
+    layout.resize(1, 4).unwrap();
     layout.resize(u16::MAX, u16::MAX).unwrap();
-    assert_eq!(layout.geometry().panes[0].1.columns, 32768);
+    assert_eq!(layout.geometry().panes[0].1.columns, 32767);
 }
 
 #[test]

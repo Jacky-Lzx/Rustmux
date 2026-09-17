@@ -39,6 +39,14 @@ through logical lines, while alternate cursors clamp. All changed sizes reset
 scrolling margins. Height-only changes clear pending wrap; primary width reflow
 preserves it when the insertion point lands at the new right edge.
 
+An active shell prompt is handled separately when shell integration supplies
+`OSC 133;A` (prompt start) and `OSC 133;C` (command start). Completed output above
+the prompt still reflows, while the prompt and current input keep their physical
+rows until the shell repaints after `SIGWINCH`. The tracked prompt start follows
+full-screen scrolling caused while the prompt is drawn. This keeps relative cleanup
+used by shells such as fish aligned with the old prompt height and prevents fragments
+of a multi-line prompt from remaining after a split or outer-terminal resize.
+
 Alternate mode remains active across resize. Leaving it restores the resized main
 grid and the clamped saved cursor/style. Re-entering still starts a blank alternate
 grid at the new dimensions.

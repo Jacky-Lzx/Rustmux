@@ -1,38 +1,13 @@
 //! Compose validated pane screens into one content-area frame for the renderer.
 
 use crate::{
-    chrome::separator_style,
+    chrome::pane_border_style,
     layout::{Layout, PaneId, Rect},
     pane::MAX_CELLS,
     screen::Screen,
     style::Cell,
 };
 use std::io;
-use std::ops::BitOrAssign;
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct LineMask(u8);
-
-impl LineMask {
-    const EMPTY: Self = Self(0);
-    const NORTH: Self = Self(1);
-    const SOUTH: Self = Self(2);
-    const WEST: Self = Self(4);
-    const EAST: Self = Self(8);
-    const VERTICAL: Self = Self(Self::NORTH.0 | Self::SOUTH.0);
-    const HORIZONTAL: Self = Self(Self::WEST.0 | Self::EAST.0);
-    const SINGLE_CELL_SEPARATOR: Self = Self(16);
-    const T_RIGHT: Self = Self(Self::NORTH.0 | Self::SOUTH.0 | Self::WEST.0);
-    const T_LEFT: Self = Self(Self::NORTH.0 | Self::SOUTH.0 | Self::EAST.0);
-    const T_UP: Self = Self(Self::NORTH.0 | Self::WEST.0 | Self::EAST.0);
-    const T_DOWN: Self = Self(Self::SOUTH.0 | Self::WEST.0 | Self::EAST.0);
-}
-
-impl BitOrAssign for LineMask {
-    fn bitor_assign(&mut self, rhs: Self) {
-        self.0 |= rhs.0;
-    }
-}
 
 /// Compose visible panes without changing child screens. Coordinates exclude the bar.
 /// Every visible screen must exactly match its rectangle. Hidden screens may be
@@ -47,6 +22,15 @@ pub(crate) fn compose_with_highlight(
     screens: &[(PaneId, &Screen)],
     highlighted: Option<PaneId>,
 ) -> io::Result<Screen> {
+    compose_with_titles(layout, screens, highlighted, &[])
+}
+
+pub(crate) fn compose_with_titles(
+    layout: &Layout,
+    screens: &[(PaneId, &Screen)],
+    highlighted: Option<PaneId>,
+    titles: &[(PaneId, &str)],
+) -> io::Result<Screen> {
     let (rows, columns) = layout.dimensions();
     if usize::from(rows) * usize::from(columns) > MAX_CELLS {
         return Err(invalid("composed screen exceeds cell limit"));
@@ -60,6 +44,7 @@ pub(crate) fn compose_with_highlight(
         }
     }
     let geometry = layout.geometry();
+    let content_geometry = layout.content_geometry();
     let highlighted = highlighted
         .map(|id| {
             geometry
@@ -71,7 +56,7 @@ pub(crate) fn compose_with_highlight(
         })
         .transpose()?;
     let mut visible = Vec::with_capacity(geometry.panes.len());
-    for (id, rect) in &geometry.panes {
+    for (id, rect) in &content_geometry.panes {
         let source = screens
             .iter()
             .find(|(pane, _)| pane == id)
@@ -92,77 +77,38 @@ pub(crate) fn compose_with_highlight(
     for (_, rect, source) in &visible {
         frame.copy_display_cells(source, usize::from(rect.row), usize::from(rect.column));
     }
-    // Rasterize separator membership first, then connect neighboring segments.
-    let width = usize::from(columns);
-    let mut lines = vec![LineMask::EMPTY; usize::from(rows) * width];
-    for rect in &geometry.separators {
-        let direction = if rect.rows == 1 && rect.columns == 1 {
-            LineMask::SINGLE_CELL_SEPARATOR
-        } else if rect.columns == 1 {
-            LineMask::VERTICAL
-        } else {
-            LineMask::HORIZONTAL
-        }; // N/S or W/E.
-        for row in rect.row..rect.row + rect.rows {
-            for column in rect.column..rect.column + rect.columns {
-                lines[usize::from(row) * width + usize::from(column)] = direction;
-            }
-        }
+    // Each pane owns all four sides of its frame. A split reserves two cells so
+    // adjacent panes remain visually distinct instead of sharing one separator.
+    for (id, rect) in &geometry.panes {
+        draw_frame(
+            &mut frame,
+            *rect,
+            rows,
+            columns,
+            pane_border_style(
+                *id == layout.active(),
+                highlighted.is_some_and(|candidate| candidate == *rect),
+            ),
+        );
     }
-    for (index, &base) in lines
-        .iter()
-        .enumerate()
-        .filter(|(_, mask)| **mask != LineMask::EMPTY)
-    {
-        let row = index / width;
-        let column = index % width;
-        let mut mask = if base == LineMask::SINGLE_CELL_SEPARATOR {
-            // A one-cell separator is vertical only when it has pane cells on
-            // both sides; otherwise its panes lie above and below.
-            if column > 0
-                && column + 1 < width
-                && lines[index - 1] == LineMask::EMPTY
-                && lines[index + 1] == LineMask::EMPTY
-            {
-                LineMask::VERTICAL
-            } else {
-                LineMask::HORIZONTAL
-            }
-        } else {
-            base
+    for (id, rect) in &geometry.panes {
+        let Some(title) = titles
+            .iter()
+            .find(|(candidate, _)| candidate == id)
+            .map(|(_, title)| *title)
+        else {
+            continue;
         };
-        if row > 0 && lines[index - width] != LineMask::EMPTY {
-            mask |= LineMask::NORTH;
-        }
-        if row + 1 < usize::from(rows) && lines[index + width] != LineMask::EMPTY {
-            mask |= LineMask::SOUTH;
-        }
-        if column > 0 && lines[index - 1] != LineMask::EMPTY {
-            mask |= LineMask::WEST;
-        }
-        if column + 1 < width && lines[index + 1] != LineMask::EMPTY {
-            mask |= LineMask::EAST;
-        }
-        let character = match mask {
-            LineMask::VERTICAL => '│',
-            LineMask::HORIZONTAL => '─',
-            LineMask::T_RIGHT => '┤',
-            LineMask::T_LEFT => '├',
-            LineMask::T_UP => '┴',
-            LineMask::T_DOWN => '┬',
-            _ => '┼',
-        };
-        frame.set_display_cell(
-            row,
-            column,
-            Cell {
-                character,
-                style: separator_style(
-                    borders(*active_rect, row as u16, column as u16),
-                    highlighted.is_some_and(|rect| borders(rect, row as u16, column as u16)),
-                ),
-                ..Cell::default()
-            },
+        draw_title(
+            &mut frame,
+            *rect,
+            rows,
+            columns,
+            title,
+            pane_border_style(
+                *id == layout.active(),
+                highlighted.is_some_and(|candidate| candidate == *rect),
+            ),
         );
     }
     frame.set_display_cursor(
@@ -172,16 +118,130 @@ pub(crate) fn compose_with_highlight(
     Ok(frame)
 }
 
-fn borders(rect: Rect, row: u16, column: u16) -> bool {
-    let bottom = rect.row + rect.rows;
-    let right = rect.column + rect.columns;
-    let beside = (column.checked_add(1) == Some(rect.column) || column == right)
-        && row >= rect.row.saturating_sub(1)
-        && row <= bottom;
-    let above_or_below = (row.checked_add(1) == Some(rect.row) || row == bottom)
-        && column >= rect.column.saturating_sub(1)
-        && column <= right;
-    beside || above_or_below
+fn frame_bounds(rect: Rect, rows: u16, columns: u16) -> (u16, u16, u16, u16) {
+    let top = if rect.row == 0 { 0 } else { rect.row - 1 };
+    let left = if rect.column == 0 { 0 } else { rect.column - 1 };
+    let bottom = if rect.row + rect.rows == rows {
+        rows - 1
+    } else {
+        rect.row + rect.rows
+    };
+    let right = if rect.column + rect.columns == columns {
+        columns - 1
+    } else {
+        rect.column + rect.columns
+    };
+    (top, left, bottom, right)
+}
+
+fn draw_frame(frame: &mut Screen, rect: Rect, rows: u16, columns: u16, style: crate::style::Style) {
+    let (top, left, bottom, right) = frame_bounds(rect, rows, columns);
+    if rows >= 3 {
+        for column in left..=right {
+            frame.set_display_cell(
+                usize::from(top),
+                usize::from(column),
+                Cell {
+                    character: '─',
+                    style,
+                    ..Cell::default()
+                },
+            );
+            frame.set_display_cell(
+                usize::from(bottom),
+                usize::from(column),
+                Cell {
+                    character: '─',
+                    style,
+                    ..Cell::default()
+                },
+            );
+        }
+    }
+    if columns >= 3 {
+        for row in top..=bottom {
+            frame.set_display_cell(
+                usize::from(row),
+                usize::from(left),
+                Cell {
+                    character: '│',
+                    style,
+                    ..Cell::default()
+                },
+            );
+            frame.set_display_cell(
+                usize::from(row),
+                usize::from(right),
+                Cell {
+                    character: '│',
+                    style,
+                    ..Cell::default()
+                },
+            );
+        }
+    }
+    if rows >= 3 && columns >= 3 {
+        for (row, column, character) in [
+            (top, left, '┌'),
+            (top, right, '┐'),
+            (bottom, left, '└'),
+            (bottom, right, '┘'),
+        ] {
+            frame.set_display_cell(
+                usize::from(row),
+                usize::from(column),
+                Cell {
+                    character,
+                    style,
+                    ..Cell::default()
+                },
+            );
+        }
+    }
+}
+
+fn draw_title(
+    frame: &mut Screen,
+    rect: Rect,
+    rows: u16,
+    columns: u16,
+    title: &str,
+    style: crate::style::Style,
+) {
+    let (row, left, _, right) = frame_bounds(rect, rows, columns);
+    if rows < 3 || right <= left + 1 {
+        return;
+    }
+    let label = crate::chrome::clipped(&format!("─ {title} "), usize::from(right - left - 1));
+    let mut column = usize::from(left + 1);
+    for character in label.chars() {
+        let width = unicode_width::UnicodeWidthChar::width(character).unwrap_or(0);
+        if width == 0 || column + width > usize::from(right) {
+            continue;
+        }
+        frame.set_display_cell(
+            usize::from(row),
+            column,
+            Cell {
+                character,
+                width: width as u8,
+                style,
+                ..Cell::default()
+            },
+        );
+        if width == 2 {
+            frame.set_display_cell(
+                usize::from(row),
+                column + 1,
+                Cell {
+                    width: 0,
+                    style,
+                    ..Cell::default()
+                },
+            );
+        }
+        column += width;
+    }
 }
 
 fn invalid(message: &str) -> io::Error {
@@ -195,12 +255,12 @@ mod tests {
 
     #[test]
     fn active_and_history_highlights_follow_only_the_selected_pane_border() {
-        let mut layout = Layout::new(5, 9).unwrap();
+        let mut layout = Layout::new(7, 13).unwrap();
         let left = layout.active();
         layout.split_active(SplitAxis::Columns).unwrap();
         let selected = layout.split_active(SplitAxis::Rows).unwrap();
         let screens: Vec<_> = layout
-            .geometry()
+            .content_geometry()
             .panes
             .iter()
             .map(|(id, rect)| {
@@ -215,35 +275,101 @@ mod tests {
         let ordinary = compose_with_highlight(&layout, &references, None).unwrap();
         let highlighted = compose_with_highlight(&layout, &references, Some(selected)).unwrap();
         assert_eq!(
-            ordinary.row(0).unwrap()[4].style,
-            separator_style(false, false)
+            ordinary.row(0).unwrap()[5].style,
+            pane_border_style(false, false)
         );
         assert_eq!(
-            highlighted.row(0).unwrap()[4].style,
-            separator_style(false, false)
+            highlighted.row(0).unwrap()[5].style,
+            pane_border_style(false, false)
         );
-        for (row, column) in [(2, 4), (2, 7), (3, 4), (4, 4)] {
+        for (row, column) in [(3, 6), (3, 8), (4, 6), (6, 6)] {
             assert_eq!(
                 ordinary.row(row).unwrap()[column].style,
-                separator_style(true, false),
-                "active separator at {row},{column} was not highlighted"
+                pane_border_style(true, false),
+                "active border at {row},{column} was not highlighted"
             );
             assert_eq!(
                 highlighted.row(row).unwrap()[column].style,
-                separator_style(true, true),
-                "history separator at {row},{column} was not highlighted"
+                pane_border_style(true, true),
+                "history border at {row},{column} was not highlighted"
             );
         }
 
         layout.select(left).unwrap();
         let focused_left = compose_with_highlight(&layout, &references, None).unwrap();
         assert_eq!(
-            focused_left.row(0).unwrap()[4].style,
-            separator_style(true, false)
+            focused_left.row(0).unwrap()[5].style,
+            pane_border_style(true, false)
         );
         assert_eq!(
-            focused_left.row(2).unwrap()[7].style,
-            separator_style(false, false)
+            focused_left.row(3).unwrap()[8].style,
+            pane_border_style(false, false)
         );
+    }
+
+    #[test]
+    fn outer_frame_reserves_content_cells_and_renders_titles() {
+        let mut layout = Layout::new(5, 17).unwrap();
+        let left = layout.active();
+        let right = layout.split_active(SplitAxis::Columns).unwrap();
+        assert_eq!(
+            layout.content_geometry().panes,
+            vec![
+                (
+                    left,
+                    Rect {
+                        row: 1,
+                        column: 1,
+                        rows: 3,
+                        columns: 6,
+                    },
+                ),
+                (
+                    right,
+                    Rect {
+                        row: 1,
+                        column: 9,
+                        rows: 3,
+                        columns: 7,
+                    },
+                ),
+            ]
+        );
+        let left_screen = Screen::new(3, 6).unwrap();
+        let right_screen = Screen::new(3, 7).unwrap();
+        let view = compose_with_titles(
+            &layout,
+            &[(left, &left_screen), (right, &right_screen)],
+            None,
+            &[(left, "left"), (right, "right")],
+        )
+        .unwrap();
+        let top: String = view
+            .row(0)
+            .unwrap()
+            .iter()
+            .filter(|cell| cell.width != 0)
+            .map(|cell| cell.character)
+            .collect();
+        assert!(top.contains("left"));
+        assert!(top.contains("right"));
+        assert_eq!(view.row(0).unwrap()[0].character, '┌');
+        assert_eq!(view.row(4).unwrap()[16].character, '┘');
+        assert_eq!(
+            view.row(0).unwrap()[8].style,
+            pane_border_style(true, false)
+        );
+    }
+
+    #[test]
+    fn tiny_canvas_omits_outer_borders_without_losing_content() {
+        let layout = Layout::new(1, 2).unwrap();
+        let mut child = Screen::new(1, 2).unwrap();
+        child.print('o');
+        child.print('k');
+        let view = compose(&layout, &[(layout.active(), &child)]).unwrap();
+        assert_eq!(view.dimensions(), child.dimensions());
+        assert_eq!(view.row(0), child.row(0));
+        assert_eq!(view.cursor(), child.cursor());
     }
 }

@@ -1,6 +1,11 @@
 //! Per-pane process and terminal state. Polling and rendering belong to the caller.
 
-use crate::{parser::Parser, pty::PtyShell, screen::Screen, semantic::SemanticOutput};
+use crate::{
+    parser::Parser,
+    pty::PtyShell,
+    screen::Screen,
+    semantic::{PromptEvent, SemanticOutput},
+};
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -45,6 +50,7 @@ impl TemporaryFile {
 pub struct PreparedPaneResize<'a> {
     pane: &'a mut Pane,
     screen: Option<Screen>,
+    prompt_start: Option<(usize, usize)>,
     rows: u16,
     columns: u16,
 }
@@ -57,6 +63,7 @@ impl PreparedPaneResize<'_> {
         let Self {
             pane,
             screen,
+            prompt_start,
             rows,
             columns,
         } = self;
@@ -66,6 +73,7 @@ impl PreparedPaneResize<'_> {
         if let Some(screen) = screen {
             pane.screen = screen;
         }
+        pane.io.prompt_start = prompt_start;
         pane.screen.set_synchronized_output(false);
         pane.io.synchronized_since = None;
         pane.io.dirty = true;
@@ -84,6 +92,7 @@ pub(crate) struct PaneIo {
     pub eof_at: Option<Instant>,
     pub status: Option<ExitStatus>,
     pub semantic: SemanticOutput,
+    pub prompt_start: Option<(usize, usize)>,
 }
 
 impl Default for PaneIo {
@@ -96,6 +105,7 @@ impl Default for PaneIo {
             eof_at: None,
             status: None,
             semantic: SemanticOutput::default(),
+            prompt_start: None,
         }
     }
 }
@@ -223,16 +233,38 @@ impl Pane {
                 "invalid pane dimensions",
             ));
         }
+        let mut prompt_start = self.io.prompt_start;
         let screen = if self.screen.dimensions() == (usize::from(rows), usize::from(columns)) {
             None
         } else {
             let mut screen = self.screen.clone();
-            screen.resize(usize::from(rows), usize::from(columns))?;
+            if columns != self.screen.dimensions().1 as u16 {
+                if let Some(start) = prompt_start {
+                    prompt_start = Some(screen.resize_preserving_tail(
+                        usize::from(rows),
+                        usize::from(columns),
+                        start,
+                    )?);
+                } else {
+                    screen.resize(usize::from(rows), usize::from(columns))?;
+                }
+            } else {
+                let cursor_offset = prompt_start
+                    .map(|start| (self.screen.cursor().0.saturating_sub(start.0), start.1));
+                screen.resize(usize::from(rows), usize::from(columns))?;
+                if let Some((offset, column)) = cursor_offset {
+                    prompt_start = Some((
+                        screen.cursor().0.saturating_sub(offset),
+                        column.min(usize::from(columns) - 1),
+                    ));
+                }
+            }
             Some(screen)
         };
         Ok(PreparedPaneResize {
             pane: self,
             screen,
+            prompt_start,
             rows,
             columns,
         })
@@ -246,8 +278,18 @@ impl Pane {
         self.io.semantic.last_output()
     }
 
+    pub(crate) fn terminal_title(&self) -> &str {
+        self.io
+            .semantic
+            .title()
+            .map(str::trim)
+            .filter(|title| !title.is_empty())
+            .unwrap_or("shell")
+    }
+
     pub(crate) fn command_submitted(&mut self) {
         self.io.semantic.command_submitted();
+        self.io.prompt_start = None;
     }
 
     pub(crate) fn inherited_directory(&self) -> Option<PathBuf> {
@@ -259,9 +301,30 @@ impl Pane {
     /// The caller must reserve reply capacity before reading (MAX_REPLY_BYTES).
     pub fn process_output(&mut self, bytes: &[u8], reply: &mut impl FnMut(&[u8])) {
         self.io.dirty = true;
-        self.io.semantic.advance(bytes);
+        let mut events = Vec::new();
+        self.io
+            .semantic
+            .advance_with_prompt_events(bytes, &mut |offset, event| events.push((offset, event)));
+        let mut start = 0;
+        for (end, event) in events {
+            self.process_output_segment(&bytes[start..end], reply);
+            self.io.prompt_start = match event {
+                PromptEvent::Start => Some(self.screen.cursor()),
+                PromptEvent::End => None,
+            };
+            start = end;
+        }
+        self.process_output_segment(&bytes[start..], reply);
+    }
+
+    fn process_output_segment(&mut self, bytes: &[u8], reply: &mut impl FnMut(&[u8])) {
+        let before = self.screen.primary_scroll_count();
         self.parser
             .advance_with_replies(&mut self.screen, bytes, reply);
+        let scrolled = self.screen.primary_scroll_count().saturating_sub(before);
+        if let Some((row, column)) = self.io.prompt_start {
+            self.io.prompt_start = Some((row.saturating_sub(scrolled as usize), column));
+        }
     }
 
     /// Flush an incomplete UTF-8 sequence when the caller observes PTY EOF.

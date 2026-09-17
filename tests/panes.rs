@@ -174,7 +174,7 @@ fn expect_size(pane: &mut Pane, marker: &str, rows: u16, columns: u16) {
 }
 
 fn layout_sizes_reach_real_children_and_survive_zoom_and_close() {
-    let mut panes = PaneSet::new(12, 41, Pane::spawn("/bin/sh", 12, 41).unwrap()).unwrap();
+    let mut panes = PaneSet::new(12, 41, Pane::spawn("/bin/sh", 10, 39).unwrap()).unwrap();
     let first = panes.layout().active();
     until(panes.active_mut(), |p| !text(p).trim().is_empty());
     let first_pid = panes.active().shell().id();
@@ -186,8 +186,8 @@ fn layout_sizes_reach_real_children_and_survive_zoom_and_close() {
     until(panes.active_mut(), |p| !text(p).trim().is_empty());
     let second_pid = panes.active().shell().id();
     panes.synchronize_sizes().unwrap();
-    expect_size(panes.get_mut(first).unwrap(), "SPLIT_A", 12, 20);
-    expect_size(panes.get_mut(second).unwrap(), "SPLIT_B", 12, 20);
+    expect_size(panes.get_mut(first).unwrap(), "SPLIT_A", 10, 18);
+    expect_size(panes.get_mut(second).unwrap(), "SPLIT_B", 10, 19);
     panes
         .get_mut(first)
         .unwrap()
@@ -197,31 +197,31 @@ fn layout_sizes_reach_real_children_and_survive_zoom_and_close() {
     assert!(panes.active().screen().synchronized_output()); // Focus alone isn't a resize.
     panes.toggle_zoom();
     panes.synchronize_sizes().unwrap();
-    expect_size(panes.get_mut(first).unwrap(), "ZOOM_A", 12, 41);
-    expect_size(panes.get_mut(second).unwrap(), "HIDDEN_B", 12, 20);
+    expect_size(panes.get_mut(first).unwrap(), "ZOOM_A", 10, 39);
+    expect_size(panes.get_mut(second).unwrap(), "HIDDEN_B", 10, 19);
     panes.select(second).unwrap();
     panes.synchronize_sizes().unwrap();
-    expect_size(panes.get_mut(first).unwrap(), "HIDDEN_A", 12, 20);
-    expect_size(panes.get_mut(second).unwrap(), "ZOOM_B", 12, 41);
+    expect_size(panes.get_mut(first).unwrap(), "HIDDEN_A", 10, 18);
+    expect_size(panes.get_mut(second).unwrap(), "ZOOM_B", 10, 39);
     panes.resize(9, 31).unwrap();
     panes.synchronize_sizes().unwrap();
-    expect_size(panes.get_mut(first).unwrap(), "RESIZE_A", 9, 15);
-    expect_size(panes.get_mut(second).unwrap(), "RESIZE_B", 9, 31);
+    expect_size(panes.get_mut(first).unwrap(), "RESIZE_A", 7, 13);
+    expect_size(panes.get_mut(second).unwrap(), "RESIZE_B", 7, 29);
     panes.toggle_zoom();
     panes.synchronize_sizes().unwrap();
-    expect_size(panes.get_mut(second).unwrap(), "UNZOOM_B", 9, 15);
+    expect_size(panes.get_mut(second).unwrap(), "UNZOOM_B", 7, 14);
     // The geometry-only API permits this size; process synchronization rejects it
     // before altering any owned screen or terminal.
     panes.resize(257, 256).unwrap();
     assert!(panes.synchronize_sizes().is_err());
-    assert_eq!(panes.get(first).unwrap().screen().dimensions(), (9, 15));
-    assert_eq!(panes.get(second).unwrap().screen().dimensions(), (9, 15));
+    assert_eq!(panes.get(first).unwrap().screen().dimensions(), (7, 13));
+    assert_eq!(panes.get(second).unwrap().screen().dimensions(), (7, 14));
     panes.resize(9, 31).unwrap();
     assert_eq!(panes.get(first).unwrap().shell().id(), first_pid);
     assert_eq!(panes.get(second).unwrap().shell().id(), second_pid);
     let removed = panes.close(first).unwrap();
     panes.synchronize_sizes().unwrap();
-    expect_size(panes.active_mut(), "SURVIVOR", 9, 31);
+    expect_size(panes.active_mut(), "SURVIVOR", 7, 29);
     assert_eq!(panes.active().shell().id(), second_pid);
     drop(removed);
     assert_eq!(
@@ -232,5 +232,5 @@ fn layout_sizes_reach_real_children_and_survive_zoom_and_close() {
     panes.active_mut().shell_mut().terminate().unwrap();
     panes.resize(6, 21).unwrap();
     panes.synchronize_sizes().unwrap();
-    assert_eq!(panes.active().screen().dimensions(), (6, 21));
+    assert_eq!(panes.active().screen().dimensions(), (4, 19));
 }

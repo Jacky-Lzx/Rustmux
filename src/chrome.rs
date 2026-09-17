@@ -12,6 +12,7 @@ const BASE: Color = Color::Rgb(0x1e, 0x1e, 0x2e);
 const MANTLE: Color = Color::Rgb(0x18, 0x18, 0x25);
 const SUBTEXT0: Color = Color::Rgb(0xa6, 0xad, 0xc8);
 const BLUE: Color = Color::Rgb(0x89, 0xb4, 0xfa);
+const GREEN: Color = Color::Rgb(0xa6, 0xe3, 0xa1);
 const PEACH: Color = Color::Rgb(0xfa, 0xb3, 0x87);
 
 pub(crate) fn pane_rows(outer_rows: u16) -> u16 {
@@ -28,16 +29,15 @@ pub(crate) fn bar_style(active: bool) -> Style {
     }
 }
 
-pub(crate) fn separator_style(active: bool, history: bool) -> Style {
+pub(crate) fn pane_border_style(active: bool, history: bool) -> Style {
     Style {
         foreground: if history {
             PEACH
         } else if active {
-            BLUE
+            GREEN
         } else {
             SUBTEXT0
         },
-        background: MANTLE,
         bold: active || history,
         ..Style::default()
     }
@@ -141,6 +141,27 @@ pub(crate) fn compose(
 mod tests {
     use super::*;
     use crate::parser::Parser;
+
+    #[test]
+    fn pane_borders_use_main_colors_without_an_opaque_background() {
+        assert_eq!(
+            pane_border_style(true, false),
+            Style {
+                foreground: GREEN,
+                background: Color::Default,
+                bold: true,
+                ..Style::default()
+            }
+        );
+        assert_eq!(pane_border_style(false, false).foreground, SUBTEXT0);
+        assert_eq!(pane_border_style(false, true).foreground, PEACH);
+        for style in [
+            pane_border_style(false, false),
+            pane_border_style(false, true),
+        ] {
+            assert_eq!(style.background, Color::Default);
+        }
+    }
 
     #[test]
     fn bar_preserves_child_rows_cursor_and_modes() {

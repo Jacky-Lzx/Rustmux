@@ -20,21 +20,28 @@ The former last-window binding `l` now means right-pane focus. Plain Tab still
 reaches the shell; these commands only apply after Ctrl-B. Bracketed paste payload
 is forwarded unchanged, including shortcut bytes.
 
-New splits share space approximately equally and reserve a one-cell separator.
-Separators bordering the focused pane use Catppuccin Mocha Blue; unrelated
-separators retain the muted Subtext color.
+Each pane has a complete box-drawing border. Adjacent panes keep separate borders,
+so both panes retain their own edge and color. The top edge displays the latest
+OSC 0/2 terminal title, falling back to `shell`. Borders belonging to the focused
+pane use Catppuccin Mocha Green; unrelated borders retain the muted Subtext color.
+Border cells keep the terminal's default background so terminal transparency
+remains visible.
 The [layout model](split-layout.md) describes odd sizes and nested minimum sizes.
 The CLI synchronizes each child PTY and screen with its rectangle after splitting,
 outer resize and pane removal. New windows use the full content area even when
-the selected pane in the old window is smaller.
+the selected pane in the old window is smaller. Outer borders consume one row or
+column on each terminal edge; split requests and resizes are rejected before a
+pane would lose its final content cell. Extremely small dimensions omit the
+corresponding outer-border pair.
 
 All panes continue parsing output and answering terminal queries, including panes
 in background windows. The active pane supplies the cursor and input modes; all
 visible pane screens are composed into a frame. Normal updates wait while any
 visible pane in that window holds synchronized output, with the existing one-second hold
 limit. Explicit focus/layout changes force a frame. Queued frames finish before
-a replacement is written. Mouse coordinates are translated into the active pane;
-other-pane/separator presses are ignored, and releases clamp to its nearest cell.
+a replacement is written. Mouse coordinates are translated past the window bar
+and pane border into the active pane; other-pane/border presses are ignored, and
+releases clamp to its nearest cell.
 Mouse clicks do not change focus.
 
 Use shell `exit` to close a pane. Its final output is drained before removal; in

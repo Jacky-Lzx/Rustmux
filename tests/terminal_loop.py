@@ -61,6 +61,7 @@ class Session:
         self.output = bytearray()
         self.frame_pending = bytearray()
         self.frames = []
+        self.physical_rows = []
         self.last_rows = []
         self.last_frame = b""
         self.cursor_shape = None
@@ -91,7 +92,7 @@ class Session:
                     positions = list(re.finditer(rb"\x1b\[([0-9]+);([0-9]+)H", frame))
                     height = struct.unpack("HHHH", fcntl.ioctl(self.slave, termios.TIOCGWINSZ, b"\0" * 8))[0]
                     height = height or len(self.last_rows)
-                    rows = (self.last_rows + [b""] * height)[:height]
+                    rows = (self.physical_rows + [b""] * height)[:height]
                     for pos, following in zip(positions, positions[1:]):
                         row = int(pos.group(1)) - 1
                         if row < height:
@@ -117,12 +118,29 @@ class Session:
                             previous += [" "] * max(0, length - len(previous))
                             previous[column:length] = replacement
                             rows[row] = "".join(c for c in previous if c is not None).rstrip(" ").encode()
-                    self.last_rows = rows
+                    self.physical_rows = rows
+                    self.last_rows = self.logical_rows(rows)
                     self.frames.append(self.last_rows)
                     self.frames = self.frames[-64:]
             except OSError as error:
                 if error.errno not in (errno.EIO, errno.EAGAIN):
                     raise
+
+    @staticmethod
+    def logical_rows(rows):
+        """Expose pane contents without the outer frame to existing assertions."""
+        if len(rows) < 4 or not rows[1].startswith("┌".encode()) or not rows[-1].startswith("└".encode()):
+            return rows
+        result = [rows[0]]
+        border = set("│├┤┼" )
+        for raw in rows[2:-1]:
+            text = raw.decode("utf-8").rstrip(" ")
+            if text and text[0] in border:
+                text = text[1:]
+            text = text.rstrip(" │├┤┼")
+            result.append(text.encode())
+        result.extend([b""] * (len(rows) - len(result)))
+        return result
 
     def expect(self, text):
         def matches():
@@ -133,7 +151,7 @@ class Session:
                         return True
                 elif target == b"RUSTMUX_READY> ":
                     nonempty = [row for row in (rows[1:] if len(rows) > 1 else rows) if row]
-                    if nonempty and nonempty[-1].endswith(target.rstrip()):
+                    if nonempty and target.rstrip() in nonempty[-1]:
                         return True
                 elif any(target in row for row in rows):
                     return True
@@ -215,14 +233,14 @@ try:
     s.expect(b"\r\nWATCH_READY\r\n")
     for rows, columns in [(40, 120), (18, 60), (55, 150)]:
         fcntl.ioctl(s.slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, columns, 0, 0))
-        s.expect(f"SIZE:{max(1, rows - 1)}:{columns}\r\n".encode())
+        s.expect(f"SIZE:{max(1, rows - 3)}:{max(1, columns - 2)}\r\n".encode())
     # Invalid transient dimensions must not terminate Rustmux or reach the child.
     fcntl.ioctl(s.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 0, 0, 0, 0))
     s.read(0.15)
     assert b"SIZE:0:0" not in s.output
     assert s.child.poll() is None
     fcntl.ioctl(s.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
-    s.expect(b"SIZE:23:80\r\n")
+    s.expect(b"SIZE:21:78\r\n")
     s.send(b"\x03")
     s.expect(b"RUSTMUX_READY> ")
     # Output larger than the grid must still be parsed through the final marker.
@@ -313,7 +331,7 @@ try:
            b"\\033[?7lBC\\033[?7hD\\033[3;1HWRAP_DONE'; read answer; "
            b"stty echo; printf '\\033[3;1H'\n")
     s.expect(b"\r\nWRAP_DONE\r\n")
-    assert s.last_rows[1:3] == [b"A" + b" " * 78 + b"C", b"D"], s.last_rows
+    assert s.last_rows[1:3] == [b"A" + b" " * 76 + b"C", b"D"], s.last_rows
     s.send(b"\n")
     s.expect(b"RUSTMUX_READY> ")
 
@@ -677,10 +695,10 @@ for terminate in (False, True):
         s.expect(b"RUSTMUX_READY> ")
         s.send(("exec python3 -c " + shlex.quote(mouse_probe) + "\n").encode())
         for mode, encoding, payload in [
-            (1000, 1006, b"\x1b[<0;10;5M\x1b[<0;10;5m"),
-            (1002, 1006, b"\x1b[<32;11;6M\x1b[<0;11;6m"),
-            (1003, 1006, b"\x1b[<35;12;7M\x1b[<64;12;7M\x1b[<65;12;7M"),
-            (1000, 0, b"\x1b[M *%\x1b[M#*%"),
+            (1000, 1006, b"\x1b[<0;11;6M\x1b[<0;11;6m"),
+            (1002, 1006, b"\x1b[<32;12;7M\x1b[<0;12;7m"),
+            (1003, 1006, b"\x1b[<35;13;8M\x1b[<64;13;8M\x1b[<65;13;8M"),
+            (1000, 0, b"\x1b[M +&\x1b[M#+&"),
         ]:
             s.expect(("\r\nMOUSE_%d_%d\r\n" % (mode, encoding)).encode())
             assert ("\x1b[?%dh" % mode).encode() in s.last_frame
@@ -786,7 +804,7 @@ try:
     assert s.last_rows[1] == b"UNCHANGED_ROW"
     assert b"\x1b[1;1H" not in s.last_frame
     assert b"\x1b[2;1H" not in s.last_frame
-    assert b"\x1b[3;1H" in s.last_frame
+    assert b"\x1b[4;2H" in s.last_frame
     assert len(s.last_frame) < 100
     s.send(b"x")
     s.finish(0)
@@ -838,7 +856,7 @@ s = Session()
 try:
     s.expect(b"RUSTMUX_READY> ")
     s.send(b"exec python3 -c 'import os;\nwhile True: os.write(1, b\"X\" * 65536)'\n")
-    s.expect(b"X" * 80)
+    s.expect(b"X" * 78)
     time.sleep(0.2)
     os.kill(s.app_pid, signal.SIGTERM)
     s.finish(128 + signal.SIGTERM)
@@ -869,7 +887,7 @@ try:
     s.expect(b"BACK_A")
     assert s.private_modes[2004]
     s.send(b"printf '\\n%s:%s:%s\\n' RETAINED $WIN \"$(stty size)\"\n")
-    s.expect(b"RETAINED:A:39 100")
+    s.expect(b"RETAINED:A:37 98")
     s.send(b"\x02n")
     s.expect(b"WINDOW_B:unset")
     assert not s.private_modes[2004]
@@ -1066,7 +1084,7 @@ try:
     expect_bar(s, b"*1:shell")
     s.send(b"printf '\\033[23;1H%s%s' LAST_ CONTENT\n")
     s.expect(b"LAST_CONTENT")
-    assert b"LAST_CONTENT" in s.last_rows[23]
+    assert b"LAST_CONTENT" in s.last_rows[21]
     assert b"*1:shell" in s.last_rows[0]
     s.send(b"\x02c")
     s.expect(b"RUSTMUX_READY> ")
@@ -1097,7 +1115,7 @@ bar_mouse = r"""
 import os, select, time, tty
 tty.setraw(0)
 os.write(1, b"\x1b[?1000;1006h\x1b[2J\x1b[HBAR_MOUSE_READY")
-expected = b"\x1b[<0;2;1m\x1b[<0;2;23Mx"
+expected = b"\x1b[<0;2;1m\x1b[<0;2;21Mx"
 data = bytearray()
 end = time.monotonic() + 4
 while len(data) < len(expected):
@@ -1115,7 +1133,7 @@ try:
         source.flush()
         s.send(("exec python3 " + shlex.quote(source.name) + "\n").encode())
         s.expect(b"BAR_MOUSE_READY")
-        s.send(b"\x1b[<0;2;1M\x1b[<0;2;1m\x1b[<0;2;24Mx")
+        s.send(b"\x1b[<0;3;1M\x1b[<0;3;1m\x1b[<0;3;23Mx")
         s.finish(0)
         assert any(b"BAR_MOUSE_OK" in row for row in s.last_rows)
 finally:
@@ -1269,17 +1287,17 @@ try:
     s.send(b"\x02%")
     s.expect(b"RUSTMUX_READY>")
     s.send(b"stty -echo; VAR=B; printf '\\033[2J\\033[H%s%s:%s\\n' RIGHT _B \"$(stty size)\"\n")
-    s.expect(b"RIGHT_B:23 40")
+    s.expect(b"RIGHT_B:21 38")
     assert any(b"MARK_A" in row for row in s.last_rows)
     s.send(b"\x02hprintf '\\033[2J\\033[HLEFT:%s:%s\\n' $VAR \"$(stty size)\"\n")
-    s.expect(b"LEFT:A:23 39")
+    s.expect(b"LEFT:A:21 38")
     s.send(b'\x02"')
     s.expect(b"RUSTMUX_READY>")
     s.send(b"stty -echo; VAR=C; printf '\\033[2J\\033[HLOWER:%s:%s\\n' $VAR \"$(stty size)\"\n")
-    s.expect(b"LOWER:C:11 39")
-    assert any(b"RIGHT_B:23 40" in row for row in s.last_rows)
+    s.expect(b"LOWER:C:10 38")
+    assert any(b"RIGHT_B:21 38" in row for row in s.last_rows)
     s.send(b"\x02kprintf '\\033[2J\\033[HUP:%s:%s\\n' $VAR \"$(stty size)\"\n")
-    s.expect(b"UP:A:11 39")
+    s.expect(b"UP:A:9 38")
     s.send(b"\x02lprintf '\\033[2J\\033[HFOCUS:%s\\n' $VAR\n")
     s.expect(b"FOCUS:B")
     s.send(b"\x02oprintf '\\033[2J\\033[HCYCLE:%s\\n' $VAR\n")
@@ -1287,16 +1305,16 @@ try:
     fcntl.ioctl(s.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
     s.read(0.1)
     s.send(b"printf '\\033[2J\\033[HRESIZED:%s:%s\\n' $VAR \"$(stty size)\"\n")
-    s.expect(b"RESIZED:A:14 49")
+    s.expect(b"RESIZED:A:12 48")
     s.send(b"\x02jexit 7\n")
     end = time.monotonic() + 3
     while any(b"LOWER:C" in row for row in s.last_rows):
         s.read()
         assert time.monotonic() < end, s.last_rows
     s.send(b"printf '\\033[2J\\033[HAFTER:%s:%s\\n' $VAR \"$(stty size)\"\n")
-    s.expect(b"AFTER:B:29 50")
+    s.expect(b"AFTER:B:27 48")
     s.send(b"\x02hprintf '\\033[2J\\033[HRESTORED:%s:%s\\n' $VAR \"$(stty size)\"\n")
-    s.expect(b"RESTORED:A:29 49")
+    s.expect(b"RESTORED:A:27 48")
     s.send(b"exit 0\n")
     end = time.monotonic() + 3
     while any(b"RESTORED:A" in row for row in s.last_rows):
@@ -1304,7 +1322,7 @@ try:
         assert time.monotonic() < end, s.last_rows
     s.send(b"printf '\\033[2J\\033[HLAST_PANE:%s:%s\\n' $VAR \"$(stty size)\"; exit 9\n")
     s.finish(9)
-    assert any(b"LAST_PANE:B:29 100" in row for row in s.last_rows)
+    assert any(b"LAST_PANE:B:27 98" in row for row in s.last_rows)
 finally:
     s.close()
 
@@ -1313,7 +1331,7 @@ split_mouse = r"""
 import os, select, time, tty
 tty.setraw(0)
 os.write(1, b"\x1b[?1000;1006h\x1b[2J\x1b[HSPLIT_MOUSE_READY")
-expected = b'\x1b[<0;2;2M\x1b[<0;1;1m\x1b[M !"x'
+expected = b'\x1b[<0;1;2M\x1b[<0;1;1mx'
 data = bytearray()
 end = time.monotonic() + 4
 while len(data) < len(expected):
@@ -1335,7 +1353,7 @@ try:
         source.flush()
         s.send(("python3 " + shlex.quote(source.name) + "\n").encode())
         s.expect(b"SPLIT_MOUSE_READY")
-        s.send(b'\x1b[<0;42;3M\x1b[<0;1;1M\x1b[<0;1;1m\x1b[M I#x')
+        s.send(b'\x1b[<0;42;4M\x1b[<0;1;1M\x1b[<0;1;1m\x1b[M I$x')
         s.expect(b"SPLIT_MOUSE_OK")
     os.kill(s.app_pid, signal.SIGTERM)
     s.finish(128 + signal.SIGTERM)
@@ -1353,22 +1371,22 @@ try:
     s.send(b"stty -echo; VAR=B; printf '\\033[2J\\033[H%s%s\\n' ZOOM _RIGHT\n")
     s.expect(b"ZOOM_RIGHT")
     s.send(b"\x02Zprintf '\\033[2J\\033[HZOOM:%s:%s\\n' $VAR \"$(stty size)\"\n")
-    s.expect(b"ZOOM:B:23 80")
+    s.expect(b"ZOOM:B:21 78")
     assert not any(b"ZOOM_BASE" in row for row in s.last_rows)
     s.send(b"\x02hprintf '\\033[2J\\033[HTARGET:%s:%s\\n' $VAR \"$(stty size)\"\n")
-    s.expect(b"TARGET:A:23 80")
+    s.expect(b"TARGET:A:21 78")
     assert not any(b"ZOOM:B" in row for row in s.last_rows)
     fcntl.ioctl(s.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
     s.read(0.1)
     s.send(b"printf '\\033[2J\\033[HZOOM_RESIZE:%s:%s\\n' $VAR \"$(stty size)\"\n")
-    s.expect(b"ZOOM_RESIZE:A:29 100")
+    s.expect(b"ZOOM_RESIZE:A:27 98")
     s.send(b"\x02oprintf '\\033[2J\\033[HCYCLE_ZOOM:%s:%s\\n' $VAR \"$(stty size)\"\n")
-    s.expect(b"CYCLE_ZOOM:B:29 100")
+    s.expect(b"CYCLE_ZOOM:B:27 98")
     s.send(b"\x02Zprintf '\\033[2J\\033[HTILED:%s:%s\\n' $VAR \"$(stty size)\"\n")
-    s.expect(b"TILED:B:29 50")
+    s.expect(b"TILED:B:27 48")
     assert any(b"ZOOM_RESIZE:A" in row for row in s.last_rows)
     s.send(b"\x02hprintf '\\033[2J\\033[HRESTORED_ZOOM:%s:%s\\n' $VAR \"$(stty size)\"\n")
-    s.expect(b"RESTORED_ZOOM:A:29 49")
+    s.expect(b"RESTORED_ZOOM:A:27 48")
     s.send(b"\x02Zexit 0\n")
     end = time.monotonic() + 3
     while any(b"RESTORED_ZOOM:A" in row for row in s.last_rows):
@@ -1376,11 +1394,15 @@ try:
         assert time.monotonic() < end, s.last_rows
     s.send(b"printf '\\033[2J\\033[HZOOM_SURVIVOR:%s:%s\\n' $VAR \"$(stty size)\"; exit 8\n")
     s.finish(8)
-    assert any(b"ZOOM_SURVIVOR:B:29 100" in row for row in s.last_rows)
+    assert any(b"ZOOM_SURVIVOR:B:27 98" in row for row in s.last_rows)
 finally:
     s.close()
 
 # Zoomed mouse coordinates have no tiled column offset.
+zoom_mouse = split_mouse.replace(
+    "expected = b'\\x1b[<0;1;2M\\x1b[<0;1;1mx'",
+    "expected = b'\\x1b[<0;2;2M\\x1b[<0;1;1m\\x1b[M !\"x'",
+)
 s = Session()
 try:
     s.expect(b"RUSTMUX_READY> ")
@@ -1389,11 +1411,11 @@ try:
     s.send(b"\x02%\x02Z")
     s.expect(b"RUSTMUX_READY>")
     with tempfile.NamedTemporaryFile(mode="w", suffix=".py") as source:
-        source.write(split_mouse)
+        source.write(zoom_mouse)
         source.flush()
         s.send(("python3 " + shlex.quote(source.name) + "\n").encode())
         s.expect(b"SPLIT_MOUSE_READY")
-        s.send(b'\x1b[<0;2;3M\x1b[<0;1;1M\x1b[<0;1;1m\x1b[M !#x')
+        s.send(b'\x1b[<0;3;4M\x1b[<0;1;1M\x1b[<0;1;1m\x1b[M "$x')
         s.expect(b"SPLIT_MOUSE_OK")
     os.kill(s.app_pid, signal.SIGTERM)
     s.finish(128 + signal.SIGTERM)
@@ -1573,7 +1595,7 @@ try:
     s.send(b"qprintf '\\n%s%s\\n' RESIZE_PROMPT_ OK\n")
     s.expect(b"RESIZE_PROMPT_OK")
     s.send(b"\x02Z")
-    s.expect(b"RESIZE_HIST_00")
+    s.expect(b"RESIZE_HIST_02")
     assert any(b"RESIZE_PROMPT_OK" in row for row in s.last_rows)
     s.send(b"printf '\\n%s%s\\n' REGROWN_ INPUT_OK\n")
     s.expect(b"REGROWN_INPUT_OK")
@@ -1592,10 +1614,11 @@ try:
     for width in [32, 53, 80]:
         fcntl.ioctl(s.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, width, 0, 0))
         end = time.monotonic() + 3
-        count = (len(payload) + width - 1) // width
+        content_width = width - 2
+        count = (len(payload) + content_width - 1) // content_width
         while True:
             s.read()
-            visible = b"".join(row[:width] for row in s.last_rows[1:1 + count])
+            visible = b"".join(row[:content_width] for row in s.last_rows[1:1 + count])
             if visible == payload:
                 break
             assert time.monotonic() < end, (width, s.last_rows)
@@ -1617,23 +1640,23 @@ try:
     s.expect(b"RIGHT_READY")
     s.send(b"\x02\x0c")
     s.send(b"printf 'RIGHT_%s_' \"$resize_token\"; stty size\n")
-    s.expect(b"RIGHT_right_23 39")
+    s.expect(b"RIGHT_right_21 37")
     s.send(b"\x02h")
     s.send(b"printf 'LEFT_%s_' \"$resize_token\"; stty size\n")
-    s.expect(b"LEFT_left_23 40")
+    s.expect(b"LEFT_left_21 39")
     s.send(b'\x02\x08\x02"')
     s.expect(b"RUSTMUX_READY>")
     s.send(b"stty -echo; printf 'BOTTOM_%s\\n' READY\n")
     s.expect(b"BOTTOM_READY")
     s.send(b"\x02\x0b")
     s.send(b"printf 'BOTTOM_%s_' SIZE; stty size\n")
-    s.expect(b"BOTTOM_SIZE_12 39")
+    s.expect(b"BOTTOM_SIZE_11 38")
     s.send(b"\x02Z\x02\x0a\x02Z")
     s.send(b"printf 'RESTORED_%s_' SIZE; stty size\n")
-    s.expect(b"RESTORED_SIZE_12 39")
+    s.expect(b"RESTORED_SIZE_11 38")
     s.send(b"\x02\x0a")
     s.send(b"printf 'DOWN_%s_' SIZE; stty size\n")
-    s.expect(b"DOWN_SIZE_11 39")
+    s.expect(b"DOWN_SIZE_10 38")
     os.kill(s.app_pid, signal.SIGTERM)
     s.finish(128 + signal.SIGTERM)
 finally:
@@ -1651,13 +1674,13 @@ try:
     s.expect(b"RIGHT_READY")
     # Wrap the last pane into the first slot; same-batch input stays with RIGHT.
     s.send(b"\x02}test \"$swap_pid\" = \"$$\" && printf '%s_' \"$swap_token\"; stty size\n")
-    s.expect(b"RIGHT_23 39")
-    assert any(b"RIGHT_23 39" in row[:39] for row in s.last_rows[1:])
+    s.expect(b"RIGHT_21 38")
+    assert any(b"RIGHT_21 38" in row[:38] for row in s.last_rows[1:])
     s.send(b"\x02{test \"$swap_pid\" = \"$$\" && printf '%s_BACK_' \"$swap_token\"; stty size\n")
-    s.expect(b"RIGHT_BACK_23 40")
+    s.expect(b"RIGHT_BACK_21 38")
     # Focus LEFT by geometry: its shell and variables survived both exchanges.
     s.send(b"\x02htest \"$swap_pid\" = \"$$\" && printf '%s_STILL_' \"$swap_token\"; stty size\n")
-    s.expect(b"LEFT_STILL_23 39")
+    s.expect(b"LEFT_STILL_21 38")
     s.send(b"exit 0\n")
     # Wait until removal is rendered before sending input to the surviving shell.
     end = time.monotonic() + 3
@@ -1665,7 +1688,7 @@ try:
         s.read()
         assert time.monotonic() < end, s.last_rows
     s.send(b"printf '%s_SURVIVES_' \"$swap_token\"; stty size\n")
-    s.expect(b"RIGHT_SURVIVES_23 80")
+    s.expect(b"RIGHT_SURVIVES_21 78")
     s.send(b"exit 0\n")
     s.finish(0)
 finally:
@@ -1704,7 +1727,7 @@ with tempfile.TemporaryDirectory() as directory:
         s.expect(b"KEEP_READY")
         os.kill(closing_pid, 0)  # Undo keeps this shell alive and hidden.
         s.send(b"printf '\\nSURVIVOR:%s:%s_' $KEEP ${LEAK-unset}; stty size\n")
-        s.expect(b"SURVIVOR:survivor:unset_23 80")
+        s.expect(b"SURVIVOR:survivor:unset_21 78")
         s.send(b"\x02z")
         command = ("test \"$PWD\" = " + shlex.quote(directory) +
                    " && printf '\\nUNDO:%s:%s\\n' $UNDO_KEEP $$\n")
@@ -1713,7 +1736,7 @@ with tempfile.TemporaryDirectory() as directory:
         s.send(b"\x02x")
         s.expect(b"Close pane? Type yes:")
         s.send(b"yes\r")
-        s.expect(b"SURVIVOR:survivor:unset_23 80")
+        s.expect(b"SURVIVOR:survivor:unset_21 78")
         # A target that exits naturally while confirming must not close its sibling.
         s.send(b"\x02%")
         s.expect(b"RUSTMUX_READY>")
@@ -1844,17 +1867,17 @@ with tempfile.TemporaryDirectory() as directory:
         with open(record) as source:
             moving_pid = int(source.read())
         s.send(b"report\n")
-        s.expect(("JOB:%s:40" % moving_pid).encode())
+        s.expect(("JOB:%s:38" % moving_pid).encode())
         s.send(b"\x02!report\n")
-        s.expect(("JOB:%s:80" % moving_pid).encode())
+        s.expect(("JOB:%s:78" % moving_pid).encode())
         expect_bar(s, b"*2:shell")
         assert any(b"HISTORY_MOVED" in row for row in s.last_rows[1:])
         os.kill(moving_pid, 0)
         s.send(b"\x02\tprintf '\\nKEEP:%s_' $KEEP; stty size\n")
-        s.expect(b"KEEP:source_23 80")
+        s.expect(b"KEEP:source_21 78")
         expect_bar(s, b"*1:shell")
         s.send(b"\x02\treport\n")
-        s.expect(("JOB:%s:80" % moving_pid).encode())
+        s.expect(("JOB:%s:78" % moving_pid).encode())
         s.send(b"quit\n")
         s.expect(b"RUSTMUX_READY>")
         s.send(b"printf '\\nKEEP:%s\\n' $KEEP\n")
@@ -1895,12 +1918,12 @@ with tempfile.TemporaryDirectory() as directory:
         s.expect(b"Move to window #: 1")
         os.kill(pid, 0)
         s.send(b"\rreport\n")
-        s.expect(("JOINJOB:%s:40" % pid).encode())
+        s.expect(("JOINJOB:%s:38" % pid).encode())
         expect_bar(s, b"*1:shell")
         assert b"2:shell" not in s.last_rows[0]
         assert any(b"JOIN_HISTORY" in row for row in s.last_rows[1:])
         s.send(b"\x02hprintf '\\nKEEP:%s_' $KEEP; stty size\n")
-        s.expect(b"KEEP:target_23 39")
+        s.expect(b"KEEP:target_21 38")
         s.send(b"\x02lquit\n")
         s.expect(b"RUSTMUX_READY>")
         s.send(b"printf '\\nKEEP:%s\\n' $KEEP\n")
@@ -2211,7 +2234,7 @@ try:
     s.expect(b"RUSTMUX_READY>")
     expect_bar(s, f"[{background_name}]".encode())
     s.send(b"stty size\n")
-    s.expect(b"23 80")
+    s.expect(b"21 78")
     s.send(b"exit 0\n")
     s.finish(0)
 finally:

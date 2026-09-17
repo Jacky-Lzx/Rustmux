@@ -98,6 +98,7 @@ pub struct Screen {
     cells: Vec<Cell>,
     inactive_cells: Vec<Cell>,
     scrollback: Scrollback,
+    primary_scroll_count: u64,
     continued: Vec<bool>,
     inactive_continued: Vec<bool>,
     used: Vec<usize>,
@@ -131,6 +132,11 @@ impl Screen {
     /// Number of retained primary-screen rows, ordered oldest to newest.
     pub fn history_len(&self) -> usize {
         self.scrollback.len()
+    }
+
+    /// Number of rows scrolled from the primary grid by terminal output.
+    pub(crate) fn primary_scroll_count(&self) -> u64 {
+        self.primary_scroll_count
     }
 
     /// Read a retained physical row at its original width, including cell styles.
@@ -213,6 +219,7 @@ impl Screen {
             cells,
             inactive_cells,
             scrollback: Scrollback::default(),
+            primary_scroll_count: 0,
             saved_main_cursor: None,
             saved_cursor: None,
             inactive_saved_cursor: None,
@@ -321,6 +328,68 @@ impl Screen {
         } else {
             self.resize_grid(rows, columns, true)
         }
+    }
+
+    /// Reflow completed output while keeping the live shell prompt's physical rows.
+    /// Shells such as fish repaint after SIGWINCH by moving relative to the old
+    /// prompt height. Reflowing those rows first would make that cleanup miss the
+    /// newly wrapped prefix and leave duplicate prompts behind.
+    pub(crate) fn resize_preserving_tail(
+        &mut self,
+        rows: usize,
+        columns: usize,
+        start: (usize, usize),
+    ) -> io::Result<(usize, usize)> {
+        if rows == 0
+            || columns == 0
+            || self.is_alternate()
+            || start.0 > self.row
+            || start.0 >= self.rows
+        {
+            let cursor_offset = self.row.saturating_sub(start.0);
+            self.resize(rows, columns)?;
+            return Ok((
+                self.row.saturating_sub(cursor_offset),
+                start.1.min(columns.saturating_sub(1)),
+            ));
+        }
+        let old_columns = self.columns;
+        let end_row = self.row;
+        let tail_rows = end_row - start.0 + 1;
+        let tail_cells = self.cells[start.0 * old_columns..(end_row + 1) * old_columns].to_vec();
+        let tail_used = self.used[start.0..=end_row].to_vec();
+        let cursor_offset = self.row - start.0;
+        let cursor_column = self.column;
+
+        let blank = self.blank();
+        self.cells[start.0 * old_columns..].fill(blank);
+        self.used[start.0..].fill(0);
+        self.continued[start.0..].fill(false);
+        self.row = start.0;
+        self.column = start.1.min(old_columns - 1);
+        self.wrap_pending = false;
+        self.resize(rows, columns)?;
+
+        let target_row = self.row.min(rows.saturating_sub(tail_rows));
+        let blank = self.blank();
+        for offset in 0..tail_rows.min(rows - target_row) {
+            let target = (target_row + offset) * columns;
+            self.cells[target..target + columns].fill(blank.clone());
+            let source = &tail_cells[offset * old_columns..(offset + 1) * old_columns];
+            let copied = old_columns.min(columns);
+            for (column, cell) in source.iter().take(copied).enumerate() {
+                if cell.width == 2 && column + 1 == columns {
+                    continue;
+                }
+                self.cells[target + column] = cell.clone();
+            }
+            self.used[target_row + offset] = Self::clipped_used(source, tail_used[offset], columns);
+            self.continued[target_row + offset] = false;
+        }
+        self.row = (target_row + cursor_offset).min(rows - 1);
+        self.column = cursor_column.min(columns - 1);
+        self.wrap_pending = false;
+        Ok((target_row, start.1.min(columns - 1)))
     }
 
     /// Resize a disposable render canvas without archiving or restoring history.
@@ -1237,13 +1306,16 @@ impl Screen {
     pub fn scroll_up(&mut self, count: usize) {
         if count != 0 {
             if !self.is_alternate() && self.scroll_region == (0, self.rows - 1) {
-                for (index, row) in self.cells[..count.min(self.rows) * self.columns]
+                let captured = count.min(self.rows);
+                for (index, row) in self.cells[..captured * self.columns]
                     .chunks(self.columns)
                     .enumerate()
                 {
                     self.scrollback
                         .push(row, self.continued[index], self.used[index]);
                 }
+                self.primary_scroll_count =
+                    self.primary_scroll_count.saturating_add(captured as u64);
             }
             self.shift_rows(self.scroll_region.0, self.scroll_region.1, count, false);
             self.wrap_pending = false;
@@ -1429,5 +1501,24 @@ mod tests {
             assert!(screen.write_ascii(input).is_err());
             assert_eq!(screen, before);
         }
+    }
+
+    #[test]
+    fn prompt_tail_keeps_physical_rows_while_completed_output_reflows() {
+        let mut screen = Screen::new(6, 12).unwrap();
+        screen.write_ascii(b"abcdefghijklmnop\r\n").unwrap();
+        let prompt_start = screen.cursor();
+        screen.write_ascii(b"\r\nSTATUS\r\n> ").unwrap();
+
+        assert_eq!(
+            screen.resize_preserving_tail(6, 6, prompt_start).unwrap(),
+            (3, 0)
+        );
+
+        assert_eq!(
+            lines(&screen),
+            ["abcdef", "ghijkl", "mnop  ", "      ", "STATUS", ">     "]
+        );
+        assert_eq!(screen.cursor(), (5, 2));
     }
 }

@@ -9,17 +9,20 @@ This does not claim full H06 acceptance.
 ## Coordinates and splitting
 
 Create a layout with nonzero `u16` rows and columns. Its initial pane fills the
-content area. Coordinates are zero-based and exclude the top window bar; the
-CLI adds the bar offset when rendering or handling mouse
-input. Geometry does not allocate screen cells or enforce the CLI's separate
-65,536-cell limit.
+pane canvas. Coordinates are zero-based and exclude the top window bar; the CLI
+adds the bar offset when rendering or handling mouse input. `geometry()` and
+`tiled_geometry()` describe framed pane slots and separators. Their corresponding
+`content_geometry()` methods remove outer-border cells and return the rectangles
+used by PTY screens. Geometry does not allocate screen cells or enforce the CLI's
+separate 65,536-cell limit.
 
 `split_active(SplitAxis::Columns)` keeps the original pane on the left and places
 a new active pane on the right. `SplitAxis::Rows` keeps the original above the
-new pane. Each split reserves one full column or row as a separator. Each leaf
-needs at least one cell in each dimension, so the active rectangle must span at
-least three cells along the split axis. Pane IDs are stable within a layout and
-independent of coordinates; `select(id)` changes focus without changing geometry.
+new pane. Each split reserves two full columns or rows: one border cell for each
+adjacent pane. Each leaf needs at least one cell in each dimension, so the active
+rectangle must span at least four cells along the split axis. Pane IDs are stable
+within a layout and independent of coordinates; `select(id)` changes focus without
+changing geometry.
 
 `tiled_geometry()` returns panes in first-subtree/second-subtree traversal order plus
 separator rectangles. Together they cover the content area exactly, with no
@@ -31,11 +34,13 @@ storage. Failed splits do not consume IDs or change focus or the tree.
 Each new split prefers equal halves after reserving its separator, with an odd extra
 cell going to the second subtree. The partition is clamped to the minimum sizes
 required by both subtrees. For example, a left subtree containing two side-by-side
-panes needs at least three columns, while a single right pane needs only one;
-a five-column parent therefore assigns three columns, a separator, and one column.
+panes needs at least four columns, while a single right pane needs only one;
+a seven-column parent therefore assigns four columns, two border columns, and one
+column.
 
-`minimum_size()` computes the full tree's requirements. A resize below that size
-returns an error and leaves the entire layout unchanged. Valid resizing preserves
+`minimum_size()` computes the split tree's requirements. `PaneSet` additionally
+rejects a split or resize if the outer frame would leave any PTY rectangle empty.
+A resize below that size returns an error and leaves the entire layout unchanged. Valid resizing preserves
 IDs, tree structure and active pane. Geometry is recomputed from the current size;
 manual split ratios are retained, while text reflow remains a screen-model decision. The CLI currently exits with terminal cleanup if the outer terminal becomes
 too small for an existing layout.

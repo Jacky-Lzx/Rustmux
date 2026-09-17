@@ -5,6 +5,9 @@ use std::io;
 /// Bounds recursion, geometry storage and future per-window PTY ownership.
 pub const MAX_PANES: usize = 64;
 
+/// Each side of a split owns one cell of the gap for its pane border.
+const SPLIT_BORDER_CELLS: u16 = 2;
+
 /// Stable within one Layout; independent of pane coordinates and traversal order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PaneId(u64);
@@ -17,9 +20,9 @@ impl PaneId {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SplitAxis {
-    /// First pane left, new pane right; reserve one separator column.
+    /// First pane left, new pane right; reserve one border column per pane.
     Columns,
-    /// First pane above, new pane below; reserve one separator row.
+    /// First pane above, new pane below; reserve one border row per pane.
     Rows,
 }
 
@@ -135,8 +138,8 @@ impl Node {
                 let (ar, ac) = first.minimum();
                 let (br, bc) = second.minimum();
                 match axis {
-                    SplitAxis::Columns => (ar.max(br), ac + 1 + bc),
-                    SplitAxis::Rows => (ar + 1 + br, ac.max(bc)),
+                    SplitAxis::Columns => (ar.max(br), ac + SPLIT_BORDER_CELLS + bc),
+                    SplitAxis::Rows => (ar + SPLIT_BORDER_CELLS + br, ac.max(bc)),
                 }
             }
         }
@@ -245,11 +248,16 @@ impl Node {
         let (extent, available, minimum, other_minimum) = match axis {
             SplitAxis::Columns => (
                 a.columns,
-                rect.columns - 1,
+                rect.columns - SPLIT_BORDER_CELLS,
                 first.minimum().1,
                 second.minimum().1,
             ),
-            SplitAxis::Rows => (a.rows, rect.rows - 1, first.minimum().0, second.minimum().0),
+            SplitAxis::Rows => (
+                a.rows,
+                rect.rows - SPLIT_BORDER_CELLS,
+                first.minimum().0,
+                second.minimum().0,
+            ),
         };
         let next = (i32::from(extent) + delta)
             .clamp(i32::from(minimum), i32::from(available - other_minimum))
@@ -371,6 +379,40 @@ impl Layout {
         geometry
     }
 
+    /// Visible PTY rectangles inside the pane frame. Each two-cell internal gap
+    /// already provides one border cell per pane; only panes touching the canvas
+    /// edge lose a cell to the outer border. Very small dimensions omit that pair.
+    pub fn content_geometry(&self) -> Geometry {
+        self.content_geometry_from(self.geometry())
+    }
+
+    /// Full underlying PTY geometry, including panes hidden by zoom.
+    pub fn tiled_content_geometry(&self) -> Geometry {
+        self.content_geometry_from(self.tiled_geometry())
+    }
+
+    fn content_geometry_from(&self, mut geometry: Geometry) -> Geometry {
+        let horizontal_border = self.columns >= 3;
+        let vertical_border = self.rows >= 3;
+        for (_, rect) in &mut geometry.panes {
+            if vertical_border && rect.row == 0 {
+                rect.row += 1;
+                rect.rows -= 1;
+            }
+            if vertical_border && rect.row + rect.rows == self.rows {
+                rect.rows -= 1;
+            }
+            if horizontal_border && rect.column == 0 {
+                rect.column += 1;
+                rect.columns -= 1;
+            }
+            if horizontal_border && rect.column + rect.columns == self.columns {
+                rect.columns -= 1;
+            }
+        }
+        geometry
+    }
+
     pub fn select(&mut self, id: PaneId) -> io::Result<()> {
         if !self
             .tiled_geometry()
@@ -488,7 +530,7 @@ impl Layout {
             .unwrap_or(false)
     }
 
-    /// Split only if the active rectangle can contain two cells plus a separator.
+    /// Split only if the active rectangle can contain content plus both pane borders.
     /// Rejected requests leave IDs, focus, dimensions and the entire tree unchanged.
     pub fn split_active(&mut self, axis: SplitAxis) -> io::Result<PaneId> {
         if self.count == MAX_PANES {
@@ -505,7 +547,7 @@ impl Layout {
             SplitAxis::Columns => rect.columns,
             SplitAxis::Rows => rect.rows,
         };
-        if extent < 3 {
+        if extent < 2 + SPLIT_BORDER_CELLS {
             return Err(invalid("active pane has no space for this split"));
         }
         let next = self
@@ -579,19 +621,19 @@ fn split_rects(
         |available: u16| (u32::from(available) * u32::from(share.0) / u32::from(share.1)) as u16;
     match axis {
         SplitAxis::Columns => {
-            let available = rect.columns - 1;
+            let available = rect.columns - SPLIT_BORDER_CELLS;
             a.columns = first_extent(available).clamp(ac, available - bc);
             separator.column += a.columns;
-            separator.columns = 1;
-            b.column += a.columns + 1;
+            separator.columns = SPLIT_BORDER_CELLS;
+            b.column += a.columns + SPLIT_BORDER_CELLS;
             b.columns = available - a.columns;
         }
         SplitAxis::Rows => {
-            let available = rect.rows - 1;
+            let available = rect.rows - SPLIT_BORDER_CELLS;
             a.rows = first_extent(available).clamp(ar, available - br);
             separator.row += a.rows;
-            separator.rows = 1;
-            b.row += a.rows + 1;
+            separator.rows = SPLIT_BORDER_CELLS;
+            b.row += a.rows + SPLIT_BORDER_CELLS;
             b.rows = available - a.rows;
         }
     }

@@ -8,13 +8,13 @@ use rustmux::{
 
 #[test]
 fn composition_preserves_cells_maps_cursor_and_replays_through_renderer() {
-    let mut layout = Layout::new(5, 9).unwrap();
+    let mut layout = Layout::new(7, 13).unwrap();
     let left = layout.active();
     let top = layout.split_active(SplitAxis::Columns).unwrap();
     let bottom = layout.split_active(SplitAxis::Rows).unwrap();
     let mut a = Screen::new(5, 4).unwrap();
-    let mut b = Screen::new(2, 4).unwrap();
-    let mut c = Screen::new(2, 4).unwrap();
+    let mut b = Screen::new(1, 5).unwrap();
+    let mut c = Screen::new(2, 5).unwrap();
     Parser::new().advance(&mut a, "\x1b[31m中e\u{301}".as_bytes());
     Parser::new().advance(&mut b, b"TOP\x1b[?25l");
     Parser::new().advance(
@@ -24,18 +24,19 @@ fn composition_preserves_cells_maps_cursor_and_replays_through_renderer() {
     let originals = (a.clone(), b.clone(), c.clone());
     let frame = compose(&layout, &[(bottom, &c), (left, &a), (top, &b)]).unwrap();
     for row in 0..5 {
-        assert_eq!(&frame.row(row).unwrap()[..4], a.row(row).unwrap());
+        assert_eq!(&frame.row(row + 1).unwrap()[1..5], a.row(row).unwrap());
     }
-    assert_eq!(&frame.row(3).unwrap()[5..], c.row(0).unwrap());
-    assert_eq!(frame.row(2).unwrap()[4].character, '├');
-    assert_eq!(frame.row(2).unwrap()[5].character, '─');
-    assert_eq!(frame.cursor(), (4, 6));
+    assert_eq!(&frame.row(4).unwrap()[7..12], c.row(0).unwrap());
+    assert_eq!(frame.row(2).unwrap()[5].character, '│');
+    assert_eq!(frame.row(2).unwrap()[6].character, '└');
+    assert_eq!(frame.row(3).unwrap()[6].character, '┌');
+    assert_eq!(frame.cursor(), (5, 8));
     assert!(frame.cursor_visible());
     assert!(frame.bracketed_paste());
     assert!(frame.application_cursor_keys());
     assert_eq!((a.clone(), b.clone(), c.clone()), originals);
     let mut renderer = Renderer::default();
-    let mut outer = Screen::new(5, 9).unwrap();
+    let mut outer = Screen::new(7, 13).unwrap();
     let mut parser = Parser::new();
     for view in [frame, {
         layout.select(left).unwrap();
@@ -44,7 +45,7 @@ fn composition_preserves_cells_maps_cursor_and_replays_through_renderer() {
         let mut bytes = Vec::new();
         renderer.render(&view, &mut bytes).unwrap();
         parser.advance(&mut outer, &bytes);
-        for row in 0..5 {
+        for row in 0..7 {
             assert_eq!(outer.row(row), view.row(row));
         }
         assert_eq!(outer.cursor(), view.cursor());
@@ -54,7 +55,7 @@ fn composition_preserves_cells_maps_cursor_and_replays_through_renderer() {
 
 #[test]
 fn rejects_missing_duplicate_unknown_and_wrong_size_screens_without_mutation() {
-    let mut layout = Layout::new(3, 5).unwrap();
+    let mut layout = Layout::new(5, 9).unwrap();
     let first = layout.active();
     let second = layout.split_active(SplitAxis::Columns).unwrap();
     let a = Screen::new(3, 2).unwrap();
@@ -71,27 +72,27 @@ fn rejects_missing_duplicate_unknown_and_wrong_size_screens_without_mutation() {
 
 #[test]
 fn zoom_needs_only_the_visible_full_size_screen() {
-    let mut layout = Layout::new(3, 5).unwrap();
+    let mut layout = Layout::new(5, 9).unwrap();
     let first = layout.active();
     let second = layout.split_active(SplitAxis::Columns).unwrap();
     layout.toggle_zoom();
-    let mut full = Screen::new(3, 5).unwrap();
+    let mut full = Screen::new(3, 7).unwrap();
     Parser::new().advance(&mut full, b"ZOOM\x1b[2;3H");
     let frame = compose(&layout, &[(second, &full)]).unwrap();
     for row in 0..3 {
-        assert_eq!(frame.row(row), full.row(row));
+        assert_eq!(&frame.row(row + 1).unwrap()[1..8], full.row(row).unwrap());
     }
-    assert_eq!(frame.cursor(), full.cursor());
-    let hidden = Screen::new(1, 1).unwrap();
+    assert_eq!(frame.cursor(), (full.cursor().0 + 1, full.cursor().1 + 1));
+    let hidden = Screen::new(3, 3).unwrap();
     assert!(compose(&layout, &[(first, &hidden), (second, &full)]).is_ok());
     layout.toggle_zoom();
     assert!(compose(&layout, &[(first, &hidden), (second, &full)]).is_err());
 }
 
 #[test]
-fn minimal_nested_separators_keep_their_orientation() {
+fn nested_panes_keep_independent_adjacent_borders() {
     for axis in [SplitAxis::Rows, SplitAxis::Columns] {
-        let mut layout = Layout::new(3, 3).unwrap();
+        let mut layout = Layout::new(7, 7).unwrap();
         let first = layout.active();
         let second = layout.split_active(axis).unwrap();
         layout
@@ -101,7 +102,7 @@ fn minimal_nested_separators_keep_their_orientation() {
             })
             .unwrap();
         let screens: Vec<_> = layout
-            .geometry()
+            .content_geometry()
             .panes
             .iter()
             .map(|(id, r)| (*id, Screen::new(r.rows.into(), r.columns.into()).unwrap()))
@@ -110,12 +111,16 @@ fn minimal_nested_separators_keep_their_orientation() {
         let frame = compose(&layout, &refs).unwrap();
         match axis {
             SplitAxis::Columns => {
-                assert_eq!(frame.row(1).unwrap()[1].character, '├');
-                assert_eq!(frame.row(1).unwrap()[2].character, '─');
+                assert_eq!(frame.row(2).unwrap()[2].character, '│');
+                assert_eq!(frame.row(2).unwrap()[3].character, '└');
+                assert_eq!(frame.row(3).unwrap()[2].character, '│');
+                assert_eq!(frame.row(3).unwrap()[3].character, '┌');
             }
             SplitAxis::Rows => {
-                assert_eq!(frame.row(1).unwrap()[1].character, '┬');
-                assert_eq!(frame.row(2).unwrap()[1].character, '│');
+                assert_eq!(frame.row(2).unwrap()[2].character, '─');
+                assert_eq!(frame.row(2).unwrap()[3].character, '─');
+                assert_eq!(frame.row(3).unwrap()[2].character, '┐');
+                assert_eq!(frame.row(3).unwrap()[3].character, '┌');
             }
         }
         assert!(screens.iter().any(|(id, _)| *id == first));
@@ -125,17 +130,17 @@ fn minimal_nested_separators_keep_their_orientation() {
 
 #[test]
 fn composing_taller_canvas_does_not_restore_history_or_shift_cursor() {
-    let mut layout = Layout::new(5, 4).unwrap();
+    let mut layout = Layout::new(7, 6).unwrap();
     let top = layout.active();
     let bottom = layout.split_active(SplitAxis::Rows).unwrap();
-    let a = Screen::new(2, 4).unwrap();
+    let a = Screen::new(1, 4).unwrap();
     let mut b = Screen::new(2, 4).unwrap();
     Parser::new().advance(&mut b, b"OLD1\r\nOLD2\r\nLIVE");
     let snapshot = b.clone();
     let view = compose(&layout, &[(top, &a), (bottom, &b)]).unwrap();
-    assert_eq!(view.cursor(), (4, 3));
-    assert_eq!(view.row(3), b.row(0));
-    assert_eq!(view.row(4), b.row(1));
+    assert_eq!(view.cursor(), (5, 4));
+    assert_eq!(&view.row(4).unwrap()[1..5], b.row(0).unwrap());
+    assert_eq!(&view.row(5).unwrap()[1..5], b.row(1).unwrap());
     assert_eq!(view.history_len(), b.history_len());
     assert_eq!(b, snapshot);
 }

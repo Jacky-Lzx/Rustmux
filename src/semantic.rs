@@ -1,4 +1,4 @@
-//! Bounded OSC 7 directory metadata and OSC 133 command-output capture.
+//! Bounded OSC title/directory metadata and OSC 133 command-output capture.
 
 use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt;
@@ -6,6 +6,12 @@ use std::path::{Path, PathBuf};
 
 const MAX_OSC_BYTES: usize = 1024;
 const MAX_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PromptEvent {
+    Start,
+    End,
+}
 
 #[derive(Debug, Default)]
 pub(crate) struct SemanticOutput {
@@ -16,6 +22,7 @@ pub(crate) struct SemanticOutput {
     current: Vec<u8>,
     last: Option<String>,
     current_directory: Option<PathBuf>,
+    title: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -38,7 +45,15 @@ enum State {
 
 impl SemanticOutput {
     pub fn advance(&mut self, input: &[u8]) {
-        for &byte in input {
+        self.advance_with_prompt_events(input, &mut |_, _| {});
+    }
+
+    pub fn advance_with_prompt_events(
+        &mut self,
+        input: &[u8],
+        event: &mut impl FnMut(usize, PromptEvent),
+    ) {
+        for (index, &byte) in input.iter().enumerate() {
             if matches!(byte, 0x18 | 0x1a) {
                 self.state = State::Ground;
                 continue;
@@ -70,8 +85,8 @@ impl SemanticOutput {
                     mut overflowed,
                 } => match byte {
                     7 => {
-                        if !overflowed {
-                            self.osc(&bytes);
+                        if !overflowed && let Some(prompt) = self.osc(&bytes) {
+                            event(index + 1, prompt);
                         }
                         State::Ground
                     }
@@ -86,8 +101,8 @@ impl SemanticOutput {
                     mut overflowed,
                 } => {
                     if byte == b'\\' {
-                        if !overflowed {
-                            self.osc(&bytes);
+                        if !overflowed && let Some(prompt) = self.osc(&bytes) {
+                            event(index + 1, prompt);
                         }
                         State::Ground
                     } else {
@@ -130,6 +145,10 @@ impl SemanticOutput {
 
     pub fn set_current_directory(&mut self, path: PathBuf) {
         self.current_directory = Some(path);
+    }
+
+    pub fn title(&self) -> Option<&str> {
+        self.title.as_deref()
     }
 
     pub fn cancel_current(&mut self) {
@@ -179,14 +198,21 @@ impl SemanticOutput {
         }
     }
 
-    fn osc(&mut self, control: &[u8]) {
+    fn osc(&mut self, control: &[u8]) -> Option<PromptEvent> {
+        if let Some(title) = control
+            .strip_prefix(b"0;")
+            .or_else(|| control.strip_prefix(b"2;"))
+        {
+            self.title = Some(String::from_utf8_lossy(title).into_owned());
+            return None;
+        }
         if let Some(path) = control.strip_prefix(b"7;").and_then(osc7_path) {
             self.current_directory = Some(path);
-            return;
+            return None;
         }
         let mut fields = control.split(|&byte| byte == b';');
         if fields.next() != Some(b"133".as_slice()) {
-            return;
+            return None;
         }
         match fields.next() {
             Some(b"C") => {
@@ -194,9 +220,19 @@ impl SemanticOutput {
                 self.capturing = true;
                 self.semantic_boundaries = true;
                 self.overflowed = false;
+                Some(PromptEvent::End)
             }
-            Some(b"D" | b"A") if self.capturing => self.complete(),
-            _ => {}
+            Some(b"A") => {
+                if self.capturing {
+                    self.complete();
+                }
+                Some(PromptEvent::Start)
+            }
+            Some(b"D") if self.capturing => {
+                self.complete();
+                Some(PromptEvent::End)
+            }
+            _ => None,
         }
     }
 
@@ -318,6 +354,24 @@ mod tests {
     }
 
     #[test]
+    fn osc133_reports_prompt_lifetime_at_sequence_boundaries() {
+        let mut output = SemanticOutput::default();
+        let mut events = Vec::new();
+        output.advance_with_prompt_events(
+            b"before\x1b]133;A;click_events=1\x1b\\prompt\x1b]133;B\x07",
+            &mut |offset, event| events.push((offset, event)),
+        );
+        assert_eq!(events, vec![(30, PromptEvent::Start)]);
+
+        events.clear();
+        output.advance_with_prompt_events(
+            b"input\x1b]133;C\x07output\x1b]133;D;0\x07",
+            &mut |offset, event| events.push((offset, event)),
+        );
+        assert_eq!(events, vec![(13, PromptEvent::End), (29, PromptEvent::End)]);
+    }
+
+    #[test]
     fn running_incomplete_and_oversized_commands_are_unavailable() {
         let mut output = SemanticOutput::default();
         output.advance(b"\x1b]133;C\x07old\x1b]133;D\x07");
@@ -383,5 +437,16 @@ mod tests {
             output.advance(invalid);
         }
         assert_eq!(output.current_directory(), Some(Path::new("/tmp/valid")));
+    }
+
+    #[test]
+    fn osc_zero_and_two_update_the_terminal_title() {
+        let mut output = SemanticOutput::default();
+        output.advance(b"\x1b]0;first\x07");
+        assert_eq!(output.title(), Some("first"));
+        output.advance(b"\x1b]2;second\x1b\\");
+        assert_eq!(output.title(), Some("second"));
+        output.advance(b"\x1b]1;ignored\x07");
+        assert_eq!(output.title(), Some("second"));
     }
 }

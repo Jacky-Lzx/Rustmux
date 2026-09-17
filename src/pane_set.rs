@@ -90,7 +90,11 @@ impl<T> PaneSet<T> {
 
     /// Geometry only; the caller remains responsible for resizing PTYs and screens.
     pub fn resize(&mut self, rows: u16, columns: u16) -> io::Result<()> {
-        self.layout.resize(rows, columns)
+        let mut candidate = self.layout.clone();
+        candidate.resize(rows, columns)?;
+        require_content_cells(&candidate)?;
+        self.layout = candidate;
+        Ok(())
     }
 
     /// Validate a prospective split before invoking the content factory exactly once.
@@ -104,8 +108,9 @@ impl<T> PaneSet<T> {
     ) -> io::Result<PaneId> {
         let mut candidate = self.layout.clone();
         let id = candidate.split_active(axis)?;
+        require_content_cells(&candidate)?;
         let rect = candidate
-            .tiled_geometry()
+            .tiled_content_geometry()
             .panes
             .into_iter()
             .find(|(pane, _)| *pane == id)
@@ -128,7 +133,7 @@ impl<T> PaneSet<T> {
     ) -> io::Result<()> {
         let (layout, id) = self.layout.restore_closed(before, after, id)?;
         let rect = layout
-            .tiled_geometry()
+            .tiled_content_geometry()
             .panes
             .into_iter()
             .find(|(pane, _)| *pane == id)
@@ -206,15 +211,15 @@ impl PaneSet<crate::pane::Pane> {
                 "pane layout exceeds cell limit",
             ));
         }
-        let mut sizes = self.layout.tiled_geometry().panes;
+        let mut sizes = self.layout.tiled_content_geometry().panes;
         if self.layout.is_zoomed() {
             let active = self.layout.active();
+            let visible = self.layout.content_geometry().panes[0].1;
             let (_, rect) = sizes
                 .iter_mut()
                 .find(|(id, _)| *id == active)
                 .expect("active pane exists");
-            rect.rows = rows;
-            rect.columns = columns;
+            *rect = visible;
         }
         // Refresh child status before preparing; an exited child needs no ioctl.
         for (_, pane) in &mut self.entries {
@@ -238,4 +243,19 @@ impl PaneSet<crate::pane::Pane> {
         }
         Ok(())
     }
+}
+
+fn require_content_cells(layout: &Layout) -> io::Result<()> {
+    if layout
+        .tiled_content_geometry()
+        .panes
+        .iter()
+        .any(|(_, rect)| rect.rows == 0 || rect.columns == 0)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "pane has no space inside its border",
+        ));
+    }
+    Ok(())
 }

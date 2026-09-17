@@ -713,10 +713,18 @@ fn spawn_window(
     rows: u16,
     columns: u16,
 ) -> io::Result<PaneSet<Pane>> {
+    let (content_rows, content_columns) = pane_content_dimensions(rows, columns);
     PaneSet::new(
         rows,
         columns,
-        Pane::spawn_in(shell, directory, rows, columns)?,
+        Pane::spawn_in(shell, directory, content_rows, content_columns)?,
+    )
+}
+
+fn pane_content_dimensions(rows: u16, columns: u16) -> (u16, u16) {
+    (
+        if rows >= 3 { rows - 2 } else { rows },
+        if columns >= 3 { columns - 2 } else { columns },
     )
 }
 
@@ -734,7 +742,12 @@ fn submits_command(byte: u8, bracketed_paste: bool) -> bool {
 }
 
 fn spawn_editor_window(text: &str, rows: u16, columns: u16) -> io::Result<PaneSet<Pane>> {
-    PaneSet::new(rows, columns, Pane::spawn_editor(text, rows, columns)?)
+    let (content_rows, content_columns) = pane_content_dimensions(rows, columns);
+    PaneSet::new(
+        rows,
+        columns,
+        Pane::spawn_editor(text, content_rows, content_columns)?,
+    )
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -767,24 +780,24 @@ fn service_pane(pane: &mut Pane, requested: PollFlags, ready: PollFlags) -> io::
             "invalid PTY descriptor",
         ));
     }
-    let (shell, parser, screen, state) = pane.parts_mut();
-    let reply_read_limit = state.reply_read_limit();
+    let reply_read_limit = pane.io().reply_read_limit();
     let readable = ready.intersects(PollFlags::POLLIN | PollFlags::POLLHUP | PollFlags::POLLERR);
-    if !state.eof && requested.contains(PollFlags::POLLIN) {
+    if !pane.io().eof && requested.contains(PollFlags::POLLIN) {
         if readable {
             let mut bytes = [0; 8192];
             let read_limit = bytes.len().min(reply_read_limit);
-            match shell.read(&mut bytes[..read_limit]) {
-                Ok(0) => state.eof = true,
+            match pane.shell_mut().read(&mut bytes[..read_limit]) {
+                Ok(0) => pane.parts_mut().3.eof = true,
                 Ok(count) => {
-                    state.semantic.advance(&bytes[..count]);
-                    parser.advance_with_replies(screen, &bytes[..count], &mut |reply| {
-                        if state.status.is_none() {
-                            state.to_shell.extend(reply);
-                        }
+                    let mut replies = Vec::new();
+                    pane.process_output(&bytes[..count], &mut |reply| {
+                        replies.extend_from_slice(reply);
                     });
+                    let state = pane.parts_mut().3;
+                    if state.status.is_none() {
+                        state.to_shell.extend(replies);
+                    }
                     debug_assert!(state.to_shell.len() <= LIMIT);
-                    state.dirty = true;
                 }
                 Err(error)
                     if matches!(
@@ -793,17 +806,16 @@ fn service_pane(pane: &mut Pane, requested: PollFlags, ready: PollFlags) -> io::
                     ) => {}
                 Err(error) => return Err(error),
             }
-        } else if state.status.is_some() {
+        } else if pane.io().status.is_some() {
             // Descendants retaining the slave must not delay direct-child exit.
-            state.eof = true;
+            pane.parts_mut().3.eof = true;
         }
-        if state.eof {
-            parser.finish(screen);
-            state.dirty = true;
-            state.eof_at = Some(Instant::now());
+        if pane.io().eof {
+            pane.finish_output();
         }
     }
-    if !state.eof && state.status.is_none() && ready.contains(PollFlags::POLLOUT) {
+    if !pane.io().eof && pane.io().status.is_none() && ready.contains(PollFlags::POLLOUT) {
+        let (shell, _, _, state) = pane.parts_mut();
         send(shell, &mut state.to_shell)?;
     }
     Ok(())
@@ -952,9 +964,9 @@ fn forward(
                 .iter()
                 .map(|window| {
                     let layout = window.content().layout();
-                    let mut sizes = layout.tiled_geometry().panes;
+                    let mut sizes = layout.tiled_content_geometry().panes;
                     if layout.is_zoomed() {
-                        let visible = layout.geometry().panes[0];
+                        let visible = layout.content_geometry().panes[0];
                         *sizes.iter_mut().find(|(id, _)| *id == visible.0).unwrap() = visible;
                     }
                     (window.id(), sizes)
@@ -1033,10 +1045,15 @@ fn forward(
                             (pane_id, screen)
                         })
                         .collect();
-                    let content = pane_view::compose_with_highlight(
+                    let titles: Vec<_> = panes
+                        .iter()
+                        .map(|(pane_id, pane)| (pane_id, pane.terminal_title()))
+                        .collect();
+                    let content = pane_view::compose_with_titles(
                         panes.layout(),
                         &screens,
                         history.as_ref().map(|_| focused),
+                        &titles,
                     )?;
                     let mut view =
                         compose(&content, *outer_rows, session_name, &names, active_index)?;
@@ -1237,7 +1254,7 @@ fn forward(
             let set = windows.active().unwrap().content();
             let rect = set
                 .layout()
-                .geometry()
+                .content_geometry()
                 .panes
                 .into_iter()
                 .find(|(id, _)| *id == set.layout().active())
@@ -1685,7 +1702,7 @@ mod tests {
         handshake::{self, ClientPeer, ServerPeer},
         protocol::{ClientMessage, ServerMessage},
     };
-    use std::os::unix::net::UnixStream;
+    use std::os::unix::{fs::PermissionsExt, net::UnixStream};
     use std::thread;
 
     fn socket_peers(rows: u16, columns: u16) -> (ClientPeer, ServerPeer) {
@@ -1963,6 +1980,29 @@ mod tests {
         pending.clear();
         assert!(!receive(&mut Paused, &mut pending).unwrap());
         assert!(receive(&mut io::empty(), &mut pending).unwrap());
+    }
+
+    #[test]
+    fn pane_service_tracks_prompt_markers_across_output_scrolling() {
+        let mut shell = tempfile::NamedTempFile::new().unwrap();
+        shell
+            .write_all(
+                b"#!/bin/sh\nprintf '\\033[3;1H\\033]133;A\\a\\r\\nSTATUS\\r\\n> \\033]133;B\\a'\nsleep 5\n",
+            )
+            .unwrap();
+        let mut permissions = shell.as_file().metadata().unwrap().permissions();
+        permissions.set_mode(0o700);
+        shell.as_file().set_permissions(permissions).unwrap();
+
+        let mut pane = Pane::spawn(shell.path(), 3, 8).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while pane.io().prompt_start != Some((0, 0)) {
+            service_pane(&mut pane, PollFlags::POLLIN, PollFlags::POLLIN).unwrap();
+            assert!(Instant::now() < deadline, "prompt marker was not parsed");
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(pane.screen().cursor(), (2, 2));
+        pane.shell_mut().terminate().unwrap();
     }
 }
 
