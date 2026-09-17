@@ -29,9 +29,14 @@ fn execute(command: Option<rustmux::cli::Command>) -> Result<u8, String> {
             rustmux::session::supervisor::create(&name, &shell, detached)
                 .map_err(|error| error.to_string())
         }
-        Some(rustmux::cli::Command::Attach { name }) => {
-            rustmux::session::supervisor::attach(&name).map_err(|error| error.to_string())
-        }
+        Some(rustmux::cli::Command::Attach { name }) => match name {
+            Some(name) => {
+                rustmux::session::supervisor::attach(&name).map_err(|error| error.to_string())
+            }
+            None => {
+                rustmux::session::supervisor::choose_and_attach().map_err(|error| error.to_string())
+            }
+        },
         Some(rustmux::cli::Command::List) => {
             for name in rustmux::session::list().map_err(|error| error.to_string())? {
                 println!("{name}");
@@ -174,7 +179,9 @@ mod tests {
                 name: name.clone(),
                 detached: false,
             }),
-            Some(Command::Attach { name: name.clone() }),
+            Some(Command::Attach {
+                name: Some(name.clone()),
+            }),
         ] {
             assert!(starts_interactive_session(&command));
         }

@@ -28,6 +28,7 @@ session that survives terminal detachment, or reconnect to it later, use:
 ./target/debug/rustmux new work
 ./target/debug/rustmux new --detached background
 ./target/debug/rustmux attach work
+./target/debug/rustmux attach
 ./target/debug/rustmux list
 ./target/debug/rustmux kill-all --yes
 ```
@@ -37,6 +38,17 @@ terminal while its panes continue running. Only one client displays a session at
 a time. Its name appears before the window labels in the top bar and remains the
 same after reattachment. The endpoint is removed when the last pane exits. See
 [Named Session Commands](../reference/session-cli.md).
+
+Ctrl-B followed by Ctrl-W opens the Session Manager from an attached session.
+The current session is selected initially; choose another session with `j`/`k`
+and Enter, or press Esc or `q` to return to the current session.
+
+When more than one session is running, `rustmux attach` without a name opens a
+centered session window. It shows each session's attached/detached state and
+server PID. Move with Up/Down or `j`/`k`, attach with Enter, and cancel with Esc,
+`q` or Ctrl-C. Press `a` to enter a new session name and create it with Enter.
+Press `d` twice consecutively to terminate the selected session; any intervening
+key cancels the first `d`. A single running session is attached directly.
 
 Starting another interactive Rustmux or attaching a session from inside a pane
 is rejected before terminal modes change. Session inspection and control commands,

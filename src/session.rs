@@ -3,6 +3,7 @@
 pub mod client;
 pub mod frontend;
 pub mod handshake;
+mod picker;
 pub mod protocol;
 pub mod supervisor;
 
@@ -264,10 +265,24 @@ fn acquire_client_in(directory: &Path, name: &SessionName) -> io::Result<ClientL
 
 /// Return private session endpoints in stable name order.
 pub fn list() -> io::Result<Vec<SessionName>> {
-    list_in(&session_directory())
+    Ok(list_info()?
+        .into_iter()
+        .map(|session| session.name)
+        .collect())
 }
 
-fn list_in(directory: &Path) -> io::Result<Vec<SessionName>> {
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct SessionInfo {
+    pub(crate) name: SessionName,
+    pub(crate) attached: bool,
+    pub(crate) server_pid: Option<i32>,
+}
+
+pub(crate) fn list_info() -> io::Result<Vec<SessionInfo>> {
+    list_info_in(&session_directory())
+}
+
+fn list_info_in(directory: &Path) -> io::Result<Vec<SessionInfo>> {
     let entries = match fs::read_dir(directory) {
         Ok(entries) => entries,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -305,11 +320,17 @@ fn list_in(directory: &Path) -> io::Result<Vec<SessionName>> {
         {
             continue;
         }
-        if endpoint_is_live(directory, &name, &entry.path()) {
-            sessions.push(name);
-        }
+        let Some(attached) = endpoint_client_state(directory, &name, &entry.path()) else {
+            continue;
+        };
+        let server_pid = live_server_pid_in(directory, &name).ok().map(Pid::as_raw);
+        sessions.push(SessionInfo {
+            name,
+            attached,
+            server_pid,
+        });
     }
-    sessions.sort_unstable();
+    sessions.sort_unstable_by(|left, right| left.name.cmp(&right.name));
     Ok(sessions)
 }
 
@@ -422,22 +443,22 @@ fn invalid_pid_record(name: &SessionName) -> io::Error {
     )
 }
 
-fn endpoint_is_live(directory: &Path, name: &SessionName, socket: &Path) -> bool {
+fn endpoint_client_state(directory: &Path, name: &SessionName, socket: &Path) -> Option<bool> {
     let file = match open_lock_file_with(directory, name, false) {
         Ok(file) => file,
         // Endpoints created before client locking have no sidecar file.
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            return UnixStream::connect(socket).is_ok();
+            return UnixStream::connect(socket).is_ok().then_some(false);
         }
-        Err(_) => return false,
+        Err(_) => return None,
     };
     match Flock::lock(file, FlockArg::LockSharedNonblock) {
         // An exclusive client lock proves that the server still has an attachment.
-        Err((_, error)) if error == Errno::EWOULDBLOCK => true,
+        Err((_, error)) if error == Errno::EWOULDBLOCK => Some(true),
         // Without an attached client, probe the listening server while holding a
         // shared lock so an attachment cannot begin between these observations.
-        Ok(_lock) => UnixStream::connect(socket).is_ok(),
-        Err(_) => false,
+        Ok(_lock) => UnixStream::connect(socket).is_ok().then_some(false),
+        Err(_) => None,
     }
 }
 
@@ -714,11 +735,15 @@ mod tests {
         fs::write(directory.0.join("note.sock"), b"not a socket").unwrap();
         fs::write(directory.0.join("ignored"), b"not an endpoint").unwrap();
 
+        let sessions = list_info_in(&directory.0).unwrap();
         assert_eq!(
-            list_in(&directory.0).unwrap(),
+            sessions
+                .iter()
+                .map(|session| (&session.name, session.attached))
+                .collect::<Vec<_>>(),
             vec![
-                SessionName::new("alpha").unwrap(),
-                SessionName::new("beta").unwrap(),
+                (&SessionName::new("alpha").unwrap(), false),
+                (&SessionName::new("beta").unwrap(), true),
             ]
         );
         drop(alpha.listener().accept().unwrap().0);
@@ -733,12 +758,12 @@ mod tests {
     #[test]
     fn listing_missing_directory_is_empty_and_rejects_public_directory() {
         let directory = TestDirectory::new();
-        assert!(list_in(&directory.0).unwrap().is_empty());
+        assert!(list_info_in(&directory.0).unwrap().is_empty());
 
         fs::create_dir(&directory.0).unwrap();
         fs::set_permissions(&directory.0, fs::Permissions::from_mode(0o755)).unwrap();
         assert_eq!(
-            list_in(&directory.0).unwrap_err().kind(),
+            list_info_in(&directory.0).unwrap_err().kind(),
             io::ErrorKind::PermissionDenied
         );
     }

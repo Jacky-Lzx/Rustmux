@@ -2216,3 +2216,122 @@ try:
     s.finish(0)
 finally:
     s.close()
+
+
+# Omitting the attach name opens a picker when several sessions are live. Its
+# selection is based on the same sorted list as the CLI and restores the outer
+# terminal before the selected session client takes over.
+picker_helper = f"picker-helper-{os.getpid()}"
+picker_target = f"picker-target-{os.getpid()}"
+picker_second = f"picker-second-{os.getpid()}"
+picker_created = f"picker-created-{os.getpid()}"
+for name in (picker_helper, picker_target):
+    created = subprocess.run(
+        [BINARY, "new", "--detached", name], capture_output=True, text=True,
+        env=background_env,
+    )
+    assert created.returncode == 0, created
+picker = None
+try:
+    sessions = subprocess.run(
+        [BINARY, "list"], check=True, capture_output=True, text=True,
+    ).stdout.splitlines()
+    helper_index = sessions.index(picker_helper)
+    target_index = sessions.index(picker_target)
+    assert len(sessions) > 1, sessions
+
+    picker = Session(arguments=("attach",))
+    end = time.monotonic() + 8
+    while b"Session Manager" not in picker.output:
+        picker.read()
+        assert time.monotonic() < end, bytes(picker.output[-2000:])
+    picker.send(b"j" * target_index)
+    visible_target = b"picker-target"
+    while visible_target not in picker.output:
+        picker.read()
+        assert time.monotonic() < end, bytes(picker.output[-2000:])
+    picker.send(b"\r")
+    picker.expect(b"RUSTMUX_READY>")
+    expect_bar(picker, f"[{picker_target}]".encode())
+
+    # Ctrl-B Ctrl-W detaches only this client, opens the manager with the
+    # current session selected, and attaches the chosen session. Cancelling a
+    # manager opened this way reconnects the session that opened it.
+    picker.output.clear()
+    picker.send(b"\x02\x17")
+    end = time.monotonic() + 8
+    while b"Session Manager" not in picker.output:
+        picker.read()
+        assert time.monotonic() < end, bytes(picker.output[-2000:])
+    target_to_helper = (helper_index - target_index) % len(sessions)
+    picker.send(b"j" * target_to_helper + b"\r")
+    picker.expect(b"RUSTMUX_READY>")
+    expect_bar(picker, f"[{picker_helper}]".encode())
+
+    picker.output.clear()
+    picker.send(b"\x02\x17")
+    end = time.monotonic() + 8
+    while b"Session Manager" not in picker.output:
+        picker.read()
+        assert time.monotonic() < end, bytes(picker.output[-2000:])
+    picker.send(b"q")
+    picker.expect(b"RUSTMUX_READY>")
+    expect_bar(picker, f"[{picker_helper}]".encode())
+    picker.send(b"\x02d")
+    picker.finish(0)
+
+    # The first d only arms deletion. Another key cancels that confirmation;
+    # only a fresh consecutive dd terminates the selected session.
+    sessions = subprocess.run(
+        [BINARY, "list"], check=True, capture_output=True, text=True,
+    ).stdout.splitlines()
+    helper_index = sessions.index(picker_helper)
+    picker.close()
+    picker = Session(arguments=("attach",))
+    end = time.monotonic() + 8
+    while b"Session Manager" not in picker.output:
+        picker.read()
+        assert time.monotonic() < end, bytes(picker.output[-2000:])
+    picker.send(b"\x1b[B" * helper_index + b"d")
+    while b"Press d again to kill" not in picker.output:
+        picker.read()
+        assert time.monotonic() < end, bytes(picker.output[-2000:])
+    assert picker_helper in subprocess.run(
+        [BINARY, "list"], check=True, capture_output=True, text=True,
+    ).stdout.splitlines()
+    picker.output.clear()
+    picker.send(b"xdd")
+    while b"Session Manager" not in picker.output:
+        picker.read()
+        assert time.monotonic() < end, bytes(picker.output[-2000:])
+    assert picker_helper not in subprocess.run(
+        [BINARY, "list"], check=True, capture_output=True, text=True,
+    ).stdout.splitlines()
+    picker.send(b"q")
+    picker.finish(0)
+
+    # `a` uses the same New shortcut as main. The entered name is validated,
+    # created as a persistent session and attached after the picker restores.
+    created = subprocess.run(
+        [BINARY, "new", "--detached", picker_second], capture_output=True,
+        text=True, env=background_env,
+    )
+    assert created.returncode == 0, created
+    picker.close()
+    picker = Session(arguments=("attach",))
+    end = time.monotonic() + 8
+    while b"Session Manager" not in picker.output:
+        picker.read()
+        assert time.monotonic() < end, bytes(picker.output[-2000:])
+    picker.send(b"a" + picker_created.encode() + b"\r")
+    picker.expect(b"RUSTMUX_READY>")
+    expect_bar(picker, f"[{picker_created}]".encode())
+    picker.send(b"exit 0\n")
+    picker.finish(0)
+finally:
+    if picker is not None:
+        picker.close()
+    for name in (picker_helper, picker_target, picker_second, picker_created):
+        subprocess.run(
+            [BINARY, "kill", name], capture_output=True, text=True, timeout=5,
+        )

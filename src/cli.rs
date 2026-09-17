@@ -23,8 +23,8 @@ pub enum Command {
     },
     /// Attach to an existing named session.
     Attach {
-        /// Existing session name.
-        name: SessionName,
+        /// Existing session name; omit to choose from running sessions.
+        name: Option<SessionName>,
     },
     /// List named session endpoints.
     List,
@@ -73,8 +73,12 @@ mod tests {
                 .unwrap()
                 .command,
             Some(Command::Attach {
-                name: SessionName::new("work-2").unwrap()
+                name: Some(SessionName::new("work-2").unwrap())
             })
+        );
+        assert_eq!(
+            Cli::try_parse_from(["rustmux", "attach"]).unwrap().command,
+            Some(Command::Attach { name: None })
         );
         assert_eq!(
             Cli::try_parse_from(["rustmux", "list"]).unwrap().command,

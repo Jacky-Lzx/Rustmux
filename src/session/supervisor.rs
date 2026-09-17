@@ -89,8 +89,71 @@ fn start_detached(name: &SessionName) -> io::Result<u8> {
 
 /// Attach this terminal to an existing named session.
 pub fn attach(name: &SessionName) -> io::Result<u8> {
+    let mut name = name.clone();
+    loop {
+        match attach_once(&name)? {
+            client::ClientExit::Process(status) => return Ok(status),
+            client::ClientExit::Detached => return Ok(0),
+            client::ClientExit::SessionManager => match manage_sessions(Some(&name), false)? {
+                Some(next) => name = next,
+                None => return Ok(0),
+            },
+        }
+    }
+}
+
+fn attach_once(name: &SessionName) -> io::Result<client::ClientExit> {
     let _lease = acquire_client(name)?;
     client::run(connect(name)?)
+}
+
+/// Attach directly when one session exists, or ask the user to choose among several.
+pub fn choose_and_attach() -> io::Result<u8> {
+    match manage_sessions(None, true)? {
+        Some(name) => attach(&name),
+        None => Ok(0),
+    }
+}
+
+fn manage_sessions(
+    return_to: Option<&SessionName>,
+    attach_single_directly: bool,
+) -> io::Result<Option<SessionName>> {
+    let mut return_to = return_to.cloned();
+    let mut changed = false;
+    loop {
+        let sessions = super::list_info()?;
+        match sessions.as_slice() {
+            [] if changed || return_to.is_some() => return Ok(None),
+            [] => {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "no sessions are running",
+                ));
+            }
+            [session] if attach_single_directly && !changed => {
+                return Ok(Some(session.name.clone()));
+            }
+            _ => {}
+        }
+        match super::picker::choose(&sessions, return_to.as_ref())? {
+            super::picker::Choice::Attach(name) => return Ok(Some(name)),
+            super::picker::Choice::Create(name) => {
+                let shell = crate::config::shell()
+                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+                create(&name, &shell, true)?;
+                return Ok(Some(name));
+            }
+            super::picker::Choice::Kill(name) => {
+                kill(&name)?;
+                if return_to.as_ref() == Some(&name) {
+                    return_to = None;
+                }
+                changed = true;
+            }
+            super::picker::Choice::Cancel => return Ok(return_to),
+        }
+    }
 }
 
 /// Ask a live named-session server to terminate and wait for endpoint cleanup.

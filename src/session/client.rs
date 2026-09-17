@@ -24,7 +24,7 @@ const MAX_BUFFERED_OUTPUT_BYTES: usize = MAX_FRAME_BYTES + READ_BYTES;
 ///
 /// The terminal enters raw mode and the alternate screen only after the
 /// handshake succeeds. All return paths restore its termios and display modes.
-pub fn run(stream: UnixStream) -> io::Result<u8> {
+pub(crate) fn run(stream: UnixStream) -> io::Result<ClientExit> {
     let file = TerminalDevice::open_controlling()?;
     let size = crate::terminal_device::window_size(&file)?;
     let peer = handshake::client(stream, size.ws_row, size.ws_col)?;
@@ -32,7 +32,7 @@ pub fn run(stream: UnixStream) -> io::Result<u8> {
     run_attached(file, peer, &signals)
 }
 
-fn run_attached(file: File, peer: ClientPeer, signals: &ClientSignals) -> io::Result<u8> {
+fn run_attached(file: File, peer: ClientPeer, signals: &ClientSignals) -> io::Result<ClientExit> {
     let mut terminal = TerminalDevice::enter(file)?;
     let result = bridge(&mut terminal, peer, signals);
     let restored = terminal.restore();
@@ -46,22 +46,22 @@ fn bridge(
     terminal: &mut TerminalDevice,
     mut peer: ClientPeer,
     signals: &ClientSignals,
-) -> io::Result<u8> {
+) -> io::Result<ClientExit> {
     let mut outbound = Outbound::default();
     let mut to_terminal = VecDeque::new();
     let mut pending_resize = signals.resize.swap(false, Ordering::Relaxed);
     let mut exit = None;
     let mut input = ClientInput::default();
-    let mut detaching = false;
+    let mut client_exit = None;
 
     apply_server_messages(peer.decode(&[])?, &mut to_terminal, &mut exit)?;
     loop {
         let signal = signals.pending.load(Ordering::Relaxed);
         if signal != 0 {
-            return Ok((128 + signal) as u8);
+            return Ok(ClientExit::Process((128 + signal) as u8));
         }
         pending_resize |= signals.resize.swap(false, Ordering::Relaxed);
-        if pending_resize && outbound.is_empty() && !detaching {
+        if pending_resize && outbound.is_empty() && client_exit.is_none() {
             let size = terminal.size()?;
             if size.ws_row != 0 && size.ws_col != 0 {
                 outbound.push(ClientMessage::Resize {
@@ -76,20 +76,22 @@ fn bridge(
         {
             return exit_status(status);
         }
-        if detaching && outbound.is_empty() {
-            return Ok(0);
+        if let Some(client_exit) = client_exit
+            && outbound.is_empty()
+        {
+            return Ok(client_exit);
         }
 
         let (terminal_ready, socket_ready) = {
             let mut terminal_flags = PollFlags::empty();
-            if exit.is_none() && !detaching && outbound.is_empty() && !pending_resize {
+            if exit.is_none() && client_exit.is_none() && outbound.is_empty() && !pending_resize {
                 terminal_flags |= PollFlags::POLLIN;
             }
             if !to_terminal.is_empty() {
                 terminal_flags |= PollFlags::POLLOUT;
             }
             let mut socket_flags = PollFlags::empty();
-            if exit.is_none() && !detaching && to_terminal.is_empty() {
+            if exit.is_none() && client_exit.is_none() && to_terminal.is_empty() {
                 socket_flags |= PollFlags::POLLIN;
             }
             if !outbound.is_empty() {
@@ -113,7 +115,7 @@ fn bridge(
         reject_invalid_fd(socket_ready, "session socket")?;
         if terminal_ready.intersects(PollFlags::POLLIN | PollFlags::POLLHUP | PollFlags::POLLERR)
             && exit.is_none()
-            && !detaching
+            && client_exit.is_none()
             && outbound.is_empty()
         {
             let mut bytes = [0; READ_BYTES];
@@ -126,11 +128,11 @@ fn bridge(
                 }
                 Ok(count) => {
                     let mut forwarded = Vec::with_capacity(count);
-                    detaching = input.feed(&bytes[..count], &mut forwarded);
+                    client_exit = input.feed(&bytes[..count], &mut forwarded);
                     if !forwarded.is_empty() {
                         outbound.push(ClientMessage::Input(forwarded))?;
                     }
-                    if detaching {
+                    if client_exit.is_some() {
                         outbound.push(ClientMessage::Detach)?;
                     }
                 }
@@ -147,7 +149,7 @@ fn bridge(
         }
         if socket_ready.intersects(PollFlags::POLLIN | PollFlags::POLLHUP | PollFlags::POLLERR)
             && exit.is_none()
-            && !detaching
+            && client_exit.is_none()
             && to_terminal.is_empty()
         {
             let mut bytes = [0; READ_BYTES];
@@ -244,9 +246,17 @@ fn invalid_data(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
 }
 
-fn exit_status(status: i32) -> io::Result<u8> {
+fn exit_status(status: i32) -> io::Result<ClientExit> {
     u8::try_from(status)
+        .map(ClientExit::Process)
         .map_err(|_| invalid_data(format!("session exit status {status} is outside 0..=255")))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ClientExit {
+    Process(u8),
+    Detached,
+    SessionManager,
 }
 
 #[derive(Debug, Default)]
@@ -303,7 +313,7 @@ struct ClientInput {
 }
 
 impl ClientInput {
-    fn feed(&mut self, bytes: &[u8], forwarded: &mut Vec<u8>) -> bool {
+    fn feed(&mut self, bytes: &[u8], forwarded: &mut Vec<u8>) -> Option<ClientExit> {
         for &byte in bytes {
             self.tail.push_back(byte);
             if self.tail.len() > 6 {
@@ -321,7 +331,10 @@ impl ClientInput {
             } else if self.prefix {
                 self.prefix = false;
                 if byte == b'd' {
-                    return true;
+                    return Some(ClientExit::Detached);
+                }
+                if byte == 23 {
+                    return Some(ClientExit::SessionManager);
                 }
                 forwarded.extend([2, byte]);
             } else if byte == 2 {
@@ -330,7 +343,7 @@ impl ClientInput {
                 forwarded.push(byte);
             }
         }
-        false
+        None
     }
 }
 
@@ -442,7 +455,7 @@ mod tests {
             thread::yield_now();
         }
         master.write_all(b"input").unwrap();
-        assert_eq!(client.join().unwrap(), 7);
+        assert_eq!(client.join().unwrap(), ClientExit::Process(7));
         server.join().unwrap();
 
         let mut restored = termios::tcgetattr(&observer).unwrap();
@@ -480,7 +493,7 @@ mod tests {
             )
             .is_err()
         );
-        assert_eq!(exit_status(255).unwrap(), 255);
+        assert_eq!(exit_status(255).unwrap(), ClientExit::Process(255));
         assert_eq!(
             exit_status(-1).unwrap_err().kind(),
             io::ErrorKind::InvalidData
@@ -495,23 +508,51 @@ mod tests {
     fn detach_shortcut_preserves_prior_input_and_ignores_paste_contents() {
         let mut input = ClientInput::default();
         let mut forwarded = Vec::new();
-        assert!(!input.feed(b"before\x02", &mut forwarded));
-        assert!(input.feed(b"dafter", &mut forwarded));
+        assert_eq!(input.feed(b"before\x02", &mut forwarded), None);
+        assert_eq!(
+            input.feed(b"dafter", &mut forwarded),
+            Some(ClientExit::Detached)
+        );
         assert_eq!(forwarded, b"before");
 
         let mut input = ClientInput::default();
         let mut forwarded = Vec::new();
-        assert!(!input.feed(b"\x1b[200~paste\x02d\x1b[201~", &mut forwarded));
+        assert_eq!(
+            input.feed(b"\x1b[200~paste\x02d\x1b[201~", &mut forwarded),
+            None
+        );
         assert_eq!(forwarded, b"\x1b[200~paste\x02d\x1b[201~");
-        assert!(input.feed(b"\x02d", &mut forwarded));
+        assert_eq!(
+            input.feed(b"\x02d", &mut forwarded),
+            Some(ClientExit::Detached)
+        );
+    }
+
+    #[test]
+    fn session_manager_shortcut_is_local_and_ignored_in_paste_contents() {
+        let mut input = ClientInput::default();
+        let mut forwarded = Vec::new();
+        assert_eq!(
+            input.feed(b"before\x02\x17after", &mut forwarded),
+            Some(ClientExit::SessionManager)
+        );
+        assert_eq!(forwarded, b"before");
+
+        let mut input = ClientInput::default();
+        let mut forwarded = Vec::new();
+        assert_eq!(
+            input.feed(b"\x1b[200~paste\x02\x17\x1b[201~", &mut forwarded),
+            None
+        );
+        assert_eq!(forwarded, b"\x1b[200~paste\x02\x17\x1b[201~");
     }
 
     #[test]
     fn non_detach_prefixes_are_forwarded_for_the_server_parser() {
         let mut input = ClientInput::default();
         let mut forwarded = Vec::new();
-        assert!(!input.feed(b"\x02", &mut forwarded));
-        assert!(!input.feed(b"c\x02\x02", &mut forwarded));
+        assert_eq!(input.feed(b"\x02", &mut forwarded), None);
+        assert_eq!(input.feed(b"c\x02\x02", &mut forwarded), None);
         assert_eq!(forwarded, b"\x02c\x02\x02");
     }
 }

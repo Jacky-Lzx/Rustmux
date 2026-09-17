@@ -75,7 +75,7 @@ impl TerminalDevice {
             active: true,
         };
         termios::tcsetattr(&terminal.file, SetArg::TCSANOW, &raw)?;
-        terminal.control(ENTER)?;
+        terminal.write_all(ENTER)?;
         Ok(terminal)
     }
 
@@ -97,7 +97,7 @@ impl TerminalDevice {
         }
         // Always attempt termios restoration, independently of output failures.
         let modes = termios::tcsetattr(&self.file, SetArg::TCSANOW, &self.original);
-        let screen = self.control(LEAVE);
+        let screen = self.write_all(LEAVE);
         if modes.is_ok() && screen.is_ok() {
             self.active = false;
         }
@@ -105,7 +105,7 @@ impl TerminalDevice {
         screen
     }
 
-    fn control(&mut self, mut bytes: &[u8]) -> io::Result<()> {
+    pub(crate) fn write_all(&mut self, mut bytes: &[u8]) -> io::Result<()> {
         let deadline = Instant::now() + Duration::from_millis(500);
         while !bytes.is_empty() {
             if Instant::now() >= deadline {

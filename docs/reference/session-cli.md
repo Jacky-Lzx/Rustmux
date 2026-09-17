@@ -7,6 +7,7 @@ Rustmux keeps its existing foreground mode when started without arguments. Five
 rustmux new work
 rustmux new --detached background
 rustmux attach work
+rustmux attach
 rustmux list
 rustmux kill work
 rustmux kill-all --yes
@@ -35,11 +36,14 @@ While attached to a named session, Ctrl-B followed by `d` sends the protocol
 `Detach` message and restores the outer terminal. Input earlier in the same read
 is delivered first. The shortcut is disabled inside bracketed paste, and all
 other prefix combinations remain byte-for-byte input for the server-side command
-parser. The top window bar prefixes its window labels with the session name and
-shows the same identity after reattachment. When horizontal space is limited,
-the prefix is clipped before the active window label. Starting Rustmux without a
-subcommand retains the original foreground lifetime, has no detachable background
-server and does not show a session prefix.
+parser. Ctrl-B followed by Ctrl-W also detaches the client, then opens the Session
+Manager with the current session selected. Enter attaches the selected session;
+Esc or `q` reconnects the session that opened the manager. The top window bar
+prefixes its window labels with the session name and shows the same identity after
+reattachment. When horizontal space is limited, the prefix is clipped before the
+active window label. Starting Rustmux without a subcommand retains the original
+foreground lifetime, has no detachable background server and does not show a
+session prefix.
 
 `attach` validates the private runtime directory and requires the socket to be
 owned by the effective user with no group or other permissions. It then performs
@@ -48,6 +52,26 @@ one displayed client at a time; panes, screen state and scrollback continue whil
 no client is attached. A second `attach` exits immediately with an error while
 the first client holds the session's advisory lock. The kernel releases that lock
 if the client exits or crashes, so reconnecting does not depend on manual cleanup.
+
+When `attach` has no name, it reports an error if there are no live sessions and
+connects directly if there is exactly one. With several sessions it opens a
+centered session window on the temporary alternate screen, ordered the same way
+as `list`. The table reports the reliable metadata available from the current
+endpoint format: attached/detached state and server PID. Up/Down and `j`/`k` move
+cyclically, Enter attaches, and Esc, `q` or Ctrl-C cancels without starting a
+client. As in the `main` Session Manager, `a` opens a bounded session-name editor;
+Enter creates and attaches the new session, while Esc returns to the table.
+Pressing `d` once arms termination for the selected session and changes the
+footer to a warning. Only an immediately following `d` terminates it; every
+other key clears the pending confirmation. After termination, the refreshed
+table remains open. The window follows terminal resizes and restores the
+previous terminal modes and screen before attaching or returning.
+
+The same manager is available from an attached session with Ctrl-B Ctrl-W. The
+client releases the current session lock before showing it, so selecting another
+detached session switches the terminal without stopping either server or its
+panes. Killing the session that opened the manager removes the cancel target;
+closing the manager then returns to the outer terminal.
 
 `list` prints one live session name per line in sorted order, making its output
 suitable for shell scripts. It does not enter terminal mode. An exclusive client

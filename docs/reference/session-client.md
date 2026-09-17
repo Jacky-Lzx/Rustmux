@@ -20,8 +20,10 @@ that closes without `Exit` is reported as an incomplete session rather than a
 successful command.
 
 The bridge forwards Rustmux prefix keys to the server-side window parser except
-for Ctrl-B `d`, which queues `Detach` after any earlier bytes and returns once the
-frame is written. Bracketed paste contents never trigger this shortcut.
+for Ctrl-B `d` and Ctrl-B Ctrl-W. Both queue `Detach` after any earlier bytes and
+return once the frame is written. The first exits to the outer terminal; the
+second restores the terminal before the supervisor opens the Session Manager.
+Bracketed paste contents never trigger either shortcut.
 
 The PTY unit test exercises the real raw-mode boundary: initial dimensions and
 resize propagation, keyboard input, rendered output, final status and exact
