@@ -338,6 +338,12 @@ impl HistoryView {
                     b"\x1b[1;2C" if !self.paste && self.editor.is_none() => {
                         self.extend_selection(1, 0)
                     }
+                    b"\x1b[1;6D" if !self.paste && self.editor.is_none() => {
+                        self.extend_selection_word(false)
+                    }
+                    b"\x1b[1;6C" if !self.paste && self.editor.is_none() => {
+                        self.extend_selection_word(true)
+                    }
                     b"\x1b[A" | b"\x1bOA" if !self.paste => {
                         if let Some(editor) = &mut self.editor {
                             editor.recall(&self.queries, true);
@@ -679,16 +685,24 @@ impl HistoryView {
     }
 
     fn extend_selection(&mut self, columns: isize, rows: isize) {
-        self.clear_copy_status();
-        if !self.keyboard_selection() {
-            self.toggle_selection();
-            if (rows < 0 || (rows == 0 && columns < 0))
-                && let Some(selection) = &mut self.selection
-            {
-                std::mem::swap(&mut selection.anchor, &mut selection.cursor);
-            }
-        }
+        self.prepare_selection(rows < 0 || (rows == 0 && columns < 0));
         self.move_selection(columns, rows);
+    }
+
+    fn extend_selection_word(&mut self, forward: bool) {
+        self.prepare_selection(!forward);
+        self.move_selection_word(forward);
+    }
+
+    fn prepare_selection(&mut self, reverse: bool) {
+        self.clear_copy_status();
+        if self.keyboard_selection() {
+            return;
+        }
+        self.toggle_selection();
+        if reverse && let Some(selection) = &mut self.selection {
+            std::mem::swap(&mut selection.anchor, &mut selection.cursor);
+        }
     }
 
     fn swap_selection_ends(&mut self) {
@@ -1391,6 +1405,28 @@ mod tests {
         assert!(view.label(80).contains("Select 1:1–1:2"));
         type_bytes(&mut view, b"\x1b[1;2B\x1b[1;2A");
         assert_eq!(view.selection.unwrap().cursor, (0, 1));
+    }
+
+    #[test]
+    fn ctrl_shift_arrows_start_or_extend_selection_by_word() {
+        let mut source = Screen::new(4, 8).unwrap();
+        Parser::new().advance(&mut source, b"alpha beta\r\nlast");
+
+        let mut view = HistoryView::new(&source).unwrap();
+        type_bytes(&mut view, b"\x1b[1;6C");
+        let selection = view.selection.unwrap();
+        assert_eq!(selection.anchor, (0, 0));
+        assert_eq!(selection.cursor, (0, 4));
+        type_bytes(&mut view, b"\x1b[1;6C");
+        assert_eq!(view.selection.unwrap().cursor, (1, 1));
+
+        let mut view = HistoryView::new(&source).unwrap();
+        type_bytes(&mut view, b"/beta\r\x1b[1;6D");
+        let selection = view.selection.unwrap();
+        assert_eq!(selection.anchor, (1, 1));
+        assert_eq!(selection.cursor, (0, 0));
+        type_bytes(&mut view, b"y");
+        assert_eq!(view.take_copy().unwrap(), osc52("alpha beta").unwrap());
     }
 
     #[test]
