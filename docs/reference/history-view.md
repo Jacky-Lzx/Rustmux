@@ -161,8 +161,11 @@ Alt-B/Alt-F encodings are accepted for movement; selection accepts
 `CSI 1;6 D/C`.
 Ctrl-U/Ctrl-D and Page Up/Page Down move by one pane height, while `g`/`G`
 extend to the snapshot's first/last row. Movement scrolls the
-frozen viewport as needed. Wheel events and unrelated history/search commands
-are ignored until the selection is completed or cancelled.
+frozen viewport as needed. Vertical movement retains its intended column across
+shorter rows and restores that column on a later long row; horizontal or
+boundary movement establishes a new intended column. Wheel events and unrelated
+history/search commands are ignored until the selection is completed or
+cancelled.
 
 The endpoints are inclusive and either end may precede the anchor. Selected
 cells are highlighted instead of the current search result. Press `y` to copy

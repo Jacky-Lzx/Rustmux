@@ -30,6 +30,7 @@ enum CopyStatus {
 struct Selection {
     anchor: (usize, usize),
     cursor: (usize, usize),
+    preferred_column: Option<usize>,
     source: SelectionSource,
 }
 
@@ -663,6 +664,7 @@ impl HistoryView {
         self.selection = Some(Selection {
             anchor,
             cursor,
+            preferred_column: None,
             source: SelectionSource::Keyboard,
         });
     }
@@ -673,16 +675,20 @@ impl HistoryView {
         };
         let total_rows = self.source.history_len() + self.source.dimensions().0;
         if rows != 0 {
+            let preferred_column = selection.preferred_column.unwrap_or(selection.cursor.1);
             selection.cursor.0 = selection
                 .cursor
                 .0
                 .saturating_add_signed(rows)
                 .min(total_rows.saturating_sub(1));
-            selection.cursor.1 = self.cell_at_or_before(selection.cursor.0, selection.cursor.1);
+            selection.cursor.1 = self.cell_at_or_before(selection.cursor.0, preferred_column);
+            selection.preferred_column = Some(preferred_column);
         } else if columns < 0 {
             selection.cursor = self.previous_cell(selection.cursor);
+            selection.preferred_column = None;
         } else {
             selection.cursor = self.next_cell(selection.cursor);
+            selection.preferred_column = None;
         }
         self.selection = Some(selection);
         self.reveal(selection.cursor.0);
@@ -714,6 +720,7 @@ impl HistoryView {
             return;
         };
         std::mem::swap(&mut selection.anchor, &mut selection.cursor);
+        selection.preferred_column = None;
         self.selection = Some(selection);
         self.reveal(selection.cursor.0);
     }
@@ -722,7 +729,9 @@ impl HistoryView {
         let Some(mut selection) = self.selection else {
             return;
         };
-        selection.cursor = (row, self.cell_at_or_before(row, selection.cursor.1));
+        let preferred_column = selection.preferred_column.unwrap_or(selection.cursor.1);
+        selection.cursor = (row, self.cell_at_or_before(row, preferred_column));
+        selection.preferred_column = Some(preferred_column);
         self.selection = Some(selection);
         self.reveal(row);
     }
@@ -731,6 +740,7 @@ impl HistoryView {
         let Some(mut selection) = self.selection else {
             return;
         };
+        selection.preferred_column = None;
         selection.cursor.1 = if end {
             self.last_cell(selection.cursor.0)
         } else {
@@ -743,6 +753,7 @@ impl HistoryView {
         let Some(mut selection) = self.selection else {
             return;
         };
+        selection.preferred_column = None;
         let original = selection.cursor;
         let mut cursor = original;
         if !self.cell_is_whitespace(cursor) {
@@ -951,6 +962,7 @@ impl HistoryView {
             self.selection = Some(Selection {
                 anchor: position,
                 cursor: position,
+                preferred_column: None,
                 source: SelectionSource::Mouse,
             });
             self.drag_scroll = None;
@@ -1286,6 +1298,7 @@ mod tests {
         view.selection = Some(Selection {
             anchor: (0, 2),
             cursor: (1, 1),
+            preferred_column: None,
             source: SelectionSource::Keyboard,
         });
         assert_eq!(view.copy_selection().unwrap(), osc52("cdEF").unwrap());
@@ -1294,6 +1307,7 @@ mod tests {
         view.selection = Some(Selection {
             anchor: (2, 1),
             cursor: (0, 2),
+            preferred_column: None,
             source: SelectionSource::Keyboard,
         });
         assert_eq!(view.copy_selection().unwrap(), osc52("cdEF\nha").unwrap());
@@ -1364,6 +1378,29 @@ mod tests {
     }
 
     #[test]
+    fn vertical_selection_restores_its_column_after_short_rows() {
+        let mut source = Screen::new(4, 8).unwrap();
+        Parser::new().advance(&mut source, b"abcdef\r\nxyz\r\nuvwxyz\r\nend");
+        let mut view = HistoryView::new(&source).unwrap();
+
+        type_bytes(&mut view, b"vlllllj");
+        assert_eq!(view.selection.unwrap().cursor, (1, 2));
+        type_bytes(&mut view, b"j");
+        assert_eq!(view.selection.unwrap().cursor, (2, 5));
+        type_bytes(&mut view, b"k");
+        assert_eq!(view.selection.unwrap().cursor, (1, 2));
+        type_bytes(&mut view, b"h");
+        assert_eq!(view.selection.unwrap().cursor, (1, 1));
+        type_bytes(&mut view, b"j");
+        assert_eq!(view.selection.unwrap().cursor, (2, 1));
+
+        type_bytes(&mut view, b"$gG");
+        assert_eq!(view.selection.unwrap().cursor, (3, 2));
+        type_bytes(&mut view, b"g");
+        assert_eq!(view.selection.unwrap().cursor, (0, 5));
+    }
+
+    #[test]
     fn selection_o_swaps_ends_and_reveals_the_new_cursor() {
         let mut source = Screen::new(2, 4).unwrap();
         Parser::new().advance(&mut source, b"top\r\nmid1\r\nmid2\r\nbottom");
@@ -1372,6 +1409,7 @@ mod tests {
         view.selection = Some(Selection {
             anchor: (0, 0),
             cursor: (last, 3),
+            preferred_column: None,
             source: SelectionSource::Keyboard,
         });
 
