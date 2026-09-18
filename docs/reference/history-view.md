@@ -175,6 +175,10 @@ that began from a match restores the retained search highlight. `q` or Ctrl-C ex
 After selection ends, plain `y` again copies the retained search match when one
 is active, or the complete visible viewport otherwise.
 
+The selection status keeps its coordinate range visible and shortens movement
+hints as the pane narrows. At the smallest widths it falls back to a clipped
+`Sel row:column–row:column` label without emitting a partial Unicode character.
+
 Selection copies complete wide glyphs and combining suffixes. It joins rows
 created by soft wrapping without a newline and inserts `\n` across explicit hard
 line boundaries. Unused padding, clipped glyphs, styles, the bar and other panes

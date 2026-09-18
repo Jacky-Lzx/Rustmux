@@ -267,13 +267,28 @@ impl HistoryView {
             .filter(|selection| selection.source == SelectionSource::Keyboard)
         {
             let (start, end) = ordered(selection.anchor, selection.cursor);
-            return format!(
-                "Select {}:{}–{}:{} · arrows/hjkl:extend b/e:word 0/$:line o:swap y:copy v:cancel",
+            let range = format!(
+                "{}:{}–{}:{}",
                 start.0 + 1,
                 start.1 + 1,
                 end.0 + 1,
                 end.1 + 1
             );
+            let candidates = [
+                format!(
+                    "Select {range} · arrows/hjkl:extend b/e:word 0/$:line o:swap y:copy v:cancel"
+                ),
+                format!("Select {range} · hjkl b/e 0/$ o y v"),
+                format!("Sel {range} · y/v"),
+                format!("Sel {range}"),
+            ];
+            if let Some(label) = candidates
+                .iter()
+                .find(|label| label.chars().count() <= columns)
+            {
+                return label.clone();
+            }
+            return candidates[3].chars().take(columns).collect();
         }
         let marker = self.direction.marker();
         let search = if self.query.is_empty() {
@@ -1447,6 +1462,22 @@ mod tests {
         assert!(view.label(80).contains("Select 1:1–1:2"));
         type_bytes(&mut view, b"\x1b[1;2B\x1b[1;2A");
         assert_eq!(view.selection.unwrap().cursor, (0, 1));
+    }
+
+    #[test]
+    fn selection_label_keeps_coordinates_and_actions_within_available_width() {
+        let mut source = Screen::new(2, 4).unwrap();
+        Parser::new().advance(&mut source, b"abcd\r\nnext");
+        let mut view = HistoryView::new(&source).unwrap();
+        type_bytes(&mut view, b"vl");
+
+        assert!(view.label(100).contains("arrows/hjkl:extend"));
+        assert!(view.label(48).contains("hjkl b/e 0/$ o y v"));
+        assert_eq!(view.label(24), "Sel 1:1–1:2 · y/v");
+        assert_eq!(view.label(11), "Sel 1:1–1:2");
+        for columns in 0..=100 {
+            assert!(view.label(columns).chars().count() <= columns);
+        }
     }
 
     #[test]
