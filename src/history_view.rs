@@ -267,7 +267,7 @@ impl HistoryView {
         {
             let (start, end) = ordered(selection.anchor, selection.cursor);
             return format!(
-                "Select {}:{}–{}:{} · arrows/hjkl:extend o:swap y:copy v:cancel",
+                "Select {}:{}–{}:{} · arrows/hjkl:extend b/e:word o:swap y:copy v:cancel",
                 start.0 + 1,
                 start.1 + 1,
                 end.0 + 1,
@@ -483,6 +483,8 @@ impl HistoryView {
                 b'l' => self.move_selection(1, 0),
                 b'k' => self.move_selection(0, -1),
                 b'j' => self.move_selection(0, 1),
+                b'b' => self.move_selection_word(false),
+                b'e' => self.move_selection_word(true),
                 b'o' => self.swap_selection_ends(),
                 1 => self.move_selection_to_line_end(false),
                 5 => self.move_selection_to_line_end(true),
@@ -1477,6 +1479,10 @@ mod tests {
         type_bytes(&mut view, b"\x1bb");
         assert_eq!(view.selection.unwrap().cursor, (0, 6)); // beta start
         type_bytes(&mut view, b"\x1b[1;5D");
+        assert_eq!(view.selection.unwrap().cursor, (0, 0)); // alpha start
+        type_bytes(&mut view, b"ee");
+        assert_eq!(view.selection.unwrap().cursor, (1, 1)); // beta end
+        type_bytes(&mut view, b"bb");
         assert_eq!(view.selection.unwrap().cursor, (0, 0)); // alpha start
     }
 
