@@ -26,6 +26,7 @@ coordinates; exiting restores the live application's mouse modes.
 | `v` | Start or cancel keyboard text selection |
 | `y` / Enter while selecting | Copy the selection through OSC 52 and end selection |
 | Shift-Arrow | Start a keyboard selection, or extend its active end |
+| Shift-Home / Shift-End | Start or extend a selection to the current row boundary |
 | Ctrl-Shift-Left / Ctrl-Shift-Right | Start or extend a selection by word |
 | `o` while selecting | Swap the anchor and active end |
 | `b` / `e` while selecting | Extend to the previous / next word boundary |
@@ -153,7 +154,9 @@ Shift-Right/Shift-Down extend from its end. Press `o` to swap the anchor and
 active end so either side can be extended; the new active end is scrolled into
 view. `0`/`$`, Home/End or Ctrl-A/Ctrl-E move the active end to the first or last
 retained cell of its current physical row; common CSI and application-mode
-Home/End sequences are accepted. Ctrl-Left/Ctrl-Right move to word boundaries,
+Home/End sequences are accepted. Shift-Home/Shift-End start a selection when
+needed and extend to the same boundaries; `CSI 1;2 H/F` encodings are accepted.
+Ctrl-Left/Ctrl-Right move to word boundaries,
 treating hard line breaks and whitespace as separators while allowing a word to
 continue across a soft wrap; `b` and `e` provide terminal-independent
 equivalents while a selection is active. Ctrl-Shift-Left/Ctrl-Shift-Right perform the same movement

@@ -360,6 +360,12 @@ impl HistoryView {
                     b"\x1b[1;6C" if !self.paste && self.editor.is_none() => {
                         self.extend_selection_word(true)
                     }
+                    b"\x1b[1;2H" if !self.paste && self.editor.is_none() => {
+                        self.extend_selection_to_line_end(false)
+                    }
+                    b"\x1b[1;2F" if !self.paste && self.editor.is_none() => {
+                        self.extend_selection_to_line_end(true)
+                    }
                     b"\x1b[A" | b"\x1bOA" if !self.paste => {
                         if let Some(editor) = &mut self.editor {
                             editor.recall(&self.queries, true);
@@ -717,6 +723,11 @@ impl HistoryView {
     fn extend_selection_word(&mut self, forward: bool) {
         self.prepare_selection(!forward);
         self.move_selection_word(forward);
+    }
+
+    fn extend_selection_to_line_end(&mut self, end: bool) {
+        self.prepare_selection(!end);
+        self.move_selection_to_line_end(end);
     }
 
     fn prepare_selection(&mut self, reverse: bool) {
@@ -1528,6 +1539,32 @@ mod tests {
         let mut wide = HistoryView::new(&wide).unwrap();
         type_bytes(&mut wide, b"v$");
         assert_eq!(wide.selection.unwrap().cursor, (0, 1));
+    }
+
+    #[test]
+    fn shift_home_and_end_start_or_extend_selection_to_line_boundaries() {
+        let mut source = Screen::new(2, 6).unwrap();
+        Parser::new().advance(&mut source, "A中B  \r\nnext".as_bytes());
+
+        let mut view = HistoryView::new(&source).unwrap();
+        type_bytes(&mut view, b"\x1b[1;2F");
+        let selection = view.selection.unwrap();
+        assert_eq!(selection.anchor, (0, 0));
+        assert_eq!(selection.cursor, (0, 5));
+
+        let mut view = HistoryView::new(&source).unwrap();
+        type_bytes(&mut view, b"/\xe4\xb8\xadB\r\x1b[1;2H");
+        let selection = view.selection.unwrap();
+        assert_eq!(selection.anchor, (0, 3));
+        assert_eq!(selection.cursor, (0, 0));
+        type_bytes(&mut view, b"y");
+        assert_eq!(view.take_copy().unwrap(), osc52("A中B").unwrap());
+
+        let mut view = HistoryView::new(&source).unwrap();
+        type_bytes(&mut view, b"/\xe4\xb8\xad\r\x1b[1;2F");
+        let selection = view.selection.unwrap();
+        assert_eq!(selection.anchor, (0, 1));
+        assert_eq!(selection.cursor, (0, 5));
     }
 
     #[test]
