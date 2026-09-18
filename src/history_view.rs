@@ -372,6 +372,12 @@ impl HistoryView {
                     b"\x1b[6;2~" if !self.paste && self.editor.is_none() => {
                         self.extend_selection(0, self.source.dimensions().0 as isize)
                     }
+                    b"\x1b[1;6H" if !self.paste && self.editor.is_none() => {
+                        self.extend_selection_to_snapshot_end(false)
+                    }
+                    b"\x1b[1;6F" if !self.paste && self.editor.is_none() => {
+                        self.extend_selection_to_snapshot_end(true)
+                    }
                     b"\x1b[A" | b"\x1bOA" if !self.paste => {
                         if let Some(editor) = &mut self.editor {
                             editor.recall(&self.queries, true);
@@ -734,6 +740,27 @@ impl HistoryView {
     fn extend_selection_to_line_end(&mut self, end: bool) {
         self.prepare_selection(!end);
         self.move_selection_to_line_end(end);
+    }
+
+    fn extend_selection_to_snapshot_end(&mut self, end: bool) {
+        self.prepare_selection(!end);
+        let Some(mut selection) = self.selection else {
+            return;
+        };
+        let total_rows = self.source.history_len() + self.source.dimensions().0;
+        selection.preferred_column = None;
+        selection.cursor = if end {
+            (0..total_rows)
+                .rev()
+                .find(|&row| self.first_cell(row).is_some())
+                .map_or((0, 0), |row| (row, self.last_cell(row)))
+        } else {
+            (0..total_rows)
+                .find_map(|row| self.first_cell(row).map(|column| (row, column)))
+                .unwrap_or((0, 0))
+        };
+        self.selection = Some(selection);
+        self.reveal(selection.cursor.0);
     }
 
     fn prepare_selection(&mut self, reverse: bool) {
@@ -1595,6 +1622,28 @@ mod tests {
         type_bytes(&mut view, b"\x1b[6;2~");
         assert_eq!(view.selection.unwrap().cursor, (3, 0));
         assert_eq!(view.offset, 1);
+    }
+
+    #[test]
+    fn ctrl_shift_home_and_end_select_to_snapshot_content_boundaries() {
+        let mut source = Screen::new(4, 6).unwrap();
+        Parser::new().advance(&mut source, "A中B  \r\nlast".as_bytes());
+
+        let mut view = HistoryView::new(&source).unwrap();
+        type_bytes(&mut view, b"\x1b[1;6F");
+        let selection = view.selection.unwrap();
+        assert_eq!(selection.anchor, (0, 0));
+        assert_eq!(selection.cursor, (1, 3));
+        type_bytes(&mut view, b"y");
+        assert_eq!(view.take_copy().unwrap(), osc52("A中B  \nlast").unwrap());
+
+        let mut view = HistoryView::new(&source).unwrap();
+        type_bytes(&mut view, b"/last\r\x1b[1;6H");
+        let selection = view.selection.unwrap();
+        assert_eq!(selection.anchor, (1, 3));
+        assert_eq!(selection.cursor, (0, 0));
+        type_bytes(&mut view, b"y");
+        assert_eq!(view.take_copy().unwrap(), osc52("A中B  \nlast").unwrap());
     }
 
     #[test]

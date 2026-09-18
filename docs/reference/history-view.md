@@ -29,6 +29,7 @@ coordinates; exiting restores the live application's mouse modes.
 | Shift-Home / Shift-End | Start or extend a selection to the current row boundary |
 | Shift-Page Up / Shift-Page Down | Start or extend a selection by one pane height |
 | Ctrl-Shift-Left / Ctrl-Shift-Right | Start or extend a selection by word |
+| Ctrl-Shift-Home / Ctrl-Shift-End | Start or extend to the snapshot's first / last retained cell |
 | `o` while selecting | Swap the anchor and active end |
 | `b` / `e` while selecting | Extend to the previous / next word boundary |
 | `0` / `$` while selecting | Extend to the current physical row's first / last retained cell |
@@ -173,6 +174,10 @@ shorter rows and restores that column on a later long row; horizontal or
 boundary movement establishes a new intended column. Wheel events and unrelated
 history/search commands are ignored until the selection is completed or
 cancelled.
+
+Ctrl-Shift-Home/Ctrl-Shift-End start a selection when needed and extend it to
+the snapshot's first or last retained cell. `CSI 1;6 H/F` encodings are
+accepted. Unwritten screen-tail rows are skipped.
 
 The endpoints are inclusive and either end may precede the anchor. Selected
 cells are highlighted instead of the current search result. Press `y` or Enter
