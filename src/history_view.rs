@@ -267,7 +267,7 @@ impl HistoryView {
         {
             let (start, end) = ordered(selection.anchor, selection.cursor);
             return format!(
-                "Select {}:{}–{}:{} · arrows/hjkl:extend b/e:word o:swap y:copy v:cancel",
+                "Select {}:{}–{}:{} · arrows/hjkl:extend b/e:word 0/$:line o:swap y:copy v:cancel",
                 start.0 + 1,
                 start.1 + 1,
                 end.0 + 1,
@@ -485,6 +485,8 @@ impl HistoryView {
                 b'j' => self.move_selection(0, 1),
                 b'b' => self.move_selection_word(false),
                 b'e' => self.move_selection_word(true),
+                b'0' => self.move_selection_to_line_end(false),
+                b'$' => self.move_selection_to_line_end(true),
                 b'o' => self.swap_selection_ends(),
                 1 => self.move_selection_to_line_end(false),
                 5 => self.move_selection_to_line_end(true),
@@ -1446,12 +1448,16 @@ mod tests {
         assert_eq!(view.selection.unwrap().cursor, (0, 0));
         type_bytes(&mut view, &[5, 1]);
         assert_eq!(view.selection.unwrap().cursor, (0, 0));
+        type_bytes(&mut view, b"$");
+        assert_eq!(view.selection.unwrap().cursor, (0, 5));
+        type_bytes(&mut view, b"0");
+        assert_eq!(view.selection.unwrap().cursor, (0, 0));
 
         // End stops on the wide glyph's base when its placeholder is the row tail.
         let mut wide = Screen::new(2, 3).unwrap();
         Parser::new().advance(&mut wide, "A中\r\nend".as_bytes());
         let mut wide = HistoryView::new(&wide).unwrap();
-        type_bytes(&mut wide, b"v\x1b[F");
+        type_bytes(&mut wide, b"v$");
         assert_eq!(wide.selection.unwrap().cursor, (0, 1));
     }
 
