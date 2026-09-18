@@ -326,6 +326,18 @@ impl HistoryView {
                 match self.escape.as_slice() {
                     b"\x1b[200~" => self.paste = true,
                     b"\x1b[201~" => self.paste = false,
+                    b"\x1b[1;2A" if !self.paste && self.editor.is_none() => {
+                        self.extend_selection(0, -1)
+                    }
+                    b"\x1b[1;2B" if !self.paste && self.editor.is_none() => {
+                        self.extend_selection(0, 1)
+                    }
+                    b"\x1b[1;2D" if !self.paste && self.editor.is_none() => {
+                        self.extend_selection(-1, 0)
+                    }
+                    b"\x1b[1;2C" if !self.paste && self.editor.is_none() => {
+                        self.extend_selection(1, 0)
+                    }
                     b"\x1b[A" | b"\x1bOA" if !self.paste => {
                         if let Some(editor) = &mut self.editor {
                             editor.recall(&self.queries, true);
@@ -664,6 +676,19 @@ impl HistoryView {
         }
         self.selection = Some(selection);
         self.reveal(selection.cursor.0);
+    }
+
+    fn extend_selection(&mut self, columns: isize, rows: isize) {
+        self.clear_copy_status();
+        if !self.keyboard_selection() {
+            self.toggle_selection();
+            if (rows < 0 || (rows == 0 && columns < 0))
+                && let Some(selection) = &mut self.selection
+            {
+                std::mem::swap(&mut selection.anchor, &mut selection.cursor);
+            }
+        }
+        self.move_selection(columns, rows);
     }
 
     fn swap_selection_ends(&mut self) {
@@ -1343,6 +1368,29 @@ mod tests {
         assert_eq!(selection.anchor, (0, 0));
         assert_eq!(selection.cursor, (last, 3));
         assert_eq!(view.offset, 0);
+    }
+
+    #[test]
+    fn shift_arrows_start_or_extend_selection_from_the_directional_end() {
+        let mut source = Screen::new(2, 4).unwrap();
+        Parser::new().advance(&mut source, b"abcdEF\r\nhard\r\nend");
+        let mut view = HistoryView::new(&source).unwrap();
+
+        type_bytes(&mut view, b"/cdEF\r\x1b[1;2D");
+        let selection = view.selection.unwrap();
+        assert_eq!(selection.anchor, (1, 1));
+        assert_eq!(selection.cursor, (0, 1));
+        type_bytes(&mut view, b"y");
+        assert_eq!(view.take_copy().unwrap(), osc52("bcdEF").unwrap());
+
+        let mut view = HistoryView::new(&source).unwrap();
+        type_bytes(&mut view, b"\x1b[1;2C");
+        let selection = view.selection.unwrap();
+        assert_eq!(selection.anchor, (0, 0));
+        assert_eq!(selection.cursor, (0, 1));
+        assert!(view.label(80).contains("Select 1:1–1:2"));
+        type_bytes(&mut view, b"\x1b[1;2B\x1b[1;2A");
+        assert_eq!(view.selection.unwrap().cursor, (0, 1));
     }
 
     #[test]

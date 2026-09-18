@@ -1643,6 +1643,14 @@ try:
             assert time.monotonic() < deadline, bytes(s.output[-1000:])
         selected_text = base64.b64decode(selected.group(1), validate=True)
         assert selected_text == b"SELECT_TARGET", (selected_text, s.last_rows, bytes(s.output[-500:]))
+        s.output.clear()
+        s.send(b"\x1b[1;2Cy")
+        deadline = time.monotonic() + 3
+        while not (selected := re.search(rb"\x1b\]52;c;([A-Za-z0-9+/=]*)\x07", s.output)):
+            s.read()
+            assert time.monotonic() < deadline, bytes(s.output[-1000:])
+        selected_text = base64.b64decode(selected.group(1), validate=True)
+        assert selected_text == b"SE", (selected_text, s.last_rows, bytes(s.output[-500:]))
         s.send(b"g")
         s.expect(b"HIST_00")
         s.output.clear()
