@@ -350,6 +350,16 @@ impl HistoryView {
                     b"\x1b[C" | b"\x1bOC" if !self.paste && self.keyboard_selection() => {
                         self.move_selection(1, 0)
                     }
+                    b"\x1b[1;5D" | b"\x1b[5D" | b"\x1bb"
+                        if !self.paste && self.keyboard_selection() =>
+                    {
+                        self.move_selection_word(false)
+                    }
+                    b"\x1b[1;5C" | b"\x1b[5C" | b"\x1bf"
+                        if !self.paste && self.keyboard_selection() =>
+                    {
+                        self.move_selection_word(true)
+                    }
                     b"\x1b[H" | b"\x1bOH" | b"\x1b[1~" | b"\x1b[7~"
                         if !self.paste && self.keyboard_selection() =>
                     {
@@ -674,6 +684,87 @@ impl HistoryView {
             self.first_cell(selection.cursor.0).unwrap_or(0)
         };
         self.selection = Some(selection);
+    }
+
+    fn move_selection_word(&mut self, forward: bool) {
+        let Some(mut selection) = self.selection else {
+            return;
+        };
+        let original = selection.cursor;
+        let mut cursor = original;
+        if !self.cell_is_whitespace(cursor) {
+            while let Some((next, hard_boundary)) = self.adjacent_cell(cursor, forward) {
+                if hard_boundary || self.cell_is_whitespace(next) {
+                    break;
+                }
+                cursor = next;
+            }
+            if cursor != original {
+                selection.cursor = cursor;
+                self.selection = Some(selection);
+                self.reveal(cursor.0);
+                return;
+            }
+        }
+
+        let mut next = self.adjacent_cell(cursor, forward);
+        while let Some((candidate, _)) = next {
+            cursor = candidate;
+            if !self.cell_is_whitespace(cursor) {
+                while let Some((candidate, hard_boundary)) = self.adjacent_cell(cursor, forward) {
+                    if hard_boundary || self.cell_is_whitespace(candidate) {
+                        break;
+                    }
+                    cursor = candidate;
+                }
+                break;
+            }
+            next = self.adjacent_cell(cursor, forward);
+        }
+        selection.cursor = cursor;
+        self.selection = Some(selection);
+        self.reveal(cursor.0);
+    }
+
+    fn adjacent_cell(
+        &self,
+        (row, column): (usize, usize),
+        forward: bool,
+    ) -> Option<((usize, usize), bool)> {
+        let total_rows = self.source.history_len() + self.source.dimensions().0;
+        if forward {
+            if let Some(column) = (column + 1..self.source.dimensions().1)
+                .find(|&column| self.cell_is_base(row, column))
+            {
+                return Some(((row, column), false));
+            }
+            let mut hard_boundary = false;
+            for next_row in row + 1..total_rows {
+                hard_boundary |= !self.row_data(next_row).2;
+                if let Some(column) = self.first_cell(next_row) {
+                    return Some(((next_row, column), hard_boundary));
+                }
+            }
+        } else {
+            if let Some(column) = (0..column)
+                .rev()
+                .find(|&column| self.cell_is_base(row, column))
+            {
+                return Some(((row, column), false));
+            }
+            let mut hard_boundary = false;
+            for previous_row in (0..row).rev() {
+                hard_boundary |= !self.row_data(previous_row + 1).2;
+                if self.first_cell(previous_row).is_some() {
+                    return Some(((previous_row, self.last_cell(previous_row)), hard_boundary));
+                }
+            }
+        }
+        None
+    }
+
+    fn cell_is_whitespace(&self, (row, column): (usize, usize)) -> bool {
+        self.row_data(row).0[column].character.is_whitespace()
     }
 
     fn first_cell(&self, row: usize) -> Option<usize> {
@@ -1235,6 +1326,33 @@ mod tests {
         let mut wide = HistoryView::new(&wide).unwrap();
         type_bytes(&mut wide, b"v\x1b[F");
         assert_eq!(wide.selection.unwrap().cursor, (0, 1));
+    }
+
+    #[test]
+    fn selection_word_motion_crosses_soft_wraps_and_hard_line_boundaries() {
+        let mut source = Screen::new(4, 8).unwrap();
+        Parser::new().advance(&mut source, "alpha beta\r\n中 delta".as_bytes());
+        let mut view = HistoryView::new(&source).unwrap();
+        assert!(view.row_data(1).2); // beta continues across the soft wrap.
+        assert!(!view.row_data(2).2); // The wide word follows a hard break.
+
+        type_bytes(&mut view, b"v\x1b[1;5C");
+        assert_eq!(view.selection.unwrap().cursor, (0, 4)); // alpha
+        type_bytes(&mut view, b"\x1b[5C");
+        assert_eq!(view.selection.unwrap().cursor, (1, 1)); // beta
+        type_bytes(&mut view, b"\x1bf");
+        assert_eq!(view.selection.unwrap().cursor, (2, 0)); // wide glyph base
+        type_bytes(&mut view, b"\x1b[1;5C");
+        assert_eq!(view.selection.unwrap().cursor, (2, 7)); // delta
+
+        type_bytes(&mut view, b"\x1b[1;5D");
+        assert_eq!(view.selection.unwrap().cursor, (2, 3)); // delta start
+        type_bytes(&mut view, b"\x1b[5D");
+        assert_eq!(view.selection.unwrap().cursor, (2, 0)); // wide glyph base
+        type_bytes(&mut view, b"\x1bb");
+        assert_eq!(view.selection.unwrap().cursor, (0, 6)); // beta start
+        type_bytes(&mut view, b"\x1b[1;5D");
+        assert_eq!(view.selection.unwrap().cursor, (0, 0)); // alpha start
     }
 
     #[test]

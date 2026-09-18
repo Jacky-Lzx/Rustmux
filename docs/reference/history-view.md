@@ -25,6 +25,7 @@ coordinates; exiting restores the live application's mouse modes.
 | `y` | Copy the current search match, or the visible snapshot when no match is active, through OSC 52 |
 | `v` | Start or cancel keyboard text selection |
 | Home / End, Ctrl-A / Ctrl-E while selecting | Extend to the current row's first / last retained cell |
+| Ctrl-Left / Ctrl-Right while selecting | Extend to the previous / next word boundary |
 | `q` / Ctrl-C | Exit to the live screen |
 | Esc | Cancel selection, then search; exit when neither is active |
 
@@ -141,8 +142,11 @@ meaningful cell in the viewport's top row. `h/j/k/l` or the arrow keys move its 
 horizontal movement wraps across row boundaries and skips wide-character
 placeholder cells. Home/End or Ctrl-A/Ctrl-E move the active end to the first or
 last retained cell of its current physical row; common CSI and application-mode
-Home/End sequences are accepted. Ctrl-U/Ctrl-D and Page Up/Page Down move by one pane height,
-while `g`/`G` extend to the snapshot's first/last row. Movement scrolls the
+Home/End sequences are accepted. Ctrl-Left/Ctrl-Right move to word boundaries, treating hard line breaks and
+whitespace as separators while allowing a word to continue across a soft wrap.
+Both `CSI 1;5 D/C`, `CSI 5 D/C` and Alt-B/Alt-F encodings are accepted.
+Ctrl-U/Ctrl-D and Page Up/Page Down move by one pane height, while `g`/`G`
+extend to the snapshot's first/last row. Movement scrolls the
 frozen viewport as needed. Wheel events and unrelated history/search commands
 are ignored until the selection is completed or cancelled.
 
