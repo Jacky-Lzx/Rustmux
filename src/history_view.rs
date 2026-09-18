@@ -267,7 +267,7 @@ impl HistoryView {
         {
             let (start, end) = ordered(selection.anchor, selection.cursor);
             return format!(
-                "Select {}:{}–{}:{} · arrows/hjkl:extend y:copy v:cancel",
+                "Select {}:{}–{}:{} · arrows/hjkl:extend o:swap y:copy v:cancel",
                 start.0 + 1,
                 start.1 + 1,
                 end.0 + 1,
@@ -465,6 +465,7 @@ impl HistoryView {
                 b'l' => self.move_selection(1, 0),
                 b'k' => self.move_selection(0, -1),
                 b'j' => self.move_selection(0, 1),
+                b'o' => self.swap_selection_ends(),
                 1 => self.move_selection_to_line_end(false),
                 5 => self.move_selection_to_line_end(true),
                 21 => self.move_selection(0, -height),
@@ -661,6 +662,15 @@ impl HistoryView {
         } else {
             selection.cursor = self.next_cell(selection.cursor);
         }
+        self.selection = Some(selection);
+        self.reveal(selection.cursor.0);
+    }
+
+    fn swap_selection_ends(&mut self) {
+        let Some(mut selection) = self.selection else {
+            return;
+        };
+        std::mem::swap(&mut selection.anchor, &mut selection.cursor);
         self.selection = Some(selection);
         self.reveal(selection.cursor.0);
     }
@@ -1256,6 +1266,12 @@ mod tests {
         let selection = view.selection.unwrap();
         assert_eq!(selection.anchor, (0, 2));
         assert_eq!(selection.cursor, (1, 1));
+        type_bytes(&mut view, b"ohy");
+        assert_eq!(view.take_copy().unwrap(), osc52("bcdEF").unwrap());
+        assert!(view.selection.is_none());
+        assert_eq!(view.selected, Some(0));
+
+        type_bytes(&mut view, b"v");
         type_bytes(&mut view, b"v");
         assert!(view.selection.is_none());
         assert_eq!(view.selected, Some(0));
@@ -1302,6 +1318,31 @@ mod tests {
         assert_eq!(view.offset, source.history_len());
         type_bytes(&mut view, b"v");
         assert!(view.selection.is_none());
+    }
+
+    #[test]
+    fn selection_o_swaps_ends_and_reveals_the_new_cursor() {
+        let mut source = Screen::new(2, 4).unwrap();
+        Parser::new().advance(&mut source, b"top\r\nmid1\r\nmid2\r\nbottom");
+        let mut view = HistoryView::new(&source).unwrap();
+        let last = source.history_len() + source.dimensions().0 - 1;
+        view.selection = Some(Selection {
+            anchor: (0, 0),
+            cursor: (last, 3),
+            source: SelectionSource::Keyboard,
+        });
+
+        type_bytes(&mut view, b"o");
+        let selection = view.selection.unwrap();
+        assert_eq!(selection.anchor, (last, 3));
+        assert_eq!(selection.cursor, (0, 0));
+        assert_eq!(view.offset, source.history_len());
+
+        type_bytes(&mut view, b"o");
+        let selection = view.selection.unwrap();
+        assert_eq!(selection.anchor, (0, 0));
+        assert_eq!(selection.cursor, (last, 3));
+        assert_eq!(view.offset, 0);
     }
 
     #[test]

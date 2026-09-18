@@ -1618,7 +1618,7 @@ try:
             s.read()
             assert time.monotonic() < deadline, bytes(s.output[-1000:])
         s.output.clear()
-        s.send(b"vy")
+        s.send(b"voy")
         deadline = time.monotonic() + 3
         while not (selected := re.search(rb"\x1b\]52;c;([A-Za-z0-9+/=]*)\x07", s.output)):
             s.read()
