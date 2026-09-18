@@ -276,10 +276,10 @@ impl HistoryView {
             );
             let candidates = [
                 format!(
-                    "Select {range} · arrows/hjkl:extend b/e:word 0/$:line o:swap y:copy v:cancel"
+                    "Select {range} · arrows/hjkl:extend b/e:word 0/$:line o:swap y/Enter:copy v:cancel"
                 ),
-                format!("Select {range} · hjkl b/e 0/$ o y v"),
-                format!("Sel {range} · y/v"),
+                format!("Select {range} · hjkl b/e 0/$ o y/Enter v"),
+                format!("Sel {range} · y/Enter v"),
                 format!("Sel {range}"),
             ];
             if let Some(label) = candidates
@@ -488,7 +488,7 @@ impl HistoryView {
         if self.keyboard_selection() {
             let height = self.source.dimensions().0.max(1) as isize;
             match byte {
-                b'y' => {
+                b'y' | b'\r' | b'\n' => {
                     let sequence = self.copy_selection();
                     self.stage_copy(sequence);
                     self.selection = None;
@@ -1472,8 +1472,8 @@ mod tests {
         type_bytes(&mut view, b"vl");
 
         assert!(view.label(100).contains("arrows/hjkl:extend"));
-        assert!(view.label(48).contains("hjkl b/e 0/$ o y v"));
-        assert_eq!(view.label(24), "Sel 1:1–1:2 · y/v");
+        assert!(view.label(48).contains("hjkl b/e 0/$ o y/Enter v"));
+        assert_eq!(view.label(24), "Sel 1:1–1:2 · y/Enter v");
         assert_eq!(view.label(11), "Sel 1:1–1:2");
         for columns in 0..=100 {
             assert!(view.label(columns).chars().count() <= columns);
@@ -1573,6 +1573,10 @@ mod tests {
         type_bytes(&mut view, b"y");
         assert!(view.take_copy().is_some());
         type_bytes(&mut view, b"vy");
+        assert_eq!(view.take_copy().unwrap(), osc52("a").unwrap());
+        type_bytes(&mut view, b"vl\r");
+        assert_eq!(view.take_copy().unwrap(), osc52("ab").unwrap());
+        type_bytes(&mut view, b"v\n");
         assert_eq!(view.take_copy().unwrap(), osc52("a").unwrap());
         type_bytes(&mut view, b"v/");
         assert!(view.editor.is_none());

@@ -24,6 +24,7 @@ coordinates; exiting restores the live application's mouse modes.
 | `n` / `N` | Repeat in the submitted search direction / opposite direction |
 | `y` | Copy the current search match, or the visible snapshot when no match is active, through OSC 52 |
 | `v` | Start or cancel keyboard text selection |
+| `y` / Enter while selecting | Copy the selection through OSC 52 and end selection |
 | Shift-Arrow | Start a keyboard selection, or extend its active end |
 | Ctrl-Shift-Left / Ctrl-Shift-Right | Start or extend a selection by word |
 | `o` while selecting | Swap the anchor and active end |
@@ -168,10 +169,11 @@ history/search commands are ignored until the selection is completed or
 cancelled.
 
 The endpoints are inclusive and either end may precede the anchor. Selected
-cells are highlighted instead of the current search result. Press `y` to copy
-the selected text through OSC 52, end selection and remain in history mode;
-press `v` or Esc to cancel without copying. Cancelling or copying a selection
-that began from a match restores the retained search highlight. `q` or Ctrl-C exits history directly.
+cells are highlighted instead of the current search result. Press `y` or Enter
+to copy the selected text through OSC 52, end selection and remain in history
+mode; press `v` or Esc to cancel without copying. Cancelling or copying a
+selection that began from a match restores the retained search highlight. `q`
+or Ctrl-C exits history directly.
 After selection ends, plain `y` again copies the retained search match when one
 is active, or the complete visible viewport otherwise.
 
