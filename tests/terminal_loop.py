@@ -1694,6 +1694,18 @@ try:
         s.send(b"g")
         s.expect(b"HIST_00")
         s.output.clear()
+        s.send(b"\x1b[6;2~\r")
+        deadline = time.monotonic() + 3
+        while not (selected := re.search(rb"\x1b\]52;c;([A-Za-z0-9+/=]*)\x07", s.output)):
+            s.read()
+            assert time.monotonic() < deadline, bytes(s.output[-1000:])
+        selected_text = base64.b64decode(selected.group(1), validate=True)
+        assert b"\nHIST_00\n" in selected_text, (selected_text, s.last_rows, bytes(s.output[-500:]))
+        assert selected_text.endswith(b"\nH"), (selected_text, s.last_rows, bytes(s.output[-500:]))
+        assert selected_text.count(b"\n") >= 2, (selected_text, s.last_rows, bytes(s.output[-500:]))
+        s.send(b"g")
+        s.expect(b"HIST_00")
+        s.output.clear()
         # HIST_00 begins at outer column 42, row 13 in this frozen split.
         # Dragging over its first four cells copies HIST and leaves shell input untouched.
         s.send(b"\x1b[<0;42;13M\x1b[<32;45;13M\x1b[<0;45;13m")

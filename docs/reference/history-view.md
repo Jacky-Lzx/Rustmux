@@ -27,6 +27,7 @@ coordinates; exiting restores the live application's mouse modes.
 | `y` / Enter while selecting | Copy the selection through OSC 52 and end selection |
 | Shift-Arrow | Start a keyboard selection, or extend its active end |
 | Shift-Home / Shift-End | Start or extend a selection to the current row boundary |
+| Shift-Page Up / Shift-Page Down | Start or extend a selection by one pane height |
 | Ctrl-Shift-Left / Ctrl-Shift-Right | Start or extend a selection by word |
 | `o` while selecting | Swap the anchor and active end |
 | `b` / `e` while selecting | Extend to the previous / next word boundary |
@@ -164,7 +165,9 @@ while starting a selection when needed. `CSI 1;5 D/C`, `CSI 5 D/C` and
 Alt-B/Alt-F encodings are accepted for movement; selection accepts
 `CSI 1;6 D/C`.
 Ctrl-U/Ctrl-D and Page Up/Page Down move by one pane height, while `g`/`G`
-extend to the snapshot's first/last row. Movement scrolls the
+extend to the snapshot's first/last row. Shift-Page Up/Shift-Page Down start a
+selection when needed and extend it by one pane height; `CSI 5;2~` and
+`CSI 6;2~` encodings are accepted. Movement scrolls the
 frozen viewport as needed. Vertical movement retains its intended column across
 shorter rows and restores that column on a later long row; horizontal or
 boundary movement establishes a new intended column. Wheel events and unrelated

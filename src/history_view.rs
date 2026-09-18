@@ -366,6 +366,12 @@ impl HistoryView {
                     b"\x1b[1;2F" if !self.paste && self.editor.is_none() => {
                         self.extend_selection_to_line_end(true)
                     }
+                    b"\x1b[5;2~" if !self.paste && self.editor.is_none() => {
+                        self.extend_selection(0, -(self.source.dimensions().0 as isize))
+                    }
+                    b"\x1b[6;2~" if !self.paste && self.editor.is_none() => {
+                        self.extend_selection(0, self.source.dimensions().0 as isize)
+                    }
                     b"\x1b[A" | b"\x1bOA" if !self.paste => {
                         if let Some(editor) = &mut self.editor {
                             editor.recall(&self.queries, true);
@@ -1565,6 +1571,30 @@ mod tests {
         let selection = view.selection.unwrap();
         assert_eq!(selection.anchor, (0, 1));
         assert_eq!(selection.cursor, (0, 5));
+    }
+
+    #[test]
+    fn shift_page_starts_or_extends_selection_by_one_pane() {
+        let mut source = Screen::new(2, 5).unwrap();
+        Parser::new().advance(&mut source, b"row0\r\nrow1\r\nrow2\r\nrow3\r\nrow4");
+
+        let mut view = HistoryView::new(&source).unwrap();
+        type_bytes(&mut view, b"\x1b[6;2~");
+        let selection = view.selection.unwrap();
+        assert_eq!(selection.anchor, (1, 0));
+        assert_eq!(selection.cursor, (3, 0));
+        assert_eq!(view.offset, 1);
+
+        let mut view = HistoryView::new(&source).unwrap();
+        type_bytes(&mut view, b"/row3\r\x1b[5;2~");
+        let selection = view.selection.unwrap();
+        assert_eq!(selection.anchor, (3, 3));
+        assert_eq!(selection.cursor, (1, 0));
+        assert_eq!(view.offset, 2);
+
+        type_bytes(&mut view, b"\x1b[6;2~");
+        assert_eq!(view.selection.unwrap().cursor, (3, 0));
+        assert_eq!(view.offset, 1);
     }
 
     #[test]
