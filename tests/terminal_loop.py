@@ -1114,8 +1114,8 @@ try:
     expect_bar(s, b"LOCKED")
     expect_footer(s, b"Ctrl-B Commands")
 
-    # The reserved Help footer action remains clickable, consumes modal input
-    # instead of forwarding it to the shell, and restores the live view on q.
+    # The reserved Help footer opens the panel. Clicking its first command uses
+    # the same New action as the keyboard shortcut and consumes the release.
     s.send(b"\x02")
     expect_footer(s, b"? Help")
     s.output.clear()
@@ -1124,8 +1124,37 @@ try:
     while b"Shortcut Help" not in s.output or b"Browse history" not in s.output:
         s.read()
         assert time.monotonic() < end, bytes(s.output[-2000:])
+    s.output.clear()
+    s.send(b"\x1b[<0;7;6M\x1b[<0;7;6m")
+    expect_bar(s, b"2 shell")
+    s.send(b"exit 0\n")
+    expect_bar_without(s, b"2 shell")
+    expect_bar(s, b"1 shell")
+
+    # A listed keyboard command also closes Help and dispatches through the
+    # normal shortcut table.
+    s.output.clear()
+    s.send(b"\x02?")
+    end = time.monotonic() + 8
+    while b"Shortcut Help" not in s.output:
+        s.read()
+        assert time.monotonic() < end, bytes(s.output[-2000:])
+    s.send(b"c")
+    expect_bar(s, b"2 shell")
+    s.send(b"exit 0\n")
+    expect_bar_without(s, b"2 shell")
+    expect_bar(s, b"1 shell")
+
+    # Unknown bytes stay modal; q closes the panel and the next shell command
+    # proves that neither byte leaked into its input queue.
+    s.output.clear()
+    s.send(b"\x02?")
+    end = time.monotonic() + 8
+    while b"Shortcut Help" not in s.output:
+        s.read()
+        assert time.monotonic() < end, bytes(s.output[-2000:])
     s.frames.clear()
-    s.send(b"xq")
+    s.send(b"vq")
     end = time.monotonic() + 8
     while not s.frames or any(b"Shortcut Help" in row for row in s.last_rows):
         s.read()
@@ -1133,8 +1162,7 @@ try:
     s.send(b"printf 'HELP_OK\\n'\n")
     s.expect(b"HELP_OK")
 
-    # The keyboard entry point and the visible ? close action share the same
-    # modal state without sending either key to the child.
+    # The visible ? close action shares the same modal state.
     s.output.clear()
     s.send(b"\x02?")
     end = time.monotonic() + 8

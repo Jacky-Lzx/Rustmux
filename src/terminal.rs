@@ -837,46 +837,52 @@ impl WindowInput {
 
     fn shortcut(&mut self, byte: u8, output: &mut Vec<WindowKey>) {
         self.mode = InputMode::Locked;
-        match byte {
-            b'c' => output.push(WindowKey::Create),
-            b'n' => output.push(WindowKey::Next),
-            b'p' => output.push(WindowKey::Previous),
-            b'\t' => output.push(WindowKey::Last),
-            b'&' => output.push(WindowKey::Close),
-            b'x' => output.push(WindowKey::ClosePane),
-            b'<' => output.push(WindowKey::MoveLeft),
-            b'>' => output.push(WindowKey::MoveRight),
-            b'%' => output.push(WindowKey::Split(SplitAxis::Columns)),
-            b'"' => output.push(WindowKey::Split(SplitAxis::Rows)),
-            b'{' => output.push(WindowKey::SwapPanePrevious),
-            b'}' => output.push(WindowKey::SwapPaneNext),
-            b'!' => output.push(WindowKey::BreakPane),
-            b'm' => output.push(WindowKey::JoinPane),
-            b'o' => output.push(WindowKey::NextPane),
-            b'Z' => output.push(WindowKey::ToggleZoom),
-            b'z' => output.push(WindowKey::UndoClose),
-            b'[' => output.push(WindowKey::History),
-            b'E' => output.push(WindowKey::HistoryEditor),
-            b'e' => output.push(WindowKey::LastCommandEditor),
-            b'?' => output.push(WindowKey::Help),
-            8 => output.push(WindowKey::ResizePane(Direction::Left)),
-            10 => output.push(WindowKey::ResizePane(Direction::Down)),
-            11 => output.push(WindowKey::ResizePane(Direction::Up)),
-            12 => output.push(WindowKey::ResizePane(Direction::Right)),
-            b'h' => output.push(WindowKey::FocusPane(Direction::Left)),
-            b'j' => output.push(WindowKey::FocusPane(Direction::Down)),
-            b'k' => output.push(WindowKey::FocusPane(Direction::Up)),
-            b'l' => output.push(WindowKey::FocusPane(Direction::Right)),
-            b',' => output.push(WindowKey::Rename),
-            b'1'..=b'9' => output.push(WindowKey::Select(usize::from(byte - b'1'))),
-            b'0' => output.push(WindowKey::Select(9)),
-            2 => output.push(WindowKey::Byte(2)),
-            _ => {
-                output.push(WindowKey::Byte(2));
-                output.push(WindowKey::Byte(byte));
-            }
+        if let Some(action) = shortcut_action(byte) {
+            output.push(action);
+        } else {
+            output.push(WindowKey::Byte(2));
+            output.push(WindowKey::Byte(byte));
         }
     }
+}
+
+fn shortcut_action(byte: u8) -> Option<WindowKey> {
+    Some(match byte {
+        b'c' => WindowKey::Create,
+        b'n' => WindowKey::Next,
+        b'p' => WindowKey::Previous,
+        b'\t' => WindowKey::Last,
+        b'&' => WindowKey::Close,
+        b'x' => WindowKey::ClosePane,
+        b'<' => WindowKey::MoveLeft,
+        b'>' => WindowKey::MoveRight,
+        b'%' => WindowKey::Split(SplitAxis::Columns),
+        b'"' => WindowKey::Split(SplitAxis::Rows),
+        b'{' => WindowKey::SwapPanePrevious,
+        b'}' => WindowKey::SwapPaneNext,
+        b'!' => WindowKey::BreakPane,
+        b'm' => WindowKey::JoinPane,
+        b'o' => WindowKey::NextPane,
+        b'Z' => WindowKey::ToggleZoom,
+        b'z' => WindowKey::UndoClose,
+        b'[' => WindowKey::History,
+        b'E' => WindowKey::HistoryEditor,
+        b'e' => WindowKey::LastCommandEditor,
+        b'?' => WindowKey::Help,
+        8 => WindowKey::ResizePane(Direction::Left),
+        10 => WindowKey::ResizePane(Direction::Down),
+        11 => WindowKey::ResizePane(Direction::Up),
+        12 => WindowKey::ResizePane(Direction::Right),
+        b'h' => WindowKey::FocusPane(Direction::Left),
+        b'j' => WindowKey::FocusPane(Direction::Down),
+        b'k' => WindowKey::FocusPane(Direction::Up),
+        b'l' => WindowKey::FocusPane(Direction::Right),
+        b',' => WindowKey::Rename,
+        b'1'..=b'9' => WindowKey::Select(usize::from(byte - b'1')),
+        b'0' => WindowKey::Select(9),
+        2 => WindowKey::Byte(2),
+        _ => return None,
+    })
 }
 
 fn left_mouse_press(bytes: &[u8]) -> bool {
@@ -1350,7 +1356,7 @@ fn forward(
                     if let Some(prompt) = &prompt {
                         renderer
                             .render(&prompt.overlay(&view), &mut FrameWriter(&mut to_terminal))?;
-                    } else if let Some(help) = &help {
+                    } else if let Some(help) = &mut help {
                         renderer
                             .render(&help.overlay(&view), &mut FrameWriter(&mut to_terminal))?;
                     } else {
@@ -1527,14 +1533,35 @@ fn forward(
                 force_redraw = true;
                 continue;
             }
-            if let Some(shortcuts) = &mut help {
-                if shortcuts.feed(input.pop_front().unwrap(), Instant::now()) {
-                    help = None;
-                    keys = WindowInput::default();
-                    renderer.invalidate();
+            let help_action = if let Some(shortcuts) = &mut help {
+                match shortcuts.feed(input.pop_front().unwrap(), Instant::now()) {
+                    crate::shortcut_help::HelpEvent::Continue => {
+                        force_redraw = true;
+                        continue;
+                    }
+                    crate::shortcut_help::HelpEvent::Redraw => {
+                        renderer.invalidate();
+                        force_redraw = true;
+                        continue;
+                    }
+                    crate::shortcut_help::HelpEvent::Close => {
+                        help = None;
+                        keys = WindowInput::default();
+                        renderer.invalidate();
+                        force_redraw = true;
+                        continue;
+                    }
+                    crate::shortcut_help::HelpEvent::Action(23) => Some(WindowKey::SessionManager),
+                    crate::shortcut_help::HelpEvent::Action(byte) => shortcut_action(byte),
                 }
+            } else {
+                None
+            };
+            if help_action.is_some() {
+                help = None;
+                keys = WindowInput::default();
+                renderer.invalidate();
                 force_redraw = true;
-                continue;
             }
             let pane = windows.active().unwrap().content().active();
             if !pane.io().accepts_input() || pane.io().to_shell.len() > LIMIT - 64 {
@@ -1556,7 +1583,7 @@ fn forward(
             keys.mouse_tracking = pane.screen().mouse_tracking();
             keys.bar_enabled = *outer_rows > 1;
             keys.footer_row = footer_enabled(*outer_rows).then_some(usize::from(*outer_rows));
-            if keys.mouse.is_empty() && input.front() == Some(&27) {
+            if help_action.is_none() && keys.mouse.is_empty() && input.front() == Some(&27) {
                 let active = windows.active().unwrap().id();
                 let names: Vec<_> = windows
                     .iter()
@@ -1584,11 +1611,15 @@ fn forward(
                 keys.separator_hitboxes = set.layout().separator_hitboxes();
             }
             actions.clear();
-            let input_mode = keys.mode;
-            keys.feed(input.pop_front().unwrap(), &mut actions);
-            if keys.mode != input_mode {
-                bar_dirty = true;
-                force_redraw = true;
+            if let Some(action) = help_action {
+                actions.push(action);
+            } else {
+                let input_mode = keys.mode;
+                keys.feed(input.pop_front().unwrap(), &mut actions);
+                if keys.mode != input_mode {
+                    bar_dirty = true;
+                    force_redraw = true;
+                }
             }
             for action in actions.drain(..) {
                 let old = (
@@ -2509,6 +2540,21 @@ mod window_input_tests {
                 WindowKey::Byte(2),
                 WindowKey::Byte(b'q')
             ]
+        );
+    }
+
+    #[test]
+    fn every_documented_help_action_uses_the_normal_dispatch_table() {
+        for action in crate::shortcut_help::documented_actions(false) {
+            assert!(shortcut_action(action).is_some(), "missing action {action}");
+        }
+        let named = crate::shortcut_help::documented_actions(true);
+        assert!(named.contains(&23));
+        assert!(
+            named
+                .into_iter()
+                .filter(|action| *action != 23)
+                .all(|action| shortcut_action(action).is_some())
         );
     }
 

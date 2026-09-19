@@ -275,10 +275,12 @@ Manager; cancelling the manager reconnects the session that opened it. Local,
 unnamed Rustmux processes omit this hint because they have no session manager to
 open.
 
-Ctrl-B followed by `?`, or the clickable Help hint, opens a centered read-only
-shortcut panel. Named sessions include their Session Manager entry. Esc, `q` or
-`?` closes the panel; other keyboard, paste and mouse input is consumed without
-reaching the active child. See [Shortcut Help](shortcut-help.md).
+Ctrl-B followed by `?`, or the clickable Help hint, opens a centered actionable
+shortcut panel. Pressing or clicking a listed command closes the panel and runs
+the same action as its normal shortcut. Named sessions include their Session
+Manager entry. Esc, `q` or `?` closes without an action; unknown keys and pasted
+input remain modal. Short terminals page with Left/Right, Page Up/Page Down or
+the mouse wheel. See [Shortcut Help](shortcut-help.md).
 
 When the bar is visible, Rustmux requests basic outer-terminal button reports
 even if the child has mouse tracking disabled. In that case content-area events

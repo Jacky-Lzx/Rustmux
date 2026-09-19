@@ -93,7 +93,9 @@ key clicked, while their label selects the first key. Inside a named session,
 click `Ctrl-B Ctrl-W Sessions` to open the Session Manager; local unnamed
 processes omit that hint. Press Ctrl-B followed by `?`, or click `? Help` after
 Ctrl-B, to open the complete shortcut reference. Esc, `q` or `?` closes it;
-other input stays inside the Help panel instead of reaching the shell.
+pressing or clicking a listed command closes Help and runs that action. Unknown
+keys and pasted input stay inside the panel instead of reaching the shell. Use
+Left/Right, Page Up/Page Down or the mouse wheel when the commands span pages.
 
 Use Ctrl-B followed by `%` to split left/right, or `"` to split top/bottom.
 The new pane is selected. Ctrl-B followed by lowercase `h/j/k/l` selects the pane
