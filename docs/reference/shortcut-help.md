@@ -10,11 +10,14 @@ terminal, complete middle hints may be omitted so that `? Help` remains visible;
 no hint is split. On terminals too narrow for the complete Help hint, the normal
 left-to-right fallback still applies.
 
-The panel lists window, pane, history and editing actions. Pressing a displayed
-key closes Help and sends its action through the same dispatch table as a normal
-Ctrl-B shortcut. Clicking either the key or its label does the same; in grouped
-entries such as `n/p`, clicking the exact key selects that action while clicking
-the label selects the first action. A drag cancels the click.
+The panel groups commands under `Window`, `Pane`, `History` and `General`
+headings. A heading is repeated when its group continues in another column or
+on another page; terminals with only one content row omit headings so a command
+remains actionable. Pressing a displayed key closes Help and sends its action
+through the same dispatch table as a normal Ctrl-B shortcut. Clicking either the
+key or its label does the same; in grouped entries such as `n/p`, clicking the
+exact key selects that action while clicking the label selects the first action.
+A drag cancels the click.
 
 The panel follows the footer's Catppuccin Mocha visual language: shortcut keys
 are bold Pink, action labels use sentence case in Lavender, and the Lavender
@@ -34,8 +37,9 @@ so complete CSI, SS3 and mouse reports are consumed as one sequence. Unknown
 keys and bracketed-paste contents remain inside the modal panel and never reach
 a child process.
 
-Unit tests cover bounded pagination, exact grouped-key clicks, drag cancellation,
-session-specific content, paste isolation, delayed Escape and correspondence
-between displayed actions and the normal dispatch table. The nested-PTY test
-executes New through both a panel click and keyboard input, verifies modal input
-isolation, and confirms the shell still receives ordinary commands afterward.
+Unit tests cover grouped column continuation, bounded pagination, exact
+grouped-key clicks, drag cancellation, session-specific content, paste isolation,
+delayed Escape and correspondence between displayed actions and the normal
+dispatch table. The nested-PTY test executes New through both a panel click and
+keyboard input, verifies modal input isolation, and confirms the shell still
+receives ordinary commands afterward.

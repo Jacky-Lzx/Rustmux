@@ -21,113 +21,160 @@ const LAVENDER: Color = Color::Rgb(0xb4, 0xbe, 0xfe);
 
 #[derive(Clone, Copy)]
 struct Command {
+    group: CommandGroup,
     key: &'static str,
     label: &'static str,
     actions: &'static [(usize, u8)],
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CommandGroup {
+    Window,
+    Pane,
+    History,
+    General,
+}
+
+impl CommandGroup {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Window => "Window",
+            Self::Pane => "Pane",
+            Self::History => "History",
+            Self::General => "General",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum HelpRow {
+    Heading(CommandGroup),
+    Command(Command),
+}
+
 const COMMANDS: &[Command] = &[
     Command {
+        group: CommandGroup::Window,
         key: "c",
         label: "New window",
         actions: &[(0, b'c')],
     },
     Command {
+        group: CommandGroup::Window,
         key: "&",
         label: "Close window",
         actions: &[(0, b'&')],
     },
     Command {
+        group: CommandGroup::Window,
         key: "n/p",
         label: "Switch window",
         actions: &[(0, b'n'), (2, b'p')],
     },
     Command {
+        group: CommandGroup::Window,
         key: "Tab",
         label: "Last window",
         actions: &[(0, b'\t')],
     },
     Command {
+        group: CommandGroup::Window,
         key: "1-0",
         label: "Select window",
         actions: &[(0, b'1'), (2, b'0')],
     },
     Command {
+        group: CommandGroup::Window,
         key: ",",
         label: "Rename window",
         actions: &[(0, b',')],
     },
     Command {
+        group: CommandGroup::Window,
         key: "</>",
         label: "Move window",
         actions: &[(0, b'<'), (2, b'>')],
     },
     Command {
+        group: CommandGroup::Pane,
         key: "%/\"",
         label: "Split right/down",
         actions: &[(0, b'%'), (2, b'"')],
     },
     Command {
+        group: CommandGroup::Pane,
         key: "h/j/k/l",
         label: "Focus pane",
         actions: &[(0, b'h'), (2, b'j'), (4, b'k'), (6, b'l')],
     },
     Command {
+        group: CommandGroup::Pane,
         key: "C-h/j/k/l",
         label: "Resize pane",
         actions: &[(2, 8), (4, 10), (6, 11), (8, 12)],
     },
     Command {
+        group: CommandGroup::Pane,
         key: "o",
         label: "Next pane",
         actions: &[(0, b'o')],
     },
     Command {
+        group: CommandGroup::Pane,
         key: "x",
         label: "Close pane",
         actions: &[(0, b'x')],
     },
     Command {
+        group: CommandGroup::Pane,
         key: "Z",
         label: "Toggle zoom",
         actions: &[(0, b'Z')],
     },
     Command {
+        group: CommandGroup::Pane,
         key: "z",
         label: "Restore pane",
         actions: &[(0, b'z')],
     },
     Command {
+        group: CommandGroup::Pane,
         key: "{/}",
         label: "Swap pane",
         actions: &[(0, b'{'), (2, b'}')],
     },
     Command {
+        group: CommandGroup::Pane,
         key: "!",
         label: "Pane to window",
         actions: &[(0, b'!')],
     },
     Command {
+        group: CommandGroup::Pane,
         key: "m",
         label: "Move pane",
         actions: &[(0, b'm')],
     },
     Command {
+        group: CommandGroup::History,
         key: "[",
         label: "Browse history",
         actions: &[(0, b'[')],
     },
     Command {
+        group: CommandGroup::History,
         key: "E",
         label: "Edit history",
         actions: &[(0, b'E')],
     },
     Command {
+        group: CommandGroup::History,
         key: "e",
         label: "Edit last output",
         actions: &[(0, b'e')],
     },
     Command {
+        group: CommandGroup::General,
         key: "C-b",
         label: "Literal Ctrl-B",
         actions: &[(2, 2)],
@@ -135,6 +182,7 @@ const COMMANDS: &[Command] = &[
 ];
 
 const SESSION_COMMAND: Command = Command {
+    group: CommandGroup::General,
     key: "C-w",
     label: "Session Manager",
     actions: &[(2, 23)],
@@ -284,15 +332,15 @@ impl ShortcutHelp {
             return screen;
         }
         let commands = self.commands();
-        let height = 16.min(rows);
+        let height = 17.min(rows);
         let width = 72.min(columns);
         let top = (rows - height) / 2;
         let left = (columns - width) / 2;
         let inner_width = width.saturating_sub(4);
         let content_rows = height.saturating_sub(3);
         let columns_per_page = usize::from(inner_width >= TWO_COLUMN_WIDTH) + 1;
-        let page_size = (content_rows * columns_per_page).max(1);
-        self.pages = commands.len().div_ceil(page_size).max(1);
+        let columns = layout_columns(&commands, content_rows.max(1));
+        self.pages = columns.len().div_ceil(columns_per_page).max(1);
         self.page = self.page.min(self.pages - 1);
 
         let panel = Style {
@@ -329,13 +377,25 @@ impl ShortcutHelp {
         );
 
         let column_width = inner_width / columns_per_page;
-        let start = self.page * page_size;
-        for (slot, command) in commands.into_iter().skip(start).take(page_size).enumerate() {
-            let column_index = slot / content_rows.max(1);
-            let row_index = slot % content_rows.max(1);
-            let row = top + 1 + row_index;
+        let start = self.page * columns_per_page;
+        for (column_index, items) in columns
+            .iter()
+            .skip(start)
+            .take(columns_per_page)
+            .enumerate()
+        {
             let column = left + 2 + column_index * column_width;
-            self.draw_command(&mut screen, row, column, column_width, command, panel);
+            for (row_index, item) in items.iter().enumerate() {
+                let row = top + 1 + row_index;
+                match item {
+                    HelpRow::Heading(group) => {
+                        self.draw_heading(&mut screen, row, column, column_width, *group, panel);
+                    }
+                    HelpRow::Command(command) => {
+                        self.draw_command(&mut screen, row, column, column_width, *command, panel)
+                    }
+                }
+            }
         }
 
         let footer = Style {
@@ -387,6 +447,23 @@ impl ShortcutHelp {
             commands.push(SESSION_COMMAND);
         }
         commands
+    }
+
+    fn draw_heading(
+        &self,
+        screen: &mut Screen,
+        row: usize,
+        column: usize,
+        width: usize,
+        group: CommandGroup,
+        panel: Style,
+    ) {
+        let style = Style {
+            foreground: MUTED,
+            bold: true,
+            ..panel
+        };
+        write_at(screen, row, column, group.label(), style, width);
     }
 
     fn has_action(&self, byte: u8) -> bool {
@@ -544,6 +621,33 @@ impl ShortcutHelp {
     }
 }
 
+fn layout_columns(commands: &[Command], rows_per_column: usize) -> Vec<Vec<HelpRow>> {
+    let rows_per_column = rows_per_column.max(1);
+    let show_headings = rows_per_column >= 2;
+    let mut columns = vec![Vec::new()];
+    let mut active_group = None;
+
+    for &command in commands {
+        loop {
+            let heading_needed = show_headings && active_group != Some(command.group);
+            let needed = 1 + usize::from(heading_needed);
+            let column = columns.last_mut().unwrap();
+            if column.len() + needed <= rows_per_column {
+                if heading_needed {
+                    column.push(HelpRow::Heading(command.group));
+                }
+                column.push(HelpRow::Command(command));
+                active_group = Some(command.group);
+                break;
+            }
+            columns.push(Vec::new());
+            active_group = None;
+        }
+    }
+
+    columns
+}
+
 fn sgr_mouse(sequence: &[u8]) -> Option<(u16, usize, usize, bool)> {
     if !sequence.starts_with(b"\x1b[<") || !matches!(sequence.last(), Some(b'M' | b'm')) {
         return None;
@@ -599,13 +703,22 @@ mod tests {
         let before = original.clone();
         let mut local = ShortcutHelp::new(false);
         let view = local.overlay(&original);
+        let body = text(&view);
         assert_eq!(original, before);
-        assert!(text(&view).contains("Shortcut Help"));
-        assert!(text(&view).contains("Browse history"));
-        assert!(!text(&view).contains("Session Manager"));
+        assert!(body.contains("Shortcut Help"));
+        assert!(body.contains("Window"));
+        assert!(body.contains("Pane"));
+        assert!(body.contains("History"));
+        assert!(body.contains("General"));
+        assert!(body.contains("Browse history"));
+        assert!(!body.contains("Session Manager"));
         assert_eq!(view.mouse_tracking(), MouseTracking::Button);
         assert!(view.sgr_mouse());
         assert!(!view.bracketed_paste());
+        let first_heading = view.row(1).unwrap();
+        assert_eq!(first_heading[6].character, 'W');
+        assert_eq!(first_heading[6].style.foreground, MUTED);
+        assert!(first_heading[6].style.bold);
         let first_command = view.row(2).unwrap();
         assert_eq!(first_command[6].character, 'c');
         assert_eq!(first_command[6].style.foreground, PINK);
@@ -615,6 +728,7 @@ mod tests {
 
         let mut named = ShortcutHelp::new(true);
         assert!(text(&named.overlay(&original)).contains("Session Manager"));
+        assert_eq!(named.pages, 1);
         let mut short = ShortcutHelp::new(false);
         let first = text(&short.overlay(&Screen::new(6, 40).unwrap()));
         assert!(first.contains("1/"));
@@ -644,6 +758,32 @@ mod tests {
                 ShortcutHelp::new(false).overlay(&Screen::new(rows, columns).unwrap());
             }
         }
+    }
+
+    #[test]
+    fn grouped_layout_repeats_headings_when_a_group_crosses_columns() {
+        let columns = layout_columns(COMMANDS, 3);
+        assert!(columns.len() > 2);
+        assert!(columns.iter().all(|column| column.len() <= 3));
+        assert!(
+            columns
+                .iter()
+                .all(|column| matches!(column.first(), Some(HelpRow::Heading(_))))
+        );
+        assert!(matches!(
+            columns[0].first(),
+            Some(HelpRow::Heading(CommandGroup::Window))
+        ));
+        assert!(matches!(
+            columns[1].first(),
+            Some(HelpRow::Heading(CommandGroup::Window))
+        ));
+
+        let tiny = layout_columns(COMMANDS, 1);
+        assert!(
+            tiny.iter()
+                .all(|column| matches!(column.as_slice(), [HelpRow::Command(_)]))
+        );
     }
 
     #[test]
