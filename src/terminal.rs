@@ -542,6 +542,7 @@ enum WindowKey {
     HistoryEditor,
     LastCommandEditor,
     SessionManager,
+    Help,
     FocusPane(Direction),
     ResizePane(Direction),
     SwapPaneNext,
@@ -857,6 +858,7 @@ impl WindowInput {
             b'[' => output.push(WindowKey::History),
             b'E' => output.push(WindowKey::HistoryEditor),
             b'e' => output.push(WindowKey::LastCommandEditor),
+            b'?' => output.push(WindowKey::Help),
             8 => output.push(WindowKey::ResizePane(Direction::Left)),
             10 => output.push(WindowKey::ResizePane(Direction::Down)),
             11 => output.push(WindowKey::ResizePane(Direction::Up)),
@@ -1051,6 +1053,7 @@ fn forward(
     let mut bar_dirty = false;
     let mut prompt: Option<WindowPrompt> = None;
     let mut history: Option<crate::history_view::HistoryView> = None;
+    let mut help: Option<crate::shortcut_help::ShortcutHelp> = None;
     let mut close_requested = None;
     let mut connection = ConnectionState::Attached;
     let mut session_manager_requested = false;
@@ -1131,6 +1134,7 @@ fn forward(
                 input.clear();
                 keys = WindowInput::default();
                 prompt = None;
+                help = None;
                 renderer.invalidate();
                 force_redraw = true;
                 continue;
@@ -1153,6 +1157,15 @@ fn forward(
                 history = None;
                 keys = WindowInput::default();
             }
+            renderer.invalidate();
+            force_redraw = true;
+        }
+        if help
+            .as_ref()
+            .is_some_and(|help| help.escape_expired(Instant::now()))
+        {
+            help = None;
+            keys = WindowInput::default();
             renderer.invalidate();
             force_redraw = true;
         }
@@ -1268,9 +1281,12 @@ fn forward(
                 }
             }
             if id == active {
-                if panes.active().io().eof && (prompt.is_some() || history.is_some()) {
+                if panes.active().io().eof
+                    && (prompt.is_some() || history.is_some() || help.is_some())
+                {
                     history = None;
                     prompt = None;
+                    help = None;
                     renderer.invalidate();
                     force_redraw = true;
                 }
@@ -1334,6 +1350,9 @@ fn forward(
                     if let Some(prompt) = &prompt {
                         renderer
                             .render(&prompt.overlay(&view), &mut FrameWriter(&mut to_terminal))?;
+                    } else if let Some(help) = &help {
+                        renderer
+                            .render(&help.overlay(&view), &mut FrameWriter(&mut to_terminal))?;
                     } else {
                         renderer.render(&view, &mut FrameWriter(&mut to_terminal))?;
                     }
@@ -1404,7 +1423,7 @@ fn forward(
             continue;
         }
         // A lone Escape or incomplete report must not remain held indefinitely.
-        if prompt.is_none() && keys.mouse_expired() {
+        if prompt.is_none() && help.is_none() && keys.mouse_expired() {
             let pane = windows.active_mut().unwrap().content_mut().active_mut();
             let (_, _, _, state) = pane.parts_mut();
             if state.accepts_input() && state.to_shell.len() <= LIMIT - 64 {
@@ -1508,6 +1527,15 @@ fn forward(
                 force_redraw = true;
                 continue;
             }
+            if let Some(shortcuts) = &mut help {
+                if shortcuts.feed(input.pop_front().unwrap(), Instant::now()) {
+                    help = None;
+                    keys = WindowInput::default();
+                    renderer.invalidate();
+                }
+                force_redraw = true;
+                continue;
+            }
             let pane = windows.active().unwrap().content().active();
             if !pane.io().accepts_input() || pane.io().to_shell.len() > LIMIT - 64 {
                 break;
@@ -1579,6 +1607,14 @@ fn forward(
                         input.clear();
                         keys = WindowInput::default();
                         session_manager_requested = true;
+                    }
+                    WindowKey::Help => {
+                        help = Some(crate::shortcut_help::ShortcutHelp::new(
+                            session_name.is_some(),
+                        ));
+                        keys = WindowInput::default();
+                        renderer.invalidate();
+                        force_redraw = true;
                     }
                     WindowKey::Split(axis) => {
                         let directory = active_directory(windows);
@@ -2458,7 +2494,7 @@ mod window_input_tests {
     #[test]
     fn prefix_commands_literal_prefix_and_unknown_keys() {
         assert_eq!(
-            decode(b"a\x02c\x02n\x02p\x02\t\x02&\x02<\x02>\x02\x02\x02q"),
+            decode(b"a\x02c\x02n\x02p\x02\t\x02&\x02<\x02>\x02?\x02\x02\x02q"),
             vec![
                 WindowKey::Byte(b'a'),
                 WindowKey::Create,
@@ -2468,6 +2504,7 @@ mod window_input_tests {
                 WindowKey::Close,
                 WindowKey::MoveLeft,
                 WindowKey::MoveRight,
+                WindowKey::Help,
                 WindowKey::Byte(2),
                 WindowKey::Byte(2),
                 WindowKey::Byte(b'q')
@@ -2826,6 +2863,7 @@ mod window_input_tests {
             (46, WindowKey::Next),
             (48, WindowKey::Previous),
             (58, WindowKey::ToggleZoom),
+            (66, WindowKey::Help),
         ];
         for (column, expected) in cases {
             keys.mode = InputMode::Normal;

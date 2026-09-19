@@ -91,7 +91,9 @@ The bottom bar shows shortcuts for the current input mode. Click a visible key
 or label to run server-side window and pane actions; grouped hints use the exact
 key clicked, while their label selects the first key. Inside a named session,
 click `Ctrl-B Ctrl-W Sessions` to open the Session Manager; local unnamed
-processes omit that hint.
+processes omit that hint. Press Ctrl-B followed by `?`, or click `? Help` after
+Ctrl-B, to open the complete shortcut reference. Esc, `q` or `?` closes it;
+other input stays inside the Help panel instead of reaching the shell.
 
 Use Ctrl-B followed by `%` to split left/right, or `"` to split top/bottom.
 The new pane is selected. Ctrl-B followed by lowercase `h/j/k/l` selects the pane

@@ -176,20 +176,55 @@ const NORMAL_SHORTCUTS: &[ShortcutHint] = &[
         label: "Zoom",
         actions: &[(0, b'Z')],
     },
+    ShortcutHint {
+        key: "?",
+        label: "Help",
+        actions: &[(0, b'?')],
+    },
 ];
 
 fn shortcut_width(hint: ShortcutHint) -> usize {
     display_width(hint.key) + display_width(hint.label) + 3
 }
 
-fn shortcuts(normal: bool, session: bool) -> &'static [ShortcutHint] {
-    if normal {
+fn visible_shortcuts(columns: usize, normal: bool, session: bool) -> Vec<ShortcutHint> {
+    let shortcuts = if normal {
         NORMAL_SHORTCUTS
     } else if session {
         LOCKED_SHORTCUTS
     } else {
         &LOCKED_SHORTCUTS[..1]
+    };
+    let mut visible = Vec::new();
+    let mut remaining = columns;
+    if normal {
+        let (help, primary) = shortcuts
+            .split_last()
+            .expect("normal shortcuts include help");
+        let help_width = shortcut_width(*help);
+        if help_width <= remaining {
+            remaining -= help_width;
+            for hint in primary {
+                let width = shortcut_width(*hint);
+                if width > remaining {
+                    break;
+                }
+                visible.push(*hint);
+                remaining -= width;
+            }
+            visible.push(*help);
+            return visible;
+        }
     }
+    for hint in shortcuts {
+        let width = shortcut_width(*hint);
+        if width > remaining {
+            break;
+        }
+        visible.push(*hint);
+        remaining -= width;
+    }
+    visible
 }
 
 fn draw_shortcuts(screen: &mut Screen, row: usize, columns: usize, normal: bool, session: bool) {
@@ -201,12 +236,7 @@ fn draw_shortcuts(screen: &mut Screen, row: usize, columns: usize, normal: bool,
     screen.set_style(bar_background_style());
     screen.position(row, 0);
     screen.erase_line(EraseMode::All);
-    let mut remaining = columns;
-    for hint in shortcuts(normal, session) {
-        let width = shortcut_width(*hint);
-        if width > remaining {
-            break;
-        }
+    for hint in visible_shortcuts(columns, normal, session) {
         screen.set_style(shortcut_key_style());
         print(screen, " ");
         print(screen, hint.key);
@@ -214,7 +244,6 @@ fn draw_shortcuts(screen: &mut Screen, row: usize, columns: usize, normal: bool,
         screen.set_style(shortcut_label_style());
         print(screen, hint.label);
         print(screen, " ");
-        remaining -= width;
     }
 }
 
@@ -228,12 +257,8 @@ pub(crate) fn footer_hitboxes(
 ) -> Vec<(usize, usize, u8)> {
     let mut hitboxes = Vec::new();
     let mut used = 0;
-    let mut remaining = columns;
-    for hint in shortcuts(normal, session) {
-        let width = shortcut_width(*hint);
-        if width > remaining {
-            break;
-        }
+    for hint in visible_shortcuts(columns, normal, session) {
+        let width = shortcut_width(hint);
         for (offset, action) in hint.actions {
             let column = used + 2 + offset;
             hitboxes.push((column, column + 1, *action));
@@ -242,7 +267,6 @@ pub(crate) fn footer_hitboxes(
             hitboxes.push((used + 1, used + width + 1, *action));
         }
         used += width;
-        remaining -= width;
     }
     hitboxes
 }
@@ -639,7 +663,7 @@ mod tests {
             .filter(|cell| cell.width != 0)
             .map(|cell| cell.character)
             .collect();
-        assert!(footer.starts_with(" c New  % Split → "));
+        assert!(footer.starts_with(" c New  ? Help "));
         assert!(!footer.contains("Split ↓"));
         assert!(!footer.contains("Focus"));
     }
@@ -692,7 +716,8 @@ mod tests {
 
         let narrow = footer_hitboxes(20, true, true);
         assert!(narrow.iter().any(|&(_, _, key)| key == b'c'));
-        assert!(narrow.iter().any(|&(_, _, key)| key == b'%'));
+        assert!(narrow.iter().any(|&(_, _, key)| key == b'?'));
+        assert!(!narrow.iter().any(|&(_, _, key)| key == b'%'));
         assert!(!narrow.iter().any(|&(_, _, key)| key == b'"'));
     }
 }

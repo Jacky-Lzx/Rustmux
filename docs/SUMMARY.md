@@ -36,6 +36,7 @@
 - [Rendering Measurements](reference/rendering-performance.md)
 
 - [Windows](reference/windows.md)
+- [Shortcut Help](reference/shortcut-help.md)
 - [Session Endpoints](reference/session-endpoints.md)
 - [Session Protocol](reference/session-protocol.md)
 - [Session Handshake](reference/session-handshake.md)

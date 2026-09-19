@@ -262,16 +262,23 @@ prefix.
 
 The bottom bar shows `Ctrl-B Commands` in locked mode and the available
 window/pane keys in normal mode. Complete hints are added from left to right;
-a hint that does not fit is omitted instead of being split. Left-clicking a
-visible server-side hint executes the same action as its key and consumes the
-matching release. In grouped hints such as `n/p` or `h/j/k/l`, clicking a key
-chooses that key; clicking its label or padding chooses the first displayed key.
+a hint that does not fit is omitted instead of being split. NORMAL mode reserves
+space for `? Help`, so the complete shortcut reference remains reachable when
+middle hints do not fit. Left-clicking a visible server-side hint executes the
+same action as its key and consumes the matching release. In grouped hints such
+as `n/p` or `h/j/k/l`, clicking a key chooses that key; clicking its label or
+padding chooses the first displayed key.
 Blank space, hidden hints, drags and wheel reports do nothing and never reach a
 child. Named sessions also show `Ctrl-B Ctrl-W Sessions`. Clicking that hint asks
 the attached client to restore the outer terminal before opening the Session
 Manager; cancelling the manager reconnects the session that opened it. Local,
 unnamed Rustmux processes omit this hint because they have no session manager to
 open.
+
+Ctrl-B followed by `?`, or the clickable Help hint, opens a centered read-only
+shortcut panel. Named sessions include their Session Manager entry. Esc, `q` or
+`?` closes the panel; other keyboard, paste and mouse input is consumed without
+reaching the active child. See [Shortcut Help](shortcut-help.md).
 
 When the bar is visible, Rustmux requests basic outer-terminal button reports
 even if the child has mouse tracking disabled. In that case content-area events

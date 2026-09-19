@@ -17,6 +17,7 @@ pub mod screen;
 mod scrollback;
 mod semantic;
 pub mod session;
+mod shortcut_help;
 pub mod style;
 pub mod terminal;
 mod terminal_device;

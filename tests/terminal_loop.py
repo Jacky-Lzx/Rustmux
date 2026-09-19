@@ -1113,6 +1113,41 @@ try:
     s.send(b"n")
     expect_bar(s, b"LOCKED")
     expect_footer(s, b"Ctrl-B Commands")
+
+    # The reserved Help footer action remains clickable, consumes modal input
+    # instead of forwarding it to the shell, and restores the live view on q.
+    s.send(b"\x02")
+    expect_footer(s, b"? Help")
+    s.output.clear()
+    s.send(b"\x1b[<0;66;24M\x1b[<0;66;24m")
+    end = time.monotonic() + 8
+    while b"Shortcut Help" not in s.output or b"Browse history" not in s.output:
+        s.read()
+        assert time.monotonic() < end, bytes(s.output[-2000:])
+    s.frames.clear()
+    s.send(b"xq")
+    end = time.monotonic() + 8
+    while not s.frames or any(b"Shortcut Help" in row for row in s.last_rows):
+        s.read()
+        assert time.monotonic() < end, s.last_rows
+    s.send(b"printf 'HELP_OK\\n'\n")
+    s.expect(b"HELP_OK")
+
+    # The keyboard entry point and the visible ? close action share the same
+    # modal state without sending either key to the child.
+    s.output.clear()
+    s.send(b"\x02?")
+    end = time.monotonic() + 8
+    while b"Shortcut Help" not in s.output:
+        s.read()
+        assert time.monotonic() < end, bytes(s.output[-2000:])
+    s.frames.clear()
+    s.send(b"?")
+    end = time.monotonic() + 8
+    while not s.frames or any(b"Shortcut Help" in row for row in s.last_rows):
+        s.read()
+        assert time.monotonic() < end, s.last_rows
+
     s.send(b"printf '\\033[23;1H%s%s' LAST_ CONTENT\n")
     s.expect(b"LAST_CONTENT")
     assert b"LAST_CONTENT" in s.last_rows[20]
