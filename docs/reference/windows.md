@@ -232,10 +232,11 @@ isolation, and real CLI save/cancel/reopen with continued child output and resiz
 
 ## Window bar and content area
 
-The top row is reserved for window labels. The PTY and both screen grids use
-`max(1, outer rows - 1)` rows, with the full terminal width. A terminal with only
-one row hides the bar and retains one content row. Resizing updates every pane;
-the outer 65,536-cell limit still includes the reserved row.
+The top row is reserved for window labels. When the outer terminal has at least
+three rows, the bottom row shows contextual shortcut hints and the PTY uses the
+rows between them. A two-row terminal keeps the top bar and one content row; a
+one-row terminal hides both bars and retains one content row. Resizing updates
+every pane; the outer 65,536-cell limit still includes the reserved rows.
 
 Labels show a one-based position and name, for example `1 shell` and `2 editor`.
 The active window uses a green Catppuccin Mocha badge; inactive windows use
@@ -259,12 +260,22 @@ a drag that begins in a mouse-aware child can still release on the bar. On
 extremely narrow terminals the visible label may consist only of its highlighted
 prefix.
 
+The bottom bar shows `Ctrl-B Commands` in locked mode and the available
+window/pane keys in normal mode. Complete hints are added from left to right;
+a hint that does not fit is omitted instead of being split. Left-clicking a
+visible server-side hint executes the same action as its key and consumes the
+matching release. In grouped hints such as `n/p` or `h/j/k/l`, clicking a key
+chooses that key; clicking its label or padding chooses the first displayed key.
+Blank space, hidden hints, drags and wheel reports do nothing and never reach a
+child. `Ctrl-B Ctrl-W Sessions` remains display-only because the attached client,
+not the session server that renders the bar, owns the Session Manager shortcut.
+
 When the bar is visible, Rustmux requests basic outer-terminal button reports
 even if the child has mouse tracking disabled. In that case content-area events
 are consumed instead of reaching the shell. If the child enables mouse tracking,
 content events retain its encoding and are translated to pane-local coordinates.
 
-The renderer receives a composed copy of the active child screen plus the bar;
+The renderer receives a composed copy of the active child screen plus the bars;
 child cells and cursor are shifted down one physical row; the child model and
 input modes are preserved. The copy adds allocation and
 grid-copy work to CLI rendering; prior encoding-only benchmark results do not

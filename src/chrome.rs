@@ -129,16 +129,21 @@ fn print(screen: &mut Screen, text: &str) {
 struct ShortcutHint {
     key: &'static str,
     label: &'static str,
+    actions: &'static [(usize, u8)],
 }
 
 const LOCKED_SHORTCUTS: &[ShortcutHint] = &[
     ShortcutHint {
         key: "Ctrl-B",
         label: "Commands",
+        actions: &[(0, 2)],
     },
     ShortcutHint {
         key: "Ctrl-B Ctrl-W",
         label: "Sessions",
+        // The session manager shortcut is handled by the attached client, not
+        // by the session server that owns this footer.
+        actions: &[],
     },
 ];
 
@@ -146,31 +151,45 @@ const NORMAL_SHORTCUTS: &[ShortcutHint] = &[
     ShortcutHint {
         key: "c",
         label: "New",
+        actions: &[(0, b'c')],
     },
     ShortcutHint {
         key: "%",
         label: "Split →",
+        actions: &[(0, b'%')],
     },
     ShortcutHint {
         key: "\"",
         label: "Split ↓",
+        actions: &[(0, b'"')],
     },
     ShortcutHint {
         key: "h/j/k/l",
         label: "Focus",
+        actions: &[(0, b'h'), (2, b'j'), (4, b'k'), (6, b'l')],
     },
     ShortcutHint {
         key: "n/p",
         label: "Window",
+        actions: &[(0, b'n'), (2, b'p')],
     },
     ShortcutHint {
         key: "Z",
         label: "Zoom",
+        actions: &[(0, b'Z')],
     },
 ];
 
 fn shortcut_width(hint: ShortcutHint) -> usize {
     display_width(hint.key) + display_width(hint.label) + 3
+}
+
+fn shortcuts(normal: bool) -> &'static [ShortcutHint] {
+    if normal {
+        NORMAL_SHORTCUTS
+    } else {
+        LOCKED_SHORTCUTS
+    }
 }
 
 fn draw_shortcuts(screen: &mut Screen, row: usize, columns: usize, normal: bool) {
@@ -182,13 +201,8 @@ fn draw_shortcuts(screen: &mut Screen, row: usize, columns: usize, normal: bool)
     screen.set_style(bar_background_style());
     screen.position(row, 0);
     screen.erase_line(EraseMode::All);
-    let hints = if normal {
-        NORMAL_SHORTCUTS
-    } else {
-        LOCKED_SHORTCUTS
-    };
     let mut remaining = columns;
-    for hint in hints {
+    for hint in shortcuts(normal) {
         let width = shortcut_width(*hint);
         if width > remaining {
             break;
@@ -202,6 +216,31 @@ fn draw_shortcuts(screen: &mut Screen, row: usize, columns: usize, normal: bool)
         print(screen, " ");
         remaining -= width;
     }
+}
+
+/// Return one-based, half-open footer targets. Specific characters in grouped
+/// keys precede the whole-hint fallback, so clicking `p` in `n/p` selects `p`
+/// while its label and padding select the first displayed key.
+pub(crate) fn footer_hitboxes(columns: usize, normal: bool) -> Vec<(usize, usize, u8)> {
+    let mut hitboxes = Vec::new();
+    let mut used = 0;
+    let mut remaining = columns;
+    for hint in shortcuts(normal) {
+        let width = shortcut_width(*hint);
+        if width > remaining {
+            break;
+        }
+        for (offset, action) in hint.actions {
+            let column = used + 2 + offset;
+            hitboxes.push((column, column + 1, *action));
+        }
+        if let Some((_, action)) = hint.actions.first() {
+            hitboxes.push((used + 1, used + width + 1, *action));
+        }
+        used += width;
+        remaining -= width;
+    }
+    hitboxes
 }
 
 fn powerline_label(index: usize, name: &str) -> String {
@@ -606,5 +645,35 @@ mod tests {
         let narrow = window_hitboxes(12, None, &names, 2, false);
         assert_eq!(narrow.len(), 1);
         assert_eq!(narrow[0].2, 2);
+    }
+
+    #[test]
+    fn footer_hitboxes_follow_visible_hints_and_split_grouped_keys() {
+        let locked = footer_hitboxes(80, false);
+        assert!(
+            locked
+                .iter()
+                .any(|&(start, end, key)| { start == 1 && end == 18 && key == 2 })
+        );
+        assert!(!locked.iter().any(|&(_, _, key)| key == 23));
+
+        let normal = footer_hitboxes(80, true);
+        let action_at = |column| {
+            normal
+                .iter()
+                .find(|(start, end, _)| column >= *start && column < *end)
+                .map(|(_, _, action)| *action)
+        };
+        assert_eq!(action_at(2), Some(b'c'));
+        assert_eq!(action_at(31), Some(b'h'));
+        assert_eq!(action_at(33), Some(b'j'));
+        assert_eq!(action_at(39), Some(b'h'));
+        assert_eq!(action_at(46), Some(b'n'));
+        assert_eq!(action_at(48), Some(b'p'));
+
+        let narrow = footer_hitboxes(20, true);
+        assert!(narrow.iter().any(|&(_, _, key)| key == b'c'));
+        assert!(narrow.iter().any(|&(_, _, key)| key == b'%'));
+        assert!(!narrow.iter().any(|&(_, _, key)| key == b'"'));
     }
 }

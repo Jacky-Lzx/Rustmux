@@ -559,8 +559,10 @@ struct WindowInput {
     bar_enabled: bool,
     footer_row: Option<usize>,
     bar_press: bool,
+    footer_press: bool,
     pane_press: bool,
     window_hitboxes: Vec<(usize, usize, usize)>,
+    footer_hitboxes: Vec<(usize, usize, u8)>,
     active_pane: Option<PaneId>,
     pane_hitboxes: Vec<(PaneId, Rect)>,
     separator_hitboxes: Vec<(usize, SplitAxis, Rect)>,
@@ -632,12 +634,18 @@ impl WindowInput {
         };
         let mut bytes = self.take_mouse();
         if let Some((column, row)) = coordinates {
-            self.mode = InputMode::Locked;
             let release = (bytes.starts_with(b"\x1b[<") && bytes.last() == Some(&b'm'))
                 || (bytes.starts_with(b"\x1b[M")
                     && bytes[3]
                         .checked_sub(32)
                         .is_some_and(|button| button & 0x63 == 3));
+            if self.footer_press {
+                if release {
+                    self.footer_press = false;
+                }
+                return;
+            }
+            self.mode = InputMode::Locked;
             if let Some(mut drag) = self.pane_drag {
                 if release {
                     self.pane_drag = None;
@@ -664,8 +672,20 @@ impl WindowInput {
                 return;
             }
             if self.footer_row == Some(row) {
-                if release {
-                    self.pane_press = false;
+                if !release && left_mouse_press(&bytes) {
+                    self.footer_press = true;
+                    if let Some((_, _, action)) = self
+                        .footer_hitboxes
+                        .iter()
+                        .find(|(start, end, _)| column >= *start && column < *end)
+                        .copied()
+                    {
+                        if action == 2 {
+                            self.mode = InputMode::Normal;
+                        } else {
+                            self.shortcut(action, output);
+                        }
+                    }
                 }
                 return;
             }
@@ -793,49 +813,53 @@ impl WindowInput {
         if was_paste {
             output.push(WindowKey::Byte(byte));
         } else if self.mode == InputMode::Normal {
-            self.mode = InputMode::Locked;
-            match byte {
-                b'c' => output.push(WindowKey::Create),
-                b'n' => output.push(WindowKey::Next),
-                b'p' => output.push(WindowKey::Previous),
-                b'\t' => output.push(WindowKey::Last),
-                b'&' => output.push(WindowKey::Close),
-                b'x' => output.push(WindowKey::ClosePane),
-                b'<' => output.push(WindowKey::MoveLeft),
-                b'>' => output.push(WindowKey::MoveRight),
-                b'%' => output.push(WindowKey::Split(SplitAxis::Columns)),
-                b'"' => output.push(WindowKey::Split(SplitAxis::Rows)),
-                b'{' => output.push(WindowKey::SwapPanePrevious),
-                b'}' => output.push(WindowKey::SwapPaneNext),
-                b'!' => output.push(WindowKey::BreakPane),
-                b'm' => output.push(WindowKey::JoinPane),
-                b'o' => output.push(WindowKey::NextPane),
-                b'Z' => output.push(WindowKey::ToggleZoom),
-                b'z' => output.push(WindowKey::UndoClose),
-                b'[' => output.push(WindowKey::History),
-                b'E' => output.push(WindowKey::HistoryEditor),
-                b'e' => output.push(WindowKey::LastCommandEditor),
-                8 => output.push(WindowKey::ResizePane(Direction::Left)),
-                10 => output.push(WindowKey::ResizePane(Direction::Down)),
-                11 => output.push(WindowKey::ResizePane(Direction::Up)),
-                12 => output.push(WindowKey::ResizePane(Direction::Right)),
-                b'h' => output.push(WindowKey::FocusPane(Direction::Left)),
-                b'j' => output.push(WindowKey::FocusPane(Direction::Down)),
-                b'k' => output.push(WindowKey::FocusPane(Direction::Up)),
-                b'l' => output.push(WindowKey::FocusPane(Direction::Right)),
-                b',' => output.push(WindowKey::Rename),
-                b'1'..=b'9' => output.push(WindowKey::Select(usize::from(byte - b'1'))),
-                b'0' => output.push(WindowKey::Select(9)),
-                2 => output.push(WindowKey::Byte(2)),
-                _ => {
-                    output.push(WindowKey::Byte(2));
-                    output.push(WindowKey::Byte(byte));
-                }
-            }
+            self.shortcut(byte, output);
         } else if byte == 2 {
             self.mode = InputMode::Normal;
         } else {
             output.push(WindowKey::Byte(byte));
+        }
+    }
+
+    fn shortcut(&mut self, byte: u8, output: &mut Vec<WindowKey>) {
+        self.mode = InputMode::Locked;
+        match byte {
+            b'c' => output.push(WindowKey::Create),
+            b'n' => output.push(WindowKey::Next),
+            b'p' => output.push(WindowKey::Previous),
+            b'\t' => output.push(WindowKey::Last),
+            b'&' => output.push(WindowKey::Close),
+            b'x' => output.push(WindowKey::ClosePane),
+            b'<' => output.push(WindowKey::MoveLeft),
+            b'>' => output.push(WindowKey::MoveRight),
+            b'%' => output.push(WindowKey::Split(SplitAxis::Columns)),
+            b'"' => output.push(WindowKey::Split(SplitAxis::Rows)),
+            b'{' => output.push(WindowKey::SwapPanePrevious),
+            b'}' => output.push(WindowKey::SwapPaneNext),
+            b'!' => output.push(WindowKey::BreakPane),
+            b'm' => output.push(WindowKey::JoinPane),
+            b'o' => output.push(WindowKey::NextPane),
+            b'Z' => output.push(WindowKey::ToggleZoom),
+            b'z' => output.push(WindowKey::UndoClose),
+            b'[' => output.push(WindowKey::History),
+            b'E' => output.push(WindowKey::HistoryEditor),
+            b'e' => output.push(WindowKey::LastCommandEditor),
+            8 => output.push(WindowKey::ResizePane(Direction::Left)),
+            10 => output.push(WindowKey::ResizePane(Direction::Down)),
+            11 => output.push(WindowKey::ResizePane(Direction::Up)),
+            12 => output.push(WindowKey::ResizePane(Direction::Right)),
+            b'h' => output.push(WindowKey::FocusPane(Direction::Left)),
+            b'j' => output.push(WindowKey::FocusPane(Direction::Down)),
+            b'k' => output.push(WindowKey::FocusPane(Direction::Up)),
+            b'l' => output.push(WindowKey::FocusPane(Direction::Right)),
+            b',' => output.push(WindowKey::Rename),
+            b'1'..=b'9' => output.push(WindowKey::Select(usize::from(byte - b'1'))),
+            b'0' => output.push(WindowKey::Select(9)),
+            2 => output.push(WindowKey::Byte(2)),
+            _ => {
+                output.push(WindowKey::Byte(2));
+                output.push(WindowKey::Byte(byte));
+            }
         }
     }
 }
@@ -1505,6 +1529,10 @@ fn forward(
                     session_name,
                     &names,
                     active_index,
+                    keys.mode == InputMode::Normal,
+                );
+                keys.footer_hitboxes = crate::chrome::footer_hitboxes(
+                    usize::from(columns),
                     keys.mode == InputMode::Normal,
                 );
                 keys.active_pane = Some(set.layout().active());
@@ -2737,6 +2765,70 @@ mod window_input_tests {
                 .map(WindowKey::Byte)
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn footer_clicks_enter_commands_and_dispatch_grouped_shortcuts_once() {
+        let mut keys = WindowInput {
+            pane_height: 22,
+            pane_width: 80,
+            pane_top: 1,
+            bar_enabled: true,
+            footer_row: Some(24),
+            footer_hitboxes: crate::chrome::footer_hitboxes(80, false),
+            ..WindowInput::default()
+        };
+        let mut output = Vec::new();
+        for &byte in b"\x1b[<0;2;24M\x1b[<0;2;24m" {
+            keys.feed(byte, &mut output);
+        }
+        assert!(output.is_empty());
+        assert_eq!(keys.mode, InputMode::Normal);
+
+        let cases = [
+            (2, WindowKey::Create),
+            (9, WindowKey::Split(SplitAxis::Columns)),
+            (20, WindowKey::Split(SplitAxis::Rows)),
+            (31, WindowKey::FocusPane(Direction::Left)),
+            (33, WindowKey::FocusPane(Direction::Down)),
+            (35, WindowKey::FocusPane(Direction::Up)),
+            (37, WindowKey::FocusPane(Direction::Right)),
+            (46, WindowKey::Next),
+            (48, WindowKey::Previous),
+            (58, WindowKey::ToggleZoom),
+        ];
+        for (column, expected) in cases {
+            keys.mode = InputMode::Normal;
+            keys.footer_hitboxes = crate::chrome::footer_hitboxes(80, true);
+            output.clear();
+            for byte in format!("\x1b[<0;{column};24M\x1b[<0;{column};24m").bytes() {
+                keys.feed(byte, &mut output);
+            }
+            assert_eq!(output, [expected]);
+            assert_eq!(keys.mode, InputMode::Locked);
+        }
+    }
+
+    #[test]
+    fn footer_blank_drag_wheel_and_client_local_hint_stay_consumed() {
+        let mut keys = WindowInput {
+            pane_height: 22,
+            pane_width: 80,
+            pane_top: 1,
+            mouse_tracking: MouseTracking::Any,
+            bar_enabled: true,
+            footer_row: Some(24),
+            footer_hitboxes: crate::chrome::footer_hitboxes(80, false),
+            ..WindowInput::default()
+        };
+        let mut output = Vec::new();
+        // The second locked hint is client-local and deliberately has no server
+        // hitbox. Blank space, drag motion, release and wheel remain isolated.
+        for &byte in b"\x1b[<0;20;24M\x1b[<32;22;23M\x1b[<0;22;23m\x1b[<64;70;24M" {
+            keys.feed(byte, &mut output);
+        }
+        assert!(output.is_empty());
+        assert!(!keys.footer_press);
     }
 
     #[test]

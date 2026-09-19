@@ -1142,6 +1142,37 @@ try:
 finally:
     s.close()
 
+# Visible footer hints execute the same server-side actions as their keyboard
+# shortcuts. Press/release is consumed once and grouped keys use the clicked key.
+s = Session()
+try:
+    s.expect(b"RUSTMUX_READY> ")
+    s.send(b"CLICK_WIN=1\n")
+    s.send(b"\x1b[<0;2;24M\x1b[<0;2;24m")
+    expect_bar(s, b"NORMAL")
+    expect_footer(s, b"c New")
+    s.send(b"\x1b[<0;2;24M\x1b[<0;2;24m")
+    s.expect(b"RUSTMUX_READY> ")
+    expect_bar(s, b"2 shell")
+    s.send(b"CLICK_WIN=2\n")
+
+    s.send(b"\x1b[<0;2;24M\x1b[<0;2;24m")
+    expect_bar(s, b"NORMAL")
+    s.send(b"\x1b[<0;46;24M\x1b[<0;46;24m")
+    s.send(b"printf '\nFOOTER_NEXT:%s\n' $CLICK_WIN\n")
+    s.expect(b"FOOTER_NEXT:1")
+
+    s.send(b"\x1b[<0;2;24M\x1b[<0;2;24m")
+    s.send(b"\x1b[<0;48;24M\x1b[<0;48;24m")
+    s.send(b"printf '\nFOOTER_PREVIOUS:%s\n' $CLICK_WIN\n")
+    s.expect(b"FOOTER_PREVIOUS:2")
+    s.send(b"exit 0\n")
+    expect_bar_without(s, b"2 shell")
+    s.send(b"exit 0\n")
+    s.finish(0)
+finally:
+    s.close()
+
 bar_mouse = r"""
 import os, select, time, tty
 tty.setraw(0)
