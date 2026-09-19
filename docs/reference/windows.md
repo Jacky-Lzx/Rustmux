@@ -267,8 +267,11 @@ visible server-side hint executes the same action as its key and consumes the
 matching release. In grouped hints such as `n/p` or `h/j/k/l`, clicking a key
 chooses that key; clicking its label or padding chooses the first displayed key.
 Blank space, hidden hints, drags and wheel reports do nothing and never reach a
-child. `Ctrl-B Ctrl-W Sessions` remains display-only because the attached client,
-not the session server that renders the bar, owns the Session Manager shortcut.
+child. Named sessions also show `Ctrl-B Ctrl-W Sessions`. Clicking that hint asks
+the attached client to restore the outer terminal before opening the Session
+Manager; cancelling the manager reconnects the session that opened it. Local,
+unnamed Rustmux processes omit this hint because they have no session manager to
+open.
 
 When the bar is visible, Rustmux requests basic outer-terminal button reports
 even if the child has mouse tracking disabled. In that case content-area events

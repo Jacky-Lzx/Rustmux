@@ -21,9 +21,11 @@ The server-to-client messages are:
 - `Attached`: the accepted protocol version.
 - `Output`: arbitrary bytes for the outer terminal.
 - `Exit`: the server's signed process status.
+- `OpenSessionManager`: a zero-payload terminal control request.
 - `Rejected`: a UTF-8 reason limited to 1 KiB.
 
-The version is carried explicitly so the later handshake can reject an
+Protocol version 2 adds `OpenSessionManager`. The version is carried explicitly
+so the handshake can reject an
 incompatible peer before forwarding terminal bytes. Encoding validates sizes
 and limits just like decoding. Unit tests exercise every-byte fragmentation,
 multiple frames in one read, binary payloads, maximum-size frames, malformed

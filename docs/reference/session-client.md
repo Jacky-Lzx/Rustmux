@@ -11,7 +11,8 @@ input is encoded as bounded `Input` frames, SIGWINCH is coalesced into the newes
 `Resize`, and `Output` frames are written directly to the terminal. Partial
 writes retain their frame or output bytes, while backpressure stops the opposite
 side from adding an unbounded queue. The bridge accepts the server's final
-`Exit` status only after all preceding display bytes have reached the terminal.
+`Exit` status, or its `OpenSessionManager` control, only after all preceding
+display bytes have reached the terminal.
 
 Signals, protocol errors, socket disconnects and normal process exit all pass
 through the same terminal guard. It restores termios plus cursor, keypad, mouse,
@@ -25,6 +26,11 @@ return once the frame is written. The first exits to the outer terminal; the
 second restores the terminal before the supervisor opens the Session Manager.
 Bracketed paste contents never trigger either shortcut.
 
-The PTY unit test exercises the real raw-mode boundary: initial dimensions and
-resize propagation, keyboard input, rendered output, final status and exact
+A named-session server can request the same manager transition when its footer
+hint is clicked. The client stops accepting further terminal or socket input,
+drains prior display output, restores the terminal, and then returns control to
+the supervisor. Local unnamed processes do not advertise that footer action.
+
+PTY unit tests exercise the real raw-mode boundary: initial dimensions and
+resize propagation, keyboard input, rendered output, terminal controls and exact
 termios restoration.

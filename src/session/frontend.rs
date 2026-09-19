@@ -144,6 +144,15 @@ impl ServerFrontend {
 
     /// Finish an attached stream with the process status after rendered output drains.
     pub fn send_exit(&mut self, status: i32) -> io::Result<()> {
+        self.send_control(ServerMessage::Exit { status })
+    }
+
+    /// Ask the attached client to restore its terminal and open the session manager.
+    pub fn send_session_manager(&mut self) -> io::Result<()> {
+        self.send_control(ServerMessage::OpenSessionManager)
+    }
+
+    fn send_control(&mut self, message: ServerMessage) -> io::Result<()> {
         if self.state != ConnectionState::Attached {
             return Err(io::Error::new(
                 io::ErrorKind::NotConnected,
@@ -156,7 +165,7 @@ impl ServerFrontend {
                 "session output frame is still pending",
             ));
         }
-        let frame = ServerMessage::Exit { status }
+        let frame = message
             .encode()
             .map_err(|error| invalid_data(error.to_string()))?;
         let stream = self.peer.stream_mut();
@@ -367,6 +376,40 @@ mod tests {
         assert_eq!(
             client.decode(&bytes[..count]).unwrap(),
             [ServerMessage::Exit { status: -15 }]
+        );
+    }
+
+    #[test]
+    fn sends_session_manager_only_after_output_has_drained() {
+        let (mut client, mut frontend) = connected(24, 80);
+        let mut output = VecDeque::from(b"frame".to_vec());
+        frontend.send_output(&mut output).unwrap();
+        if frontend.has_pending_output() {
+            assert_eq!(
+                frontend.send_session_manager().unwrap_err().kind(),
+                io::ErrorKind::WouldBlock
+            );
+            while frontend.has_pending_output() {
+                frontend.send_output(&mut output).unwrap();
+            }
+        }
+        frontend.send_session_manager().unwrap();
+
+        let mut messages = Vec::new();
+        let mut bytes = [0; 64];
+        while messages.len() < 2 {
+            match client.stream_mut().read(&mut bytes) {
+                Ok(count) => messages.extend(client.decode(&bytes[..count]).unwrap()),
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => thread::yield_now(),
+                Err(error) => panic!("read failed: {error}"),
+            }
+        }
+        assert_eq!(
+            messages,
+            [
+                ServerMessage::Output(b"frame".to_vec()),
+                ServerMessage::OpenSessionManager,
+            ]
         );
     }
 

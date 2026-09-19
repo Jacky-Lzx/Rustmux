@@ -327,6 +327,7 @@ trait Frontend {
     fn drain_input(&mut self, pending: &mut VecDeque<u8>);
     fn receive(&mut self, pending: &mut VecDeque<u8>) -> io::Result<ConnectionState>;
     fn send(&mut self, pending: &mut VecDeque<u8>) -> io::Result<()>;
+    fn open_session_manager(&mut self) -> io::Result<bool>;
 }
 
 struct LocalFrontend {
@@ -378,6 +379,10 @@ impl Frontend for LocalFrontend {
     fn send(&mut self, pending: &mut VecDeque<u8>) -> io::Result<()> {
         send(self.terminal.file_mut(), pending)
     }
+
+    fn open_session_manager(&mut self) -> io::Result<bool> {
+        Ok(false)
+    }
 }
 
 impl Frontend for ServerFrontend {
@@ -406,6 +411,11 @@ impl Frontend for ServerFrontend {
 
     fn send(&mut self, pending: &mut VecDeque<u8>) -> io::Result<()> {
         self.send_output(pending)
+    }
+
+    fn open_session_manager(&mut self) -> io::Result<bool> {
+        self.send_session_manager()?;
+        Ok(true)
     }
 }
 
@@ -531,6 +541,7 @@ enum WindowKey {
     History,
     HistoryEditor,
     LastCommandEditor,
+    SessionManager,
     FocusPane(Direction),
     ResizePane(Direction),
     SwapPaneNext,
@@ -682,6 +693,8 @@ impl WindowInput {
                     {
                         if action == 2 {
                             self.mode = InputMode::Normal;
+                        } else if action == 23 {
+                            output.push(WindowKey::SessionManager);
                         } else {
                             self.shortcut(action, output);
                         }
@@ -1040,6 +1053,7 @@ fn forward(
     let mut history: Option<crate::history_view::HistoryView> = None;
     let mut close_requested = None;
     let mut connection = ConnectionState::Attached;
+    let mut session_manager_requested = false;
     let mut pane_resize_pending: Option<(WindowId, Instant)> = None;
     loop {
         frontend.drain_input(&mut input);
@@ -1262,6 +1276,7 @@ fn forward(
                 }
                 active_paused = paused;
                 if close_requested.is_none()
+                    && !session_manager_requested
                     && (dirty || force_redraw || bar_dirty)
                     && pane_resize_pending.is_none()
                     && (!paused || force_redraw)
@@ -1534,6 +1549,7 @@ fn forward(
                 keys.footer_hitboxes = crate::chrome::footer_hitboxes(
                     usize::from(columns),
                     keys.mode == InputMode::Normal,
+                    session_name.is_some(),
                 );
                 keys.active_pane = Some(set.layout().active());
                 keys.pane_hitboxes = pane_view::hitboxes(set.layout());
@@ -1558,6 +1574,11 @@ fn forward(
                             pane.command_submitted();
                         }
                         pane.parts_mut().3.to_shell.push_back(byte);
+                    }
+                    WindowKey::SessionManager => {
+                        input.clear();
+                        keys = WindowInput::default();
+                        session_manager_requested = true;
                     }
                     WindowKey::Split(axis) => {
                         let directory = active_directory(windows);
@@ -1835,6 +1856,12 @@ fn forward(
                 }
             }
         }
+        if session_manager_requested && to_terminal.is_empty() {
+            if frontend.open_session_manager()? {
+                return Ok(ForwardExit::Detached);
+            }
+            session_manager_requested = false;
+        }
         if let Some(exit) = frontend_exit(connection, &input) {
             return Ok(exit);
         }
@@ -1853,7 +1880,10 @@ fn forward(
                 && pane.io().dirty
         });
         let mut outer_events = PollFlags::empty();
-        if connection == ConnectionState::Attached && input.len() < LIMIT && frontend.can_receive()
+        if connection == ConnectionState::Attached
+            && !session_manager_requested
+            && input.len() < LIMIT
+            && frontend.can_receive()
         {
             outer_events |= PollFlags::POLLIN;
         }
@@ -2775,7 +2805,7 @@ mod window_input_tests {
             pane_top: 1,
             bar_enabled: true,
             footer_row: Some(24),
-            footer_hitboxes: crate::chrome::footer_hitboxes(80, false),
+            footer_hitboxes: crate::chrome::footer_hitboxes(80, false, false),
             ..WindowInput::default()
         };
         let mut output = Vec::new();
@@ -2799,7 +2829,7 @@ mod window_input_tests {
         ];
         for (column, expected) in cases {
             keys.mode = InputMode::Normal;
-            keys.footer_hitboxes = crate::chrome::footer_hitboxes(80, true);
+            keys.footer_hitboxes = crate::chrome::footer_hitboxes(80, true, false);
             output.clear();
             for byte in format!("\x1b[<0;{column};24M\x1b[<0;{column};24m").bytes() {
                 keys.feed(byte, &mut output);
@@ -2810,7 +2840,7 @@ mod window_input_tests {
     }
 
     #[test]
-    fn footer_blank_drag_wheel_and_client_local_hint_stay_consumed() {
+    fn local_footer_blank_drag_and_wheel_stay_consumed() {
         let mut keys = WindowInput {
             pane_height: 22,
             pane_width: 80,
@@ -2818,17 +2848,36 @@ mod window_input_tests {
             mouse_tracking: MouseTracking::Any,
             bar_enabled: true,
             footer_row: Some(24),
-            footer_hitboxes: crate::chrome::footer_hitboxes(80, false),
+            footer_hitboxes: crate::chrome::footer_hitboxes(80, false, false),
             ..WindowInput::default()
         };
         let mut output = Vec::new();
-        // The second locked hint is client-local and deliberately has no server
-        // hitbox. Blank space, drag motion, release and wheel remain isolated.
+        // Local sessions omit the named-session hint. Blank space, drag motion,
+        // release and wheel remain isolated from the child.
         for &byte in b"\x1b[<0;20;24M\x1b[<32;22;23M\x1b[<0;22;23m\x1b[<64;70;24M" {
             keys.feed(byte, &mut output);
         }
         assert!(output.is_empty());
         assert!(!keys.footer_press);
+    }
+
+    #[test]
+    fn named_session_footer_requests_the_client_session_manager() {
+        let mut keys = WindowInput {
+            pane_height: 22,
+            pane_width: 80,
+            pane_top: 1,
+            bar_enabled: true,
+            footer_row: Some(24),
+            footer_hitboxes: crate::chrome::footer_hitboxes(80, false, true),
+            ..WindowInput::default()
+        };
+        let mut output = Vec::new();
+        for &byte in b"\x1b[<0;20;24M\x1b[<0;20;24m" {
+            keys.feed(byte, &mut output);
+        }
+        assert_eq!(output, [WindowKey::SessionManager]);
+        assert_eq!(keys.mode, InputMode::Locked);
     }
 
     #[test]

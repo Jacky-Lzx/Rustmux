@@ -30,9 +30,13 @@ and returns when the final pane exits. A newly accepted socket must complete the
 normal handshake before it becomes the next frontend; malformed or abandoned
 connections do not terminate the existing session. When an attached session
 finishes after its rendered output drains, the server sends the protocol `Exit`
-status before closing the connection.
+status before closing the connection. Clicking the named-session footer instead
+sends `OpenSessionManager` after rendered output drains, releases that client and
+leaves the session runtime ready for its next attachment.
 
 The CLI supervisor binds a named endpoint, forks before terminal mode changes,
 starts the server in a new process session and connects the original process as
 its first client. Later `attach` commands use the same runtime after Ctrl-B `d`
-detaches the current client.
+detaches the current client. Ctrl-B Ctrl-W or the clickable footer returns to the
+client supervisor, which opens the Session Manager and reconnects the current
+session when the manager is cancelled.

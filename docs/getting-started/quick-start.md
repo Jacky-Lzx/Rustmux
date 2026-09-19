@@ -89,8 +89,9 @@ bar shows the saved name and highlights the active window; left-click a visible
 window label to select it, or scroll over the bar to move between windows.
 The bottom bar shows shortcuts for the current input mode. Click a visible key
 or label to run server-side window and pane actions; grouped hints use the exact
-key clicked, while their label selects the first key. The Session Manager hint
-is display-only and still uses Ctrl-B followed by Ctrl-W.
+key clicked, while their label selects the first key. Inside a named session,
+click `Ctrl-B Ctrl-W Sessions` to open the Session Manager; local unnamed
+processes omit that hint.
 
 Use Ctrl-B followed by `%` to split left/right, or `"` to split top/bottom.
 The new pane is selected. Ctrl-B followed by lowercase `h/j/k/l` selects the pane

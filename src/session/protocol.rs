@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-pub const PROTOCOL_VERSION: u16 = 1;
+pub const PROTOCOL_VERSION: u16 = 2;
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
 pub const MAX_ERROR_BYTES: usize = 1024;
 
@@ -15,6 +15,7 @@ const SERVER_ATTACHED: u8 = 128;
 const SERVER_OUTPUT: u8 = 129;
 const SERVER_EXIT: u8 = 130;
 const SERVER_REJECTED: u8 = 131;
+const SERVER_OPEN_SESSION_MANAGER: u8 = 132;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ClientMessage {
@@ -65,6 +66,7 @@ pub enum ServerMessage {
     Output(Vec<u8>),
     Exit { status: i32 },
     Rejected(String),
+    OpenSessionManager,
 }
 
 impl ServerMessage {
@@ -79,6 +81,7 @@ impl ServerMessage {
                 }
                 encode_frame(SERVER_REJECTED, message.as_bytes())
             }
+            Self::OpenSessionManager => encode_frame(SERVER_OPEN_SESSION_MANAGER, &[]),
         }
     }
 }
@@ -287,6 +290,10 @@ fn decode_server(frame: Frame) -> Result<ServerMessage, ProtocolError> {
                 String::from_utf8(frame.payload).map_err(|_| ProtocolError::InvalidUtf8)?;
             Ok(ServerMessage::Rejected(message))
         }
+        SERVER_OPEN_SESSION_MANAGER => {
+            require_length(&frame, 0)?;
+            Ok(ServerMessage::OpenSessionManager)
+        }
         message => Err(ProtocolError::UnknownMessage(message)),
     }
 }
@@ -351,6 +358,7 @@ mod tests {
             },
             ServerMessage::Output(vec![b'\x1b', b'[', b'2', b'J', 0]),
             ServerMessage::Rejected("already attached".to_owned()),
+            ServerMessage::OpenSessionManager,
             ServerMessage::Exit { status: -15 },
         ];
         let encoded: Vec<u8> = expected

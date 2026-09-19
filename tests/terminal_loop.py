@@ -2602,11 +2602,13 @@ try:
     picker.expect(b"RUSTMUX_READY>")
     expect_bar(picker, f"Rustmux ({picker_target})".encode())
 
-    # Ctrl-B Ctrl-W detaches only this client, opens the manager with the
-    # current session selected, and attaches the chosen session. Cancelling a
-    # manager opened this way reconnects the session that opened it.
+    # Clicking the named-session footer asks the client to leave the alternate
+    # screen, opens the manager with the current session selected, and attaches
+    # the chosen session. Cancelling a manager opened this way reconnects the
+    # session that opened it.
+    expect_footer(picker, b"Ctrl-B Ctrl-W Sessions")
     picker.output.clear()
-    picker.send(b"\x02\x17")
+    picker.send(b"\x1b[<0;20;24M\x1b[<0;20;24m")
     end = time.monotonic() + 8
     while b"Session Manager" not in picker.output:
         picker.read()
@@ -2614,27 +2616,36 @@ try:
     while b"[CURRENT]" not in picker.output:
         picker.read()
         assert time.monotonic() < end, bytes(picker.output[-2000:])
-    manager_order = [picker_target] + [name for name in sessions if name != picker_target]
-    target_to_helper = manager_order.index(picker_helper)
-    picker.send(b"j" * target_to_helper + b"\r")
+    picker.output.clear()
+    picker.send(b"/zhelper\t")
+    end = time.monotonic() + 8
+    while picker_helper.encode() not in picker.output:
+        picker.read()
+        assert time.monotonic() < end, bytes(picker.output[-2000:])
+    picker.output.clear()
+    picker.send(b"\r")
     picker.expect(b"RUSTMUX_READY>")
     expect_bar(picker, f"Rustmux ({picker_helper})".encode())
 
+    # The keyboard shortcut remains available from the newly attached session.
     picker.output.clear()
     picker.send(b"\x02\x17")
     end = time.monotonic() + 8
     while b"Session Manager" not in picker.output:
         picker.read()
         assert time.monotonic() < end, bytes(picker.output[-2000:])
+    picker.output.clear()
+    picker.last_rows.clear()
     picker.send(b"q")
     picker.expect(b"RUSTMUX_READY>")
     expect_bar(picker, f"Rustmux ({picker_helper})".encode())
     picker.send(b"\x02d")
     picker.finish(0)
 
-    # The most recently attached detached session is selected first. The first
-    # d only arms deletion; another key cancels that confirmation, and only a
-    # fresh consecutive dd terminates the selected session.
+    # Filter to the uniquely named test session before exercising deletion so
+    # unrelated sessions in the user's runtime directory cannot be selected.
+    # The first d only arms deletion; another key cancels that confirmation,
+    # and only a fresh consecutive dd terminates the selected session.
     picker.close()
     picker = Session(arguments=("attach",))
     fcntl.ioctl(picker.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 160, 0, 0))
@@ -2642,7 +2653,21 @@ try:
     while b"Session Manager" not in picker.output or b"LAST CONNECTED" not in picker.output:
         picker.read()
         assert time.monotonic() < end, bytes(picker.output[-2000:])
+    picker.output.clear()
+    picker.send(b"/zhelper")
+    end = time.monotonic() + 8
+    while b"Search: zhelper_" not in picker.output:
+        picker.read()
+        assert time.monotonic() < end, bytes(picker.output[-2000:])
+    picker.output.clear()
+    picker.send(b"\x1b")
+    end = time.monotonic() + 8
+    while picker_helper.encode() not in picker.output or b"<dd> Kill" not in picker.output:
+        picker.read()
+        assert time.monotonic() < end, bytes(picker.output[-2000:])
+    picker.output.clear()
     picker.send(b"d")
+    end = time.monotonic() + 8
     while b"Press d again to kill" not in picker.output:
         picker.read()
         assert time.monotonic() < end, bytes(picker.output[-2000:])
