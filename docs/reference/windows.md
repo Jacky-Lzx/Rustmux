@@ -264,7 +264,7 @@ The bottom bar starts with the current mode in a plain rectangular red or green
 badge, followed by `Ctrl-B Commands` in locked mode or the available window/pane
 keys in normal mode. The mode badge has no Powerline arrows. Each shortcut uses
 Pink key text on the Base background, followed by a Powerline transition into
-an uppercase Lavender action label and back to Base. Complete hints are added
+a sentence-case Lavender action label and back to Base. Complete hints are added
 from left to right; a hint that
 does not fit is omitted instead of being split. NORMAL mode reserves space for
 `? Help`, so the complete shortcut reference remains reachable when middle hints

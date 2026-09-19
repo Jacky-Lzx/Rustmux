@@ -16,8 +16,8 @@ const BASE: Color = Color::Rgb(0x1e, 0x1e, 0x2e);
 const SURFACE: Color = Color::Rgb(0x31, 0x32, 0x44);
 const TEXT: Color = Color::Rgb(0xcd, 0xd6, 0xf4);
 const MUTED: Color = Color::Rgb(0xa6, 0xad, 0xc8);
-const BLUE: Color = Color::Rgb(0x89, 0xb4, 0xfa);
-const PEACH: Color = Color::Rgb(0xfa, 0xb3, 0x87);
+const PINK: Color = Color::Rgb(0xf5, 0xc2, 0xe7);
+const LAVENDER: Color = Color::Rgb(0xb4, 0xbe, 0xfe);
 
 #[derive(Clone, Copy)]
 struct Command {
@@ -301,7 +301,7 @@ impl ShortcutHelp {
             ..Style::default()
         };
         let border = Style {
-            foreground: BLUE,
+            foreground: LAVENDER,
             background: BASE,
             bold: true,
             ..Style::default()
@@ -314,7 +314,7 @@ impl ShortcutHelp {
             return screen;
         }
         let title = Style {
-            foreground: PEACH,
+            foreground: PINK,
             background: BASE,
             bold: true,
             ..Style::default()
@@ -498,12 +498,31 @@ impl ShortcutHelp {
         column: usize,
         width: usize,
         command: Command,
-        style: Style,
+        panel: Style,
     ) {
         let key_width = KEY_WIDTH.min(width);
         let key = clipped(command.key, key_width);
-        let text = format!("{key:<key_width$}{}", command.label);
-        write_at(screen, row, column, &text, style, width);
+        let key_text = format!("{key:<key_width$}");
+        let key_style = Style {
+            foreground: PINK,
+            bold: true,
+            ..panel
+        };
+        let label_style = Style {
+            foreground: LAVENDER,
+            ..panel
+        };
+        write_at(screen, row, column, &key_text, key_style, key_width);
+        if width > key_width {
+            write_at(
+                screen,
+                row,
+                column + key_width,
+                command.label,
+                label_style,
+                width - key_width,
+            );
+        }
         for (offset, action) in command.actions {
             if *offset < key.width().min(key_width) {
                 self.hitboxes.push(Hitbox {
@@ -587,6 +606,12 @@ mod tests {
         assert_eq!(view.mouse_tracking(), MouseTracking::Button);
         assert!(view.sgr_mouse());
         assert!(!view.bracketed_paste());
+        let first_command = view.row(2).unwrap();
+        assert_eq!(first_command[6].character, 'c');
+        assert_eq!(first_command[6].style.foreground, PINK);
+        assert!(first_command[6].style.bold);
+        assert_eq!(first_command[17].character, 'N');
+        assert_eq!(first_command[17].style.foreground, LAVENDER);
 
         let mut named = ShortcutHelp::new(true);
         assert!(text(&named.overlay(&original)).contains("Session Manager"));

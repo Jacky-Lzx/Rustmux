@@ -16,6 +16,11 @@ Ctrl-B shortcut. Clicking either the key or its label does the same; in grouped
 entries such as `n/p`, clicking the exact key selects that action while clicking
 the label selects the first action. A drag cancels the click.
 
+The panel follows the footer's Catppuccin Mocha visual language: shortcut keys
+are bold Pink, action labels use sentence case in Lavender, and the Lavender
+border surrounds a Pink title. Pagination and close guidance remain muted on a
+Surface background so they do not compete with the actionable rows.
+
 Named sessions also show Ctrl-W for the Session Manager; local unnamed processes
 omit that entry. Ctrl-h/j/k/l in the panel means the control-modified directional
 keys used to resize the nearest pane separator.
