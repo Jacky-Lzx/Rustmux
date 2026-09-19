@@ -1031,57 +1031,6 @@ with tempfile.TemporaryDirectory(prefix="rustmux-window-limit-") as directory:
     finally:
         s.close()
 
-# Rename edits window metadata while the child continues writing its own screen.
-s = Session()
-try:
-    s.expect(b"RUSTMUX_READY> ")
-    s.send(b"sleep 0.2; printf '\\033[2J\\033[H%s%s\\n' WORK _DONE\n")
-    s.send(b"\x02,")
-    s.expect(b"Rename: shell")
-    s.send("\x15中文e\u0301\x7f".encode())
-    s.expect("Rename: 中文e".encode())
-    end = time.monotonic() + 3
-    while not any(b"WORK_DONE" in row for row in s.last_rows):
-        s.read()
-        assert time.monotonic() < end, s.last_rows
-    assert s.last_rows[0].startswith("Rename: 中文e".encode())
-    s.send(b"\r")
-    s.send(b"\x02,")
-    s.expect("Rename: 中文e".encode())
-    s.send(b"\x15discard\x1b")
-    end = time.monotonic() + 3
-    while s.last_rows[0].startswith(b"Rename:"):
-        s.read()
-        assert time.monotonic() < end, s.last_rows
-    s.send(b"\x02,")
-    s.expect("Rename: 中文e".encode())
-    s.send("\x15\x1b[200~粘贴\x02c\n\x1b[201~\r".encode())
-    s.send(b"\x02,")
-    s.expect("Rename: 粘贴c".encode())
-    fcntl.ioctl(s.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 18, 60, 0, 0))
-    s.read(0.1)
-    s.send(b"\x07")
-    s.send(b"printf '\\n%s%s\\n' RENAME_ RESTORED; exit 0\n")
-    s.finish(0)
-    assert any(b"RENAME_RESTORED" in row for row in s.last_rows)
-    assert not any(row.startswith(b"Rename:") for row in s.last_rows)
-finally:
-    s.close()
-
-# A child exit cancels its pending rename and delivers the child's final screen.
-s = Session()
-try:
-    s.expect(b"RUSTMUX_READY> ")
-    s.send(b"sleep 0.2; printf '\\033[2J\\033[H%s%s\\n' EDITOR_ EXIT; exit 7\n")
-    s.send(b"\x02,")
-    s.expect(b"Rename: shell")
-    s.finish(7)
-    assert any(b"EDITOR_EXIT" in row for row in s.last_rows)
-    assert not any(row.startswith(b"Rename:") for row in s.last_rows)
-finally:
-    s.close()
-
-# Persistent bar reflects creation, focus, rename and removal without hiding content.
 def expect_bar(session, marker):
     end = time.monotonic() + 3
     while not session.last_rows or marker not in session.last_rows[0]:
@@ -1094,6 +1043,73 @@ def expect_bar_without(session, marker):
         session.read()
         assert time.monotonic() < end, session.last_rows
 
+def expect_emitted_footer(session, marker):
+    # The harness removes the pane frame and footer from logical rows. Match the
+    # emitted terminal bytes so the footer remains covered by the real PTY test.
+    end = time.monotonic() + 8
+    while marker not in session.output:
+        session.read()
+        assert time.monotonic() < end, (marker, session.last_rows, session.output[-1000:])
+    session.output.clear()
+    session.frames.clear()
+
+# Rename edits the active window name in place while the child keeps running.
+s = Session()
+try:
+    s.expect(b"RUSTMUX_READY> ")
+    s.send(b"sleep 0.2; printf '\\033[2J\\033[H%s%s\\n' WORK _DONE\n")
+    s.send(b"\x02,")
+    expect_emitted_footer(s, b"RENAME")
+    expect_bar_without(s, b"shell")
+    s.send("\x15中文e\u0301\x7f".encode())
+    expect_bar(s, "1 中文e".encode())
+    end = time.monotonic() + 3
+    while not any(b"WORK_DONE" in row for row in s.last_rows):
+        s.read()
+        assert time.monotonic() < end, s.last_rows
+    assert "1 中文e".encode() in s.last_rows[0]
+    s.send(b"\r")
+    expect_emitted_footer(s, b"LOCKED")
+    s.send(b"\x02,")
+    expect_emitted_footer(s, b"RENAME")
+    expect_bar_without(s, "中文e".encode())
+    s.send(b"discard\x1b")
+    expect_emitted_footer(s, b"LOCKED")
+    expect_bar(s, "1 中文e".encode())
+    s.send(b"\x02,")
+    expect_emitted_footer(s, b"RENAME")
+    s.send("\x1b[200~粘贴\x02c\n\x1b[201~\r".encode())
+    expect_bar(s, "1 粘贴c".encode())
+    expect_emitted_footer(s, b"LOCKED")
+    s.send(b"\x02,")
+    expect_emitted_footer(s, b"RENAME")
+    expect_bar_without(s, "粘贴c".encode())
+    fcntl.ioctl(s.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 18, 60, 0, 0))
+    s.read(0.1)
+    s.send(b"\x07")
+    expect_emitted_footer(s, b"LOCKED")
+    expect_bar(s, "1 粘贴c".encode())
+    s.send(b"printf '\\n%s%s\\n' RENAME_ RESTORED; exit 0\n")
+    s.finish(0)
+    assert any(b"RENAME_RESTORED" in row for row in s.last_rows)
+    assert not any(b"RENAME" in row for row in s.last_rows[-1:])
+finally:
+    s.close()
+
+# A child exit cancels its pending rename and delivers the child's final screen.
+s = Session()
+try:
+    s.expect(b"RUSTMUX_READY> ")
+    s.send(b"sleep 0.2; printf '\\033[2J\\033[H%s%s\\n' EDITOR_ EXIT; exit 7\n")
+    s.send(b"\x02,")
+    expect_emitted_footer(s, b"RENAME")
+    s.finish(7)
+    assert any(b"EDITOR_EXIT" in row for row in s.last_rows)
+    assert not any(b"RENAME" in row for row in s.last_rows[-1:])
+finally:
+    s.close()
+
+# Persistent bar reflects creation, focus, rename and removal without hiding content.
 def expect_footer(session, marker):
     end = time.monotonic() + 3
     while not session.physical_rows or marker not in session.physical_rows[-1]:

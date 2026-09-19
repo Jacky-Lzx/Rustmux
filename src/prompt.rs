@@ -1,14 +1,20 @@
 //! Bounded window-bar editors for names, pane destinations and close confirmations.
 
 use crate::{
-    chrome::{bar_style, prepare_row},
-    screen::{CursorShape, MouseTracking, Screen},
+    chrome::{clipped, prepare_row},
+    screen::{CursorShape, EraseMode, MouseTracking, Screen},
+    style::{Color, Style},
 };
 use std::time::{Duration, Instant};
-use unicode_width::UnicodeWidthChar;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const MAX_NAME_BYTES: usize = 128;
 const ESCAPE_DELAY: Duration = Duration::from_millis(30);
+const BASE: Color = Color::Rgb(0x1e, 0x1e, 0x2e);
+const TEXT: Color = Color::Rgb(0xcd, 0xd6, 0xf4);
+const PINK: Color = Color::Rgb(0xf5, 0xc2, 0xe7);
+const LAVENDER: Color = Color::Rgb(0xb4, 0xbe, 0xfe);
+const MIN_INPUT_COLUMNS_WITH_HINTS: usize = 4;
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum EditResult {
@@ -64,8 +70,16 @@ impl WindowPrompt {
         }
     }
 
-    pub fn new(name: &str) -> Self {
-        let mut prompt = Self {
+    fn submit_label(&self) -> &'static str {
+        match self.kind {
+            PromptKind::Rename => "Save",
+            PromptKind::Close | PromptKind::ClosePane => "Close",
+            PromptKind::MovePane => "Move",
+        }
+    }
+
+    pub fn new(_name: &str) -> Self {
+        Self {
             kind: PromptKind::Rename,
             text: String::new(),
             destinations: Vec::new(),
@@ -73,11 +87,11 @@ impl WindowPrompt {
             escape: Vec::new(),
             escape_at: None,
             paste: false,
-        };
-        for character in name.chars() {
-            prompt.append(character);
         }
-        prompt
+    }
+
+    pub fn is_rename(&self) -> bool {
+        self.kind == PromptKind::Rename
     }
 
     fn append(&mut self, character: char) {
@@ -162,13 +176,51 @@ impl WindowPrompt {
 
     pub fn overlay(&self, original: &Screen) -> Screen {
         let mut screen = original.clone();
-        let (_, columns) = screen.dimensions();
-        prepare_row(&mut screen, bar_style(true));
-        let mut remaining = columns.saturating_sub(1); // Reserve the visible cursor cell.
-        for character in self.label().chars().take(remaining) {
-            screen.print(character);
+        let (rows, columns) = screen.dimensions();
+        let panel = Style {
+            foreground: TEXT,
+            background: BASE,
+            ..Style::default()
+        };
+        if self.is_rename() {
+            if rows >= 3 {
+                screen.save_cursor();
+                prepare_prompt_row(&mut screen, rows - 1, panel);
+                screen.set_style(Style {
+                    foreground: LAVENDER,
+                    bold: true,
+                    ..panel
+                });
+                print(&mut screen, &clipped(" RENAME ", columns));
+                let hint_width = format!("<Enter> {}  <Esc> Cancel", self.submit_label()).width();
+                if " RENAME ".width() + 1 + hint_width <= columns {
+                    draw_action_hints(&mut screen, rows - 1, columns, self.submit_label(), panel);
+                }
+                screen.restore_cursor();
+            }
+            configure_modal_screen(&mut screen);
+            return screen;
         }
-        remaining = remaining.saturating_sub(self.label().len());
+
+        prepare_row(&mut screen, panel);
+
+        let label = clipped(self.label(), columns.saturating_sub(1));
+        screen.set_style(Style {
+            foreground: LAVENDER,
+            bold: true,
+            ..panel
+        });
+        print(&mut screen, &label);
+
+        let label_width = label.width();
+        let hint = format!("<Enter> {}  <Esc> Cancel", self.submit_label());
+        let hint_width = hint.width();
+        let show_hint = label_width + MIN_INPUT_COLUMNS_WITH_HINTS + 1 + hint_width < columns;
+        let reserved_hint = usize::from(show_hint) * (hint_width + 1);
+        let mut remaining = columns
+            .saturating_sub(label_width)
+            .saturating_sub(reserved_hint)
+            .saturating_sub(1); // Reserve the visible cursor cell.
         let mut start = self.text.len();
         for (index, character) in self.text.char_indices().rev() {
             let width = character.width().unwrap_or(0);
@@ -184,16 +236,78 @@ impl WindowPrompt {
         {
             screen.print(character);
         }
-        screen.set_cursor_visible(true);
-        screen.set_cursor_shape(CursorShape::SteadyBar);
-        screen.set_bracketed_paste(true);
-        screen.set_application_cursor_keys(false);
-        screen.set_application_keypad(false);
-        screen.set_focus_reporting(false);
-        screen.set_mouse_tracking(MouseTracking::Off);
-        screen.set_sgr_mouse(false);
+        let cursor_column = screen.cursor().1;
+
+        if show_hint {
+            draw_action_hints(&mut screen, 0, columns, self.submit_label(), panel);
+        }
+
+        screen.position(0, cursor_column);
+        screen.set_style(panel);
+        configure_modal_screen(&mut screen);
         screen
     }
+}
+
+fn configure_modal_screen(screen: &mut Screen) {
+    screen.set_cursor_visible(true);
+    screen.set_cursor_shape(CursorShape::SteadyBar);
+    screen.set_bracketed_paste(true);
+    screen.set_application_cursor_keys(false);
+    screen.set_application_keypad(false);
+    screen.set_focus_reporting(false);
+    screen.set_mouse_tracking(MouseTracking::Off);
+    screen.set_sgr_mouse(false);
+}
+
+fn prepare_prompt_row(screen: &mut Screen, row: usize, style: Style) {
+    screen.set_origin_mode(false);
+    screen.set_insert_mode(false);
+    screen.set_auto_wrap(false);
+    screen.designate_character_set(false, false);
+    screen.select_character_set(false);
+    screen.set_style(style);
+    screen.position(row, 0);
+    screen.erase_line(EraseMode::All);
+}
+
+fn print(screen: &mut Screen, text: &str) {
+    for character in text.chars() {
+        screen.print(character);
+    }
+}
+
+fn draw_hint(screen: &mut Screen, key: &str, label: &str, panel: Style) {
+    screen.set_style(Style {
+        foreground: PINK,
+        bold: true,
+        ..panel
+    });
+    print(screen, key);
+    screen.set_style(Style {
+        foreground: LAVENDER,
+        ..panel
+    });
+    print(screen, " ");
+    print(screen, label);
+}
+
+fn draw_action_hints(
+    screen: &mut Screen,
+    row: usize,
+    columns: usize,
+    submit_label: &str,
+    panel: Style,
+) {
+    let hint = format!("<Enter> {submit_label}  <Esc> Cancel");
+    let hint_width = hint.width();
+    if hint_width > columns {
+        return;
+    }
+    screen.position(row, columns - hint_width);
+    draw_hint(screen, "<Enter>", submit_label, panel);
+    print(screen, "  ");
+    draw_hint(screen, "<Esc>", "Cancel", panel);
 }
 
 #[cfg(test)]
@@ -280,20 +394,54 @@ mod tests {
             let saved = original.clone();
             let overlay = WindowPrompt::new("very long 中文e\u{301}").overlay(&original);
             assert_eq!(original, saved);
-            assert_eq!(overlay.row(2), original.row(2));
+            assert_eq!(overlay.row(0), original.row(0));
             assert_eq!(overlay.row(1), original.row(1));
-            assert_eq!(overlay.cursor().0, 0);
-            assert!(overlay.cursor().1 < columns);
+            assert_eq!(overlay.cursor(), original.cursor());
             assert!(!overlay.wrap_pending());
             assert!(overlay.bracketed_paste());
             assert_eq!(overlay.mouse_tracking(), MouseTracking::Off);
             if columns >= 8 {
-                let label: String = overlay.row(0).unwrap()[..7]
+                let label: String = overlay.row(2).unwrap()[..8]
                     .iter()
                     .map(|cell| cell.character)
                     .collect();
-                assert_eq!(label, "Rename:");
+                assert_eq!(label, " RENAME ");
             }
         }
+    }
+
+    #[test]
+    fn wide_prompt_uses_shared_colors_and_right_aligned_action_hints() {
+        let screen = Screen::new(3, 80).unwrap();
+        let rename = WindowPrompt::new("shell").overlay(&screen);
+        let rename_row = rename.row(2).unwrap();
+        let rename_text: String = rename_row.iter().map(|cell| cell.character).collect();
+        assert!(rename_text.starts_with(" RENAME "));
+        assert!(rename_text.ends_with("<Enter> Save  <Esc> Cancel"));
+        assert_eq!(rename.cursor(), screen.cursor());
+
+        let view = WindowPrompt::close().overlay(&screen);
+        let row = view.row(0).unwrap();
+        let text: String = row.iter().map(|cell| cell.character).collect();
+        assert!(text.starts_with("Close window? Type yes: "));
+        assert!(text.ends_with("<Enter> Close  <Esc> Cancel"));
+        assert_eq!(view.cursor(), (0, "Close window? Type yes: ".len()));
+        assert_eq!(row[0].style.foreground, LAVENDER);
+        assert!(row[0].style.bold);
+        assert_eq!(row[8].style.foreground, LAVENDER);
+
+        let hint = 80 - "<Enter> Close  <Esc> Cancel".len();
+        assert_eq!(row[hint].style.foreground, PINK);
+        assert!(row[hint].style.bold);
+        assert_eq!(row[hint + "<Enter> ".len()].style.foreground, LAVENDER);
+
+        let move_pane = WindowPrompt::move_pane(Vec::new()).overlay(&screen);
+        let move_text: String = move_pane
+            .row(0)
+            .unwrap()
+            .iter()
+            .map(|cell| cell.character)
+            .collect();
+        assert!(move_text.ends_with("<Enter> Move  <Esc> Cancel"));
     }
 }

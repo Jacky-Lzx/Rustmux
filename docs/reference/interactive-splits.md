@@ -158,6 +158,8 @@ and press Enter. The active pane is moved into a new split to the right of the
 target window's selected pane; focus follows it. The CLI currently uses a
 left/right split for this operation. Esc, Ctrl-C and Ctrl-G cancel. Bracketed
 paste can fill the number, but a pasted newline does not submit it.
+When space permits, the prompt adds right-aligned `<Enter> Move` and
+`<Esc> Cancel` hints; narrow rows keep the destination and cursor instead.
 
 Numbers are bound to stable window IDs when the prompt opens. If a background
 window exits while editing, its number cannot silently refer to another window.
@@ -192,6 +194,8 @@ press Enter to hide the pane and stop its foreground job. Empty or other answers
 dismiss the prompt; Esc, Ctrl-C and Ctrl-G cancel. Bracketed paste can fill the
 answer, but a pasted newline cannot confirm it. Ctrl-B `&` still permanently
 closes a whole window; it does not populate the undo slot.
+Wide rows show `<Enter> Close` and `<Esc> Cancel` hints in the shared prompt
+style without changing the explicit lowercase `yes` requirement.
 
 Ctrl-B `z` restores the last explicitly closed pane and focuses its original
 shell. Zoom has moved to **Ctrl-B `Z`**. Undo with no retained pane is a no-op.

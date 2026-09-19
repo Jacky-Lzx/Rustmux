@@ -429,6 +429,36 @@ pub(crate) fn window_hitboxes(
     hitboxes
 }
 
+pub(crate) fn active_window_name_cursor_column(
+    columns: usize,
+    session_name: Option<&str>,
+    names: &[String],
+    active: usize,
+) -> Option<usize> {
+    let layout = bar_layout(columns, session_name, names, active);
+    let mut used = layout.session_width;
+    let mut remaining = columns.saturating_sub(used);
+    for (index, label) in layout.labels.iter().enumerate().skip(layout.start) {
+        if remaining < 3 {
+            break;
+        }
+        let visible = clipped(label, remaining - 2);
+        let label_width = display_width(&visible);
+        if index == active {
+            let prefix = clipped(
+                &format!(" {} {}", index + 1, names.get(index)?),
+                label_width,
+            );
+            let offset = display_width(&prefix).min(label_width.saturating_sub(1));
+            return Some((used + 1 + offset).min(columns.saturating_sub(1)));
+        }
+        let segment_width = label_width + 2;
+        used += segment_width;
+        remaining -= segment_width;
+    }
+    None
+}
+
 pub(crate) fn compose(
     child: &Screen,
     outer_rows: u16,
@@ -728,17 +758,32 @@ mod tests {
     fn window_hitboxes_follow_the_rendered_segments_only() {
         let names = vec!["first".into(), "second".into(), "third".into()];
         assert_eq!(
+            active_window_name_cursor_column(80, None, &names, 0),
+            Some(9)
+        );
+        assert_eq!(
             window_hitboxes(80, None, &names, 0),
             vec![(1, 12, 0), (12, 24, 1), (24, 35, 2)]
         );
 
+        assert_eq!(
+            active_window_name_cursor_column(80, Some("work"), &names, 0),
+            Some(25)
+        );
         let session = window_hitboxes(80, Some("work"), &names, 0);
         assert_eq!(session[0], (17, 28, 0));
         assert!(session.iter().all(|(_, end, _)| *end <= 71));
 
+        let cursor = active_window_name_cursor_column(12, None, &names, 2).unwrap();
+        assert!(cursor < 12);
         let narrow = window_hitboxes(12, None, &names, 2);
         assert_eq!(narrow.len(), 1);
         assert_eq!(narrow[0].2, 2);
+
+        assert_eq!(
+            active_window_name_cursor_column(80, None, &[String::new()], 0),
+            Some(4)
+        );
     }
 
     #[test]

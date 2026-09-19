@@ -1253,14 +1253,17 @@ fn forward(
                 force_redraw = true;
             }
         }
-        let names: Vec<_> = windows
-            .iter()
-            .map(|window| window.name().to_owned())
-            .collect();
         let active_index = windows
             .iter()
             .position(|window| window.id() == active)
             .unwrap();
+        let mut names: Vec<_> = windows
+            .iter()
+            .map(|window| window.name().to_owned())
+            .collect();
+        if let Some(editor) = prompt.as_ref().filter(|editor| editor.is_rename()) {
+            names[active_index].clone_from(&editor.text);
+        }
         let mut active_paused = false;
         let mut finished = Vec::new();
         for window in windows.iter_mut() {
@@ -1336,6 +1339,19 @@ fn forward(
                         active_index,
                         keys.mode == InputMode::Normal,
                     )?;
+                    if prompt.as_ref().is_some_and(|editor| editor.is_rename())
+                        && *outer_rows > 1
+                        && let Some(column) = crate::chrome::active_window_name_cursor_column(
+                            view.dimensions().1,
+                            session_name,
+                            &names,
+                            active_index,
+                        )
+                    {
+                        view.position(0, column);
+                        view.set_cursor_visible(true);
+                        view.set_cursor_shape(crate::screen::CursorShape::SteadyBar);
+                    }
                     if let Some(history) = &history
                         && *outer_rows > 1
                     {

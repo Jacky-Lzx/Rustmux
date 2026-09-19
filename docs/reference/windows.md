@@ -3,7 +3,7 @@
 The CLI supports multiple terminal windows, each with one or more shell panes. `window::Windows<T>` owns their ordered collection and stable identities.
 A top window bar shows names and focus. Basic [interactive splitting](interactive-splits.md)
 and [named persistent sessions](session-cli.md) are available. Window renaming
-uses the same bar row as a temporary input prompt.
+edits the active label directly in the bar.
 
 ## Identity and focus
 
@@ -201,12 +201,17 @@ of the remaining H05 UI features or of all full-screen application behavior.
 
 ## Renaming a window
 
-Ctrl-B followed by `,` opens `Rename: <current name>` on the top row. Type to
-append, use Backspace to remove the last Unicode scalar, or Ctrl-U to clear.
-Enter saves; Esc, Ctrl-C or Ctrl-G cancel. Empty names are allowed. Names are
-limited to 128 UTF-8 bytes; excess text, malformed UTF-8 and control characters
-are ignored. Editing is append-only: arrow/control sequences do not move a text
-cursor. Backspace removes a combining mark separately from its base character.
+Ctrl-B followed by `,` replaces the active window name with an empty edit value
+and places a steady bar cursor at the end of that label. Type to append and use
+Backspace to remove the last Unicode scalar or Ctrl-U to clear. Enter saves;
+Esc, Ctrl-C or Ctrl-G cancel and restore the original name. Empty names are
+allowed. Names are limited to 128 UTF-8 bytes; excess text, malformed UTF-8 and
+control characters are ignored. Editing is append-only: arrow/control sequences
+do not move a text cursor. Backspace removes a combining mark separately from
+its base character.
+The bottom bar shows `RENAME`. When it is wide enough, Pink/Lavender
+`<Enter> Save` and `<Esc> Cancel` hints appear at the right; narrow rows keep only
+the mode label while the top bar reserves its space for the editable name.
 
 Bracketed paste is enabled while the prompt is visible. Its payload is treated
 as name text, including letters following Ctrl-B, and control characters such as
@@ -215,16 +220,16 @@ outside the paste. Bare Esc is distinguished from CSI/SS3 sequences by a 30ms
 minimum delay; the event loop normally observes cancellation within its 50ms
 poll interval. Escape-prefixed sequences are consumed without executing them.
 
-The prompt shows the tail of long names without splitting wide characters and
-reserves a cursor cell. On extremely narrow terminals even the label is clipped.
-It replaces the window-bar row in a temporary screen clone, resets the clone's
-character-set/style/input modes for editing, and never overwrites the child's grid
-or cursor. When the outer terminal has only one row, it temporarily covers that
-row because no dedicated bar fits. Background
-output and query replies continue while editing, and resize relocates the prompt
-at the top row. The original pane's display and input modes are restored
-when editing ends. Exiting the active child cancels the prompt before final output
-and focus fallback. Saved names are immediately visible in the window bar.
+The active label clips long names without splitting wide characters and reserves
+a cursor cell. On extremely narrow terminals even the label is clipped. The edit
+exists only in a temporary screen clone until it is saved, so it never overwrites
+the child's grid, cursor, or stored window name. With fewer than three outer rows
+there is no footer, but the name remains editable in the top bar when that bar
+fits. Background output and query replies continue while editing, and resize
+relocates the cursor with the active label. The original pane's display and input
+modes are restored when editing ends. Exiting the active child cancels the prompt
+before final output and focus fallback. Saved names are immediately visible in
+the window bar.
 
 Tests exercise Unicode and combining input, byte limits, invalid/control input,
 paste boundaries, escape handling, narrow grids, DEC graphics/origin-mode
@@ -244,8 +249,9 @@ foreground-colored badges.
 The bar uses [Catppuccin Mocha](https://catppuccin.com/palette/) with explicit RGB
 colors. It draws dark badge text (`#11111b`) on Text (`#cdd6f4`) for inactive
 windows and Green (`#a6e3a1`) for the active window, with Powerline separators
-transitioning to the Base (`#1e1e2e`) bar background. Rename and history prompts
-use the active badge colors.
+transitioning to the Base (`#1e1e2e`) bar background. Rename keeps the active
+badge style and uses the footer for its mode and actions; history prompts use the
+active badge colors.
 The badge color identifies the active window. New windows default to the name `shell`.
 
 Each label is clipped to the available display columns, excluding control
@@ -343,6 +349,8 @@ Ctrl-B followed by `&` opens `Close window? Type yes:` in the top bar using the
 same bounded text editor as renaming. Type exactly lowercase `yes` and press
 Enter to close. Empty input, any other answer, Esc, Ctrl-C or Ctrl-G cancel.
 Pasted newlines do not confirm; Enter must arrive outside bracketed paste.
+Wide rows show `<Enter> Close` and `<Esc> Cancel` hints using the same prompt
+colors; the hints disappear before reducing the answer or cursor space.
 The confirmation is for the active window; switching shortcuts are not executed
 while the editor is open. Output, terminal replies and resize continue normally.
 
