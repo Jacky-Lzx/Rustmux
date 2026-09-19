@@ -695,6 +695,7 @@ impl WindowInput {
                         if action == 2 {
                             self.mode = InputMode::Normal;
                         } else if action == 23 {
+                            self.mode = InputMode::Locked;
                             output.push(WindowKey::SessionManager);
                         } else {
                             self.shortcut(action, output);
@@ -1599,7 +1600,6 @@ fn forward(
                     session_name,
                     &names,
                     active_index,
-                    keys.mode == InputMode::Normal,
                 );
                 keys.footer_hitboxes = crate::chrome::footer_hitboxes(
                     usize::from(columns),
@@ -2884,36 +2884,36 @@ mod window_input_tests {
     fn footer_clicks_enter_commands_and_dispatch_grouped_shortcuts_once() {
         let mut keys = WindowInput {
             pane_height: 22,
-            pane_width: 80,
+            pane_width: 120,
             pane_top: 1,
             bar_enabled: true,
             footer_row: Some(24),
-            footer_hitboxes: crate::chrome::footer_hitboxes(80, false, false),
+            footer_hitboxes: crate::chrome::footer_hitboxes(120, false, false),
             ..WindowInput::default()
         };
         let mut output = Vec::new();
-        for &byte in b"\x1b[<0;2;24M\x1b[<0;2;24m" {
+        for &byte in b"\x1b[<0;11;24M\x1b[<0;11;24m" {
             keys.feed(byte, &mut output);
         }
         assert!(output.is_empty());
         assert_eq!(keys.mode, InputMode::Normal);
 
         let cases = [
-            (2, WindowKey::Create),
-            (9, WindowKey::Split(SplitAxis::Columns)),
-            (20, WindowKey::Split(SplitAxis::Rows)),
-            (31, WindowKey::FocusPane(Direction::Left)),
-            (33, WindowKey::FocusPane(Direction::Down)),
-            (35, WindowKey::FocusPane(Direction::Up)),
-            (37, WindowKey::FocusPane(Direction::Right)),
-            (46, WindowKey::Next),
-            (48, WindowKey::Previous),
-            (58, WindowKey::ToggleZoom),
-            (66, WindowKey::Help),
+            (11, WindowKey::Create),
+            (21, WindowKey::Split(SplitAxis::Columns)),
+            (35, WindowKey::Split(SplitAxis::Rows)),
+            (49, WindowKey::FocusPane(Direction::Left)),
+            (51, WindowKey::FocusPane(Direction::Down)),
+            (53, WindowKey::FocusPane(Direction::Up)),
+            (55, WindowKey::FocusPane(Direction::Right)),
+            (67, WindowKey::Next),
+            (69, WindowKey::Previous),
+            (82, WindowKey::ToggleZoom),
+            (93, WindowKey::Help),
         ];
         for (column, expected) in cases {
             keys.mode = InputMode::Normal;
-            keys.footer_hitboxes = crate::chrome::footer_hitboxes(80, true, false);
+            keys.footer_hitboxes = crate::chrome::footer_hitboxes(120, true, false);
             output.clear();
             for byte in format!("\x1b[<0;{column};24M\x1b[<0;{column};24m").bytes() {
                 keys.feed(byte, &mut output);
@@ -2957,7 +2957,13 @@ mod window_input_tests {
             ..WindowInput::default()
         };
         let mut output = Vec::new();
-        for &byte in b"\x1b[<0;20;24M\x1b[<0;20;24m" {
+        for &byte in b"\x1b[<0;11;24M\x1b[<0;11;24m" {
+            keys.feed(byte, &mut output);
+        }
+        assert!(output.is_empty());
+        assert_eq!(keys.mode, InputMode::Normal);
+        keys.footer_hitboxes = crate::chrome::footer_hitboxes(80, true, true);
+        for &byte in b"\x1b[<0;49;24M\x1b[<0;49;24m" {
             keys.feed(byte, &mut output);
         }
         assert_eq!(output, [WindowKey::SessionManager]);

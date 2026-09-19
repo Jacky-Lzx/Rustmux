@@ -79,19 +79,19 @@ shells continue running. New windows and splits inherit the active pane's valid
 OSC 7 directory. Without OSC 7, macOS and Linux query the foreground process,
 then the shell process; Yazi's foreground directory overrides stale OSC 7. See
 [Windows](../reference/windows.md#interactive-controls) for limits and input
-behavior. The right side of the bar changes from red `LOCKED` to green `NORMAL`
-after Ctrl-B and returns to `LOCKED` after the shortcut. Ctrl-B followed by `,`
+behavior. The left side of the bottom bar changes from red `LOCKED` to green
+`NORMAL` after Ctrl-B and returns to `LOCKED` after the shortcut. Ctrl-B followed by `,`
 opens the name editor:
 Enter saves, Esc cancels, and Ctrl-U clears the existing name.
 Ctrl-B followed by `&` asks to close the active window: type `yes` and Enter to
 force close, or Esc to cancel. Unsaved work in that window can be lost. The top
 bar shows the saved name and highlights the active window; left-click a visible
 window label to select it, or scroll over the bar to move between windows.
-The bottom bar shows shortcuts for the current input mode. Click a visible key
-or label to run server-side window and pane actions; grouped hints use the exact
-key clicked, while their label selects the first key. Inside a named session,
-click `Ctrl-B Ctrl-W Sessions` to open the Session Manager; local unnamed
-processes omit that hint. Press Ctrl-B followed by `?`, or click `? Help` after
+The bottom bar shows a rectangular mode badge followed by Powerline-styled
+shortcuts. Click a visible key or label to run server-side window and pane actions; grouped hints
+use the exact key clicked, while their label selects the first key. Inside a named
+session, press Ctrl-B first and then click `Ctrl-W Sessions` to open the Session
+Manager; local unnamed processes omit that NORMAL-mode hint. Press Ctrl-B followed by `?`, or click `? Help` after
 Ctrl-B, to open the complete shortcut reference. Esc, `q` or `?` closes it;
 pressing or clicking a listed command closes Help and runs that action. Unknown
 keys and pasted input stay inside the panel instead of reaching the shell. Use

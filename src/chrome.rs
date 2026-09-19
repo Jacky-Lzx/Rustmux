@@ -14,6 +14,8 @@ const BADGE_TEXT: Color = Color::Rgb(0x11, 0x11, 0x1b);
 const BASE: Color = Color::Rgb(0x1e, 0x1e, 0x2e);
 const SUBTEXT0: Color = Color::Rgb(0xa6, 0xad, 0xc8);
 const TEXT: Color = Color::Rgb(0xcd, 0xd6, 0xf4);
+const PINK: Color = Color::Rgb(0xf5, 0xc2, 0xe7);
+const LAVENDER: Color = Color::Rgb(0xb4, 0xbe, 0xfe);
 const RED: Color = Color::Rgb(0xf3, 0x8b, 0xa8);
 const GREEN: Color = Color::Rgb(0xa6, 0xe3, 0xa1);
 const PEACH: Color = Color::Rgb(0xfa, 0xb3, 0x87);
@@ -47,8 +49,8 @@ fn bar_background_style() -> Style {
 
 fn shortcut_key_style() -> Style {
     Style {
-        foreground: BADGE_TEXT,
-        background: PEACH,
+        foreground: PINK,
+        background: BASE,
         bold: true,
         ..Style::default()
     }
@@ -56,8 +58,9 @@ fn shortcut_key_style() -> Style {
 
 fn shortcut_label_style() -> Style {
     Style {
-        foreground: SUBTEXT0,
-        background: BASE,
+        foreground: BADGE_TEXT,
+        background: LAVENDER,
+        bold: true,
         ..Style::default()
     }
 }
@@ -132,18 +135,17 @@ struct ShortcutHint {
     actions: &'static [(usize, u8)],
 }
 
-const LOCKED_SHORTCUTS: &[ShortcutHint] = &[
-    ShortcutHint {
-        key: "Ctrl-B",
-        label: "Commands",
-        actions: &[(0, 2)],
-    },
-    ShortcutHint {
-        key: "Ctrl-B Ctrl-W",
-        label: "Sessions",
-        actions: &[(0, 23)],
-    },
-];
+const LOCKED_SHORTCUTS: &[ShortcutHint] = &[ShortcutHint {
+    key: "Ctrl-B",
+    label: "Commands",
+    actions: &[(0, 2)],
+}];
+
+const SESSION_SHORTCUT: ShortcutHint = ShortcutHint {
+    key: "Ctrl-W",
+    label: "Sessions",
+    actions: &[(0, 23)],
+};
 
 const NORMAL_SHORTCUTS: &[ShortcutHint] = &[
     ShortcutHint {
@@ -184,16 +186,14 @@ const NORMAL_SHORTCUTS: &[ShortcutHint] = &[
 ];
 
 fn shortcut_width(hint: ShortcutHint) -> usize {
-    display_width(hint.key) + display_width(hint.label) + 3
+    display_width(hint.key) + display_width(hint.label) + 6
 }
 
 fn visible_shortcuts(columns: usize, normal: bool, session: bool) -> Vec<ShortcutHint> {
     let shortcuts = if normal {
         NORMAL_SHORTCUTS
-    } else if session {
-        LOCKED_SHORTCUTS
     } else {
-        &LOCKED_SHORTCUTS[..1]
+        LOCKED_SHORTCUTS
     };
     let mut visible = Vec::new();
     let mut remaining = columns;
@@ -204,6 +204,12 @@ fn visible_shortcuts(columns: usize, normal: bool, session: bool) -> Vec<Shortcu
         let help_width = shortcut_width(*help);
         if help_width <= remaining {
             remaining -= help_width;
+            let session_hint = session
+                .then_some(SESSION_SHORTCUT)
+                .filter(|hint| shortcut_width(*hint) <= remaining);
+            if let Some(hint) = session_hint {
+                remaining -= shortcut_width(hint);
+            }
             for hint in primary {
                 let width = shortcut_width(*hint);
                 if width > remaining {
@@ -212,6 +218,7 @@ fn visible_shortcuts(columns: usize, normal: bool, session: bool) -> Vec<Shortcu
                 visible.push(*hint);
                 remaining -= width;
             }
+            visible.extend(session_hint);
             visible.push(*help);
             return visible;
         }
@@ -227,24 +234,19 @@ fn visible_shortcuts(columns: usize, normal: bool, session: bool) -> Vec<Shortcu
     visible
 }
 
-fn draw_shortcuts(screen: &mut Screen, row: usize, columns: usize, normal: bool, session: bool) {
-    screen.set_origin_mode(false);
-    screen.set_insert_mode(false);
-    screen.set_auto_wrap(false);
-    screen.designate_character_set(false, false);
-    screen.select_character_set(false);
-    screen.set_style(bar_background_style());
-    screen.position(row, 0);
-    screen.erase_line(EraseMode::All);
-    for hint in visible_shortcuts(columns, normal, session) {
-        screen.set_style(shortcut_key_style());
-        print(screen, " ");
-        print(screen, hint.key);
-        print(screen, " ");
-        screen.set_style(shortcut_label_style());
-        print(screen, hint.label);
-        print(screen, " ");
-    }
+fn draw_shortcut_segment(screen: &mut Screen, hint: ShortcutHint) {
+    screen.set_style(shortcut_key_style());
+    print(screen, " ");
+    print(screen, hint.key);
+    print(screen, " ");
+    screen.set_style(separator_style(BASE, LAVENDER));
+    screen.print(POWERLINE_RIGHT);
+    screen.set_style(shortcut_label_style());
+    print(screen, " ");
+    print(screen, hint.label);
+    print(screen, " ");
+    screen.set_style(separator_style(LAVENDER, BASE));
+    screen.print(POWERLINE_RIGHT);
 }
 
 /// Return one-based, half-open footer targets. Specific characters in grouped
@@ -256,8 +258,9 @@ pub(crate) fn footer_hitboxes(
     session: bool,
 ) -> Vec<(usize, usize, u8)> {
     let mut hitboxes = Vec::new();
-    let mut used = 0;
-    for hint in visible_shortcuts(columns, normal, session) {
+    let shortcuts = footer_shortcuts(columns, normal, session);
+    let mut used = footer_mode_width(columns, normal) + usize::from(!shortcuts.is_empty());
+    for hint in shortcuts {
         let width = shortcut_width(hint);
         for (offset, action) in hint.actions {
             let column = used + 2 + offset;
@@ -279,39 +282,22 @@ fn powerline_width(label: &str) -> usize {
     display_width(label) + 2
 }
 
-fn draw_powerline_segment(screen: &mut Screen, label: &str, active: bool, remaining: &mut usize) {
+fn draw_colored_powerline_segment(
+    screen: &mut Screen,
+    label: &str,
+    background: Color,
+    next_background: Color,
+    remaining: &mut usize,
+) {
     if *remaining < 3 {
         return;
     }
-    let background = if active { GREEN } else { TEXT };
     screen.set_style(separator_style(BASE, background));
     screen.print(POWERLINE_RIGHT);
     *remaining -= 1;
 
     let label = clipped(label, remaining.saturating_sub(1));
     let label_width = display_width(&label);
-    screen.set_style(bar_style(active));
-    print(screen, &label);
-    *remaining -= label_width;
-
-    screen.set_style(separator_style(background, BASE));
-    screen.print(POWERLINE_RIGHT);
-    *remaining -= 1;
-}
-
-fn mode_label(normal: bool) -> &'static str {
-    if normal { " NORMAL " } else { " LOCKED " }
-}
-
-fn draw_mode(screen: &mut Screen, columns: usize, width: usize, normal: bool) {
-    if width < 3 {
-        return;
-    }
-    let background = if normal { GREEN } else { RED };
-    screen.position(0, columns - width);
-    screen.set_style(separator_style(BASE, background));
-    screen.print(POWERLINE_RIGHT);
-    let label = clipped(mode_label(normal), width - 2);
     screen.set_style(Style {
         foreground: BADGE_TEXT,
         background,
@@ -319,17 +305,70 @@ fn draw_mode(screen: &mut Screen, columns: usize, width: usize, normal: bool) {
         ..Style::default()
     });
     print(screen, &label);
-    screen.set_style(separator_style(background, BASE));
+    *remaining -= label_width;
+
+    screen.set_style(separator_style(background, next_background));
     screen.print(POWERLINE_RIGHT);
+    *remaining -= 1;
+}
+
+fn draw_powerline_segment(screen: &mut Screen, label: &str, active: bool, remaining: &mut usize) {
+    draw_colored_powerline_segment(
+        screen,
+        label,
+        if active { GREEN } else { TEXT },
+        BASE,
+        remaining,
+    );
+}
+
+fn mode_label(normal: bool) -> &'static str {
+    if normal { " NORMAL " } else { " LOCKED " }
+}
+
+fn footer_mode_width(columns: usize, normal: bool) -> usize {
+    display_width(mode_label(normal)).min(columns)
+}
+
+fn footer_shortcuts(columns: usize, normal: bool, session: bool) -> Vec<ShortcutHint> {
+    let remaining = columns
+        .saturating_sub(footer_mode_width(columns, normal))
+        .saturating_sub(1);
+    visible_shortcuts(remaining, normal, session)
+}
+
+fn draw_footer(screen: &mut Screen, row: usize, columns: usize, normal: bool, session: bool) {
+    screen.set_origin_mode(false);
+    screen.set_insert_mode(false);
+    screen.set_auto_wrap(false);
+    screen.designate_character_set(false, false);
+    screen.select_character_set(false);
+    screen.set_style(bar_background_style());
+    screen.position(row, 0);
+    screen.erase_line(EraseMode::All);
+    let mode_width = footer_mode_width(columns, normal);
+    let shortcuts = footer_shortcuts(columns, normal, session);
+    screen.set_style(Style {
+        foreground: BADGE_TEXT,
+        background: if normal { GREEN } else { RED },
+        bold: true,
+        ..Style::default()
+    });
+    print(screen, &clipped(mode_label(normal), mode_width));
+    if !shortcuts.is_empty() {
+        screen.set_style(bar_background_style());
+        print(screen, " ");
+    }
+    for hint in shortcuts {
+        draw_shortcut_segment(screen, hint);
+    }
 }
 
 struct BarLayout {
     labels: Vec<String>,
     session: String,
     session_width: usize,
-    label_columns: usize,
     start: usize,
-    mode_width: usize,
 }
 
 fn bar_layout(
@@ -337,7 +376,6 @@ fn bar_layout(
     session_name: Option<&str>,
     names: &[String],
     active: usize,
-    normal_mode: bool,
 ) -> BarLayout {
     let labels: Vec<_> = names
         .iter()
@@ -346,23 +384,16 @@ fn bar_layout(
         .collect();
     let widths: Vec<_> = labels.iter().map(|label| powerline_width(label)).collect();
     let active_width = widths.get(active).copied().unwrap_or(0).min(columns);
-    let full_mode_width = powerline_width(mode_label(normal_mode));
-    let mode_width = if columns >= active_width.saturating_add(full_mode_width) {
-        full_mode_width
-    } else {
-        0
-    };
-    let label_columns = columns.saturating_sub(mode_width);
     let session = session_name
         .map(|name| {
             clipped(
                 &format!(" Rustmux ({name}) "),
-                label_columns.saturating_sub(active_width),
+                columns.saturating_sub(active_width),
             )
         })
         .unwrap_or_default();
     let session_width = display_width(&session);
-    let available = label_columns.saturating_sub(session_width);
+    let available = columns.saturating_sub(session_width);
     let mut start = 0;
     while start < active && widths[start..=active].iter().sum::<usize>() > available {
         start += 1;
@@ -371,9 +402,7 @@ fn bar_layout(
         labels,
         session,
         session_width,
-        label_columns,
         start,
-        mode_width,
     }
 }
 
@@ -382,12 +411,11 @@ pub(crate) fn window_hitboxes(
     session_name: Option<&str>,
     names: &[String],
     active: usize,
-    normal_mode: bool,
 ) -> Vec<(usize, usize, usize)> {
-    let layout = bar_layout(columns, session_name, names, active, normal_mode);
+    let layout = bar_layout(columns, session_name, names, active);
     let mut hitboxes = Vec::new();
     let mut used = layout.session_width;
-    let mut remaining = layout.label_columns.saturating_sub(used);
+    let mut remaining = columns.saturating_sub(used);
     for (index, label) in layout.labels.iter().enumerate().skip(layout.start) {
         if remaining < 3 {
             break;
@@ -426,25 +454,22 @@ pub(crate) fn compose(
     }
     screen.save_cursor();
     prepare_row(&mut screen, bar_background_style());
-    let layout = bar_layout(columns, session_name, names, active, normal_mode);
+    let layout = bar_layout(columns, session_name, names, active);
     screen.set_style(Style {
         bold: true,
         ..bar_background_style()
     });
     print(&mut screen, &layout.session);
-    let mut remaining = layout.label_columns.saturating_sub(layout.session_width);
+    let mut remaining = columns.saturating_sub(layout.session_width);
     for (index, label) in layout.labels.iter().enumerate().skip(layout.start) {
         draw_powerline_segment(&mut screen, label, index == active, &mut remaining);
         if remaining < 3 {
             break;
         }
     }
-    if layout.mode_width != 0 {
-        draw_mode(&mut screen, columns, layout.mode_width, normal_mode);
-    }
     if footer {
         let row = screen.dimensions().0 - 1;
-        draw_shortcuts(
+        draw_footer(
             &mut screen,
             row,
             columns,
@@ -521,9 +546,18 @@ mod tests {
             .filter(|cell| cell.width != 0)
             .map(|cell| cell.character)
             .collect();
-        assert!(footer.starts_with(" Ctrl-B Commands "));
+        assert!(footer.contains("LOCKED"));
+        assert!(footer.contains("Ctrl-B"));
+        assert!(footer.contains("Commands"));
         assert!(!footer.contains("Ctrl-B Ctrl-W Sessions"));
-        assert_eq!(view.row(4).unwrap()[0].style, shortcut_key_style());
+        let footer_row = view.row(4).unwrap();
+        assert_eq!(footer_row[0].style.background, RED);
+        assert!(footer_row[0].style.bold);
+        assert_eq!(footer_row[8].style, bar_background_style());
+        assert_eq!(footer_row[9].style, shortcut_key_style());
+        assert_eq!(footer_row[10].style, shortcut_key_style());
+        assert_eq!(footer_row[17].style, separator_style(BASE, LAVENDER));
+        assert_eq!(footer_row[18].style, shortcut_label_style());
 
         let mut mouse_child = Screen::new(2, 20).unwrap();
         mouse_child.set_mouse_tracking(MouseTracking::Drag);
@@ -608,17 +642,27 @@ mod tests {
     }
 
     #[test]
-    fn mode_badge_is_right_aligned_and_yields_to_the_active_window() {
+    fn rectangular_mode_badge_is_left_aligned_and_leaves_the_top_bar_free() {
         let child = Screen::new(2, 40).unwrap();
         let locked = compose(&child, 4, None, &["shell".into()], 0, false).unwrap();
         let normal = compose(&child, 4, None, &["shell".into()], 0, true).unwrap();
-        let locked_row = locked.row(0).unwrap();
-        let normal_row = normal.row(0).unwrap();
-        assert_eq!(locked_row[30].style, separator_style(BASE, RED));
-        assert_eq!(normal_row[30].style, separator_style(BASE, GREEN));
-        assert_eq!(locked_row[31].character, ' ');
-        assert_eq!(locked_row[32].character, 'L');
-        assert_eq!(normal_row[32].character, 'N');
+        let locked_row = locked.row(3).unwrap();
+        let normal_row = normal.row(3).unwrap();
+        assert_eq!(locked_row[0].style.background, RED);
+        assert_eq!(normal_row[0].style.background, GREEN);
+        assert_eq!(locked_row[0].character, ' ');
+        assert_eq!(locked_row[1].character, 'L');
+        assert_eq!(normal_row[1].character, 'N');
+        assert_ne!(locked_row[0].character, POWERLINE_RIGHT);
+        let top: String = locked
+            .row(0)
+            .unwrap()
+            .iter()
+            .filter(|cell| cell.width != 0)
+            .map(|cell| cell.character)
+            .collect();
+        assert!(top.contains("1 shell"));
+        assert!(!top.contains("LOCKED"));
 
         let narrow = Screen::new(1, 8).unwrap();
         let view = compose(&narrow, 3, None, &["shell".into()], 0, true).unwrap();
@@ -647,12 +691,21 @@ mod tests {
                 .map(|cell| cell.character)
                 .collect::<String>()
         };
-        assert!(text(&locked).starts_with(" Ctrl-B Commands "));
+        assert!(text(&locked).contains("LOCKED"));
+        assert!(text(&locked).contains("Ctrl-B"));
+        assert!(text(&locked).contains("Commands"));
         assert!(!text(&locked).contains("Sessions"));
-        assert!(text(&normal).starts_with(" c New  % Split →  \" Split ↓ "));
+        assert!(text(&normal).contains("NORMAL"));
+        assert!(text(&normal).contains('c'));
+        assert!(text(&normal).contains("New"));
+        assert!(text(&normal).contains("Split →"));
+        assert!(text(&normal).contains("Split ↓"));
 
-        let named = compose(&child, 3, Some("work"), &["shell".into()], 0, false).unwrap();
-        assert!(text(&named).contains("Ctrl-B Ctrl-W Sessions"));
+        let named_locked = compose(&child, 3, Some("work"), &["shell".into()], 0, false).unwrap();
+        assert!(!text(&named_locked).contains("Ctrl-W"));
+        let named = compose(&child, 3, Some("work"), &["shell".into()], 0, true).unwrap();
+        assert!(text(&named).contains("Ctrl-W"));
+        assert!(text(&named).contains("Sessions"));
 
         let narrow = Screen::new(1, 20).unwrap();
         let normal = compose(&narrow, 3, None, &["shell".into()], 0, true).unwrap();
@@ -663,7 +716,10 @@ mod tests {
             .filter(|cell| cell.width != 0)
             .map(|cell| cell.character)
             .collect();
-        assert!(footer.starts_with(" c New  ? Help "));
+        assert!(footer.contains("NORMAL"));
+        assert!(footer.contains('?'));
+        assert!(footer.contains("Help"));
+        assert!(!footer.contains("New"));
         assert!(!footer.contains("Split ↓"));
         assert!(!footer.contains("Focus"));
     }
@@ -672,15 +728,15 @@ mod tests {
     fn window_hitboxes_follow_the_rendered_segments_only() {
         let names = vec!["first".into(), "second".into(), "third".into()];
         assert_eq!(
-            window_hitboxes(80, None, &names, 0, false),
+            window_hitboxes(80, None, &names, 0),
             vec![(1, 12, 0), (12, 24, 1), (24, 35, 2)]
         );
 
-        let session = window_hitboxes(80, Some("work"), &names, 0, false);
+        let session = window_hitboxes(80, Some("work"), &names, 0);
         assert_eq!(session[0], (17, 28, 0));
         assert!(session.iter().all(|(_, end, _)| *end <= 71));
 
-        let narrow = window_hitboxes(12, None, &names, 2, false);
+        let narrow = window_hitboxes(12, None, &names, 2);
         assert_eq!(narrow.len(), 1);
         assert_eq!(narrow[0].2, 2);
     }
@@ -691,31 +747,41 @@ mod tests {
         assert!(
             locked
                 .iter()
-                .any(|&(start, end, key)| { start == 1 && end == 18 && key == 2 })
+                .any(|&(start, end, key)| { start == 10 && end == 30 && key == 2 })
         );
-        assert!(locked.iter().any(|&(_, _, key)| key == 23));
         assert!(
-            !footer_hitboxes(80, false, false)
-                .iter()
-                .any(|&(_, _, key)| key == 23)
+            !locked.iter().any(|&(_, _, key)| key == 23),
+            "Ctrl-W appears only after entering NORMAL mode"
         );
 
-        let normal = footer_hitboxes(80, true, true);
+        let normal = footer_hitboxes(120, true, false);
         let action_at = |column| {
             normal
                 .iter()
                 .find(|(start, end, _)| column >= *start && column < *end)
                 .map(|(_, _, action)| *action)
         };
-        assert_eq!(action_at(2), Some(b'c'));
-        assert_eq!(action_at(31), Some(b'h'));
-        assert_eq!(action_at(33), Some(b'j'));
-        assert_eq!(action_at(39), Some(b'h'));
-        assert_eq!(action_at(46), Some(b'n'));
-        assert_eq!(action_at(48), Some(b'p'));
+        assert_eq!(action_at(11), Some(b'c'));
+        assert_eq!(action_at(49), Some(b'h'));
+        assert_eq!(action_at(51), Some(b'j'));
+        assert_eq!(action_at(57), Some(b'h'));
+        assert_eq!(action_at(67), Some(b'n'));
+        assert_eq!(action_at(69), Some(b'p'));
+        assert_eq!(action_at(82), Some(b'Z'));
+        assert_eq!(action_at(93), Some(b'?'));
+
+        let session = footer_hitboxes(120, true, true);
+        let session_action_at = |column| {
+            session
+                .iter()
+                .find(|(start, end, _)| column >= *start && column < *end)
+                .map(|(_, _, action)| *action)
+        };
+        assert_eq!(session_action_at(82), Some(23));
+        assert_eq!(session_action_at(102), Some(b'?'));
 
         let narrow = footer_hitboxes(20, true, true);
-        assert!(narrow.iter().any(|&(_, _, key)| key == b'c'));
+        assert!(!narrow.iter().any(|&(_, _, key)| key == b'c'));
         assert!(narrow.iter().any(|&(_, _, key)| key == b'?'));
         assert!(!narrow.iter().any(|&(_, _, key)| key == b'%'));
         assert!(!narrow.iter().any(|&(_, _, key)| key == b'"'));

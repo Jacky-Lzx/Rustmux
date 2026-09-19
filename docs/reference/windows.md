@@ -138,12 +138,12 @@ payload are forwarded unchanged, including Ctrl-B combinations inside the paste.
 Unbracketed pasted text is indistinguishable from typing and follows the same
 shortcut rules. Key bindings are fixed for this initial integration.
 
-The right side of the window bar shows `LOCKED` in red during ordinary child
+The left side of the bottom bar shows `LOCKED` in red during ordinary child
 input. Pressing Ctrl-B changes it to green `NORMAL` while Rustmux waits for the
 second shortcut byte; completing the shortcut returns it to `LOCKED`. Attached
 session clients forward Ctrl-B immediately, so the server displays the same mode
-transition as a foreground-only run. The mode badge yields to the active window
-label when the terminal is too narrow to show both.
+transition as a foreground-only run. The top bar uses all of its available width
+for the session name and window labels.
 
 Ctrl-B, then `E` writes a plain-text snapshot of the active pane's retained
 primary-screen history and meaningful visible rows to a private temporary file.
@@ -254,26 +254,31 @@ starting window advances enough to keep the active label in view. Scrolling up
 anywhere on the bar selects the previous window; scrolling down selects the next,
 wrapping at either end. Left-clicking either Powerline arrow or the label between
 them selects that visible window. Both actions return input to `LOCKED` mode.
-Session text, empty space and the mode badge are not clickable. A press that begins
+Session text and empty space are not clickable. A press that begins
 on the bar consumes its release;
 a drag that begins in a mouse-aware child can still release on the bar. On
 extremely narrow terminals the visible label may consist only of its highlighted
 prefix.
 
-The bottom bar shows `Ctrl-B Commands` in locked mode and the available
-window/pane keys in normal mode. Complete hints are added from left to right;
-a hint that does not fit is omitted instead of being split. NORMAL mode reserves
-space for `? Help`, so the complete shortcut reference remains reachable when
-middle hints do not fit. Left-clicking a visible server-side hint executes the
-same action as its key and consumes the matching release. In grouped hints such
-as `n/p` or `h/j/k/l`, clicking a key chooses that key; clicking its label or
-padding chooses the first displayed key.
+The bottom bar starts with the current mode in a plain rectangular red or green
+badge, followed by `Ctrl-B Commands` in locked mode or the available window/pane
+keys in normal mode. The mode badge has no Powerline arrows. Each shortcut uses
+Pink key text on the Base background, followed by a Powerline transition into
+an uppercase Lavender action label and back to Base. Complete hints are added
+from left to right; a hint that
+does not fit is omitted instead of being split. NORMAL mode reserves space for
+`? Help`, so the complete shortcut reference remains reachable when middle hints
+do not fit. Left-clicking a visible server-side hint executes the same action as
+its key and consumes the matching release. The mode badge itself is not
+clickable. In grouped hints such as `n/p` or `h/j/k/l`, clicking a key chooses
+that key; clicking its label or padding chooses the first displayed key.
 Blank space, hidden hints, drags and wheel reports do nothing and never reach a
-child. Named sessions also show `Ctrl-B Ctrl-W Sessions`. Clicking that hint asks
-the attached client to restore the outer terminal before opening the Session
-Manager; cancelling the manager reconnects the session that opened it. Local,
-unnamed Rustmux processes omit this hint because they have no session manager to
-open.
+child. Named sessions show `Ctrl-W Sessions` only after Ctrl-B enters NORMAL
+mode; LOCKED mode still shows only `Ctrl-B Commands`. Clicking the Ctrl-W hint
+asks the attached client to restore the outer terminal before opening the
+Session Manager; cancelling the manager reconnects the session that opened it.
+Local, unnamed Rustmux processes omit this hint because they have no session
+manager to open.
 
 Ctrl-B followed by `?`, or the clickable Help hint, opens a centered actionable
 shortcut panel. Pressing or clicking a listed command closes the panel and runs
