@@ -98,7 +98,11 @@ class Session:
                         if row < height:
                             def cells(text):
                                 result = []
-                                for character in text.decode("utf-8"):
+                                # This simplified incremental-frame reconstruction
+                                # can observe an incomplete scalar at a frame edge.
+                                # Keep the harness progressing; Rustmux's parser has
+                                # separate malformed/incomplete UTF-8 coverage.
+                                for character in text.decode("utf-8", errors="replace"):
                                     if unicodedata.combining(character):
                                         index = len(result) - 1
                                         while index >= 0 and result[index] is None:

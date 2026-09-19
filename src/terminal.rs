@@ -2266,8 +2266,12 @@ mod tests {
         let mut permissions = shell.as_file().metadata().unwrap().permissions();
         permissions.set_mode(0o700);
         shell.as_file().set_permissions(permissions).unwrap();
+        // Linux rejects executing a file while another descriptor still has it
+        // open for writing. TempPath keeps automatic cleanup without retaining
+        // the NamedTempFile handle across the spawn.
+        let shell = shell.into_temp_path();
 
-        let mut pane = Pane::spawn(shell.path(), 3, 8).unwrap();
+        let mut pane = Pane::spawn(shell.as_os_str(), 3, 8).unwrap();
         let deadline = Instant::now() + Duration::from_secs(3);
         while pane.io().prompt_start != Some((0, 0)) {
             service_pane(&mut pane, PollFlags::POLLIN, PollFlags::POLLIN).unwrap();
