@@ -133,11 +133,16 @@ class Session:
     @staticmethod
     def logical_rows(rows):
         """Expose pane contents without the outer frame to existing assertions."""
-        if len(rows) < 4 or not rows[1].startswith("┌".encode()) or not rows[-1].startswith("└".encode()):
+        if len(rows) < 4 or not rows[1].startswith("┌".encode()):
+            return rows
+        bottom = len(rows) - 1
+        if not rows[bottom].startswith("└".encode()):
+            bottom -= 1
+        if bottom <= 1 or not rows[bottom].startswith("└".encode()):
             return rows
         result = [rows[0]]
         border = set("│├┤┼" )
-        for raw in rows[2:-1]:
+        for raw in rows[2:bottom]:
             text = raw.decode("utf-8").rstrip(" ")
             if text and text[0] in border:
                 text = text[1:]
@@ -237,14 +242,14 @@ try:
     s.expect(b"\r\nWATCH_READY\r\n")
     for rows, columns in [(40, 120), (18, 60), (55, 150)]:
         fcntl.ioctl(s.slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, columns, 0, 0))
-        s.expect(f"SIZE:{max(1, rows - 3)}:{max(1, columns - 2)}\r\n".encode())
+        s.expect(f"SIZE:{max(1, rows - 4)}:{max(1, columns - 2)}\r\n".encode())
     # Invalid transient dimensions must not terminate Rustmux or reach the child.
     fcntl.ioctl(s.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 0, 0, 0, 0))
     s.read(0.15)
     assert b"SIZE:0:0" not in s.output
     assert s.child.poll() is None
     fcntl.ioctl(s.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
-    s.expect(b"SIZE:21:78\r\n")
+    s.expect(b"SIZE:20:78\r\n")
     s.send(b"\x03")
     s.expect(b"RUSTMUX_READY> ")
     # Output larger than the grid must still be parsed through the final marker.
@@ -892,7 +897,7 @@ try:
     s.expect(b"BACK_A")
     assert s.private_modes[2004]
     s.send(b"printf '\\n%s:%s:%s\\n' RETAINED $WIN \"$(stty size)\"\n")
-    s.expect(b"RETAINED:A:37 98")
+    s.expect(b"RETAINED:A:36 98")
     s.send(b"\x02n")
     s.expect(b"WINDOW_B:unset")
     assert not s.private_modes[2004]
@@ -1089,18 +1094,28 @@ def expect_bar_without(session, marker):
         session.read()
         assert time.monotonic() < end, session.last_rows
 
+def expect_footer(session, marker):
+    end = time.monotonic() + 3
+    while not session.physical_rows or marker not in session.physical_rows[-1]:
+        session.read()
+        assert time.monotonic() < end, session.physical_rows
+
 s = Session()
 try:
     s.expect(b"RUSTMUX_READY> ")
     expect_bar(s, b"1 shell")
     expect_bar(s, b"LOCKED")
+    expect_footer(s, b"Ctrl-B Commands")
     s.send(b"\x02")
     expect_bar(s, b"NORMAL")
+    expect_footer(s, b"c New")
+    expect_footer(s, b"h/j/k/l Focus")
     s.send(b"n")
     expect_bar(s, b"LOCKED")
+    expect_footer(s, b"Ctrl-B Commands")
     s.send(b"printf '\\033[23;1H%s%s' LAST_ CONTENT\n")
     s.expect(b"LAST_CONTENT")
-    assert b"LAST_CONTENT" in s.last_rows[21]
+    assert b"LAST_CONTENT" in s.last_rows[20]
     assert b"1 shell" in s.last_rows[0]
     s.send(b"\x02c")
     s.expect(b"RUSTMUX_READY> ")
@@ -1131,7 +1146,7 @@ bar_mouse = r"""
 import os, select, time, tty
 tty.setraw(0)
 os.write(1, b"\x1b[?1000;1006h\x1b[2J\x1b[HBAR_MOUSE_READY")
-expected = b"\x1b[<0;2;21M\x1b[<0;2;1mx"
+expected = b"\x1b[<0;2;20M\x1b[<0;2;1mx"
 data = bytearray()
 end = time.monotonic() + 4
 while len(data) < len(expected):
@@ -1149,7 +1164,8 @@ try:
         source.flush()
         s.send(("exec python3 " + shlex.quote(source.name) + "\n").encode())
         s.expect(b"BAR_MOUSE_READY")
-        s.send(b"\x1b[<0;3;23M\x1b[<0;3;1mx")
+        s.send(b"\x1b[<0;3;24M\x1b[<0;3;24m\x1b[<64;3;24M")
+        s.send(b"\x1b[<0;3;22M\x1b[<0;3;1mx")
         s.finish(0)
         assert any(b"BAR_MOUSE_OK" in row for row in s.last_rows)
 finally:
@@ -1329,15 +1345,15 @@ try:
     s.send(b"\x02%")
     s.expect(b"RUSTMUX_READY>")
     s.send(b"stty -echo; VAR=B; printf '\\033[2J\\033[H%s%s:%s\\n' RIGHT _B \"$(stty size)\"\n")
-    s.expect(b"RIGHT_B:21 38")
+    s.expect(b"RIGHT_B:20 38")
     assert any(b"MARK_A" in row for row in s.last_rows)
     s.send(b"\x02hprintf '\\033[2J\\033[HLEFT:%s:%s\\n' $VAR \"$(stty size)\"\n")
-    s.expect(b"LEFT:A:21 38")
+    s.expect(b"LEFT:A:20 38")
     s.send(b'\x02"')
     s.expect(b"RUSTMUX_READY>")
     s.send(b"stty -echo; VAR=C; printf '\\033[2J\\033[HLOWER:%s:%s\\n' $VAR \"$(stty size)\"\n")
-    s.expect(b"LOWER:C:10 38")
-    assert any(b"RIGHT_B:21 38" in row for row in s.last_rows)
+    s.expect(b"LOWER:C:9 38")
+    assert any(b"RIGHT_B:20 38" in row for row in s.last_rows)
     s.send(b"\x02kprintf '\\033[2J\\033[HUP:%s:%s\\n' $VAR \"$(stty size)\"\n")
     s.expect(b"UP:A:9 38")
     s.send(b"\x02lprintf '\\033[2J\\033[HFOCUS:%s\\n' $VAR\n")
@@ -1354,9 +1370,9 @@ try:
         s.read()
         assert time.monotonic() < end, s.last_rows
     s.send(b"printf '\\033[2J\\033[HAFTER:%s:%s\\n' $VAR \"$(stty size)\"\n")
-    s.expect(b"AFTER:B:27 48")
+    s.expect(b"AFTER:B:26 48")
     s.send(b"\x02hprintf '\\033[2J\\033[HRESTORED:%s:%s\\n' $VAR \"$(stty size)\"\n")
-    s.expect(b"RESTORED:A:27 48")
+    s.expect(b"RESTORED:A:26 48")
     s.send(b"exit 0\n")
     end = time.monotonic() + 3
     while any(b"RESTORED:A" in row for row in s.last_rows):
@@ -1364,7 +1380,7 @@ try:
         assert time.monotonic() < end, s.last_rows
     s.send(b"printf '\\033[2J\\033[HLAST_PANE:%s:%s\\n' $VAR \"$(stty size)\"; exit 9\n")
     s.finish(9)
-    assert any(b"LAST_PANE:B:27 98" in row for row in s.last_rows)
+    assert any(b"LAST_PANE:B:26 98" in row for row in s.last_rows)
 finally:
     s.close()
 
@@ -1430,9 +1446,9 @@ try:
     # Intermediate mouse positions are coalesced before the final PTY resize.
     # This prevents prompt-redrawing shells from processing stale dimensions.
     s.send(b"\x1b[M H%\x1b[M@M%\x1b[M@W%\x1b[M@R%\x1b[M#R%printf 'DRAG:%s:%s:%s\n' $VAR $count \"$(stty size)\"\n")
-    s.expect(b"DRAG:B:1:21 28")
+    s.expect(b"DRAG:B:1:20 28")
     s.send(b"\x02hprintf 'DRAG:%s:%s\n' $VAR \"$(stty size)\"\n")
-    s.expect(b"DRAG:A:21 48")
+    s.expect(b"DRAG:A:20 48")
     os.kill(s.app_pid, signal.SIGTERM)
     s.finish(128 + signal.SIGTERM)
 finally:
@@ -1449,22 +1465,22 @@ try:
     s.send(b"stty -echo; VAR=B; printf '\\033[2J\\033[H%s%s\\n' ZOOM _RIGHT\n")
     s.expect(b"ZOOM_RIGHT")
     s.send(b"\x02Zprintf '\\033[2J\\033[HZOOM:%s:%s\\n' $VAR \"$(stty size)\"\n")
-    s.expect(b"ZOOM:B:21 78")
+    s.expect(b"ZOOM:B:20 78")
     assert not any(b"ZOOM_BASE" in row for row in s.last_rows)
     s.send(b"\x02hprintf '\\033[2J\\033[HTARGET:%s:%s\\n' $VAR \"$(stty size)\"\n")
-    s.expect(b"TARGET:A:21 78")
+    s.expect(b"TARGET:A:20 78")
     assert not any(b"ZOOM:B" in row for row in s.last_rows)
     fcntl.ioctl(s.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
     s.read(0.1)
     s.send(b"printf '\\033[2J\\033[HZOOM_RESIZE:%s:%s\\n' $VAR \"$(stty size)\"\n")
-    s.expect(b"ZOOM_RESIZE:A:27 98")
+    s.expect(b"ZOOM_RESIZE:A:26 98")
     s.send(b"\x02oprintf '\\033[2J\\033[HCYCLE_ZOOM:%s:%s\\n' $VAR \"$(stty size)\"\n")
-    s.expect(b"CYCLE_ZOOM:B:27 98")
+    s.expect(b"CYCLE_ZOOM:B:26 98")
     s.send(b"\x02Zprintf '\\033[2J\\033[HTILED:%s:%s\\n' $VAR \"$(stty size)\"\n")
-    s.expect(b"TILED:B:27 48")
+    s.expect(b"TILED:B:26 48")
     assert any(b"ZOOM_RESIZE:A" in row for row in s.last_rows)
     s.send(b"\x02hprintf '\\033[2J\\033[HRESTORED_ZOOM:%s:%s\\n' $VAR \"$(stty size)\"\n")
-    s.expect(b"RESTORED_ZOOM:A:27 48")
+    s.expect(b"RESTORED_ZOOM:A:26 48")
     s.send(b"\x02Zexit 0\n")
     end = time.monotonic() + 3
     while any(b"RESTORED_ZOOM:A" in row for row in s.last_rows):
@@ -1472,7 +1488,7 @@ try:
         assert time.monotonic() < end, s.last_rows
     s.send(b"printf '\\033[2J\\033[HZOOM_SURVIVOR:%s:%s\\n' $VAR \"$(stty size)\"; exit 8\n")
     s.finish(8)
-    assert any(b"ZOOM_SURVIVOR:B:27 98" in row for row in s.last_rows)
+    assert any(b"ZOOM_SURVIVOR:B:26 98" in row for row in s.last_rows)
 finally:
     s.close()
 
@@ -1858,7 +1874,7 @@ try:
     s.send(b"qprintf '\\n%s%s\\n' RESIZE_PROMPT_ OK\n")
     s.expect(b"RESIZE_PROMPT_OK")
     s.send(b"\x02Z")
-    s.expect(b"RESIZE_HIST_02")
+    s.expect(b"RESIZE_HIST_03")
     assert any(b"RESIZE_PROMPT_OK" in row for row in s.last_rows)
     s.send(b"printf '\\n%s%s\\n' REGROWN_ INPUT_OK\n")
     s.expect(b"REGROWN_INPUT_OK")
@@ -1903,23 +1919,23 @@ try:
     s.expect(b"RIGHT_READY")
     s.send(b"\x02\x0c")
     s.send(b"printf 'RIGHT_%s_' \"$resize_token\"; stty size\n")
-    s.expect(b"RIGHT_right_21 37")
+    s.expect(b"RIGHT_right_20 37")
     s.send(b"\x02h")
     s.send(b"printf 'LEFT_%s_' \"$resize_token\"; stty size\n")
-    s.expect(b"LEFT_left_21 39")
+    s.expect(b"LEFT_left_20 39")
     s.send(b'\x02\x08\x02"')
     s.expect(b"RUSTMUX_READY>")
     s.send(b"stty -echo; printf 'BOTTOM_%s\\n' READY\n")
     s.expect(b"BOTTOM_READY")
     s.send(b"\x02\x0b")
     s.send(b"printf 'BOTTOM_%s_' SIZE; stty size\n")
-    s.expect(b"BOTTOM_SIZE_11 38")
+    s.expect(b"BOTTOM_SIZE_10 38")
     s.send(b"\x02Z\x02\x0a\x02Z")
     s.send(b"printf 'RESTORED_%s_' SIZE; stty size\n")
-    s.expect(b"RESTORED_SIZE_11 38")
+    s.expect(b"RESTORED_SIZE_10 38")
     s.send(b"\x02\x0a")
     s.send(b"printf 'DOWN_%s_' SIZE; stty size\n")
-    s.expect(b"DOWN_SIZE_10 38")
+    s.expect(b"DOWN_SIZE_9 38")
     os.kill(s.app_pid, signal.SIGTERM)
     s.finish(128 + signal.SIGTERM)
 finally:
@@ -1937,13 +1953,13 @@ try:
     s.expect(b"RIGHT_READY")
     # Wrap the last pane into the first slot; same-batch input stays with RIGHT.
     s.send(b"\x02}test \"$swap_pid\" = \"$$\" && printf '%s_' \"$swap_token\"; stty size\n")
-    s.expect(b"RIGHT_21 38")
-    assert any(b"RIGHT_21 38" in row[:38] for row in s.last_rows[1:])
+    s.expect(b"RIGHT_20 38")
+    assert any(b"RIGHT_20 38" in row[:38] for row in s.last_rows[1:])
     s.send(b"\x02{test \"$swap_pid\" = \"$$\" && printf '%s_BACK_' \"$swap_token\"; stty size\n")
-    s.expect(b"RIGHT_BACK_21 38")
+    s.expect(b"RIGHT_BACK_20 38")
     # Focus LEFT by geometry: its shell and variables survived both exchanges.
     s.send(b"\x02htest \"$swap_pid\" = \"$$\" && printf '%s_STILL_' \"$swap_token\"; stty size\n")
-    s.expect(b"LEFT_STILL_21 38")
+    s.expect(b"LEFT_STILL_20 38")
     s.send(b"exit 0\n")
     # Wait until removal is rendered before sending input to the surviving shell.
     end = time.monotonic() + 3
@@ -1951,7 +1967,7 @@ try:
         s.read()
         assert time.monotonic() < end, s.last_rows
     s.send(b"printf '%s_SURVIVES_' \"$swap_token\"; stty size\n")
-    s.expect(b"RIGHT_SURVIVES_21 78")
+    s.expect(b"RIGHT_SURVIVES_20 78")
     s.send(b"exit 0\n")
     s.finish(0)
 finally:
@@ -1990,7 +2006,7 @@ with tempfile.TemporaryDirectory() as directory:
         s.expect(b"KEEP_READY")
         os.kill(closing_pid, 0)  # Undo keeps this shell alive and hidden.
         s.send(b"printf '\\nSURVIVOR:%s:%s_' $KEEP ${LEAK-unset}; stty size\n")
-        s.expect(b"SURVIVOR:survivor:unset_21 78")
+        s.expect(b"SURVIVOR:survivor:unset_20 78")
         s.send(b"\x02z")
         command = ("test \"$PWD\" = " + shlex.quote(directory) +
                    " && printf '\\nUNDO:%s:%s\\n' $UNDO_KEEP $$\n")
@@ -1999,7 +2015,7 @@ with tempfile.TemporaryDirectory() as directory:
         s.send(b"\x02x")
         s.expect(b"Close pane? Type yes:")
         s.send(b"yes\r")
-        s.expect(b"SURVIVOR:survivor:unset_21 78")
+        s.expect(b"SURVIVOR:survivor:unset_20 78")
         # A target that exits naturally while confirming must not close its sibling.
         s.send(b"\x02%")
         s.expect(b"RUSTMUX_READY>")
@@ -2137,7 +2153,7 @@ with tempfile.TemporaryDirectory() as directory:
         assert any(b"HISTORY_MOVED" in row for row in s.last_rows[1:])
         os.kill(moving_pid, 0)
         s.send(b"\x02\tprintf '\\nKEEP:%s_' $KEEP; stty size\n")
-        s.expect(b"KEEP:source_21 78")
+        s.expect(b"KEEP:source_20 78")
         expect_bar(s, b"1 shell")
         s.send(b"\x02\treport\n")
         s.expect(("JOB:%s:78" % moving_pid).encode())
@@ -2187,7 +2203,7 @@ with tempfile.TemporaryDirectory() as directory:
         expect_bar(s, b"1 shell")
         assert any(b"JOIN_HISTORY" in row for row in s.last_rows[1:])
         s.send(b"\x02hprintf '\\nKEEP:%s_' $KEEP; stty size\n")
-        s.expect(b"KEEP:target_21 38")
+        s.expect(b"KEEP:target_20 38")
         s.send(b"\x02lquit\n")
         s.expect(b"RUSTMUX_READY>")
         s.send(b"printf '\\nKEEP:%s\\n' $KEEP\n")
@@ -2504,7 +2520,7 @@ try:
     s.expect(b"RUSTMUX_READY>")
     expect_bar(s, f"Rustmux ({background_name})".encode())
     s.send(b"stty size\n")
-    s.expect(b"21 78")
+    s.expect(b"20 78")
     s.send(b"exit 0\n")
     s.finish(0)
 finally:

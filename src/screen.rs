@@ -624,6 +624,13 @@ impl Screen {
         Ok(())
     }
 
+    /// Reserve a bottom row on a disposable render copy without moving the
+    /// existing cells or cursor. This is display composition, not a terminal
+    /// resize operation for the child.
+    pub(crate) fn append_display_row(&mut self) -> io::Result<()> {
+        self.resize_display(self.rows + 1, self.columns)
+    }
+
     // Display-only assembly helpers. The compositor validates all rectangles before
     // calling these; direct cell copies preserve styles, wide cells and suffixes.
     pub(crate) fn copy_display_cells(&mut self, source: &Screen, row: usize, column: usize) {
@@ -1405,7 +1412,7 @@ impl Screen {
 
 #[cfg(test)]
 mod tests {
-    use super::Screen;
+    use super::{MouseTracking, Screen};
 
     fn lines(screen: &Screen) -> Vec<String> {
         (0..screen.dimensions().0)
@@ -1418,6 +1425,31 @@ mod tests {
                     .collect()
             })
             .collect()
+    }
+
+    #[test]
+    fn appended_display_row_preserves_content_cursor_and_modes() {
+        let mut screen = Screen::new(2, 5).unwrap();
+        screen.write_ascii(b"abc\r\ndef").unwrap();
+        screen.set_bracketed_paste(true);
+        screen.set_mouse_tracking(MouseTracking::Any);
+        let before = screen.clone();
+
+        screen.append_display_row().unwrap();
+
+        assert_eq!(screen.dimensions(), (3, 5));
+        assert_eq!(screen.row(0), before.row(0));
+        assert_eq!(screen.row(1), before.row(1));
+        assert_eq!(screen.cursor(), before.cursor());
+        assert_eq!(screen.bracketed_paste(), before.bracketed_paste());
+        assert_eq!(screen.mouse_tracking(), before.mouse_tracking());
+        assert!(
+            screen
+                .row(2)
+                .unwrap()
+                .iter()
+                .all(|cell| cell.character == ' ')
+        );
     }
 
     #[test]

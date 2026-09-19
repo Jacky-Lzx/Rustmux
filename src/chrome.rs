@@ -1,4 +1,4 @@
-//! Top-row window chrome, composed separately from child terminal state.
+//! Window chrome, composed separately from child terminal state.
 use crate::{
     screen::{EraseMode, MouseTracking, Screen},
     style::{Color, Style},
@@ -6,7 +6,8 @@ use crate::{
 use std::io;
 use unicode_width::UnicodeWidthChar;
 
-const PANE_BAR_ROWS: u16 = 1;
+const TOP_BAR_ROWS: u16 = 1;
+const BOTTOM_BAR_ROWS: u16 = 1;
 const MIN_PANE_ROWS: u16 = 1;
 const POWERLINE_RIGHT: char = '';
 const BADGE_TEXT: Color = Color::Rgb(0x11, 0x11, 0x1b);
@@ -18,7 +19,12 @@ const GREEN: Color = Color::Rgb(0xa6, 0xe3, 0xa1);
 const PEACH: Color = Color::Rgb(0xfa, 0xb3, 0x87);
 
 pub(crate) fn pane_rows(outer_rows: u16) -> u16 {
-    outer_rows.saturating_sub(PANE_BAR_ROWS).max(MIN_PANE_ROWS)
+    let chrome_rows = TOP_BAR_ROWS + u16::from(footer_enabled(outer_rows)) * BOTTOM_BAR_ROWS;
+    outer_rows.saturating_sub(chrome_rows).max(MIN_PANE_ROWS)
+}
+
+pub(crate) fn footer_enabled(outer_rows: u16) -> bool {
+    outer_rows >= TOP_BAR_ROWS + BOTTOM_BAR_ROWS + MIN_PANE_ROWS
 }
 
 pub(crate) fn bar_style(active: bool) -> Style {
@@ -34,6 +40,23 @@ pub(crate) fn bar_style(active: bool) -> Style {
 fn bar_background_style() -> Style {
     Style {
         foreground: TEXT,
+        background: BASE,
+        ..Style::default()
+    }
+}
+
+fn shortcut_key_style() -> Style {
+    Style {
+        foreground: BADGE_TEXT,
+        background: PEACH,
+        bold: true,
+        ..Style::default()
+    }
+}
+
+fn shortcut_label_style() -> Style {
+    Style {
+        foreground: SUBTEXT0,
         background: BASE,
         ..Style::default()
     }
@@ -99,6 +122,85 @@ fn display_width(text: &str) -> usize {
 fn print(screen: &mut Screen, text: &str) {
     for character in text.chars() {
         screen.print(character);
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ShortcutHint {
+    key: &'static str,
+    label: &'static str,
+}
+
+const LOCKED_SHORTCUTS: &[ShortcutHint] = &[
+    ShortcutHint {
+        key: "Ctrl-B",
+        label: "Commands",
+    },
+    ShortcutHint {
+        key: "Ctrl-B Ctrl-W",
+        label: "Sessions",
+    },
+];
+
+const NORMAL_SHORTCUTS: &[ShortcutHint] = &[
+    ShortcutHint {
+        key: "c",
+        label: "New",
+    },
+    ShortcutHint {
+        key: "%",
+        label: "Split →",
+    },
+    ShortcutHint {
+        key: "\"",
+        label: "Split ↓",
+    },
+    ShortcutHint {
+        key: "h/j/k/l",
+        label: "Focus",
+    },
+    ShortcutHint {
+        key: "n/p",
+        label: "Window",
+    },
+    ShortcutHint {
+        key: "Z",
+        label: "Zoom",
+    },
+];
+
+fn shortcut_width(hint: ShortcutHint) -> usize {
+    display_width(hint.key) + display_width(hint.label) + 3
+}
+
+fn draw_shortcuts(screen: &mut Screen, row: usize, columns: usize, normal: bool) {
+    screen.set_origin_mode(false);
+    screen.set_insert_mode(false);
+    screen.set_auto_wrap(false);
+    screen.designate_character_set(false, false);
+    screen.select_character_set(false);
+    screen.set_style(bar_background_style());
+    screen.position(row, 0);
+    screen.erase_line(EraseMode::All);
+    let hints = if normal {
+        NORMAL_SHORTCUTS
+    } else {
+        LOCKED_SHORTCUTS
+    };
+    let mut remaining = columns;
+    for hint in hints {
+        let width = shortcut_width(*hint);
+        if width > remaining {
+            break;
+        }
+        screen.set_style(shortcut_key_style());
+        print(screen, " ");
+        print(screen, hint.key);
+        print(screen, " ");
+        screen.set_style(shortcut_label_style());
+        print(screen, hint.label);
+        print(screen, " ");
+        remaining -= width;
     }
 }
 
@@ -251,6 +353,10 @@ pub(crate) fn compose(
         screen.set_mouse_tracking(MouseTracking::Drag);
     }
     screen.prepend_display_row()?;
+    let footer = footer_enabled(outer_rows);
+    if footer {
+        screen.append_display_row()?;
+    }
     screen.save_cursor();
     prepare_row(&mut screen, bar_background_style());
     let layout = bar_layout(columns, session_name, names, active, normal_mode);
@@ -268,6 +374,10 @@ pub(crate) fn compose(
     }
     if layout.mode_width != 0 {
         draw_mode(&mut screen, columns, layout.mode_width, normal_mode);
+    }
+    if footer {
+        let row = screen.dimensions().0 - 1;
+        draw_shortcuts(&mut screen, row, columns, normal_mode);
     }
     screen.restore_cursor();
     Ok(screen)
@@ -301,11 +411,12 @@ mod tests {
 
     #[test]
     fn bar_preserves_child_rows_cursor_and_modes() {
-        let mut child = Screen::new(3, 40).unwrap();
+        let mut child = Screen::new(3, 60).unwrap();
         Parser::new().advance(&mut child, b"content\x1b[2;3r\x1b[?6h\x1b(0\x1b[?2004h");
         let before = child.clone();
-        let view = compose(&child, 4, None, &["first".into(), "中文".into()], 1, false).unwrap();
+        let view = compose(&child, 5, None, &["first".into(), "中文".into()], 1, false).unwrap();
         assert_eq!(child, before);
+        assert_eq!(view.dimensions(), (5, 60));
         for row in 0..3 {
             assert_eq!(view.row(row + 1), child.row(row));
         }
@@ -330,16 +441,26 @@ mod tests {
         assert_eq!(row[10].style, separator_style(TEXT, BASE));
         assert_eq!(row[11].style, separator_style(BASE, GREEN));
         assert_eq!(row[12].style, bar_style(true));
+        let footer: String = view
+            .row(4)
+            .unwrap()
+            .iter()
+            .filter(|cell| cell.width != 0)
+            .map(|cell| cell.character)
+            .collect();
+        assert!(footer.starts_with(" Ctrl-B Commands "));
+        assert!(footer.contains("Ctrl-B Ctrl-W Sessions"));
+        assert_eq!(view.row(4).unwrap()[0].style, shortcut_key_style());
 
         let mut mouse_child = Screen::new(2, 20).unwrap();
         mouse_child.set_mouse_tracking(MouseTracking::Drag);
         mouse_child.set_sgr_mouse(true);
-        let view = compose(&mouse_child, 3, None, &["shell".into()], 0, false).unwrap();
+        let view = compose(&mouse_child, 4, None, &["shell".into()], 0, false).unwrap();
         assert_eq!(view.mouse_tracking(), MouseTracking::Drag);
         assert!(view.sgr_mouse());
 
         mouse_child.set_mouse_tracking(MouseTracking::Any);
-        let view = compose(&mouse_child, 3, None, &["shell".into()], 0, false).unwrap();
+        let view = compose(&mouse_child, 4, None, &["shell".into()], 0, false).unwrap();
         assert_eq!(view.mouse_tracking(), MouseTracking::Any);
     }
 
@@ -368,7 +489,9 @@ mod tests {
             }
         }
         assert_eq!(pane_rows(1), 1);
-        assert_eq!(pane_rows(24), 23);
+        assert_eq!(pane_rows(2), 1);
+        assert_eq!(pane_rows(3), 1);
+        assert_eq!(pane_rows(24), 22);
         let child = Screen::new(1, 10).unwrap();
         assert_eq!(
             compose(&child, 1, None, &["hidden".into()], 0, false).unwrap(),
@@ -381,7 +504,7 @@ mod tests {
         let child = Screen::new(2, 50).unwrap();
         let view = compose(
             &child,
-            3,
+            4,
             Some("personal"),
             &["first".into(), "editor".into()],
             1,
@@ -398,7 +521,7 @@ mod tests {
         assert!(bar.starts_with(" Rustmux (personal) "));
         assert!(bar.contains("2 editor"));
 
-        let narrow = Screen::new(2, 9).unwrap();
+        let narrow = Screen::new(1, 9).unwrap();
         let view = compose(&narrow, 3, Some("personal"), &["first".into()], 0, false).unwrap();
         let bar: String = view
             .row(0)
@@ -414,8 +537,8 @@ mod tests {
     #[test]
     fn mode_badge_is_right_aligned_and_yields_to_the_active_window() {
         let child = Screen::new(2, 40).unwrap();
-        let locked = compose(&child, 3, None, &["shell".into()], 0, false).unwrap();
-        let normal = compose(&child, 3, None, &["shell".into()], 0, true).unwrap();
+        let locked = compose(&child, 4, None, &["shell".into()], 0, false).unwrap();
+        let normal = compose(&child, 4, None, &["shell".into()], 0, true).unwrap();
         let locked_row = locked.row(0).unwrap();
         let normal_row = normal.row(0).unwrap();
         assert_eq!(locked_row[30].style, separator_style(BASE, RED));
@@ -424,7 +547,7 @@ mod tests {
         assert_eq!(locked_row[32].character, 'L');
         assert_eq!(normal_row[32].character, 'N');
 
-        let narrow = Screen::new(2, 8).unwrap();
+        let narrow = Screen::new(1, 8).unwrap();
         let view = compose(&narrow, 3, None, &["shell".into()], 0, true).unwrap();
         let bar: String = view
             .row(0)
@@ -435,6 +558,37 @@ mod tests {
             .collect();
         assert!(bar.contains("1 she"), "bar was {bar:?}");
         assert!(!bar.contains("NORMAL"));
+    }
+
+    #[test]
+    fn footer_changes_with_mode_and_keeps_hints_atomic() {
+        let child = Screen::new(1, 80).unwrap();
+        let locked = compose(&child, 3, None, &["shell".into()], 0, false).unwrap();
+        let normal = compose(&child, 3, None, &["shell".into()], 0, true).unwrap();
+        let text = |screen: &Screen| {
+            screen
+                .row(2)
+                .unwrap()
+                .iter()
+                .filter(|cell| cell.width != 0)
+                .map(|cell| cell.character)
+                .collect::<String>()
+        };
+        assert!(text(&locked).starts_with(" Ctrl-B Commands "));
+        assert!(text(&normal).starts_with(" c New  % Split →  \" Split ↓ "));
+
+        let narrow = Screen::new(1, 20).unwrap();
+        let normal = compose(&narrow, 3, None, &["shell".into()], 0, true).unwrap();
+        let footer: String = normal
+            .row(2)
+            .unwrap()
+            .iter()
+            .filter(|cell| cell.width != 0)
+            .map(|cell| cell.character)
+            .collect();
+        assert!(footer.starts_with(" c New  % Split → "));
+        assert!(!footer.contains("Split ↓"));
+        assert!(!footer.contains("Focus"));
     }
 
     #[test]

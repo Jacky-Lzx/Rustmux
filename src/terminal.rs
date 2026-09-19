@@ -21,7 +21,7 @@ use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGWINCH};
 
 use crate::pane::{INPUT_LIMIT as LIMIT, MAX_CELLS, Pane};
 use crate::{
-    chrome::{compose, pane_rows},
+    chrome::{compose, footer_enabled, pane_rows},
     layout::{Direction, PaneId, Rect, SplitAxis},
     pane_set::PaneSet,
     pane_view,
@@ -557,6 +557,7 @@ struct WindowInput {
     pane_width: usize,
     mouse_tracking: MouseTracking,
     bar_enabled: bool,
+    footer_row: Option<usize>,
     bar_press: bool,
     pane_press: bool,
     window_hitboxes: Vec<(usize, usize, usize)>,
@@ -581,6 +582,7 @@ impl WindowInput {
             || (self.mouse.is_empty()
                 && (!(self.mouse_tracking != MouseTracking::Off
                     || self.bar_enabled
+                    || self.footer_row.is_some()
                     || self.pane_hitboxes.len() > 1)
                     || byte != 27))
         {
@@ -659,6 +661,12 @@ impl WindowInput {
             }
             if release && self.bar_press {
                 self.bar_press = false;
+                return;
+            }
+            if self.footer_row == Some(row) {
+                if release {
+                    self.pane_press = false;
+                }
                 return;
             }
             if !release && left_mouse_press(&bytes) {
@@ -1480,6 +1488,7 @@ fn forward(
             keys.pane_width = usize::from(rect.columns);
             keys.mouse_tracking = pane.screen().mouse_tracking();
             keys.bar_enabled = *outer_rows > 1;
+            keys.footer_row = footer_enabled(*outer_rows).then_some(usize::from(*outer_rows));
             if keys.mouse.is_empty() && input.front() == Some(&27) {
                 let active = windows.active().unwrap().id();
                 let names: Vec<_> = windows
@@ -2698,6 +2707,36 @@ mod window_input_tests {
             keys.feed(byte, &mut output);
         }
         assert!(output.is_empty());
+    }
+
+    #[test]
+    fn footer_mouse_reports_never_reach_the_child() {
+        let mut keys = WindowInput {
+            pane_height: 22,
+            pane_width: 80,
+            pane_top: 1,
+            mouse_tracking: MouseTracking::Any,
+            bar_enabled: true,
+            footer_row: Some(24),
+            ..WindowInput::default()
+        };
+        let mut output = Vec::new();
+        for &byte in b"\x1b[<0;2;24M\x1b[<32;3;24M\x1b[<0;3;24m\x1b[<64;4;24M" {
+            keys.feed(byte, &mut output);
+        }
+        assert!(output.is_empty());
+
+        for &byte in b"\x1b[<0;2;23M" {
+            keys.feed(byte, &mut output);
+        }
+        assert_eq!(
+            output,
+            b"\x1b[<0;2;22M"
+                .iter()
+                .copied()
+                .map(WindowKey::Byte)
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]
