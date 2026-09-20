@@ -1355,13 +1355,13 @@ fn forward(
                     if let Some(history) = &history {
                         let (rows, columns) = view.dimensions();
                         if footer_enabled(*outer_rows) {
-                            let content_columns =
-                                crate::chrome::history_footer_content_columns(columns);
-                            let label = history.label(content_columns);
-                            let label = label.strip_prefix("History ").unwrap_or(&label);
+                            let hints = history.footer_hints();
+                            let status_columns =
+                                crate::chrome::history_footer_status_columns(columns, hints);
+                            let (status, cursor) = history.footer_status(status_columns);
                             if let Some(start) =
-                                crate::chrome::draw_history_footer(&mut view, label)
-                                && let Some(column) = history.query_cursor(content_columns)
+                                crate::chrome::draw_history_footer(&mut view, &status, hints)
+                                && let Some(column) = cursor
                             {
                                 view.position(rows - 1, start + column);
                                 view.set_cursor_visible(true);

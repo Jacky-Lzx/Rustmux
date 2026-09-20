@@ -10,6 +10,7 @@ const TOP_BAR_ROWS: u16 = 1;
 const BOTTOM_BAR_ROWS: u16 = 1;
 const MIN_PANE_ROWS: u16 = 1;
 const POWERLINE_RIGHT: char = '';
+const HISTORY_MINIMUM_STATUS_COLUMNS: usize = 24;
 const BADGE_TEXT: Color = Color::Rgb(0x11, 0x11, 0x1b);
 const BASE: Color = Color::Rgb(0x1e, 0x1e, 0x2e);
 const SUBTEXT0: Color = Color::Rgb(0xa6, 0xad, 0xc8);
@@ -236,15 +237,19 @@ fn visible_shortcuts(columns: usize, normal: bool, session: bool) -> Vec<Shortcu
 }
 
 fn draw_shortcut_segment(screen: &mut Screen, hint: ShortcutHint) {
+    draw_key_label_segment(screen, hint.key, hint.label);
+}
+
+fn draw_key_label_segment(screen: &mut Screen, key: &str, label: &str) {
     screen.set_style(shortcut_key_style());
     print(screen, " ");
-    print(screen, hint.key);
+    print(screen, key);
     print(screen, " ");
     screen.set_style(separator_style(BASE, LAVENDER));
     screen.print(POWERLINE_RIGHT);
     screen.set_style(shortcut_label_style());
     print(screen, " ");
-    print(screen, hint.label);
+    print(screen, label);
     print(screen, " ");
     screen.set_style(separator_style(LAVENDER, BASE));
     screen.print(POWERLINE_RIGHT);
@@ -365,7 +370,43 @@ fn draw_footer(screen: &mut Screen, row: usize, columns: usize, normal: bool, se
     }
 }
 
-pub(crate) fn draw_history_footer(screen: &mut Screen, label: &str) -> Option<usize> {
+fn history_hint_width((key, label): (&str, &str)) -> usize {
+    key.width() + label.width() + 6
+}
+
+fn visible_history_hints<'a>(
+    columns: usize,
+    hints: &'a [(&'a str, &'a str)],
+) -> Vec<(&'a str, &'a str)> {
+    let available = history_footer_content_columns(columns);
+    let minimum_status = available.min(HISTORY_MINIMUM_STATUS_COLUMNS);
+    let mut remaining = available.saturating_sub(minimum_status);
+    let mut visible = Vec::new();
+    for hint in hints {
+        let width = history_hint_width(*hint);
+        if width > remaining.saturating_sub(1) {
+            break;
+        }
+        visible.push(*hint);
+        remaining -= width;
+    }
+    visible
+}
+
+pub(crate) fn history_footer_status_columns(columns: usize, hints: &[(&str, &str)]) -> usize {
+    let available = history_footer_content_columns(columns);
+    let hints = visible_history_hints(columns, hints);
+    let hint_width: usize = hints.iter().copied().map(history_hint_width).sum();
+    available
+        .saturating_sub(hint_width)
+        .saturating_sub(usize::from(!hints.is_empty()))
+}
+
+pub(crate) fn draw_history_footer(
+    screen: &mut Screen,
+    status: &str,
+    hints: &[(&str, &str)],
+) -> Option<usize> {
     let (rows, columns) = screen.dimensions();
     if rows < 3 || columns == 0 {
         return None;
@@ -393,7 +434,15 @@ pub(crate) fn draw_history_footer(screen: &mut Screen, label: &str) -> Option<us
     if used < columns {
         screen.set_style(bar_background_style());
         print(screen, " ");
-        print(screen, &clipped(label, columns - content_start));
+        let visible_hints = visible_history_hints(columns, hints);
+        let status_columns = history_footer_status_columns(columns, hints);
+        print(screen, &clipped(status, status_columns));
+        if !visible_hints.is_empty() {
+            print(screen, " ");
+        }
+        for (key, label) in visible_hints {
+            draw_key_label_segment(screen, key, label);
+        }
     }
     screen.restore_cursor();
     Some(content_start.min(columns.saturating_sub(1)))
@@ -795,7 +844,8 @@ mod tests {
         let mut history = compose(&child, 3, None, &["shell".into()], 0, false).unwrap();
         let saved_top = history.row(0).unwrap().to_vec();
         let saved_cursor = history.cursor();
-        assert_eq!(draw_history_footer(&mut history, "2/40 · q:exit"), Some(10));
+        let hints = &[("/?", "Search"), ("q", "Exit")];
+        assert_eq!(draw_history_footer(&mut history, "2/40", hints), Some(10));
         assert_eq!(history.row(0).unwrap(), saved_top);
         assert_eq!(history.cursor(), saved_cursor);
         let footer = history.row(2).unwrap();
@@ -804,11 +854,31 @@ mod tests {
             .filter(|cell| cell.width != 0)
             .map(|cell| cell.character)
             .collect();
-        assert!(text.starts_with(" HISTORY  2/40 · q:exit"));
+        assert!(text.starts_with(" HISTORY  2/40"));
+        assert!(text.contains("/?"));
+        assert!(text.contains("Search"));
+        assert!(text.contains("q"));
+        assert!(text.contains("Exit"));
         assert_eq!(footer[0].style.background, PEACH);
         assert_eq!(footer[9].style.background, BASE);
+        let search = text.find("Search").unwrap();
+        assert_eq!(footer[search].style.background, LAVENDER);
         assert_eq!(history_footer_content_columns(80), 70);
         assert_eq!(history_footer_content_columns(8), 0);
+        assert_eq!(history_footer_status_columns(80, hints), 44);
+
+        let narrow_child = Screen::new(1, 40).unwrap();
+        let mut narrow = compose(&narrow_child, 3, None, &["shell".into()], 0, false).unwrap();
+        draw_history_footer(&mut narrow, "Search /still-in-history", hints);
+        let narrow_text: String = narrow
+            .row(2)
+            .unwrap()
+            .iter()
+            .filter(|cell| cell.width != 0)
+            .map(|cell| cell.character)
+            .collect();
+        assert!(narrow_text.contains("Search /still-in-history"));
+        assert!(!narrow_text.contains("/?"));
     }
 
     #[test]

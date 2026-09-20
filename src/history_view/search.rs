@@ -174,6 +174,14 @@ impl QueryInput {
     }
 
     pub fn display(&self, columns: usize) -> (String, usize) {
+        let (input, cursor) = self.input_display(columns);
+        (
+            format!("{input} · Up/Down:recall Enter:find Ctrl-C:cancel"),
+            cursor,
+        )
+    }
+
+    pub fn input_display(&self, columns: usize) -> (String, usize) {
         let marker = self.direction.marker();
         let prefix = if columns >= 9 {
             format!("Search {marker}")
@@ -200,7 +208,7 @@ impl QueryInput {
             .skip_while(|character| character.width() == Some(0))
             .collect();
         (
-            format!("{prefix}{tail} · Up/Down:recall Enter:find Ctrl-C:cancel"),
+            format!("{prefix}{tail}"),
             (prefix.len() + before_width).min(columns.saturating_sub(1)),
         )
     }

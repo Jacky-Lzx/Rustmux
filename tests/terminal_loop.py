@@ -1926,7 +1926,7 @@ try:
         expect_footer(s, b"Search ?DRAFT")
         s.send(b"\x1b[A\x1b[A\r")
         expect_footer(s, b"8/10 ?HIST_0")
-        assert b"Search " not in s.physical_rows[-1]
+        assert b"Search ?HIST_0" not in s.physical_rows[-1]
         s.send(b"/HIST_X\x1b[D\x1b[3~0")
         expect_footer(s, b"Search /HIST_0")
         assert b"\x1b[?25h" in s.last_frame

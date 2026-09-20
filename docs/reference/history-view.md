@@ -7,7 +7,9 @@ and still freezes the current visible screen. Alternate-screen applications igno
 Other panes continue displaying live output. The top window bar remains visible.
 The bottom bar replaces `LOCKED` or `NORMAL` with a rectangular `HISTORY` badge,
 followed by the number of rows above the snapshot's bottom and the snapshot
-history length.
+history length. Available actions use the same Powerline key-and-command segments
+as the normal footer and change with browsing, search, selection and copy status.
+Narrow terminals omit complete action segments instead of drawing partial hints.
 The browsed pane's complete border changes to Catppuccin Mocha Peach and returns
 to Catppuccin Mocha Green on exit.
 The cursor is hidden while browsing and shown in the bottom bar while editing a

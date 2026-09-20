@@ -8,6 +8,17 @@ use std::time::{Duration, Instant};
 const MAX_HISTORY_ESCAPE_BYTES: usize = 64;
 const ESCAPE_TIMEOUT: Duration = Duration::from_millis(30);
 const COPY_STATUS_DURATION: Duration = Duration::from_secs(1);
+
+const BROWSE_FOOTER_HINTS: &[(&str, &str)] = &[("/?", "Search"), ("n/N", "Match"), ("q", "Exit")];
+const SEARCH_FOOTER_HINTS: &[(&str, &str)] =
+    &[("↑/↓", "Recall"), ("Enter", "Find"), ("Ctrl-C", "Cancel")];
+const SELECTION_FOOTER_HINTS: &[(&str, &str)] = &[
+    ("y/Enter", "Copy"),
+    ("v", "Cancel"),
+    ("h/j/k/l", "Extend"),
+    ("b/e", "Word"),
+];
+const COPY_FOOTER_HINTS: &[(&str, &str)] = &[("q", "Exit")];
 const DRAG_SCROLL_INTERVAL: Duration = Duration::from_millis(50);
 // Encoded OSC 52 output stays below the terminal's 64 KiB input/IO budget.
 const MAX_COPY_TEXT_BYTES: usize = 32 * 1024;
@@ -174,6 +185,65 @@ impl HistoryView {
 
     pub fn query_cursor(&self, columns: usize) -> Option<usize> {
         self.editor.as_ref().map(|editor| editor.display(columns).1)
+    }
+
+    pub fn footer_hints(&self) -> &'static [(&'static str, &'static str)] {
+        if self.editor.is_some() {
+            SEARCH_FOOTER_HINTS
+        } else if self.copy_status.is_some() {
+            COPY_FOOTER_HINTS
+        } else if self.keyboard_selection() {
+            SELECTION_FOOTER_HINTS
+        } else {
+            BROWSE_FOOTER_HINTS
+        }
+    }
+
+    pub fn footer_status(&self, columns: usize) -> (String, Option<usize>) {
+        if let Some(editor) = &self.editor {
+            let (label, cursor) = editor.input_display(columns);
+            return (label, Some(cursor));
+        }
+        if let Some(status) = self.copy_status {
+            let label = match status {
+                CopyStatus::Sent => "Copy sent to terminal",
+                CopyStatus::TooLarge => "Copy too large (32 KiB limit)",
+            };
+            return (label.to_owned(), None);
+        }
+        if let Some(selection) = self
+            .selection
+            .filter(|selection| selection.source == SelectionSource::Keyboard)
+        {
+            let (start, end) = ordered(selection.anchor, selection.cursor);
+            return (
+                format!(
+                    "Select {}:{}–{}:{}",
+                    start.0 + 1,
+                    start.1 + 1,
+                    end.0 + 1,
+                    end.1 + 1
+                ),
+                None,
+            );
+        }
+        let marker = self.direction.marker();
+        let search = if self.query.is_empty() {
+            String::new()
+        } else if self.hits.is_empty() {
+            format!(" · no match {marker}{}", self.query)
+        } else {
+            format!(
+                " · {}/{} {marker}{}",
+                self.selected.map_or(0, |index| index + 1),
+                self.hits.len(),
+                self.query
+            )
+        };
+        (
+            format!("{}/{}{}", self.offset, self.source.history_len(), search),
+            None,
+        )
     }
 
     pub fn escape_expired(&self, now: Instant) -> bool {
@@ -1231,6 +1301,8 @@ mod tests {
         let mut view = HistoryView::new(&source).unwrap();
         assert_eq!(view.offset, 0);
         assert!(view.label(80).starts_with("History 0/0"));
+        assert_eq!(view.footer_status(80), ("0/0".into(), None));
+        assert_eq!(view.footer_hints(), BROWSE_FOOTER_HINTS);
         assert_eq!(view.render().unwrap().row(0).unwrap()[0].character, 's');
         type_bytes(&mut view, b"\x1b[<0;1;1M\x1b[<32;5;1M\x1b[<0;5;1m");
         assert_eq!(view.take_copy().unwrap(), osc52("short").unwrap());
@@ -1286,6 +1358,11 @@ mod tests {
         let deadline = view.copy_status_until.unwrap();
         assert!(!view.expire_copy_status(deadline - Duration::from_millis(1)));
         assert!(view.label(80).contains("Copy sent to terminal"));
+        assert_eq!(
+            view.footer_status(80),
+            ("Copy sent to terminal".into(), None)
+        );
+        assert_eq!(view.footer_hints(), COPY_FOOTER_HINTS);
         assert!(view.expire_copy_status(deadline));
         assert!(view.label(80).starts_with("History "));
         assert!(view.copy_status_until.is_none());
@@ -1516,6 +1593,8 @@ mod tests {
         type_bytes(&mut view, b"vl");
 
         assert!(view.label(100).contains("arrows/hjkl:extend"));
+        assert_eq!(view.footer_status(100), ("Select 1:1–1:2".into(), None));
+        assert_eq!(view.footer_hints(), SELECTION_FOOTER_HINTS);
         assert!(view.label(48).contains("hjkl b/e 0/$ o y/Enter v"));
         assert_eq!(view.label(24), "Sel 1:1–1:2 · y/Enter v");
         assert_eq!(view.label(11), "Sel 1:1–1:2");
@@ -2020,7 +2099,10 @@ mod tests {
         Parser::new().advance(&mut source, b"abXX\r\ncdXX\r\nefXX\r\nlast");
         let original = source.clone();
         let mut view = HistoryView::new(&source).unwrap();
-        type_bytes(&mut view, b"g/XX\r");
+        type_bytes(&mut view, b"g/XX");
+        assert_eq!(view.footer_status(24), ("Search /XX".into(), Some(10)));
+        assert_eq!(view.footer_hints(), SEARCH_FOOTER_HINTS);
+        type_bytes(&mut view, b"\r");
         assert_eq!(view.selected, Some(0));
         assert_eq!(view.hits.len(), 3);
         let rendered = view.render().unwrap();
