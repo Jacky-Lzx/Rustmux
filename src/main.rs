@@ -21,13 +21,19 @@ fn execute(command: Option<rustmux::cli::Command>) -> Result<u8, String> {
     }
     match command {
         None => {
-            let shell = rustmux::config::shell()?;
-            rustmux::terminal::run(&shell).map_err(|error| error.to_string())
+            let config = rustmux::config::load()?;
+            rustmux::terminal::run(config.shell(), config.notifications())
+                .map_err(|error| error.to_string())
         }
         Some(rustmux::cli::Command::New { name, detached }) => {
-            let shell = rustmux::config::shell()?;
-            rustmux::session::supervisor::create(&name, &shell, detached)
-                .map_err(|error| error.to_string())
+            let config = rustmux::config::load()?;
+            rustmux::session::supervisor::create(
+                &name,
+                config.shell(),
+                config.notifications(),
+                detached,
+            )
+            .map_err(|error| error.to_string())
         }
         Some(rustmux::cli::Command::Attach { name }) => match name {
             Some(name) => {

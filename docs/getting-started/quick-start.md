@@ -16,10 +16,21 @@ reports an error without silently falling back.
 
 ```toml
 shell = "/opt/homebrew/bin/fish"
+
+[notifications]
+long_command_bell = true
+command_duration_seconds = 5
 ```
 
+`long_command_bell` controls whether an OSC 133-integrated command rings when it
+finishes, and `command_duration_seconds` sets the positive whole-second threshold.
+Both notification values are optional and default to `true` and `5`. Configuration
+is read when a local session or named-session server starts; an existing named
+session keeps its original values until it is recreated.
+
 `RUSTMUX_SHELL=/bin/sh ./target/debug/rustmux` remains available as a temporary
-override. Changes take effect the next time Rustmux starts.
+override. Changes take effect the next time a local session or named-session
+server starts.
 
 Running without arguments keeps the foreground-only behavior. To create a named
 session that survives terminal detachment, or reconnect to it later, use:

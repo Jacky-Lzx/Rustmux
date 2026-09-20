@@ -26,7 +26,12 @@ const DETACHED_START_TIMEOUT: Duration = Duration::from_secs(2);
 ///
 /// This must run during single-threaded process startup because the child is
 /// created with `fork` and continues in Rust before starting any other threads.
-pub fn create(name: &SessionName, shell: &OsStr, detached: bool) -> io::Result<u8> {
+pub fn create(
+    name: &SessionName,
+    shell: &OsStr,
+    notifications: crate::config::Notifications,
+    detached: bool,
+) -> io::Result<u8> {
     let endpoint = SessionEndpoint::bind(name)?;
     // SAFETY: the CLI calls this during single-threaded startup, so the child
     // cannot inherit locks held by another thread.
@@ -40,7 +45,7 @@ pub fn create(name: &SessionName, shell: &OsStr, detached: bool) -> io::Result<u
             }
         }
         ForkResult::Child => {
-            let status = run_server(endpoint, name, shell).unwrap_or(1);
+            let status = run_server(endpoint, name, shell, notifications).unwrap_or(1);
             std::process::exit(i32::from(status));
         }
     }
@@ -140,9 +145,9 @@ fn manage_sessions(
         match super::picker::choose(&sessions, return_to.as_ref())? {
             super::picker::Choice::Attach(name) => return Ok(Some(name)),
             super::picker::Choice::Create(name) => {
-                let shell = crate::config::shell()
+                let config = crate::config::load()
                     .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
-                create(&name, &shell, true)?;
+                create(&name, config.shell(), config.notifications(), true)?;
                 return Ok(Some(name));
             }
             super::picker::Choice::Kill(name) => {
@@ -180,11 +185,16 @@ pub fn kill(name: &SessionName) -> io::Result<()> {
     Ok(())
 }
 
-fn run_server(endpoint: SessionEndpoint, name: &SessionName, shell: &OsStr) -> io::Result<u8> {
+fn run_server(
+    endpoint: SessionEndpoint,
+    name: &SessionName,
+    shell: &OsStr,
+    notifications: crate::config::Notifications,
+) -> io::Result<u8> {
     detach_process(endpoint.listener().as_raw_fd())?;
     let _server = acquire_server(name)?;
     let peer = accept_peer(&endpoint)?;
-    crate::terminal::serve_session(shell, name, &endpoint, peer)
+    crate::terminal::serve_session(shell, name, &endpoint, peer, notifications)
 }
 
 fn detach_process(listener: i32) -> io::Result<()> {

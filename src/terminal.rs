@@ -49,12 +49,13 @@ const PANE_DRAG_RESIZE_INTERVAL: Duration = Duration::from_millis(33);
 /// Run on the controlling terminal during single-threaded program startup.
 /// Returns the shell exit code, or 128 + signal for termination by signal.
 /// Input and output must be terminals. Raw mode is restored before returning.
-pub fn run(shell_path: &OsStr) -> io::Result<u8> {
+pub fn run(shell_path: &OsStr, notifications: crate::config::Notifications) -> io::Result<u8> {
     let file = TerminalDevice::open_controlling()?;
     let size = window_size(&file)?;
     // Start the shell before changing the outer terminal, so exec failures
     // cannot leave it raw. Signal registration below creates no worker threads.
-    let mut session = TerminalSession::new(shell_path, size.ws_row, size.ws_col, None)?;
+    let mut session =
+        TerminalSession::new(shell_path, size.ws_row, size.ws_col, None, notifications)?;
     let signals = Signals::install()?;
     let mut terminal = LocalFrontend::enter(file, signals.resize.clone())?;
     let result = session.attach(&mut terminal, &signals);
@@ -80,9 +81,16 @@ pub fn serve_session(
     name: &crate::session::SessionName,
     endpoint: &SessionEndpoint,
     mut peer: ServerPeer,
+    notifications: crate::config::Notifications,
 ) -> io::Result<u8> {
     let (rows, columns) = peer.size();
-    let mut session = TerminalSession::new(shell_path, rows, columns, Some(name.as_str()))?;
+    let mut session = TerminalSession::new(
+        shell_path,
+        rows,
+        columns,
+        Some(name.as_str()),
+        notifications,
+    )?;
     let signals = Signals::install()?;
     loop {
         let mut frontend = ServerFrontend::new(peer);
@@ -120,7 +128,15 @@ struct TerminalSession {
     session_name: Option<String>,
     windows: Windows<PaneSet<Pane>>,
     outer_rows: u16,
+    notifications: crate::config::Notifications,
     closed: Option<crate::closed_pane::ClosedPane>,
+}
+
+#[derive(Clone, Copy)]
+struct SessionContext<'a> {
+    shell_path: &'a OsStr,
+    session_name: Option<&'a str>,
+    notifications: crate::config::Notifications,
 }
 
 impl TerminalSession {
@@ -129,18 +145,20 @@ impl TerminalSession {
         rows: u16,
         columns: u16,
         session_name: Option<&str>,
+        notifications: crate::config::Notifications,
     ) -> io::Result<Self> {
         check_size(rows, columns)?;
         let mut windows = Windows::default();
         windows.create(
             "shell".into(),
-            spawn_window(shell_path, None, pane_rows(rows), columns)?,
+            spawn_window(shell_path, None, pane_rows(rows), columns, notifications)?,
         )?;
         Ok(Self {
             shell_path: shell_path.to_owned(),
             session_name: session_name.map(str::to_owned),
             windows,
             outer_rows: rows,
+            notifications,
             closed: None,
         })
     }
@@ -154,8 +172,11 @@ impl TerminalSession {
             frontend,
             &mut self.windows,
             signals,
-            &self.shell_path,
-            self.session_name.as_deref(),
+            SessionContext {
+                shell_path: &self.shell_path,
+                session_name: self.session_name.as_deref(),
+                notifications: self.notifications,
+            },
             &mut self.outer_rows,
             &mut self.closed,
         )
@@ -932,12 +953,19 @@ fn spawn_window(
     directory: Option<&Path>,
     rows: u16,
     columns: u16,
+    notifications: crate::config::Notifications,
 ) -> io::Result<PaneSet<Pane>> {
     let (content_rows, content_columns) = pane_content_dimensions(rows, columns);
     PaneSet::new(
         rows,
         columns,
-        Pane::spawn_in(shell, directory, content_rows, content_columns)?,
+        Pane::spawn_in(
+            shell,
+            directory,
+            content_rows,
+            content_columns,
+            notifications,
+        )?,
     )
 }
 
@@ -1100,11 +1128,15 @@ fn forward(
     frontend: &mut impl Frontend,
     windows: &mut Windows<PaneSet<Pane>>,
     signals: &Signals,
-    shell_path: &OsStr,
-    session_name: Option<&str>,
+    context: SessionContext<'_>,
     outer_rows: &mut u16,
     closed: &mut Option<crate::closed_pane::ClosedPane>,
 ) -> io::Result<ForwardExit> {
+    let SessionContext {
+        shell_path,
+        session_name,
+        notifications,
+    } = context;
     let mut renderer = Renderer::default();
     let mut to_terminal = VecDeque::new();
     let mut input = VecDeque::new();
@@ -1751,6 +1783,7 @@ fn forward(
                                 directory.as_deref(),
                                 rect.rows,
                                 rect.columns,
+                                notifications,
                             )
                         }) {
                             Ok(_) => panes.synchronize_sizes()?,
@@ -1991,7 +2024,13 @@ fn forward(
                         let (rows, columns) =
                             windows.active().unwrap().content().layout().dimensions();
                         let directory = active_directory(windows);
-                        match spawn_window(shell_path, directory.as_deref(), rows, columns) {
+                        match spawn_window(
+                            shell_path,
+                            directory.as_deref(),
+                            rows,
+                            columns,
+                            notifications,
+                        ) {
                             Ok(pane) => {
                                 windows.create("shell".into(), pane)?;
                             }
@@ -2242,7 +2281,14 @@ mod tests {
         let window = windows
             .create(
                 "first".into(),
-                spawn_window(OsStr::new("/bin/sh"), None, 24, 80).unwrap(),
+                spawn_window(
+                    OsStr::new("/bin/sh"),
+                    None,
+                    24,
+                    80,
+                    crate::config::Notifications::default(),
+                )
+                .unwrap(),
             )
             .unwrap();
         let first = windows.active().unwrap().content().layout().active();
@@ -2361,7 +2407,14 @@ mod tests {
 
     #[test]
     fn terminal_session_preserves_shell_across_socket_attachments() {
-        let mut session = TerminalSession::new(OsStr::new("/bin/sh"), 24, 80, None).unwrap();
+        let mut session = TerminalSession::new(
+            OsStr::new("/bin/sh"),
+            24,
+            80,
+            None,
+            crate::config::Notifications::default(),
+        )
+        .unwrap();
         let signals = test_signals();
         let (mut first_client, mut first_frontend) = socket_frontend(24, 80);
         send_client_messages(
@@ -2401,7 +2454,14 @@ mod tests {
         ))
         .unwrap();
         let endpoint = SessionEndpoint::bind(&name).unwrap();
-        let mut session = TerminalSession::new(OsStr::new("/bin/sh"), 24, 80, None).unwrap();
+        let mut session = TerminalSession::new(
+            OsStr::new("/bin/sh"),
+            24,
+            80,
+            None,
+            crate::config::Notifications::default(),
+        )
+        .unwrap();
         let signals = test_signals();
 
         let (mut first_client, mut first_frontend) = socket_frontend(24, 80);
@@ -2464,7 +2524,14 @@ mod tests {
         send_client_messages(&mut client, &[ClientMessage::Input(b"exit 7\n".to_vec())]);
 
         assert_eq!(
-            serve_session(OsStr::new("/bin/sh"), &name, &endpoint, server).unwrap(),
+            serve_session(
+                OsStr::new("/bin/sh"),
+                &name,
+                &endpoint,
+                server,
+                crate::config::Notifications::default(),
+            )
+            .unwrap(),
             7
         );
         let mut status = None;

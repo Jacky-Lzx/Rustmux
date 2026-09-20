@@ -22,8 +22,6 @@ pub(crate) const INPUT_LIMIT: usize = 64 * 1024;
 
 pub(crate) const MAX_CELLS: usize = 64 * 1024;
 pub(crate) const MAX_REPLY_DRAIN_BYTES: usize = 8192;
-const LONG_COMMAND_BELL_AFTER: Duration = Duration::from_secs(5);
-
 /// Owns one nonblocking PTY, incremental parser and screen. Moving a pane between
 /// windows does not restart its process or reset its parsing state. Dropping it
 /// uses PtyShell's close/kill/reap behavior for the direct child.
@@ -33,6 +31,7 @@ pub struct Pane {
     parser: Parser,
     screen: Screen,
     io: PaneIo,
+    command_bell_after: Option<Duration>,
     _temporary_file: Option<TemporaryFile>,
 }
 
@@ -143,7 +142,13 @@ impl Pane {
     /// nonblocking. Startup failures leave no live child behind. Follow
     /// PtyShell::spawn's single-threaded process-spawning requirement.
     pub fn spawn(shell: impl AsRef<OsStr>, rows: u16, columns: u16) -> io::Result<Self> {
-        Self::spawn_in(shell, None, rows, columns)
+        Self::spawn_in(
+            shell,
+            None,
+            rows,
+            columns,
+            crate::config::Notifications::default(),
+        )
     }
 
     pub(crate) fn spawn_in(
@@ -151,6 +156,7 @@ impl Pane {
         directory: Option<&Path>,
         rows: u16,
         columns: u16,
+        notifications: crate::config::Notifications,
     ) -> io::Result<Self> {
         if usize::from(rows) * usize::from(columns) > MAX_CELLS {
             return Err(io::Error::new(
@@ -173,6 +179,7 @@ impl Pane {
             parser: Parser::new(),
             screen,
             io,
+            command_bell_after: notifications.command_bell_after(),
             _temporary_file: None,
         })
     }
@@ -196,6 +203,7 @@ impl Pane {
             parser: Parser::new(),
             screen,
             io: PaneIo::default(),
+            command_bell_after: None,
             _temporary_file: Some(temporary_file),
         })
     }
@@ -326,13 +334,12 @@ impl Pane {
             start = end;
         }
         self.process_output_segment(&bytes[start..], reply);
-        if self
-            .io
-            .semantic
-            .take_completed_commands()
-            .into_iter()
-            .any(|duration| duration >= LONG_COMMAND_BELL_AFTER)
-        {
+        let completed_commands = self.io.semantic.take_completed_commands();
+        if self.command_bell_after.is_some_and(|threshold| {
+            completed_commands
+                .into_iter()
+                .any(|duration| duration >= threshold)
+        }) {
             self.io.bell_pending = true;
             self.io.command_bell_pending = true;
         }

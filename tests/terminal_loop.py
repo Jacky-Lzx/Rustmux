@@ -716,8 +716,8 @@ finally:
     s.close()
 
 # OSC 133 command lifetimes are tracked independently per pane. Short commands
-# stay silent; a background command completing after five seconds rings once and
-# reuses the pane/window bell marker.
+# stay silent; a background command over the configured threshold rings once and
+# reuses the pane/window bell marker. Disabling the notification suppresses both.
 short_command_probe = r"""
 import os, time
 os.write(1, b"\x1b]133;C\x1b\\SHORT_START")
@@ -744,24 +744,53 @@ finally:
 long_command_probe = r"""
 import os, time
 os.write(1, b"\x1b]133;C\x1b\\LONG_START")
-time.sleep(5.1)
+time.sleep(1.1)
 os.write(1, b"\x1b]133;D;0\x1b\\LONG_DONE")
 """
-s = Session()
-try:
-    s.expect(b"RUSTMUX_READY> ")
-    s.send(("python3 -c " + shlex.quote(long_command_probe) + "\n").encode())
-    s.expect(b"LONG_START")
-    s.send(b"\x02c")
-    s.expect(b"RUSTMUX_READY> ")
-    deadline = time.monotonic() + 8
-    while b"1 shell [!]" not in s.physical_rows[0] or b"\x07" not in s.output:
-        s.read()
-        assert time.monotonic() < deadline, (s.physical_rows[0], bytes(s.output))
-    os.kill(s.app_pid, signal.SIGTERM)
-    s.finish(128 + signal.SIGTERM)
-finally:
-    s.close()
+with tempfile.TemporaryDirectory(prefix="rustmux-notifications-") as directory:
+    os.mkdir(os.path.join(directory, "rustmux"))
+    config_path = os.path.join(directory, "rustmux", "config.toml")
+    with open(config_path, "w", encoding="utf-8") as config:
+        config.write("[notifications]\ncommand_duration_seconds = 1\n")
+    s = Session(extra_env={"XDG_CONFIG_HOME": directory})
+    try:
+        s.expect(b"RUSTMUX_READY> ")
+        s.send(("python3 -c " + shlex.quote(long_command_probe) + "\n").encode())
+        s.expect(b"LONG_START")
+        s.send(b"\x02c")
+        s.expect(b"RUSTMUX_READY> ")
+        deadline = time.monotonic() + 4
+        while b"1 shell [!]" not in s.physical_rows[0] or b"\x07" not in s.output:
+            s.read()
+            assert time.monotonic() < deadline, (s.physical_rows[0], bytes(s.output))
+        os.kill(s.app_pid, signal.SIGTERM)
+        s.finish(128 + signal.SIGTERM)
+    finally:
+        s.close()
+
+    with open(config_path, "w", encoding="utf-8") as config:
+        config.write(
+            "[notifications]\n"
+            "long_command_bell = false\n"
+            "command_duration_seconds = 1\n"
+        )
+    s = Session(extra_env={"XDG_CONFIG_HOME": directory})
+    try:
+        s.expect(b"RUSTMUX_READY> ")
+        s.output.clear()
+        s.frames.clear()
+        s.send(("python3 -c " + shlex.quote(long_command_probe) + "\n").encode())
+        deadline = time.monotonic() + 4
+        while not any(b"LONG_DONE" in row for row in s.last_rows):
+            s.read()
+            assert time.monotonic() < deadline, s.last_rows
+        s.read(0.2)
+        assert b"\x07" not in s.output, bytes(s.output)
+        assert b"[!]" not in s.physical_rows[0], s.physical_rows[0]
+        os.kill(s.app_pid, signal.SIGTERM)
+        s.finish(128 + signal.SIGTERM)
+    finally:
+        s.close()
 
 # Physical mouse rows are translated past the top bar; other event fields are preserved.
 mouse_probe = r"""

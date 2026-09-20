@@ -4,18 +4,72 @@ use std::env;
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+const DEFAULT_COMMAND_DURATION_SECONDS: u64 = 5;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Notifications {
+    pub long_command_bell: bool,
+    pub command_duration: Duration,
+}
+
+impl Default for Notifications {
+    fn default() -> Self {
+        Self {
+            long_command_bell: true,
+            command_duration: Duration::from_secs(DEFAULT_COMMAND_DURATION_SECONDS),
+        }
+    }
+}
+
+impl Notifications {
+    pub fn command_bell_after(self) -> Option<Duration> {
+        self.long_command_bell.then_some(self.command_duration)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Config {
+    shell: OsString,
+    notifications: Notifications,
+}
+
+impl Config {
+    pub fn shell(&self) -> &OsString {
+        &self.shell
+    }
+
+    pub fn notifications(&self) -> Notifications {
+        self.notifications
+    }
+}
+
+#[derive(Debug, Default, Eq, PartialEq)]
+struct ParsedConfig {
+    shell: Option<String>,
+    notifications: Notifications,
+}
+
+/// Load and validate the complete configuration used by a new session.
+pub fn load() -> Result<Config, String> {
+    let configured = load_config(&config_path())?;
+    Ok(Config {
+        shell: select_shell(
+            env::var_os("RUSTMUX_SHELL"),
+            configured.shell.map(OsString::from),
+            env::var_os("SHELL"),
+        ),
+        notifications: configured.notifications,
+    })
+}
 
 /// Select the shell used for initial, split and newly created panes.
 ///
 /// `RUSTMUX_SHELL` remains an explicit per-process override. Without it, the
 /// `shell` value in `config.toml` takes precedence over the login shell.
 pub fn shell() -> Result<OsString, String> {
-    let configured = load_shell(&config_path())?;
-    Ok(select_shell(
-        env::var_os("RUSTMUX_SHELL"),
-        configured.map(OsString::from),
-        env::var_os("SHELL"),
-    ))
+    load().map(|config| config.shell)
 }
 
 fn select_shell(
@@ -30,29 +84,66 @@ fn select_shell(
         .unwrap_or_else(|| OsString::from("/bin/sh"))
 }
 
-fn load_shell(path: &Path) -> Result<Option<String>, String> {
+fn load_config(path: &Path) -> Result<ParsedConfig, String> {
     let source = match fs::read_to_string(path) {
         Ok(source) => source,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(ParsedConfig::default());
+        }
         Err(error) => return Err(format!("could not read {}: {error}", path.display())),
     };
-    parse_shell(&source).map_err(|error| format!("invalid {}: {error}", path.display()))
+    parse_config(&source).map_err(|error| format!("invalid {}: {error}", path.display()))
 }
 
-fn parse_shell(source: &str) -> Result<Option<String>, String> {
+fn parse_config(source: &str) -> Result<ParsedConfig, String> {
     let document = source
         .parse::<toml::Table>()
         .map_err(|error| error.to_string())?;
-    let Some(value) = document.get("shell") else {
-        return Ok(None);
+    let shell = match document.get("shell") {
+        None => None,
+        Some(value) => {
+            let shell = value
+                .as_str()
+                .ok_or_else(|| "shell must be a string".to_owned())?;
+            if shell.trim().is_empty() || shell.contains('\0') {
+                return Err("shell must be a nonempty executable name or path".to_owned());
+            }
+            Some(shell.to_owned())
+        }
     };
-    let shell = value
-        .as_str()
-        .ok_or_else(|| "shell must be a string".to_owned())?;
-    if shell.trim().is_empty() || shell.contains('\0') {
-        return Err("shell must be a nonempty executable name or path".to_owned());
+    let notifications = parse_notifications(document.get("notifications"))?;
+    Ok(ParsedConfig {
+        shell,
+        notifications,
+    })
+}
+
+fn parse_notifications(value: Option<&toml::Value>) -> Result<Notifications, String> {
+    let Some(value) = value else {
+        return Ok(Notifications::default());
+    };
+    let table = value
+        .as_table()
+        .ok_or_else(|| "notifications must be a table".to_owned())?;
+    let mut notifications = Notifications::default();
+    if let Some(value) = table.get("long_command_bell") {
+        notifications.long_command_bell = value
+            .as_bool()
+            .ok_or_else(|| "notifications.long_command_bell must be a boolean".to_owned())?;
     }
-    Ok(Some(shell.to_owned()))
+    if let Some(value) = table.get("command_duration_seconds") {
+        let seconds = value.as_integer().ok_or_else(|| {
+            "notifications.command_duration_seconds must be a positive integer".to_owned()
+        })?;
+        let seconds = u64::try_from(seconds)
+            .ok()
+            .filter(|&seconds| seconds > 0)
+            .ok_or_else(|| {
+                "notifications.command_duration_seconds must be a positive integer".to_owned()
+            })?;
+        notifications.command_duration = Duration::from_secs(seconds);
+    }
+    Ok(notifications)
 }
 
 /// Return the user configuration path without creating it.
@@ -98,7 +189,7 @@ mod tests {
     #[test]
     fn parser_reads_shell_and_ignores_future_configuration() {
         assert_eq!(
-            parse_shell(
+            parse_config(
                 r#"
 shell = "/opt/homebrew/bin/fish"
 scrollback_lines = 5000
@@ -108,15 +199,67 @@ preset = "mocha"
 "#,
             )
             .unwrap(),
-            Some("/opt/homebrew/bin/fish".to_owned())
+            ParsedConfig {
+                shell: Some("/opt/homebrew/bin/fish".to_owned()),
+                notifications: Notifications::default(),
+            }
         );
-        assert_eq!(parse_shell("scrollback_lines = 5000").unwrap(), None);
-        assert!(parse_shell("shell = 7").unwrap_err().contains("string"));
+        assert_eq!(
+            parse_config("scrollback_lines = 5000").unwrap(),
+            ParsedConfig::default()
+        );
+        assert!(parse_config("shell = 7").unwrap_err().contains("string"));
         assert!(
-            parse_shell("shell = \"  \"")
+            parse_config("shell = \"  \"")
                 .unwrap_err()
                 .contains("nonempty")
         );
+    }
+
+    #[test]
+    fn parser_reads_notification_defaults_overrides_and_disable_switch() {
+        assert_eq!(
+            parse_config("").unwrap().notifications,
+            Notifications::default()
+        );
+        assert_eq!(
+            parse_config(
+                r#"
+[notifications]
+long_command_bell = true
+command_duration_seconds = 12
+future_option = "ignored"
+"#,
+            )
+            .unwrap()
+            .notifications,
+            Notifications {
+                long_command_bell: true,
+                command_duration: Duration::from_secs(12),
+            }
+        );
+        let disabled = parse_config(
+            r#"
+[notifications]
+long_command_bell = false
+"#,
+        )
+        .unwrap()
+        .notifications;
+        assert_eq!(disabled.command_bell_after(), None);
+    }
+
+    #[test]
+    fn parser_rejects_invalid_notification_values() {
+        for source in [
+            "notifications = true",
+            "[notifications]\nlong_command_bell = 1",
+            "[notifications]\ncommand_duration_seconds = 0",
+            "[notifications]\ncommand_duration_seconds = -1",
+            "[notifications]\ncommand_duration_seconds = 1.5",
+        ] {
+            assert!(parse_config(source).is_err(), "accepted {source:?}");
+        }
     }
 
     #[test]
