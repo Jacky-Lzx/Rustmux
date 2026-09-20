@@ -22,8 +22,12 @@ fn execute(command: Option<rustmux::cli::Command>) -> Result<u8, String> {
     match command {
         None => {
             let config = rustmux::config::load()?;
-            rustmux::terminal::run(config.shell(), config.notifications())
-                .map_err(|error| error.to_string())
+            rustmux::terminal::run(
+                config.shell(),
+                config.notifications(),
+                config.scrollback_lines(),
+            )
+            .map_err(|error| error.to_string())
         }
         Some(rustmux::cli::Command::New { name, detached }) => {
             let config = rustmux::config::load()?;
@@ -31,6 +35,7 @@ fn execute(command: Option<rustmux::cli::Command>) -> Result<u8, String> {
                 &name,
                 config.shell(),
                 config.notifications(),
+                config.scrollback_lines(),
                 detached,
             )
             .map_err(|error| error.to_string())

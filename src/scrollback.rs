@@ -14,15 +14,39 @@ pub(crate) struct HistoryRow {
     pub used: usize,
 }
 
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Scrollback {
     rows: Arc<VecDeque<HistoryRow>>,
     cells: usize,
+    max_lines: usize,
+}
+
+impl Default for Scrollback {
+    fn default() -> Self {
+        Self::new(MAX_LINES)
+    }
 }
 
 impl Scrollback {
+    pub fn new(max_lines: usize) -> Self {
+        Self {
+            rows: Arc::default(),
+            cells: 0,
+            max_lines,
+        }
+    }
+
+    pub fn clear(&mut self) {
+        Arc::make_mut(&mut self.rows).clear();
+        self.cells = 0;
+    }
+
     pub fn len(&self) -> usize {
         self.rows.len()
+    }
+
+    pub fn max_lines(&self) -> usize {
+        self.max_lines
     }
 
     pub fn row(&self, index: usize) -> Option<&[Cell]> {
@@ -44,14 +68,18 @@ impl Scrollback {
     }
 
     pub fn push(&mut self, row: &[Cell], continued: bool, used: usize) {
+        if self.max_lines == 0 {
+            self.clear();
+            return;
+        }
         // An oversized row cannot fit even on its own. Discard older history too,
         // so retained history never jumps across an unrecorded newer row.
         if row.len() > MAX_CELLS {
-            *self = Self::default();
+            self.clear();
             return;
         }
         let rows = Arc::make_mut(&mut self.rows);
-        while rows.len() >= MAX_LINES || self.cells + row.len() > MAX_CELLS {
+        while rows.len() >= self.max_lines || self.cells + row.len() > MAX_CELLS {
             self.cells -= rows
                 .pop_front()
                 .expect("history exceeds its bound")

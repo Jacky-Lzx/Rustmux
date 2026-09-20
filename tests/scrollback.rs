@@ -125,3 +125,38 @@ fn line_and_cell_limits_evict_oldest_complete_rows() {
     wide.scroll_up(1);
     assert_eq!(wide.history_len(), 0);
 }
+
+#[test]
+fn configured_line_limit_supports_small_and_disabled_history() {
+    let mut limited = Screen::new_with_scrollback_limit(1, 1, 2).unwrap();
+    for character in ['a', 'b', 'c', 'd'] {
+        limited.print(character);
+        limited.scroll_up(1);
+    }
+    assert_eq!(limited.history_len(), 2);
+    assert_eq!(history_text(&limited, 0), "c");
+    assert_eq!(history_text(&limited, 1), "d");
+
+    limited.clear_history();
+    for character in ['e', 'f', 'g'] {
+        limited.print(character);
+        limited.scroll_up(1);
+    }
+    assert_eq!(limited.history_len(), 2);
+    assert_eq!(history_text(&limited, 0), "f");
+    assert_eq!(history_text(&limited, 1), "g");
+
+    limited.resize(1, 2).unwrap();
+    for character in ['h', 'i', 'j'] {
+        limited.print(character);
+        limited.scroll_up(1);
+    }
+    assert_eq!(limited.history_len(), 2);
+
+    let mut disabled = Screen::new_with_scrollback_limit(1, 1, 0).unwrap();
+    for character in ['a', 'b', 'c'] {
+        disabled.print(character);
+        disabled.scroll_up(1);
+    }
+    assert_eq!(disabled.history_len(), 0);
+}

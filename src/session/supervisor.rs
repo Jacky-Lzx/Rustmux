@@ -30,6 +30,7 @@ pub fn create(
     name: &SessionName,
     shell: &OsStr,
     notifications: crate::config::Notifications,
+    scrollback_lines: usize,
     detached: bool,
 ) -> io::Result<u8> {
     let endpoint = SessionEndpoint::bind(name)?;
@@ -45,7 +46,8 @@ pub fn create(
             }
         }
         ForkResult::Child => {
-            let status = run_server(endpoint, name, shell, notifications).unwrap_or(1);
+            let status =
+                run_server(endpoint, name, shell, notifications, scrollback_lines).unwrap_or(1);
             std::process::exit(i32::from(status));
         }
     }
@@ -147,7 +149,13 @@ fn manage_sessions(
             super::picker::Choice::Create(name) => {
                 let config = crate::config::load()
                     .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
-                create(&name, config.shell(), config.notifications(), true)?;
+                create(
+                    &name,
+                    config.shell(),
+                    config.notifications(),
+                    config.scrollback_lines(),
+                    true,
+                )?;
                 return Ok(Some(name));
             }
             super::picker::Choice::Kill(name) => {
@@ -190,11 +198,19 @@ fn run_server(
     name: &SessionName,
     shell: &OsStr,
     notifications: crate::config::Notifications,
+    scrollback_lines: usize,
 ) -> io::Result<u8> {
     detach_process(endpoint.listener().as_raw_fd())?;
     let _server = acquire_server(name)?;
     let peer = accept_peer(&endpoint)?;
-    crate::terminal::serve_session(shell, name, &endpoint, peer, notifications)
+    crate::terminal::serve_session(
+        shell,
+        name,
+        &endpoint,
+        peer,
+        notifications,
+        scrollback_lines,
+    )
 }
 
 fn detach_process(listener: i32) -> io::Result<()> {

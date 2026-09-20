@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 const DEFAULT_COMMAND_DURATION_SECONDS: u64 = 5;
+pub const DEFAULT_SCROLLBACK_LINES: usize = crate::screen::SCROLLBACK_MAX_LINES;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Notifications {
@@ -33,6 +34,7 @@ impl Notifications {
 pub struct Config {
     shell: OsString,
     notifications: Notifications,
+    scrollback_lines: usize,
 }
 
 impl Config {
@@ -43,12 +45,17 @@ impl Config {
     pub fn notifications(&self) -> Notifications {
         self.notifications
     }
+
+    pub fn scrollback_lines(&self) -> usize {
+        self.scrollback_lines
+    }
 }
 
 #[derive(Debug, Default, Eq, PartialEq)]
 struct ParsedConfig {
     shell: Option<String>,
     notifications: Notifications,
+    scrollback_lines: Option<usize>,
 }
 
 /// Load and validate the complete configuration used by a new session.
@@ -61,6 +68,9 @@ pub fn load() -> Result<Config, String> {
             env::var_os("SHELL"),
         ),
         notifications: configured.notifications,
+        scrollback_lines: configured
+            .scrollback_lines
+            .unwrap_or(DEFAULT_SCROLLBACK_LINES),
     })
 }
 
@@ -112,9 +122,19 @@ fn parse_config(source: &str) -> Result<ParsedConfig, String> {
         }
     };
     let notifications = parse_notifications(document.get("notifications"))?;
+    let scrollback_lines = document
+        .get("scrollback_lines")
+        .map(|value| {
+            value
+                .as_integer()
+                .and_then(|lines| usize::try_from(lines).ok())
+                .ok_or_else(|| "scrollback_lines must be a nonnegative integer".to_owned())
+        })
+        .transpose()?;
     Ok(ParsedConfig {
         shell,
         notifications,
+        scrollback_lines,
     })
 }
 
@@ -187,7 +207,7 @@ mod tests {
     }
 
     #[test]
-    fn parser_reads_shell_and_ignores_future_configuration() {
+    fn parser_reads_shell_scrollback_and_ignores_future_configuration() {
         assert_eq!(
             parse_config(
                 r#"
@@ -202,11 +222,21 @@ preset = "mocha"
             ParsedConfig {
                 shell: Some("/opt/homebrew/bin/fish".to_owned()),
                 notifications: Notifications::default(),
+                scrollback_lines: Some(5000),
             }
         );
         assert_eq!(
             parse_config("scrollback_lines = 5000").unwrap(),
-            ParsedConfig::default()
+            ParsedConfig {
+                scrollback_lines: Some(5000),
+                ..ParsedConfig::default()
+            }
+        );
+        assert_eq!(
+            parse_config("scrollback_lines = 0")
+                .unwrap()
+                .scrollback_lines,
+            Some(0)
         );
         assert!(parse_config("shell = 7").unwrap_err().contains("string"));
         assert!(
@@ -214,6 +244,18 @@ preset = "mocha"
                 .unwrap_err()
                 .contains("nonempty")
         );
+    }
+
+    #[test]
+    fn parser_rejects_invalid_scrollback_limits() {
+        for source in [
+            "scrollback_lines = -1",
+            "scrollback_lines = 1.5",
+            "scrollback_lines = true",
+            "scrollback_lines = \"1000\"",
+        ] {
+            assert!(parse_config(source).is_err(), "accepted {source:?}");
+        }
     }
 
     #[test]

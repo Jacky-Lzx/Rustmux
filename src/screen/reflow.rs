@@ -173,8 +173,9 @@ impl Screen {
         }
         pack(&logical, &points, resized.columns, &mut output, &mut mapped);
         let start = output.len().saturating_sub(resized.rows).min(mapped[0].row);
-        let mut new_history = Scrollback::default();
-        let keep = crate::scrollback::MAX_LINES.min(crate::scrollback::MAX_CELLS / resized.columns);
+        let max_lines = self.scrollback.max_lines();
+        let mut new_history = Scrollback::new(max_lines);
+        let keep = max_lines.min(crate::scrollback::MAX_CELLS / resized.columns);
         let blank = Cell {
             style: crate::style::Style {
                 background: current.style.background,

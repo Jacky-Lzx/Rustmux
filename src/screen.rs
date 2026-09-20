@@ -178,11 +178,19 @@ impl Screen {
 
     /// Discard primary-screen history without changing either visible grid or modes.
     pub fn clear_history(&mut self) {
-        self.scrollback = Scrollback::default();
+        self.scrollback.clear();
     }
 
     /// Create a blank screen with the cursor at the upper-left corner.
     pub fn new(rows: usize, columns: usize) -> io::Result<Self> {
+        Self::new_with_scrollback_limit(rows, columns, SCROLLBACK_MAX_LINES)
+    }
+
+    pub fn new_with_scrollback_limit(
+        rows: usize,
+        columns: usize,
+        scrollback_lines: usize,
+    ) -> io::Result<Self> {
         let length = rows
             .checked_mul(columns)
             .filter(|&length| length != 0)
@@ -230,7 +238,7 @@ impl Screen {
             columns,
             cells,
             inactive_cells,
-            scrollback: Scrollback::default(),
+            scrollback: Scrollback::new(scrollback_lines),
             primary_scroll_count: 0,
             alternate: false,
             saved_main_cursor: None,

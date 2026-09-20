@@ -16,6 +16,7 @@ reports an error without silently falling back.
 
 ```toml
 shell = "/opt/homebrew/bin/fish"
+scrollback_lines = 1000
 
 [notifications]
 long_command_bell = true
@@ -25,8 +26,12 @@ command_duration_seconds = 5
 `long_command_bell` controls whether an OSC 133-integrated command rings when it
 finishes, and `command_duration_seconds` sets the positive whole-second threshold.
 Both notification values are optional and default to `true` and `5`. Configuration
-is read when a local session or named-session server starts; an existing named
-session keeps its original values until it is recreated.
+is read when a local session or named-session server starts. `scrollback_lines`
+is an optional nonnegative integer that defaults to `1000`; set it to `0` to
+disable retained history. The separate 65,536-cell cap remains fixed, so a large
+line limit cannot make history unbounded. New windows, splits and temporary editor
+windows inherit the session value. An existing named session keeps its original
+configuration until it is recreated.
 
 `RUSTMUX_SHELL=/bin/sh ./target/debug/rustmux` remains available as a temporary
 override. Changes take effect the next time a local session or named-session

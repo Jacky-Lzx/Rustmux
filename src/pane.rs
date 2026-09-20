@@ -148,6 +148,7 @@ impl Pane {
             rows,
             columns,
             crate::config::Notifications::default(),
+            crate::config::DEFAULT_SCROLLBACK_LINES,
         )
     }
 
@@ -157,6 +158,7 @@ impl Pane {
         rows: u16,
         columns: u16,
         notifications: crate::config::Notifications,
+        scrollback_lines: usize,
     ) -> io::Result<Self> {
         if usize::from(rows) * usize::from(columns) > MAX_CELLS {
             return Err(io::Error::new(
@@ -164,7 +166,11 @@ impl Pane {
                 "pane exceeds cell limit",
             ));
         }
-        let screen = Screen::new(usize::from(rows), usize::from(columns))?;
+        let screen = Screen::new_with_scrollback_limit(
+            usize::from(rows),
+            usize::from(columns),
+            scrollback_lines,
+        )?;
         let directory = directory.filter(|path| path.is_dir());
         let shell = PtyShell::spawn_in(shell, directory, rows, columns)?;
         let master = shell.master_fd().expect("new PTY is open");
@@ -185,14 +191,23 @@ impl Pane {
     }
 
     /// Start an editor in its own pane with a private, automatically removed snapshot file.
-    pub(crate) fn spawn_editor(text: &str, rows: u16, columns: u16) -> io::Result<Self> {
+    pub(crate) fn spawn_editor(
+        text: &str,
+        rows: u16,
+        columns: u16,
+        scrollback_lines: usize,
+    ) -> io::Result<Self> {
         if usize::from(rows) * usize::from(columns) > MAX_CELLS {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "pane exceeds cell limit",
             ));
         }
-        let screen = Screen::new(usize::from(rows), usize::from(columns))?;
+        let screen = Screen::new_with_scrollback_limit(
+            usize::from(rows),
+            usize::from(columns),
+            scrollback_lines,
+        )?;
         let temporary_file = TemporaryFile::snapshot(text)?;
         let shell = PtyShell::spawn_editor(temporary_file.0.path().as_os_str(), rows, columns)?;
         let master = shell.master_fd().expect("new PTY is open");

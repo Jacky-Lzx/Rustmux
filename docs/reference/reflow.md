@@ -29,7 +29,8 @@ up to keep it visible. Content below that viewport is discarded in this case;
 there is no separate buffer for content below the screen. Saved cursors outside
 the final viewport clamp vertically, as in other resize operations.
 
-History still retains at most 1,000 physical rows and 65,536 cells. Reflow can
+History still observes the configured physical-row limit and the fixed 65,536-cell
+limit. Reflow can
 increase the row count and evict older data; evicted text cannot return after
 widening. Sparse packed rows avoid allocating a full-width grid for every
 intermediate row. Only retained history rows and the visible grid are padded.

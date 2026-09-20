@@ -16,12 +16,17 @@ history. Entering or leaving the alternate screen preserves primary history.
 
 ## Bounds and snapshots
 
-At most 1,000 rows and 65,536 cells are retained per screen, whichever limit is
-reached first. These bounds are separate from the visible-grid limit and currently
-fixed rather than configurable. Appending evicts complete oldest rows until both
-bounds fit. A row wider than the cell budget clears older history and is omitted;
-the CLI's existing grid limit prevents that case in normal use. Cell limits are
-not byte limits: cells also carry styles and bounded combining suffixes.
+The top-level `scrollback_lines` configuration sets the maximum number of rows
+retained per screen. It is a nonnegative integer, defaults to 1,000, and can be
+set to zero to disable history. A separate fixed limit of 65,536 cells still
+applies, whichever bound is reached first. Appending evicts complete oldest rows
+until both bounds fit. A row wider than the cell budget clears older history and
+is omitted; the CLI's existing grid limit prevents that case in normal use. Cell
+limits are not byte limits: cells also carry styles and bounded combining suffixes.
+
+Configuration is read when the local process or named-session server starts. New
+windows, splits and temporary editor windows inherit that session value; existing
+named sessions keep their original value until they are recreated.
 
 Screen clones share immutable history through reference-counted storage. Updating
 one snapshot copies the deque metadata when necessary and shares its existing
@@ -38,7 +43,7 @@ Right-edge and remaining bottom clipping are not recorded. Height growth consume
 the newest history rows and restores them above the old grid, preserving order.
 Height-only restoration retains physical rows. Column changes use
 [primary reflow](reflow.md) to rebuild history and visible content together;
-normal capacity limits still apply.
+the configured row limit and fixed cell limit still apply.
 
 `clear_history()` discards history without changing grids, cursor or terminal
 modes. RIS clears history with the screen reset; DECSTR and normal display erasure
@@ -50,4 +55,5 @@ copy mode, persistence and resize/reflow remain subsequent steps.
 `cargo test --test scrollback` checks exact Unicode/style preservation, LF and
 wrap capture, explicit scrolling, editing exclusion, margins and alternate-screen
 isolation, mixed-width history after resize, snapshot independence, reset behavior,
-invalid resize, oldest-row eviction and both storage limits.
+invalid resize, configured row limits (including disabled history), oldest-row
+eviction and the fixed cell limit.
