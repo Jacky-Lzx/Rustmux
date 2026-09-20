@@ -72,11 +72,42 @@ fn duplicate_modes_are_idempotent_and_reentry_is_fresh() {
 }
 
 #[test]
+fn legacy_modes_switch_without_implicit_cursor_restore_and_apply_their_clear_rules() {
+    let retained = parse(b"MAIN\x1b[?47h\x1b[HALT\x1b[?47l\x1b[?47h");
+    assert!(retained.is_alternate());
+    assert_eq!(text(&retained, 0), "ALT   ");
+    assert_eq!(retained.cursor(), (0, 3));
+
+    let cleared = parse(b"MAIN\x1b[?1047h\x1b[44m\x1b[HALT\x1b[?1047l\x1b[?1047h");
+    assert!(cleared.is_alternate());
+    assert_eq!(text(&cleared, 0), "      ");
+    assert_eq!(cleared.cursor(), (0, 3));
+    assert!(
+        cleared
+            .row(0)
+            .unwrap()
+            .iter()
+            .all(|cell| cell.style.background == Color::Indexed(4))
+    );
+
+    let main = parse(b"MAIN\x1b[2;3H\x1b[?47h\x1b[3;4H\x1b[?47l");
+    assert!(!main.is_alternate());
+    assert_eq!(text(&main, 0), "MAIN  ");
+    assert_eq!(main.cursor(), (2, 3));
+
+    for mode in [47, 1047] {
+        let screen = parse(
+            format!("\x1b[?{mode}h\x1b[2;3H\x1b7\x1b[?{mode}l\x1b[?{mode}h\x1b[H\x1b8").as_bytes(),
+        );
+        assert_eq!(screen.cursor(), (1, 2));
+    }
+}
+
+#[test]
 fn only_supported_well_formed_private_modes_switch_screens() {
     for sequence in [
         "\x1b[1049h",
         "\x1b[?1049m",
-        "\x1b[?47h",
         "\x1b[??1049h",
         "\x1b[1?1049h",
         "\x1b[?1049:h",

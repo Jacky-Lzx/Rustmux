@@ -27,7 +27,8 @@ shows the outer cursor.
 Each grid has one explicit save slot, containing coordinates, current text style,
 pending wrap, origin/autowrap modes and G0/G1 character-set state. Saving again replaces it; restoring does not consume it. Restore
 without a save is a no-op. Main and alternate slots are independent. A fresh
-alternate visit has no explicit save, and its slot is discarded on exit. The
+mode-1049 visit has no explicit alternate save, and that slot is discarded on
+1049 exit. Modes 47 and 1047 retain the alternate slot across switches. The
 separate 1049 main-screen snapshot remains intact even when a program saves a
 cursor inside the alternate screen.
 

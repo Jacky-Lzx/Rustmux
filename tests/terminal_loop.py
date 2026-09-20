@@ -278,6 +278,21 @@ try:
     s.send(b"\n")
     s.expect(b"RUSTMUX_READY> ")
     assert b"aXc" in s.last_rows, s.last_rows
+    # Mode 47 preserves the alternate buffer while switching back to the main
+    # buffer. Split the marker literals so expect() cannot match the shell's
+    # echoed command line instead of the rendered screen.
+    s.send(
+        b"stty -echo; printf '\\033[?47h\\033[HMODE''47'; read answer; "
+        b"printf '\\033[?47l'; read answer; printf '\\033[?47h'; read answer; "
+        b"printf '\\033[?47l'; stty echo; printf '\\nLEGACY_''DONE\\n'\n"
+    )
+    s.expect(b"MODE47")
+    s.send(b"\n")
+    s.expect(b"aXc")
+    s.send(b"\n")
+    s.expect(b"MODE47")
+    s.send(b"\n")
+    s.expect(b"LEGACY_DONE")
     s.send(b"printf '\\033[?25l\\nHIDDEN_CURSOR\\n'; read answer; printf '\\033[?25h'\n")
     s.expect(b"\r\nHIDDEN_CURSOR\r\n")
     assert s.last_frame.endswith(b"\x1b[?25l"), s.last_frame

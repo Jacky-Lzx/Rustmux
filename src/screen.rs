@@ -111,6 +111,7 @@ pub struct Screen {
     inactive_continued: Vec<bool>,
     used: Vec<usize>,
     inactive_used: Vec<usize>,
+    alternate: bool,
     saved_main_cursor: Option<SavedCursor>,
     saved_cursor: Option<SavedCursor>,
     inactive_saved_cursor: Option<SavedCursor>,
@@ -230,6 +231,7 @@ impl Screen {
             inactive_cells,
             scrollback: Scrollback::default(),
             primary_scroll_count: 0,
+            alternate: false,
             saved_main_cursor: None,
             saved_cursor: None,
             inactive_saved_cursor: None,
@@ -268,6 +270,7 @@ impl Screen {
         self.inactive_continued.fill(false);
         self.used.fill(0);
         self.inactive_used.fill(0);
+        self.alternate = false;
         self.saved_main_cursor = None;
         self.saved_cursor = None;
         self.inactive_saved_cursor = None;
@@ -479,6 +482,7 @@ impl Screen {
         resized.sgr_mouse = self.sgr_mouse;
         resized.application_cursor_keys = self.application_cursor_keys;
         resized.application_keypad = self.application_keypad;
+        resized.alternate = self.alternate;
         resized.origin_mode = self.origin_mode;
         resized.auto_wrap = self.auto_wrap;
         resized.character_sets = self.character_sets;
@@ -694,7 +698,61 @@ impl Screen {
     }
 
     pub fn is_alternate(&self) -> bool {
-        self.saved_main_cursor.is_some()
+        self.alternate
+    }
+
+    fn swap_screen_buffers(&mut self) {
+        std::mem::swap(&mut self.cells, &mut self.inactive_cells);
+        std::mem::swap(&mut self.continued, &mut self.inactive_continued);
+        std::mem::swap(&mut self.used, &mut self.inactive_used);
+        std::mem::swap(&mut self.scroll_region, &mut self.inactive_scroll_region);
+        std::mem::swap(&mut self.saved_cursor, &mut self.inactive_saved_cursor);
+        self.alternate = !self.alternate;
+        self.wrap_pending = false;
+    }
+
+    fn clear_active_buffer(&mut self, discard_saved_cursor: bool) {
+        let blank = self.blank();
+        self.used.fill(if blank.style == Style::default() {
+            0
+        } else {
+            self.columns
+        });
+        self.cells.fill(blank);
+        self.continued.fill(false);
+        if discard_saved_cursor {
+            self.saved_cursor = None;
+        }
+    }
+
+    fn clear_inactive_buffer(&mut self, discard_saved_cursor: bool) {
+        self.inactive_cells.fill(Cell::default());
+        self.inactive_continued.fill(false);
+        self.inactive_used.fill(0);
+        if discard_saved_cursor {
+            self.inactive_saved_cursor = None;
+        }
+    }
+
+    /// Select the existing alternate buffer without saving the cursor.
+    pub fn enter_alternate_buffer(&mut self) {
+        if !self.is_alternate() {
+            self.saved_main_cursor = None;
+            self.swap_screen_buffers();
+        }
+    }
+
+    /// Return to the main buffer without restoring the cursor. Mode 1047 clears
+    /// the alternate display on exit; mode 47 retains it for a later visit.
+    pub fn leave_alternate_buffer(&mut self, clear: bool) {
+        if !self.is_alternate() {
+            return;
+        }
+        self.saved_main_cursor = None;
+        if clear {
+            self.clear_active_buffer(false);
+        }
+        self.swap_screen_buffers();
     }
 
     /// Enter a cleared alternate grid while retaining the current coordinates and style.
@@ -712,40 +770,24 @@ impl Screen {
             auto_wrap: self.auto_wrap,
             character_sets: self.character_sets,
         });
-        std::mem::swap(&mut self.cells, &mut self.inactive_cells);
-        std::mem::swap(&mut self.continued, &mut self.inactive_continued);
-        std::mem::swap(&mut self.used, &mut self.inactive_used);
-        std::mem::swap(&mut self.scroll_region, &mut self.inactive_scroll_region);
-        std::mem::swap(&mut self.saved_cursor, &mut self.inactive_saved_cursor);
-        let blank = self.blank();
-        self.used.fill(if blank.style == Style::default() {
-            0
-        } else {
-            self.columns
-        });
-        self.cells.fill(blank);
-        self.continued.fill(false);
-        self.wrap_pending = false;
+        self.swap_screen_buffers();
+        self.clear_active_buffer(true);
     }
 
     /// Restore main cells, coordinates, writing style and delayed wrap.
     /// A reset while already on the main screen is a no-op.
     pub fn leave_alternate(&mut self) {
-        let Some(saved) = self.saved_main_cursor.take() else {
+        if !self.is_alternate() {
             return;
-        };
-        std::mem::swap(&mut self.cells, &mut self.inactive_cells);
-        std::mem::swap(&mut self.continued, &mut self.inactive_continued);
-        std::mem::swap(&mut self.used, &mut self.inactive_used);
-        std::mem::swap(&mut self.scroll_region, &mut self.inactive_scroll_region);
-        std::mem::swap(&mut self.saved_cursor, &mut self.inactive_saved_cursor);
+        }
+        let saved = self.saved_main_cursor.take();
+        self.swap_screen_buffers();
         // Release discarded combining suffixes; the next visit starts blank.
-        self.inactive_cells.fill(Cell::default());
-        self.inactive_continued.fill(false);
-        self.inactive_used.fill(0);
-        self.inactive_saved_cursor = None;
+        self.clear_inactive_buffer(true);
         self.inactive_scroll_region = (0, self.rows - 1);
-        self.apply_saved_cursor(saved);
+        if let Some(saved) = saved {
+            self.apply_saved_cursor(saved);
+        }
     }
 
     pub fn cursor_visible(&self) -> bool {

@@ -18,7 +18,7 @@ See [XTerm DECRQM/DECRPM](https://invisible-island.net/xterm/ctlseqs/ctlseqs.htm
 | DEC private | 1000 / 1002 / 1003 | Mouse tracking |
 | DEC private | 1006 | SGR mouse encoding |
 | DEC private | 1004 | Focus reporting |
-| DEC private | 1049 | Alternate screen |
+| DEC private | 47 / 1047 / 1049 | Alternate screen |
 | DEC private | 2004 | Bracketed paste |
 | DEC private | 2026 | Synchronized output |
 

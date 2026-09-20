@@ -401,7 +401,7 @@ impl Parser {
                     (true, 1000 | 1002 | 1003) => Some(screen.mouse_tracking() as usize == mode),
                     (true, 1006) => Some(screen.sgr_mouse()),
                     (true, 1004) => Some(screen.focus_reporting()),
-                    (true, 1049) => Some(screen.is_alternate()),
+                    (true, 47 | 1047 | 1049) => Some(screen.is_alternate()),
                     (true, 2026) => Some(screen.synchronized_output()),
                     (true, 2004) => Some(screen.bracketed_paste()),
                     _ => None,
@@ -478,6 +478,13 @@ impl Parser {
                     }
                     if *mode == Some(25) {
                         screen.set_cursor_visible(command == b'h');
+                    }
+                    if matches!(*mode, Some(47 | 1047)) {
+                        if command == b'h' {
+                            screen.enter_alternate_buffer();
+                        } else {
+                            screen.leave_alternate_buffer(*mode == Some(1047));
+                        }
                     }
                     if *mode == Some(1049) {
                         if command == b'h' {
