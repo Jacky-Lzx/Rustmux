@@ -11,6 +11,7 @@ main grid active. It removes all saved cursor state and restores:
 - Default text style and colors.
 - Full-height scrolling regions.
 - Origin mode off, automatic wrapping on, insert mode off.
+- Kitty keyboard flags and both main/alternate mode stacks cleared.
 - ASCII in G0/G1, with G0 invoked.
 - Default tab stops every eight columns.
 
@@ -41,7 +42,7 @@ to an interactive shell prompt.
 [Soft reset (DECSTR)](soft-reset.md) restores modes without erasing text.
 Device-attribute replies and terminal capability queries remain future work. Hardware-terminal power-on behavior is outside this model.
 
-RIS also disables bracketed paste, application cursor keys and application keypad. The next rendered
+RIS also disables bracketed paste, Kitty keyboard enhancements, application cursor keys and application keypad. The next rendered
 frame synchronizes these input modes with the outer terminal.
 
 RIS restores the global cursor shape to a blinking block.

@@ -589,6 +589,7 @@ struct WindowInput {
     pane_left: usize,
     pane_width: usize,
     mouse_tracking: MouseTracking,
+    kitty_keyboard_flags: u8,
     bar_enabled: bool,
     footer_row: Option<usize>,
     bar_press: bool,
@@ -615,7 +616,8 @@ impl WindowInput {
     fn feed(&mut self, byte: u8, output: &mut Vec<WindowKey>) {
         if self.paste
             || (self.mouse.is_empty()
-                && (!(self.mouse_tracking != MouseTracking::Off
+                && (!(self.kitty_keyboard_flags != 0
+                    || self.mouse_tracking != MouseTracking::Off
                     || self.bar_enabled
                     || self.footer_row.is_some()
                     || self.pane_hitboxes.len() > 1)
@@ -631,7 +633,11 @@ impl WindowInput {
             [27] | [27, b'['] => true,
             [27, b'[', b'M', ..] => len < 6,
             [27, b'[', b'<', rest @ ..] => {
-                rest.last().is_none_or(|b| !matches!(b, b'M' | b'm'))
+                rest.last().is_none_or(|b| !matches!(b, b'M' | b'm' | b'u'))
+                    && len < MAX_MOUSE_SEQUENCE_BYTES
+            }
+            [27, b'[', rest @ ..] => {
+                rest.last().is_none_or(|byte| !(0x40..=0x7e).contains(byte))
                     && len < MAX_MOUSE_SEQUENCE_BYTES
             }
             _ => false,
@@ -666,6 +672,27 @@ impl WindowInput {
             _ => None,
         };
         let mut bytes = self.take_mouse();
+        if let Some(key) = kitty_key_event(&bytes) {
+            if key.is_ctrl_b() {
+                if key.event_type != 3 {
+                    self.plain(2, output);
+                }
+                return;
+            }
+            if self.mode == InputMode::Normal {
+                if key.event_type == 3 {
+                    return;
+                }
+                if let Some(byte) = key.shortcut_byte() {
+                    self.shortcut(byte, output);
+                } else {
+                    self.mode = InputMode::Locked;
+                    output.push(WindowKey::Byte(2));
+                    output.extend(bytes.into_iter().map(WindowKey::Byte));
+                }
+                return;
+            }
+        }
         if let Some((column, row)) = coordinates {
             let release = (bytes.starts_with(b"\x1b[<") && bytes.last() == Some(&b'm'))
                 || (bytes.starts_with(b"\x1b[M")
@@ -866,6 +893,90 @@ impl WindowInput {
             output.push(WindowKey::Byte(byte));
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct KittyKeyEvent {
+    codepoint: u32,
+    shifted: Option<u32>,
+    base_layout: Option<u32>,
+    modifiers: u16,
+    event_type: u8,
+}
+
+impl KittyKeyEvent {
+    fn is_ctrl_b(self) -> bool {
+        self.modifiers & 4 != 0
+            && [Some(self.codepoint), self.shifted, self.base_layout]
+                .into_iter()
+                .flatten()
+                .any(|codepoint| matches!(char::from_u32(codepoint), Some('b' | 'B')))
+    }
+
+    fn shortcut_byte(self) -> Option<u8> {
+        if self.modifiers & !(1 | 4) != 0 {
+            return None;
+        }
+        let codepoint = if self.modifiers & 1 != 0 {
+            self.shifted.or_else(|| {
+                self.base_layout.map(|codepoint| {
+                    u8::try_from(codepoint)
+                        .ok()
+                        .filter(u8::is_ascii)
+                        .map_or(codepoint, |byte| u32::from(byte.to_ascii_uppercase()))
+                })
+            })
+        } else {
+            self.base_layout
+        }
+        .unwrap_or(self.codepoint);
+        if self.modifiers & 4 != 0 {
+            let byte = u8::try_from(codepoint).ok()?;
+            return byte.is_ascii().then_some(byte.to_ascii_uppercase() & 0x1f);
+        }
+        u8::try_from(codepoint).ok().filter(u8::is_ascii)
+    }
+}
+
+fn kitty_key_event(sequence: &[u8]) -> Option<KittyKeyEvent> {
+    let parameters = sequence.strip_prefix(b"\x1b[")?.strip_suffix(b"u")?;
+    let text = std::str::from_utf8(parameters).ok()?;
+    let mut fields = text.split(';');
+    let mut key = fields.next()?.split(':');
+    let codepoint = key.next()?.parse().ok()?;
+    let parse_optional = |value: Option<&str>| match value {
+        Some("") | None => Some(None),
+        Some(value) => value.parse().ok().map(Some),
+    };
+    let shifted = parse_optional(key.next())?;
+    let base_layout = parse_optional(key.next())?;
+    if key.next().is_some() {
+        return None;
+    }
+    let mut modifier_field = fields.next().unwrap_or("").split(':');
+    let encoded_modifiers = match modifier_field.next() {
+        Some("") | None => 1,
+        Some(value) => value.parse::<u16>().ok()?,
+    };
+    let modifiers = encoded_modifiers.checked_sub(1)?;
+    let event_type = match modifier_field.next() {
+        Some("") | None => 1,
+        Some(value) => value.parse().ok()?,
+    };
+    if modifier_field.next().is_some() || !matches!(event_type, 1..=3) {
+        return None;
+    }
+    let _text = fields.next();
+    if fields.next().is_some() {
+        return None;
+    }
+    Some(KittyKeyEvent {
+        codepoint,
+        shifted,
+        base_layout,
+        modifiers,
+        event_type,
+    })
 }
 
 fn shortcut_action(byte: u8) -> Option<WindowKey> {
@@ -1443,6 +1554,16 @@ fn forward(
                         active_index,
                         keys.mode == InputMode::Normal,
                     )?;
+                    if keys.mode == InputMode::Normal
+                        || prompt.is_some()
+                        || history.is_some()
+                        || help.is_some()
+                    {
+                        // Rustmux-owned modes expect ordinary key bytes. Keep the
+                        // child's requested flags intact and restore them when the
+                        // local mode closes.
+                        view.set_kitty_keyboard_flags(0, 1);
+                    }
                     if prompt.as_ref().is_some_and(|editor| editor.is_rename())
                         && *outer_rows > 1
                         && let Some(column) = crate::chrome::active_window_name_cursor_column(
@@ -1715,6 +1836,7 @@ fn forward(
             keys.pane_left = usize::from(rect.column);
             keys.pane_width = usize::from(rect.columns);
             keys.mouse_tracking = pane.screen().mouse_tracking();
+            keys.kitty_keyboard_flags = pane.screen().kitty_keyboard_flags();
             keys.bar_enabled = *outer_rows > 1;
             keys.footer_row = footer_enabled(*outer_rows).then_some(usize::from(*outer_rows));
             if help_action.is_none() && keys.mouse.is_empty() && input.front() == Some(&27) {
@@ -2768,6 +2890,72 @@ mod window_input_tests {
         decoder.feed(b'n', &mut actions);
         assert_eq!(actions, [WindowKey::Next]);
         assert_eq!(decoder.mode, InputMode::Locked);
+    }
+
+    #[test]
+    fn kitty_encoded_prefix_and_commands_preserve_mux_shortcuts() {
+        let decode = |bytes: &[u8]| {
+            let mut decoder = WindowInput {
+                kitty_keyboard_flags: 1,
+                ..WindowInput::default()
+            };
+            let mut result = Vec::new();
+            for &byte in bytes {
+                decoder.feed(byte, &mut result);
+            }
+            result
+        };
+        assert_eq!(decode(b"\x1b[98;5u\x1b[99;1u"), vec![WindowKey::Create]);
+        assert_eq!(
+            decode(b"\x1b[98;5:1u\x1b[122:90;2u"),
+            vec![WindowKey::ToggleZoom]
+        );
+        assert_eq!(
+            decode(b"\x1b[1073::98;5u\x1b[1094::99;1u"),
+            vec![WindowKey::Create]
+        );
+        // Key releases for the owned prefix and a pending mux command are local.
+        assert!(decode(b"\x1b[98;5:3u").is_empty());
+        let mut decoder = WindowInput {
+            kitty_keyboard_flags: 1,
+            ..WindowInput::default()
+        };
+        decoder.mode = InputMode::Normal;
+        let mut actions = Vec::new();
+        for &byte in b"\x1b[99;1:3u" {
+            decoder.feed(byte, &mut actions);
+        }
+        assert!(actions.is_empty());
+        assert_eq!(decoder.mode, InputMode::Normal);
+
+        let ordinary = b"\x1b[97;3u";
+        assert_eq!(
+            decode(ordinary),
+            ordinary
+                .iter()
+                .copied()
+                .map(WindowKey::Byte)
+                .collect::<Vec<_>>()
+        );
+        let malformed = b"\x1b[99;invalidu";
+        let mut decoder = WindowInput {
+            kitty_keyboard_flags: 1,
+            mode: InputMode::Normal,
+            ..WindowInput::default()
+        };
+        let mut actions = Vec::new();
+        for &byte in malformed {
+            decoder.feed(byte, &mut actions);
+        }
+        assert_eq!(actions.first(), Some(&WindowKey::Byte(2)));
+        assert_eq!(
+            &actions[1..],
+            &malformed
+                .iter()
+                .copied()
+                .map(WindowKey::Byte)
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]

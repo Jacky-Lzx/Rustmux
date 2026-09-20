@@ -170,8 +170,10 @@ class Session:
             self.read()
             if time.monotonic() > end:
                 raise AssertionError((text, self.last_rows, bytes(self.output[-1000:]), self.child.poll()))
+        matched_output = bytes(self.output)
         self.output.clear()
         self.frames.clear()
+        return matched_output
 
     def send(self, data):
         end = time.monotonic() + 8
@@ -627,6 +629,44 @@ for terminate in (False, True):
         assert s.output.rfind(b"\x1b[0 q") > s.output.rfind(b"\x1b[6 q")
     finally:
         s.close()
+
+# Kitty keyboard flags, stacks and queries are virtualized per pane. The active
+# pane controls outer encoding, while an encoded Ctrl-B remains Rustmux's prefix.
+keyboard_probe = r"""
+import os, select, time, tty
+tty.setraw(0)
+def receive(expected):
+    data = bytearray()
+    end = time.monotonic() + 6
+    while len(data) < len(expected):
+        assert time.monotonic() < end, repr(data)
+        if select.select([0], [], [], 0.1)[0]:
+            data.extend(os.read(0, len(expected) - len(data)))
+    assert data == expected, repr(data)
+os.write(1, b"\x1b[=3u\x1b[?u\x1b[2J\x1b[HKEYBOARD_" + b"READY")
+receive(b"\x1b[?3u")
+receive(b"x")
+os.write(1, b"\x1b[=0u\x1b[2J\x1b[HKEYBOARD_" + b"EXIT")
+"""
+s = Session()
+try:
+    s.expect(b"RUSTMUX_READY> ")
+    s.send(("exec python3 -c " + shlex.quote(keyboard_probe) + "\n").encode())
+    output = s.expect(b"KEYBOARD_READY")
+    assert b"\x1b[=3u" in output, output
+    s.send(b"\x1b[98;5u\x1b[99;1u")
+    output = s.expect(b"RUSTMUX_READY> ")
+    assert b"\x1b[=0u" in output, output
+    s.send(b"\x02p")
+    output = s.expect(b"KEYBOARD_READY")
+    assert b"\x1b[=3u" in output, output
+    s.send(b"x")
+    s.expect(b"KEYBOARD_EXIT")
+    os.kill(s.app_pid, signal.SIGTERM)
+    s.finish(128 + signal.SIGTERM)
+    assert s.output.rfind(b"\x1b[=0u") > s.output.rfind(b"\x1b[=3u")
+finally:
+    s.close()
 
 # Focus events are input; output-side CSI I still means forward tabulation.
 focus_probe = r"""

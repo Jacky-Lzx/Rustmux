@@ -11,6 +11,10 @@ fn frame(renderer: &mut Renderer, screen: &Screen) -> Vec<u8> {
 }
 
 fn assert_modes(actual: &Screen, expected: &Screen) {
+    assert_eq!(
+        actual.kitty_keyboard_flags(),
+        expected.kitty_keyboard_flags()
+    );
     assert_eq!(actual.bracketed_paste(), expected.bracketed_paste());
     assert_eq!(
         actual.application_cursor_keys(),
@@ -35,7 +39,13 @@ fn unchanged_modes_are_omitted_even_when_text_changes() {
     );
     Parser::new().advance(&mut screen, b"X");
     let bytes = frame(&mut renderer, &screen);
-    for mode in [b"\x1b[?2004".as_slice(), b"\x1b[?1l", b"\x1b>", b" q"] {
+    for mode in [
+        b"\x1b[=0u".as_slice(),
+        b"\x1b[?2004",
+        b"\x1b[?1l",
+        b"\x1b>",
+        b" q",
+    ] {
         assert!(!bytes.windows(mode.len()).any(|w| w == mode));
     }
 }
@@ -48,6 +58,8 @@ fn individual_mode_changes_and_resets_replay_without_redundant_commands() {
     let mut parser = Parser::new();
     parser.advance(&mut replay, &frame(&mut renderer, &screen));
     for input in [
+        b"\x1b[=3u".as_slice(),
+        b"\x1b[=0u",
         b"\x1b[?2004h".as_slice(),
         b"\x1b[?2004l",
         b"\x1b[?1h",

@@ -151,5 +151,7 @@ While browsing history, drag the left mouse button across text to copy that
 selection through OSC 52 when the button is released.
 
 Only the documented terminal-control subset is supported. Full-screen editors,
-terminal queries and extended keyboard/mouse modes are not yet fully supported;
-see [Input and Rendering Loop](../reference/input-loop.md#current-compatibility).
+terminal queries and extended mouse modes are not yet fully supported. Kitty
+keyboard flags and encoded Rustmux shortcuts are supported when the outer
+terminal implements the protocol; see
+[Input and Rendering Loop](../reference/input-loop.md#current-compatibility).

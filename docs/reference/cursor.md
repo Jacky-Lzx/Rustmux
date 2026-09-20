@@ -11,9 +11,11 @@ The parser supports DEC cursor controls described in the
   mixed, and the last save replaces the slot regardless of syntax.
 
 Only parameterless CSI s/u are accepted. Explicit numeric parameters (including
-zero), private prefixes and intermediates are ignored. This keeps parameterized
-CSI u keyboard sequences and CSI Pl ; Pr s margin commands distinct. Left/right
-margin mode (DECLRMM) and the Kitty keyboard protocol are not implemented.
+zero), private prefixes and intermediates are not cursor restores. This keeps
+parameterized CSI u keyboard sequences and CSI Pl ; Pr s margin commands
+distinct. Left/right margin mode (DECLRMM) is not implemented. Parameterized
+keyboard commands are handled separately; see
+[Kitty Keyboard Protocol](kitty-keyboard.md).
 
 Visibility starts enabled and is a global mode. It survives screen switching and
 resize, and is not part of a cursor save. The renderer hides the cursor while

@@ -21,7 +21,8 @@ active PTY unchanged, including [bracketed paste](bracketed-paste.md) markers
 when enabled by the child. Frames also synchronize
 [application cursor key mode](application-cursor.md) with the outer terminal. Output follows `PTY -> Parser -> Screen -> render ->
 outer terminal`. The inner PTY's line discipline and shell handle editing and
-keyboard signals. The parser supports the documented control subset and standard
+keyboard signals. Frames synchronize the active pane's
+[Kitty keyboard flags](kitty-keyboard.md) with the outer terminal. The parser supports the documented control subset and standard
 eight-column tabs; unknown commands are ignored rather than passed through.
 
 All terminal descriptors are nonblocking. Raw input has a 64 KiB staging queue,
@@ -56,7 +57,7 @@ and cleanup. macOS may keep the controlling PTY alive until that process exits,
 so closed standard streams alone do not necessarily produce EOF.
 
 Raw termios is saved before modification and restored on normal return, errors
-and unwinding. Cleanup also resets common mouse/bracketed-paste modes, text style,
+and unwinding. Cleanup also resets Kitty keyboard, common mouse/bracketed-paste modes, text style,
 cursor visibility and the alternate screen. Terminal control writes have a
 500 ms deadline so a blocked output device cannot prevent termios restoration.
 Cleanup cannot restore a physically disconnected device, nor recover from SIGKILL
@@ -106,7 +107,7 @@ are required. Local validation is on macOS; Linux results require the CI run.
 
 ## Current compatibility
 
-The CLI now depends on our parser's supported subset. Queries beyond standard DSR, [DA1](device-attributes.md) and [DECRQM](mode-queries.md), mouse extensions and full emoji shaping are not implemented. Programs requiring
+The CLI now depends on our parser's supported subset. Queries beyond standard DSR, [DA1](device-attributes.md), [DECRQM](mode-queries.md) and the [Kitty keyboard query](kitty-keyboard.md), mouse extensions and full emoji shaping are not implemented. Programs requiring
 those features may display incorrectly or wait for an unsupported terminal reply.
 Full-screen editor compatibility is not yet an acceptance claim. There is no
 split layout or persistent session support.
@@ -115,6 +116,9 @@ split layout or persistent session support.
 reply capacity participates in PTY read backpressure.
 [Focus Reporting](focus-reporting.md) describes physical and multi-pane focus
 events and mode synchronization on changes.
+
+[Kitty Keyboard Protocol](kitty-keyboard.md) describes per-pane enhancement
+flags, encoded prefix shortcuts and outer-terminal synchronization.
 
 [Mouse Reporting](mouse-reporting.md) describes supported single-pane mouse modes.
 

@@ -38,6 +38,7 @@ struct Parameters {
     subparameter: [bool; 32],
     invalid: bool,
     private: bool,
+    keyboard_prefix: Option<u8>,
     soft_reset: bool,
     cursor_shape: bool,
     mode_query: bool,
@@ -321,10 +322,19 @@ impl Parser {
                                 }
                             }
                             b'?' if !parameters.private
+                                && parameters.keyboard_prefix.is_none()
                                 && parameters.index == 0
                                 && parameters.values[0].is_none() =>
                             {
                                 parameters.private = true
+                            }
+                            prefix @ (b'=' | b'>' | b'<')
+                                if !parameters.private
+                                    && parameters.keyboard_prefix.is_none()
+                                    && parameters.index == 0
+                                    && parameters.values[0].is_none() =>
+                            {
+                                parameters.keyboard_prefix = Some(prefix)
                             }
                             b';' | b':' if parameters.index + 1 < parameters.values.len() => {
                                 parameters.index += 1;
@@ -348,6 +358,35 @@ impl Parser {
         command: u8,
         reply: &mut impl FnMut(&[u8]),
     ) {
+        if command == b'u' && (parameters.private || parameters.keyboard_prefix.is_some()) {
+            if parameters.private
+                && parameters.keyboard_prefix.is_none()
+                && parameters.index == 0
+                && parameters.values[0].is_none()
+            {
+                let response = format!("\x1b[?{}u", screen.kitty_keyboard_flags());
+                debug_assert!(response.len() <= MAX_REPLY_BYTES);
+                reply(response.as_bytes());
+            } else if !parameters.private && !parameters.subparameter.contains(&true) {
+                let first = parameters.values[0].unwrap_or(0);
+                match parameters.keyboard_prefix {
+                    Some(b'=') if parameters.index <= 1 => {
+                        screen.set_kitty_keyboard_flags(first, parameters.values[1].unwrap_or(1));
+                    }
+                    Some(b'>') if parameters.index == 0 => {
+                        screen.push_kitty_keyboard_flags(first);
+                    }
+                    Some(b'<') if parameters.index == 0 => {
+                        screen.pop_kitty_keyboard_flags(first);
+                    }
+                    _ => {}
+                }
+            }
+            return;
+        }
+        if parameters.keyboard_prefix.is_some() {
+            return;
+        }
         if parameters.mode_query {
             if command == b'p' {
                 let mode = parameters.values[0].unwrap_or(0);
@@ -662,6 +701,79 @@ mod tests {
             (0, 2),
         );
         fixture("AéB".as_bytes(), &["AéB  "], (0, 3));
+    }
+
+    #[test]
+    fn kitty_keyboard_modes_are_per_screen_stack_bounded_and_queryable() {
+        let mut parser = Parser::new();
+        let mut screen = Screen::new(2, 8).unwrap();
+        let mut replies = Vec::new();
+        parser.advance_with_replies(&mut screen, b"\x1b[=3u\x1b[?u", &mut |reply| {
+            replies.extend_from_slice(reply)
+        });
+        assert_eq!(screen.kitty_keyboard_flags(), 3);
+        assert_eq!(replies, b"\x1b[?3u");
+
+        parser.advance(&mut screen, b"\x1b[=4;2u\x1b[=2;3u");
+        assert_eq!(screen.kitty_keyboard_flags(), 5);
+        parser.advance(&mut screen, b"\x1b[>7u\x1b[>31u\x1b[<u");
+        assert_eq!(screen.kitty_keyboard_flags(), 7);
+        parser.advance(&mut screen, b"\x1b[<2u");
+        assert_eq!(screen.kitty_keyboard_flags(), 0);
+
+        parser.advance(&mut screen, b"\x1b[=3u\x1b[?1049h\x1b[=12u");
+        assert_eq!(screen.kitty_keyboard_flags(), 12);
+        parser.advance(&mut screen, b"\x1b[?1049l");
+        assert_eq!(screen.kitty_keyboard_flags(), 3);
+        parser.advance(&mut screen, b"\x1b[?1049h");
+        assert_eq!(screen.kitty_keyboard_flags(), 12);
+
+        for flags in 0..40 {
+            parser.advance(&mut screen, format!("\x1b[>{flags}u").as_bytes());
+        }
+        for _ in 0..40 {
+            parser.advance(&mut screen, b"\x1b[<u");
+        }
+        assert_eq!(screen.kitty_keyboard_flags(), 0);
+
+        parser.advance(&mut screen, b"\x1b[=3u\x1b[?1049h\x1b[=7u\x1bc");
+        assert_eq!(screen.kitty_keyboard_flags(), 0);
+        parser.advance(&mut screen, b"\x1b[?1049h");
+        assert_eq!(screen.kitty_keyboard_flags(), 0);
+    }
+
+    #[test]
+    fn kitty_keyboard_commands_accept_every_chunk_boundary() {
+        let input = b"\x1b[>3u\x1b[=4;2u\x1b[<u\x1b[?u";
+        for split in 0..=input.len() {
+            let mut parser = Parser::new();
+            let mut screen = Screen::new(1, 4).unwrap();
+            let mut replies = Vec::new();
+            parser.advance_with_replies(&mut screen, &input[..split], &mut |reply| {
+                replies.extend_from_slice(reply)
+            });
+            parser.advance_with_replies(&mut screen, &input[split..], &mut |reply| {
+                replies.extend_from_slice(reply)
+            });
+            assert_eq!(screen.kitty_keyboard_flags(), 0, "split {split}");
+            assert_eq!(replies, b"\x1b[?0u", "split {split}");
+        }
+    }
+
+    #[test]
+    fn malformed_kitty_keyboard_commands_are_atomic() {
+        for input in [
+            b"\x1b[?1u".as_slice(),
+            b"\x1b[==3u",
+            b"\x1b[=3:2u",
+            b"\x1b[>3;2u",
+            b"\x1b[<1;2u",
+            b"\x1b[=999999999999999999999999u",
+        ] {
+            let mut screen = Screen::new(1, 4).unwrap();
+            Parser::new().advance(&mut screen, input);
+            assert_eq!(screen.kitty_keyboard_flags(), 0, "accepted {input:?}");
+        }
     }
 
     #[test]

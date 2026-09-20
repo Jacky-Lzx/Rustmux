@@ -1,12 +1,14 @@
 //! A resizable text grid, independent of PTY I/O and escape-sequence parsing.
 
-use std::io;
+use std::{collections::VecDeque, io};
 
 mod reflow;
 use unicode_width::UnicodeWidthChar;
 
 const MAX_COMBINING_SCALARS: usize = 16;
 const DEFAULT_TAB_WIDTH: usize = 8;
+const KITTY_KEYBOARD_FLAGS: u8 = 0b1_1111;
+const MAX_KEYBOARD_MODE_STACK_DEPTH: usize = 32;
 
 use crate::{
     scrollback::Scrollback,
@@ -55,6 +57,12 @@ pub enum EraseMode {
 struct CharacterSets {
     graphics: [bool; 2],
     active: usize,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct KeyboardMode {
+    flags: u8,
+    stack: VecDeque<u8>,
 }
 
 impl CharacterSets {
@@ -111,6 +119,8 @@ pub struct Screen {
     insert_mode: bool,
     bracketed_paste: bool,
     focus_reporting: bool,
+    keyboard_main: KeyboardMode,
+    keyboard_alternate: KeyboardMode,
     synchronized_output: bool,
     mouse_tracking: MouseTracking,
     sgr_mouse: bool,
@@ -228,6 +238,8 @@ impl Screen {
             insert_mode: false,
             bracketed_paste: false,
             focus_reporting: false,
+            keyboard_main: KeyboardMode::default(),
+            keyboard_alternate: KeyboardMode::default(),
             synchronized_output: false,
             mouse_tracking: MouseTracking::Off,
             sgr_mouse: false,
@@ -267,6 +279,8 @@ impl Screen {
         self.application_keypad = false;
         self.bracketed_paste = false;
         self.focus_reporting = false;
+        self.keyboard_main = KeyboardMode::default();
+        self.keyboard_alternate = KeyboardMode::default();
         self.mouse_tracking = MouseTracking::Off;
         self.sgr_mouse = false;
         for (column, stop) in self.tab_stops.iter_mut().enumerate() {
@@ -456,6 +470,10 @@ impl Screen {
         resized.insert_mode = self.insert_mode;
         resized.bracketed_paste = self.bracketed_paste;
         resized.focus_reporting = self.focus_reporting;
+        resized.keyboard_main.clone_from(&self.keyboard_main);
+        resized
+            .keyboard_alternate
+            .clone_from(&self.keyboard_alternate);
         resized.synchronized_output = self.synchronized_output;
         resized.mouse_tracking = self.mouse_tracking;
         resized.sgr_mouse = self.sgr_mouse;
@@ -799,6 +817,53 @@ impl Screen {
     /// Global input mode, preserved by cursor saves, grid switches and soft reset.
     pub fn set_focus_reporting(&mut self, enabled: bool) {
         self.focus_reporting = enabled;
+    }
+
+    pub fn kitty_keyboard_flags(&self) -> u8 {
+        self.keyboard_mode().flags
+    }
+
+    pub fn set_kitty_keyboard_flags(&mut self, requested: usize, mode: usize) {
+        let requested = requested as u8 & KITTY_KEYBOARD_FLAGS;
+        let keyboard = self.keyboard_mode_mut();
+        keyboard.flags = match mode {
+            2 => keyboard.flags | requested,
+            3 => keyboard.flags & !requested,
+            _ => requested,
+        };
+    }
+
+    pub fn push_kitty_keyboard_flags(&mut self, requested: usize) {
+        let requested = requested as u8 & KITTY_KEYBOARD_FLAGS;
+        let keyboard = self.keyboard_mode_mut();
+        if keyboard.stack.len() == MAX_KEYBOARD_MODE_STACK_DEPTH {
+            keyboard.stack.pop_front();
+        }
+        keyboard.stack.push_back(keyboard.flags);
+        keyboard.flags = requested;
+    }
+
+    pub fn pop_kitty_keyboard_flags(&mut self, count: usize) {
+        let keyboard = self.keyboard_mode_mut();
+        for _ in 0..count.max(1) {
+            keyboard.flags = keyboard.stack.pop_back().unwrap_or(0);
+        }
+    }
+
+    fn keyboard_mode(&self) -> &KeyboardMode {
+        if self.is_alternate() {
+            &self.keyboard_alternate
+        } else {
+            &self.keyboard_main
+        }
+    }
+
+    fn keyboard_mode_mut(&mut self) -> &mut KeyboardMode {
+        if self.is_alternate() {
+            &mut self.keyboard_alternate
+        } else {
+            &mut self.keyboard_main
+        }
     }
 
     pub fn bracketed_paste(&self) -> bool {

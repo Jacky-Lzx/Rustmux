@@ -33,6 +33,7 @@ pub struct Renderer {
 // is deliberately not cached: each frame hides it while painting and restores it.
 #[derive(Clone, Copy)]
 struct OutputModes {
+    keyboard: u8,
     paste: bool,
     cursor_keys: bool,
     keypad: bool,
@@ -44,6 +45,7 @@ struct OutputModes {
 impl OutputModes {
     fn from_screen(screen: &Screen) -> Self {
         Self {
+            keyboard: screen.kitty_keyboard_flags(),
             paste: screen.bracketed_paste(),
             cursor_keys: screen.application_cursor_keys(),
             keypad: screen.application_keypad(),
@@ -93,6 +95,11 @@ fn render_frame(
     previous: Option<&[Vec<Cell>]>,
 ) -> io::Result<()> {
     output.write_all(b"\x1b[?25l\x1b[0m")?;
+    // The active pane owns Kitty keyboard encoding. Setting, rather than
+    // pushing, prevents pane switches and redraws from growing the outer stack.
+    if previous_modes.is_none_or(|modes| modes.keyboard != screen.kitty_keyboard_flags()) {
+        write!(output, "\x1b[={}u", screen.kitty_keyboard_flags())?;
+    }
     // The single active pane determines how the outer terminal encodes paste.
     // Input forwarding preserves the resulting start/end markers unchanged.
     if previous_modes.is_none_or(|modes| modes.paste != screen.bracketed_paste()) {
