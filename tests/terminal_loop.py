@@ -225,7 +225,10 @@ try:
     s.expect(b"NESTED_STATUS:1")
     assert any(b"rustmux: nested Rustmux sessions are not supported" in row
                for row in s.last_rows), s.last_rows
-    assert any(b"RUSTMUX_READY>" in row for row in s.last_rows), s.last_rows
+    deadline = time.monotonic() + 3
+    while not any(b"RUSTMUX_READY>" in row for row in s.last_rows):
+        s.read()
+        assert time.monotonic() < deadline, s.last_rows
     s.send("printf '\\n%s\\n' '中文输入'\n".encode())
     s.expect("\r\n中文输入\r\n".encode())
     s.send(b"printf '\\n%s\\n' 'backspacX\x7fe'\n")
@@ -1965,6 +1968,13 @@ try:
         expect_footer(s, b"HISTORY ")
         fcntl.ioctl(s.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
         expect_bar(s, b"1 shell")
+        deadline = time.monotonic() + 3
+        while (b"HISTORY " in s.physical_rows[-1]
+               or s.private_modes.get(1006) is not False):
+            s.read()
+            assert time.monotonic() < deadline, (s.private_modes, s.last_frame, s.output[-1000:])
+        assert b"LOCKED" in s.physical_rows[-1], s.physical_rows[-1]
+        assert s.private_modes.get(1002) is True
         s.send(b"printf '\\n%s%s\\n' RESIZE_ LIVE\n")
         s.expect(b"RESIZE_LIVE")
     os.kill(s.app_pid, signal.SIGTERM)
