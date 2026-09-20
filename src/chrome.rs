@@ -75,16 +75,18 @@ fn separator_style(foreground: Color, background: Color) -> Style {
     }
 }
 
-pub(crate) fn pane_border_style(active: bool, history: bool) -> Style {
+pub(crate) fn pane_border_style(active: bool, history: bool, bell: bool) -> Style {
     Style {
         foreground: if history {
             PEACH
         } else if active {
             GREEN
+        } else if bell {
+            PEACH
         } else {
             SUBTEXT0
         },
-        bold: active || history,
+        bold: active || history || bell,
         ..Style::default()
     }
 }
@@ -607,7 +609,7 @@ mod tests {
     #[test]
     fn pane_borders_use_main_colors_without_an_opaque_background() {
         assert_eq!(
-            pane_border_style(true, false),
+            pane_border_style(true, false, false),
             Style {
                 foreground: GREEN,
                 background: Color::Default,
@@ -615,11 +617,14 @@ mod tests {
                 ..Style::default()
             }
         );
-        assert_eq!(pane_border_style(false, false).foreground, SUBTEXT0);
-        assert_eq!(pane_border_style(false, true).foreground, PEACH);
+        assert_eq!(pane_border_style(false, false, false).foreground, SUBTEXT0);
+        assert_eq!(pane_border_style(false, true, false).foreground, PEACH);
+        assert_eq!(pane_border_style(false, false, true).foreground, PEACH);
+        assert_eq!(pane_border_style(true, false, true).foreground, GREEN);
         for style in [
-            pane_border_style(false, false),
-            pane_border_style(false, true),
+            pane_border_style(false, false, false),
+            pane_border_style(false, true, false),
+            pane_border_style(false, false, true),
         ] {
             assert_eq!(style.background, Color::Default);
         }

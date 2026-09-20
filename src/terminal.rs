@@ -1275,12 +1275,16 @@ fn forward(
             .position(|window| window.id() == active)
             .unwrap();
         if connection == ConnectionState::Attached {
-            for (_, pane) in windows.active_mut().unwrap().content_mut().iter_mut() {
-                let state = pane.parts_mut().3;
-                if state.bell_pending {
-                    state.bell_pending = false;
-                    bar_dirty = true;
-                }
+            let state = windows
+                .active_mut()
+                .unwrap()
+                .content_mut()
+                .active_mut()
+                .parts_mut()
+                .3;
+            if state.bell_pending {
+                state.bell_pending = false;
+                bar_dirty = true;
             }
         }
         let mut names = window_names(windows);
@@ -1348,11 +1352,16 @@ fn forward(
                         .iter()
                         .map(|(pane_id, pane)| (pane_id, pane.terminal_title()))
                         .collect();
+                    let bells: Vec<_> = panes
+                        .iter()
+                        .filter_map(|(pane_id, pane)| pane.io().bell_pending.then_some(pane_id))
+                        .collect();
                     let content = pane_view::compose_with_titles(
                         panes.layout(),
                         &screens,
                         history.as_ref().map(|_| focused),
                         &titles,
+                        &bells,
                     )?;
                     let mut view = compose(
                         &content,

@@ -886,6 +886,28 @@ try:
     s.expect(b"RUSTMUX_READY> ")
     s.send(b"WIN=A; printf '\\033[2J\\033[H%s%s\\n' READY _A\n")
     s.expect(b"READY_A")
+    # A bell from an unfocused pane marks that pane even while its window is
+    # active. Selecting the window is not enough; focusing the pane clears it.
+    s.send(b"sleep 0.2; printf '\\a\\033[2J\\033[H%s%s\\n' PANE _BELL\n")
+    s.send(b"\x02%")
+    s.expect(b"RUSTMUX_READY> ")
+    deadline = time.monotonic() + 3
+    while b"1 shell [!]" not in s.physical_rows[0]:
+        s.read()
+        assert time.monotonic() < deadline, s.physical_rows[0]
+    s.send(b"\x02h")
+    s.expect(b"PANE_BELL")
+    deadline = time.monotonic() + 3
+    while b"1 shell [!]" in s.physical_rows[0]:
+        s.read()
+        assert time.monotonic() < deadline, s.physical_rows[0]
+    s.send(b"\x02l")
+    s.send(b"exit\n")
+    deadline = time.monotonic() + 3
+    while b"\xe2\x94\x82\xe2\x94\x82" in b"".join(s.last_rows):
+        s.read()
+        assert time.monotonic() < deadline, s.last_rows
+    assert any(b"PANE_BELL" in row for row in s.last_rows), s.last_rows
     s.send(b"sleep 0.2; printf '\\a\\033[?2004h\\033[2J\\033[H%s%s\\n' BACK _A\n")
     s.send(b"\x02")
     s.send(b"c")

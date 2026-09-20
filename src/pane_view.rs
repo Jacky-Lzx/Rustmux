@@ -22,7 +22,7 @@ pub(crate) fn compose_with_highlight(
     screens: &[(PaneId, &Screen)],
     highlighted: Option<PaneId>,
 ) -> io::Result<Screen> {
-    compose_with_titles(layout, screens, highlighted, &[])
+    compose_with_titles(layout, screens, highlighted, &[], &[])
 }
 
 pub(crate) fn compose_with_titles(
@@ -30,6 +30,7 @@ pub(crate) fn compose_with_titles(
     screens: &[(PaneId, &Screen)],
     highlighted: Option<PaneId>,
     titles: &[(PaneId, &str)],
+    bells: &[PaneId],
 ) -> io::Result<Screen> {
     let (rows, columns) = layout.dimensions();
     if usize::from(rows) * usize::from(columns) > MAX_CELLS {
@@ -88,6 +89,7 @@ pub(crate) fn compose_with_titles(
             pane_border_style(
                 *id == layout.active(),
                 highlighted.is_some_and(|candidate| candidate == *rect),
+                bells.contains(id),
             ),
         );
     }
@@ -108,6 +110,7 @@ pub(crate) fn compose_with_titles(
             pane_border_style(
                 *id == layout.active(),
                 highlighted.is_some_and(|candidate| candidate == *rect),
+                bells.contains(id),
             ),
         );
     }
@@ -297,21 +300,21 @@ mod tests {
         let highlighted = compose_with_highlight(&layout, &references, Some(selected)).unwrap();
         assert_eq!(
             ordinary.row(0).unwrap()[5].style,
-            pane_border_style(false, false)
+            pane_border_style(false, false, false)
         );
         assert_eq!(
             highlighted.row(0).unwrap()[5].style,
-            pane_border_style(false, false)
+            pane_border_style(false, false, false)
         );
         for (row, column) in [(3, 6), (3, 8), (4, 6), (6, 6)] {
             assert_eq!(
                 ordinary.row(row).unwrap()[column].style,
-                pane_border_style(true, false),
+                pane_border_style(true, false, false),
                 "active border at {row},{column} was not highlighted"
             );
             assert_eq!(
                 highlighted.row(row).unwrap()[column].style,
-                pane_border_style(true, true),
+                pane_border_style(true, true, false),
                 "history border at {row},{column} was not highlighted"
             );
         }
@@ -320,11 +323,11 @@ mod tests {
         let focused_left = compose_with_highlight(&layout, &references, None).unwrap();
         assert_eq!(
             focused_left.row(0).unwrap()[5].style,
-            pane_border_style(true, false)
+            pane_border_style(true, false, false)
         );
         assert_eq!(
             focused_left.row(3).unwrap()[8].style,
-            pane_border_style(false, false)
+            pane_border_style(false, false, false)
         );
     }
 
@@ -363,6 +366,7 @@ mod tests {
             &[(left, &left_screen), (right, &right_screen)],
             None,
             &[(left, "left"), (right, "right")],
+            &[left],
         )
         .unwrap();
         let top: String = view
@@ -378,7 +382,11 @@ mod tests {
         assert_eq!(view.row(4).unwrap()[16].character, '┘');
         assert_eq!(
             view.row(0).unwrap()[8].style,
-            pane_border_style(true, false)
+            pane_border_style(true, false, false)
+        );
+        assert_eq!(
+            view.row(0).unwrap()[0].style,
+            pane_border_style(false, false, true)
         );
     }
 
