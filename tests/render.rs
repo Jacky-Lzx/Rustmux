@@ -32,6 +32,37 @@ fn exact_style_encoding_resets_attributes_between_cells() {
 }
 
 #[test]
+fn underline_styles_and_colors_are_encoded_exactly() {
+    let screen = screen(
+        1,
+        4,
+        "\x1b[4:3;58:2::1:2:3mA\x1b[4:5;58:5:123mB\x1b[24mC\x1b[59mD",
+    );
+    let output = frame(&screen);
+    assert!(
+        output
+            .windows(b"\x1b[0;4:3;58;2;1;2;3mA".len())
+            .any(|bytes| { bytes == b"\x1b[0;4:3;58;2;1;2;3mA" })
+    );
+    assert!(
+        output
+            .windows(b"\x1b[0;4:5;58;5;123mB".len())
+            .any(|bytes| { bytes == b"\x1b[0;4:5;58;5;123mB" })
+    );
+    assert!(
+        output
+            .windows(b"\x1b[0;58;5;123mC".len())
+            .any(|bytes| { bytes == b"\x1b[0;58;5;123mC" })
+    );
+    assert!(
+        output
+            .windows(b"\x1b[0mD".len())
+            .any(|bytes| bytes == b"\x1b[0mD")
+    );
+    redraw_matches(&screen, &mut Screen::new(1, 4).unwrap());
+}
+
+#[test]
 fn wide_leaders_and_suffixes_are_emitted_once() {
     let screen = screen(1, 4, "中e\u{301}X");
     assert_eq!(

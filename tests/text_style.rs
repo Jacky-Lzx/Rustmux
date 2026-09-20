@@ -1,6 +1,6 @@
 use rustmux::parser::Parser;
 use rustmux::screen::Screen;
-use rustmux::style::{Cell, Color, Style};
+use rustmux::style::{Cell, Color, Style, UnderlineStyle};
 
 fn parsed(rows: usize, columns: usize, input: &[u8]) -> Screen {
     let mut expected = Screen::new(rows, columns).unwrap();
@@ -36,10 +36,11 @@ fn attributes_and_individual_resets_are_saved_per_cell() {
             style: Style {
                 foreground: Color::Indexed(1),
                 background: Color::Indexed(4),
+                underline_color: Color::Default,
                 bold: true,
                 dim: true,
                 italic: true,
-                underline: true,
+                underline: UnderlineStyle::Single,
                 blink: true,
                 inverse: true,
                 hidden: true,
@@ -82,7 +83,7 @@ fn all_sixteen_palette_colors_are_distinct_from_default() {
 }
 
 #[test]
-fn extended_colors_consume_components_and_preserve_other_attributes() {
+fn extended_colors_apply_to_foreground_background_and_underline() {
     let screen = parsed(
         1,
         4,
@@ -104,8 +105,13 @@ fn extended_colors_consume_components_and_preserve_other_attributes() {
         ..Style::default()
     };
     assert_eq!(screen.row(0).unwrap()[1].style, style);
-    // Unsupported underline color still consumes its RGB values, not dim/italic.
-    assert_eq!(screen.row(0).unwrap()[2].style, style);
+    assert_eq!(
+        screen.row(0).unwrap()[2].style,
+        Style {
+            underline_color: Color::Rgb(1, 2, 3),
+            ..style
+        }
+    );
 }
 
 #[test]
@@ -115,6 +121,8 @@ fn malformed_color_groups_and_parameter_overflow_do_not_partially_apply() {
         "1;38;2;1;2",
         "1;38;2;;2;3",
         "1;38;5;256",
+        "1;58;5;256",
+        "1;58;2;1;2",
         "0;48;2;1;2;999",
         "1;38;9;2",
         "1;99999999999999999999999999999999",
@@ -207,6 +215,7 @@ fn colon_colors_preserve_group_boundaries() {
                 foreground: Color::Rgb(255, 0, 0),
                 background: Color::Rgb(0, 51, 0),
                 bold: true,
+                underline: UnderlineStyle::Curly,
                 ..Style::default()
             }
         );
@@ -218,12 +227,47 @@ fn colon_colors_preserve_group_boundaries() {
 }
 
 #[test]
+fn underline_styles_and_colors_are_independent_and_reset_separately() {
+    let screen = parsed(
+        1,
+        9,
+        b"\x1b[58;5;123;4mA\x1b[4:2mB\x1b[4:3;58:2::1:2:3mC\x1b[4:4mD\x1b[4:5mE\x1b[24mF\x1b[4:1;59mG\x1b[4:0mH\x1b[21mI",
+    );
+    let row = screen.row(0).unwrap();
+    assert_eq!(row[0].style.underline, UnderlineStyle::Single);
+    assert_eq!(row[0].style.underline_color, Color::Indexed(123));
+    assert_eq!(row[1].style.underline, UnderlineStyle::Double);
+    assert_eq!(row[2].style.underline, UnderlineStyle::Curly);
+    assert_eq!(row[2].style.underline_color, Color::Rgb(1, 2, 3));
+    assert_eq!(row[3].style.underline, UnderlineStyle::Dotted);
+    assert_eq!(row[4].style.underline, UnderlineStyle::Dashed);
+    assert_eq!(row[5].style.underline, UnderlineStyle::None);
+    assert_eq!(row[5].style.underline_color, Color::Rgb(1, 2, 3));
+    assert_eq!(row[6].style.underline, UnderlineStyle::Single);
+    assert_eq!(row[6].style.underline_color, Color::Default);
+    assert_eq!(row[7].style.underline, UnderlineStyle::None);
+    assert_eq!(row[8].style.underline, UnderlineStyle::Double);
+}
+
+#[test]
+fn unknown_underline_substyles_are_ignored_as_complete_groups() {
+    let screen = parsed(1, 3, b"\x1b[31;4mA\x1b[4:6;32mB\x1b[4:;33mC");
+    let row = screen.row(0).unwrap();
+    assert_eq!(row[0].style.underline, UnderlineStyle::Single);
+    assert_eq!(row[1].style.underline, UnderlineStyle::Single);
+    assert_eq!(row[1].style.foreground, Color::Indexed(2));
+    assert_eq!(row[2].style.underline, UnderlineStyle::Single);
+    assert_eq!(row[2].style.foreground, Color::Indexed(3));
+}
+
+#[test]
 fn malformed_colon_colors_are_atomic_and_do_not_affect_cursor_commands() {
     for params in [
         "38:2:255:0",
         "38:2:256:0:0",
         "38:2::1::3",
         "38:5:",
+        "58:2::1:2",
         "38:2:1:2:3:4:5",
         "38:2:1;2;3",
         "38;2:1:2:3",

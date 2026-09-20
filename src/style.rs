@@ -9,13 +9,39 @@ pub enum Color {
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum UnderlineStyle {
+    #[default]
+    None,
+    Single,
+    Double,
+    Curly,
+    Dotted,
+    Dashed,
+}
+
+impl UnderlineStyle {
+    pub(crate) fn from_sgr(value: usize) -> Option<Self> {
+        Some(match value {
+            0 => Self::None,
+            1 => Self::Single,
+            2 => Self::Double,
+            3 => Self::Curly,
+            4 => Self::Dotted,
+            5 => Self::Dashed,
+            _ => return None,
+        })
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Style {
     pub foreground: Color,
     pub background: Color,
+    pub underline_color: Color,
     pub bold: bool,
     pub dim: bool,
     pub italic: bool,
-    pub underline: bool,
+    pub underline: UnderlineStyle,
     pub blink: bool,
     pub inverse: bool,
     pub hidden: bool,
@@ -57,17 +83,18 @@ impl Style {
                 1 => self.bold = true,
                 2 => self.dim = true,
                 3 => self.italic = true,
-                4 => self.underline = true,
+                4 => self.underline = UnderlineStyle::Single,
                 5 => self.blink = true,
                 7 => self.inverse = true,
                 8 => self.hidden = true,
                 9 => self.strikethrough = true,
+                21 => self.underline = UnderlineStyle::Double,
                 22 => {
                     self.bold = false;
                     self.dim = false;
                 }
                 23 => self.italic = false,
-                24 => self.underline = false,
+                24 => self.underline = UnderlineStyle::None,
                 25 => self.blink = false,
                 27 => self.inverse = false,
                 28 => self.hidden = false,
@@ -78,6 +105,7 @@ impl Style {
                 code @ 100..=107 => self.background = Color::Indexed((code - 100 + 8) as u8),
                 39 => self.foreground = Color::Default,
                 49 => self.background = Color::Default,
+                59 => self.underline_color = Color::Default,
                 code @ (38 | 48 | 58) => {
                     let component =
                         |index| u8::try_from(params.get(index).copied().flatten()?).ok();
@@ -98,8 +126,8 @@ impl Style {
                     match code {
                         38 => self.foreground = color,
                         48 => self.background = color,
-                        // Underline color is unsupported, but consume its group.
-                        _ => {}
+                        58 => self.underline_color = color,
+                        _ => unreachable!(),
                     }
                 }
                 _ => {}

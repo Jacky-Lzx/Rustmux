@@ -55,7 +55,13 @@ impl Parameters {
                     end += 1;
                 }
                 let group = &self.values[start..end];
-                if matches!(group[0], Some(38 | 48 | 58)) {
+                if group[0] == Some(4) {
+                    if let [_, Some(value)] = group
+                        && let Some(underline) = crate::style::UnderlineStyle::from_sgr(*value)
+                    {
+                        style.underline = underline;
+                    }
+                } else if matches!(group[0], Some(38 | 48 | 58)) {
                     // Kitty omits the color-space slot; accept an empty or zero
                     // slot too. Keep group boundaries so components never become SGR codes.
                     let normalized;
@@ -69,8 +75,8 @@ impl Parameters {
                     };
                     style = style.sgr(color)?;
                 }
-                // Unsupported subparameter groups (for example 4:3) are ignored
-                // as a unit, without treating their values as separate attributes.
+                // Other unsupported subparameter groups are ignored as a unit,
+                // without treating their values as separate attributes.
             } else {
                 while end < len && !(end + 1 < len && self.subparameter[end + 1]) {
                     end += 1;

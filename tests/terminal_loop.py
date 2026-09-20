@@ -116,7 +116,7 @@ class Session:
                                 return result
                             column = int(pos.group(2)) - 1
                             payload = frame[pos.end():following.start()]
-                            replacement = cells(re.sub(rb"\x1b\[[0-9;]*m", b"", payload))
+                            replacement = cells(re.sub(rb"\x1b\[[0-9;:]*m", b"", payload))
                             previous = cells(rows[row])
                             length = column + len(replacement)
                             previous += [" "] * max(0, length - len(previous))
@@ -273,6 +273,12 @@ try:
     s.send(b"printf '\\033[2J\\033[Habc\\033[1;2H\\033[31mX\\033[0m\\n'\n")
     s.expect(b"\r\naXc\r\n")
     assert b"\x1b[0;38;5;1mX" in s.last_frame, s.last_frame
+    s.send(
+        b"stty -echo; printf '\\n\\033[4:3;58:2::1:2:3mUNDER\\033[0m'; "
+        b"stty echo; printf '\\nSTYLE_''DONE\\n'\n"
+    )
+    s.expect(b"\r\nSTYLE_DONE\r\n")
+    assert b"\x1b[0;4:3;58;2;1;2;3mUNDER" in s.last_frame, s.last_frame
     s.send(b"printf '\\033[?1049h\\033[HALTSCREEN'; read answer; printf '\\033[?1049l'\n")
     s.expect(b"\r\nALTSCREEN\r\n")
     s.send(b"\n")

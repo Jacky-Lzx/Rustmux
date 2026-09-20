@@ -15,7 +15,8 @@ Parameters are applied from left to right; omitted parameters mean reset.
 | 0 or omitted | Reset all attributes and colors |
 | 1 / 2 / 22 | Bold / dim / clear both |
 | 3 / 23 | Italic on / off |
-| 4 / 24 | Underline on / off |
+| 4 / 21 / 24 | Single underline / double underline / underline off |
+| 4:0–4:5 | None, single, double, curly, dotted or dashed underline |
 | 5 / 25 | Blink on / off |
 | 7 / 27 | Inverse on / off |
 | 8 / 28 | Hidden on / off |
@@ -25,6 +26,8 @@ Parameters are applied from left to right; omitted parameters mean reset.
 | 39 / 49 | Default foreground / background |
 | 38;5;n / 48;5;n | Indexed foreground / background, n in 0–255 |
 | 38;2;r;g;b / 48;2;r;g;b | RGB foreground / background, components in 0–255 |
+| 58;5;n / 58;2;r;g;b | Indexed / RGB underline color |
+| 59 | Default underline color |
 
 Default colors remain symbolic and distinct from palette index zero. Indexed
 colors are not converted to RGB, and bold does not implicitly select bright
@@ -43,13 +46,14 @@ retain the full writing style.
 SGR uses the parser's fixed 32-parameter buffer. Excess parameters, integer
 overflow invalidate the whole command. Missing or out-of-range
 extended-color components also leave the current style unchanged, including
-attributes earlier in that command. Unknown simple codes are ignored. Unsupported
-underline-color code 58 consumes a valid extended-color group without applying
-its components as attributes. Double underline and other attributes remain outside this subset.
+attributes earlier in that command. Unknown simple codes are ignored. Underline
+style and color are independent: code 24 disables the line without resetting its
+color, while code 59 resets the color without changing the line style.
 
-Colon groups support 38/48:5:n and 38/48:2:r:g:b, including an optional
-empty or zero color-space slot (38:2::r:g:b). Unsupported subparameter
-groups are ignored as a unit; malformed color groups reject the whole SGR.
+Colon groups support 38/48/58:5:n and 38/48/58:2:r:g:b, including an optional
+empty or zero color-space slot (38:2::r:g:b), plus underline styles 4:0 through
+4:5. Unsupported subparameter groups and unknown underline styles are ignored as
+a unit; malformed color groups reject the whole SGR.
 The fixed buffer counts both parameters and subparameters toward its limit.
 
 `tests/text_style.rs` checks style snapshots, individual/global resets, all 16
