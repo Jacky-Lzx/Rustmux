@@ -1,7 +1,8 @@
 # Application Keypad
 
-ESC = (DECKPAM) requests application numeric-keypad encoding; ESC > (DECKPNM)
-returns to numeric encoding. This mode is separate from application cursor keys.
+ESC = (DECKPAM) and CSI ? 66 h (DECNKM) request application numeric-keypad
+encoding; ESC > (DECKPNM) and CSI ? 66 l return to numeric encoding. This mode
+is separate from application cursor keys.
 For example, keypad 0, 1 and Enter can send ESC O p, ESC O q and ESC O M in
 application mode, instead of digits and carriage return. See
 [XTerm control sequences](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html).
@@ -15,11 +16,12 @@ responsibility. Mode changes follow the existing frame schedule and output queue
 Cursor save/restore, alternate-screen switching and resize preserve keypad mode.
 RIS and DECSTR disable it. Exit cleanup emits ESC >, including after handled
 termination signals. Cleanup resets to numeric mode rather than capturing the
-outer terminal's prior keypad setting. CSI ? 66 h/l aliases are not implemented.
+outer terminal's prior keypad setting. DECRQM reports mode 66 from the shared
+keypad state. The renderer uses ESC = / ESC > for either input spelling.
 
 ## Verification
 
-Run `cargo test --test application_keypad` for parsing at every input split,
+Run `cargo test --test application_keypad` for both spellings at every input split,
 independence from cursor-key and paste modes, reset/state preservation, ignored
 escape sequences and renderer replay. The nested PTY suite models keypad
 0, 1, 9, decimal and Enter in both modes, checks exact child input bytes, and

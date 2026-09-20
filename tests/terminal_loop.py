@@ -576,11 +576,11 @@ def receive(expected):
         if select.select([0], [], [], 0.1)[0]:
             data.extend(os.read(0, len(expected) - len(data)))
     assert data == expected, repr(data)
-os.write(1, b"\x1b=\x1b[2J\x1b[HAPP_PAD")
+os.write(1, b"\x1b[?66h\x1b[2J\x1b[HAPP_PAD")
 receive(b"\x1bOp\x1bOq\x1bOy\x1bOn\x1bOM")
-os.write(1, b"\x1b[!p\x1b[2J\x1b[HNORMAL_PAD")
+os.write(1, b"\x1b[?66l\x1b[2J\x1b[HNORMAL_PAD")
 receive(b"019.\r")
-os.write(1, b"\x1b=\x1b[2J\x1b[HEXIT_PAD")
+os.write(1, b"\x1b[?66h\x1b[2J\x1b[HEXIT_PAD")
 receive(b"exit")
 """
 for terminate in (False, True):

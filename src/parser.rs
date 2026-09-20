@@ -398,6 +398,7 @@ impl Parser {
                     (true, 6) => Some(screen.origin_mode()),
                     (true, 7) => Some(screen.auto_wrap()),
                     (true, 25) => Some(screen.cursor_visible()),
+                    (true, 66) => Some(screen.application_keypad()),
                     (true, 1000 | 1002 | 1003) => Some(screen.mouse_tracking() as usize == mode),
                     (true, 1006) => Some(screen.sgr_mouse()),
                     (true, 1004) => Some(screen.focus_reporting()),
@@ -451,6 +452,9 @@ impl Parser {
                     }
                     if *mode == Some(1) {
                         screen.set_application_cursor_keys(command == b'h');
+                    }
+                    if *mode == Some(66) {
+                        screen.set_application_keypad(command == b'h');
                     }
                     if let Some(mode @ (1000 | 1002 | 1003)) = *mode {
                         let tracking = if command == b'l' {

@@ -24,6 +24,13 @@ fn toggles_do_not_change_display_or_other_input_modes() {
     assert!(!parsed(b"\x1b=\x1b>").application_keypad());
     let combined = parsed(b"\x1b[?1;2004;25h\x1b=");
     assert!(combined.application_keypad() && combined.bracketed_paste());
+
+    let private = parsed(b"\x1b[?1;66;2004h");
+    assert!(private.application_keypad());
+    assert!(private.application_cursor_keys());
+    assert!(private.bracketed_paste());
+    assert!(!parsed(b"\x1b=\x1b[?66l").application_keypad());
+    assert!(parsed(b"\x1b>\x1b[?66h").application_keypad());
 }
 
 #[test]
@@ -44,6 +51,8 @@ fn unrelated_and_cancelled_escape_sequences_are_ignored() {
         b"=".as_slice(),
         b"\x1b =",
         b"\x1b(=",
+        b"\x1b[66h",
+        b"\x1b[?66:1h",
         b"\x1b\x18=",
         b"\x1b]ignored\x1b=\x07",
     ] {

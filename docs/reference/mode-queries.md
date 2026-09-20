@@ -15,6 +15,7 @@ See [XTerm DECRQM/DECRPM](https://invisible-island.net/xterm/ctlseqs/ctlseqs.htm
 | DEC private | 6 | Origin mode |
 | DEC private | 7 | Automatic wrapping |
 | DEC private | 25 | Cursor visibility |
+| DEC private | 66 | Application keypad |
 | DEC private | 1000 / 1002 / 1003 | Mouse tracking |
 | DEC private | 1006 | SGR mouse encoding |
 | DEC private | 1004 | Focus reporting |
@@ -22,8 +23,8 @@ See [XTerm DECRQM/DECRPM](https://invisible-island.net/xterm/ctlseqs/ctlseqs.htm
 | DEC private | 2004 | Bracketed paste |
 | DEC private | 2026 | Synchronized output |
 
-All other numbers report 0, including unsupported DECSET aliases such as 66,
-unsupported mouse extensions and mode 2027. Keypad ESC = / ESC > and cursor
+All other numbers report 0, including unsupported mouse extensions and mode
+2027. Keypad ESC = / ESC > and CSI ? 66 h/l share one queried state. Cursor
 shape commands remain supported separately; that does not imply support for
 other mode-number aliases. Private mode 1048 is also a save/restore action rather
 than retained boolean state, so its query remains unrecognized. ANSI and private

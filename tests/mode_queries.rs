@@ -31,6 +31,7 @@ fn supported_modes_report_both_states_without_mutation() {
         ("?", 6),
         ("?", 7),
         ("?", 25),
+        ("?", 66),
         ("?", 1004),
         ("?", 47),
         ("?", 1047),
@@ -71,7 +72,6 @@ fn unsupported_and_default_modes_report_zero_in_their_own_namespace() {
     for (prefix, mode) in [
         ("", 1),
         ("?", 4),
-        ("?", 66),
         ("?", 1005),
         ("?", 2027),
         ("", 0),
