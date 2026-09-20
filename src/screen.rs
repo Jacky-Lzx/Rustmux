@@ -127,6 +127,7 @@ pub struct Screen {
     sgr_mouse: bool,
     application_cursor_keys: bool,
     application_keypad: bool,
+    backarrow_sends_backspace: bool,
     tab_stops: Vec<bool>,
     scroll_region: (usize, usize),
     inactive_scroll_region: (usize, usize),
@@ -247,6 +248,7 @@ impl Screen {
             sgr_mouse: false,
             application_cursor_keys: false,
             application_keypad: false,
+            backarrow_sends_backspace: false,
             tab_stops,
             scroll_region: (0, rows - 1),
             inactive_scroll_region: (0, rows - 1),
@@ -280,6 +282,7 @@ impl Screen {
         self.insert_mode = false;
         self.application_cursor_keys = false;
         self.application_keypad = false;
+        self.backarrow_sends_backspace = false;
         self.bracketed_paste = false;
         self.focus_reporting = false;
         self.keyboard_main = KeyboardMode::default();
@@ -309,6 +312,7 @@ impl Screen {
         self.insert_mode = false;
         self.application_cursor_keys = false;
         self.application_keypad = false;
+        self.backarrow_sends_backspace = false;
         self.scroll_region = (0, self.rows - 1);
         self.style = Style::default();
         self.wrap_pending = false;
@@ -482,6 +486,7 @@ impl Screen {
         resized.sgr_mouse = self.sgr_mouse;
         resized.application_cursor_keys = self.application_cursor_keys;
         resized.application_keypad = self.application_keypad;
+        resized.backarrow_sends_backspace = self.backarrow_sends_backspace;
         resized.alternate = self.alternate;
         resized.origin_mode = self.origin_mode;
         resized.auto_wrap = self.auto_wrap;
@@ -824,6 +829,15 @@ impl Screen {
     /// DECCKM is global input state, independent of either grid's saved cursor.
     pub fn set_application_cursor_keys(&mut self, enabled: bool) {
         self.application_cursor_keys = enabled;
+    }
+
+    pub fn backarrow_sends_backspace(&self) -> bool {
+        self.backarrow_sends_backspace
+    }
+
+    /// DECBKM is global input state and does not belong to either screen grid.
+    pub fn set_backarrow_sends_backspace(&mut self, enabled: bool) {
+        self.backarrow_sends_backspace = enabled;
     }
 
     pub fn mouse_tracking(&self) -> MouseTracking {

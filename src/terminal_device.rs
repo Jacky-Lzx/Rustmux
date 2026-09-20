@@ -20,6 +20,7 @@ const ENTER: &[u8] = b"\x1b[?1049h";
 // CSI 0 SP q: reset cursor shape (the space is part of DECSCUSR).
 // ESC >: restore numeric keypad encoding (disable application keypad).
 // ?1l: restore normal cursor-key encoding (disable application cursor keys).
+// ?67l: make the Backspace key send DEL rather than BS.
 // CSI = 0 u: disable Kitty progressive keyboard enhancements.
 // ?2004l: disable bracketed paste (the markers around pasted input).
 // ?1000l: disable basic mouse button reporting.
@@ -33,7 +34,7 @@ const ENTER: &[u8] = b"\x1b[?1049h";
 // These are baseline resets, not a snapshot of the previous display modes.
 // Raw mode and other termios attributes are restored separately.
 const LEAVE: &[u8] =
-    b"\x1b[0 q\x1b>\x1b[?1l\x1b[=0u\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1004l\x1b[?1006l\x1b[0m\x1b[?25h\x1b[?1049l";
+    b"\x1b[0 q\x1b>\x1b[?1l\x1b[?67l\x1b[=0u\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1004l\x1b[?1006l\x1b[0m\x1b[?25h\x1b[?1049l";
 
 /// One nonblocking file description for terminal input and output.
 pub(crate) struct TerminalDevice {

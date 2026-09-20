@@ -19,8 +19,9 @@ An alternate screen preserves the previous screen contents. After handling the
 [window shortcuts](windows.md#interactive-controls), input is forwarded to the
 active PTY unchanged, including [bracketed paste](bracketed-paste.md) markers
 when enabled by the child. Frames also synchronize
-[application cursor key mode](application-cursor.md) with the outer terminal. Output follows `PTY -> Parser -> Screen -> render ->
-outer terminal`. The inner PTY's line discipline and shell handle editing and
+[application cursor key mode](application-cursor.md) and
+[backarrow-key mode](backarrow-key.md) with the outer terminal. Output follows
+`PTY -> Parser -> Screen -> render -> outer terminal`. The inner PTY's line discipline and shell handle editing and
 keyboard signals. Frames synchronize the active pane's
 [Kitty keyboard flags](kitty-keyboard.md) with the outer terminal. The parser supports the documented control subset and standard
 eight-column tabs; unknown commands are ignored rather than passed through.

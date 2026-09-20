@@ -2,7 +2,7 @@ mod common;
 use rustmux::{parser::Parser, render::render, screen::Screen};
 
 // Exercise every persisted family of screen state before resetting.
-const DIRTY: &str = "main中e\u{301}\x1b[1;31;44m\x1b[2;3r\x1b[?6;25l\x1b[4h\x1b[3g\x1b[4G\x1bH\x1b)0\x0e\x1b7\x1b[?1049h\x1b[2;4r\x1b[?6h\x1b[?7l\x1b(0\x1b[Hqx\x1b7";
+const DIRTY: &str = "main中e\u{301}\x1b[1;31;44m\x1b[2;3r\x1b[?6;25;67l\x1b[4h\x1b[3g\x1b[4G\x1bH\x1b)0\x0e\x1b7\x1b[?1049h\x1b[2;4r\x1b[?6;67h\x1b[?7l\x1b(0\x1b[Hqx\x1b7";
 
 fn parsed(input: &[u8]) -> Screen {
     let mut expected = Screen::new(4, 16).unwrap();

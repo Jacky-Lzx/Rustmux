@@ -15,6 +15,10 @@ pub fn assert_rendered_screen_eq(actual: &Screen, expected: &Screen) {
         expected.application_cursor_keys()
     );
     assert_eq!(actual.application_keypad(), expected.application_keypad());
+    assert_eq!(
+        actual.backarrow_sends_backspace(),
+        expected.backarrow_sends_backspace()
+    );
     assert_eq!(actual.bracketed_paste(), expected.bracketed_paste());
     assert_eq!(actual.focus_reporting(), expected.focus_reporting());
     assert_eq!(actual.mouse_tracking(), expected.mouse_tracking());

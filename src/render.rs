@@ -37,6 +37,7 @@ struct OutputModes {
     paste: bool,
     cursor_keys: bool,
     keypad: bool,
+    backarrow: bool,
     cursor_shape: CursorShape,
     focus: bool,
     mouse: (MouseTracking, bool),
@@ -49,6 +50,7 @@ impl OutputModes {
             paste: screen.bracketed_paste(),
             cursor_keys: screen.application_cursor_keys(),
             keypad: screen.application_keypad(),
+            backarrow: screen.backarrow_sends_backspace(),
             cursor_shape: screen.cursor_shape(),
             focus: screen.focus_reporting(),
             mouse: (screen.mouse_tracking(), screen.sgr_mouse()),
@@ -124,6 +126,14 @@ fn render_frame(
             b"\x1b="
         } else {
             b"\x1b>"
+        })?;
+    }
+    // Let the outer terminal encode its Backspace key as BS or DEL for the child.
+    if previous_modes.is_none_or(|modes| modes.backarrow != screen.backarrow_sends_backspace()) {
+        output.write_all(if screen.backarrow_sends_backspace() {
+            b"\x1b[?67h"
+        } else {
+            b"\x1b[?67l"
         })?;
     }
     // Set shape while hidden; the frame ending restores requested visibility.

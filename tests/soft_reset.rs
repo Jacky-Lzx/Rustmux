@@ -1,6 +1,5 @@
 use rustmux::{parser::Parser, screen::Screen, style::Style};
-const MODES: &str =
-    "\x1b[2;4r\x1b[?6h\x1b[?7;25l\x1b[4h\x1b[31;44;1m\x1b)0\x0e\x1b[3g\x1b[5G\x1bH\x1b[2;8HX\x1b7";
+const MODES: &str = "\x1b[2;4r\x1b[?6;67h\x1b[?7;25l\x1b[4h\x1b[31;44;1m\x1b)0\x0e\x1b[3g\x1b[5G\x1bH\x1b[2;8HX\x1b7";
 
 fn parsed(input: &[u8]) -> Screen {
     let mut expected = Screen::new(4, 8).unwrap();
@@ -32,6 +31,7 @@ fn resets_modes_but_preserves_cells_cursor_and_custom_tabs() {
     assert!(after.auto_wrap());
     assert!(!after.origin_mode());
     assert!(!after.insert_mode());
+    assert!(!after.backarrow_sends_backspace());
     assert!(!after.wrap_pending());
     assert_eq!(after.style(), Style::default());
     assert_eq!(after.scroll_region(), (0, 3));
@@ -52,6 +52,7 @@ fn alternate_stays_active_and_main_snapshot_survives() {
     // These modes are global rather than part of the mode-1049 snapshot.
     main.set_insert_mode(false);
     main.set_cursor_visible(true);
+    main.set_backarrow_sends_backspace(false);
     let input = format!("{MODES}\x1b[?1049hALT\x1b[!p");
     let mut screen = parsed(input.as_bytes());
     assert!(screen.is_alternate());

@@ -564,6 +564,48 @@ for terminate in (False, True):
     finally:
         s.close()
 
+# Model the outer terminal's Backspace key in both DECBKM states.
+backarrow_probe = r"""
+import os, select, time, tty
+tty.setraw(0)
+def receive(expected):
+    data = bytearray()
+    end = time.monotonic() + 6
+    while len(data) < len(expected):
+        assert time.monotonic() < end, repr(data)
+        if select.select([0], [], [], 0.1)[0]:
+            data.extend(os.read(0, len(expected) - len(data)))
+    assert data == expected, repr(data)
+os.write(1, b"\x1b[?67h\x1b[2J\x1b[HBACKSPACE_BS")
+receive(b"\x08")
+os.write(1, b"\x1b[?67l\x1b[2J\x1b[HBACKSPACE_DEL")
+receive(b"\x7f")
+os.write(1, b"\x1b[?67h\x1b[2J\x1b[HBACKSPACE_EXIT")
+receive(b"exit")
+"""
+for terminate in (False, True):
+    s = Session()
+    try:
+        s.expect(b"RUSTMUX_READY> ")
+        s.send(("exec python3 -c " + shlex.quote(backarrow_probe) + "\n").encode())
+        s.expect(b"\r\nBACKSPACE_BS\r\n")
+        assert b"\x1b[?67h" in s.last_frame
+        if terminate:
+            os.kill(s.app_pid, signal.SIGTERM)
+            s.finish(128 + signal.SIGTERM)
+        else:
+            s.send(b"\x08")
+            s.expect(b"\r\nBACKSPACE_DEL\r\n")
+            assert b"\x1b[?67l" in s.last_frame
+            s.send(b"\x7f")
+            s.expect(b"\r\nBACKSPACE_EXIT\r\n")
+            assert b"\x1b[?67h" in s.last_frame
+            s.send(b"exit")
+            s.finish(0)
+        assert s.output.rfind(b"\x1b[?67l") > s.output.rfind(b"\x1b[?67h")
+    finally:
+        s.close()
+
 # Model keypad 0, 1, 9, decimal and Enter in numeric/application modes.
 keypad_probe = r"""
 import os, select, time, tty

@@ -21,6 +21,10 @@ fn assert_modes(actual: &Screen, expected: &Screen) {
         expected.application_cursor_keys()
     );
     assert_eq!(actual.application_keypad(), expected.application_keypad());
+    assert_eq!(
+        actual.backarrow_sends_backspace(),
+        expected.backarrow_sends_backspace()
+    );
     assert_eq!(actual.cursor_shape(), expected.cursor_shape());
     assert_eq!(actual.focus_reporting(), expected.focus_reporting());
     assert_eq!(actual.mouse_tracking(), expected.mouse_tracking());
@@ -44,6 +48,7 @@ fn unchanged_modes_are_omitted_even_when_text_changes() {
         b"\x1b[?2004",
         b"\x1b[?1l",
         b"\x1b>",
+        b"\x1b[?67l",
         b" q",
     ] {
         assert!(!bytes.windows(mode.len()).any(|w| w == mode));
@@ -66,6 +71,8 @@ fn individual_mode_changes_and_resets_replay_without_redundant_commands() {
         b"\x1b[?1l",
         b"\x1b=",
         b"\x1b>",
+        b"\x1b[?67h",
+        b"\x1b[?67l",
         b"\x1b[5 q",
         b"\x1b[0 q",
         b"\x1b[?1004h",
@@ -89,7 +96,10 @@ fn individual_mode_changes_and_resets_replay_without_redundant_commands() {
 fn every_failed_prefix_invalidates_all_modes() {
     let initial = Screen::new(2, 80).unwrap();
     let mut screen = initial.clone();
-    Parser::new().advance(&mut screen, b"\x1b[?2004;1;1004;1003;1006h\x1b=\x1b[6 qX");
+    Parser::new().advance(
+        &mut screen,
+        b"\x1b[?2004;1;67;1004;1003;1006h\x1b=\x1b[6 qX",
+    );
     let mut renderer = Renderer::default();
     frame(&mut renderer, &initial);
     let changed = frame(&mut renderer, &screen);

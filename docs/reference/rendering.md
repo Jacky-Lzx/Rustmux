@@ -6,8 +6,8 @@ buffer. The renderer borrows the model without changing it and does not flush.
 The CLI uses `Renderer::render` with a bounded frame queue in its event loop.
 This stateful API compares rows with the last successfully queued frame and
 paints changed cell spans; `render` remains the standalone full-frame API.
-Renderer remembers the last queued Kitty keyboard, paste, cursor-key, keypad, cursor-shape,
-focus-reporting and mouse states. It synchronizes each only on the first frame,
+Renderer remembers the last queued Kitty keyboard, paste, cursor-key, keypad,
+backarrow, cursor-shape, focus-reporting and mouse states. It synchronizes each only on the first frame,
 a change or cache invalidation. The standalone `render` function always includes
 that synchronization. See [Focus Reporting](focus-reporting.md). A Renderer is
 specific to one ordered output stream; recreate it if queued output is discarded.
@@ -17,8 +17,9 @@ specific to one ordered output stream; recreate it if queued output is discarded
 A standalone full frame hides the cursor, resets attributes and synchronizes the outer
 terminal's [bracketed paste mode](bracketed-paste.md) and
 [Kitty keyboard flags](kitty-keyboard.md),
-[application cursor keys](application-cursor.md) and
-[application keypad](application-keypad.md), then positions explicitly
+[application cursor keys](application-cursor.md),
+[application keypad](application-keypad.md) and
+[backarrow encoding](backarrow-key.md), then positions explicitly
 at the start of each row. It also emits the [cursor shape](cursor-shape.md)
 while the cursor is hidden. All cells, including spaces, are drawn to remove stale
 content. Wide trailing placeholders are skipped; leaders and their stored

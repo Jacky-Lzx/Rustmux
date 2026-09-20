@@ -323,6 +323,7 @@ impl ShortcutHelp {
         screen.set_bracketed_paste(false);
         screen.set_application_cursor_keys(false);
         screen.set_application_keypad(false);
+        screen.set_backarrow_sends_backspace(false);
         screen.set_focus_reporting(false);
         screen.set_mouse_tracking(MouseTracking::Button);
         screen.set_sgr_mouse(true);

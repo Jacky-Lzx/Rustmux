@@ -10,7 +10,7 @@ moving the current cursor. It is distinct from [RIS](terminal-reset.md).
 | Cursor visibility | Enabled |
 | Cursor shape | Blinking block |
 | Synchronized output | Disabled |
-| Insert, origin, application cursor key and keypad modes | Disabled |
+| Insert, origin, application cursor key, keypad and backarrow modes | Disabled |
 | Automatic wrapping | Enabled (Rustmux default, following XTerm) |
 | Pending wrap | Cleared |
 | Current writing style | Default |

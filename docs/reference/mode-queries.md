@@ -16,6 +16,7 @@ See [XTerm DECRQM/DECRPM](https://invisible-island.net/xterm/ctlseqs/ctlseqs.htm
 | DEC private | 7 | Automatic wrapping |
 | DEC private | 25 | Cursor visibility |
 | DEC private | 66 | Application keypad |
+| DEC private | 67 | Backarrow key sends backspace |
 | DEC private | 1000 / 1002 / 1003 | Mouse tracking |
 | DEC private | 1006 | SGR mouse encoding |
 | DEC private | 1004 | Focus reporting |

@@ -27,6 +27,7 @@
 - [Bracketed Paste](reference/bracketed-paste.md)
 - [Application Cursor Keys](reference/application-cursor.md)
 - [Application Keypad](reference/application-keypad.md)
+- [Backarrow Key](reference/backarrow-key.md)
 - [Cursor Shape](reference/cursor-shape.md)
 - [Focus Reporting](reference/focus-reporting.md)
 - [Kitty Keyboard Protocol](reference/kitty-keyboard.md)
