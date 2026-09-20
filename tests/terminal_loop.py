@@ -895,12 +895,14 @@ try:
     while b"1 shell [!]" not in s.physical_rows[0]:
         s.read()
         assert time.monotonic() < deadline, s.physical_rows[0]
+    assert b"shell [!]" in b"".join(s.physical_rows[1:]), s.last_rows
     s.send(b"\x02h")
     s.expect(b"PANE_BELL")
     deadline = time.monotonic() + 3
     while b"1 shell [!]" in s.physical_rows[0]:
         s.read()
         assert time.monotonic() < deadline, s.physical_rows[0]
+    assert b"shell [!]" not in b"".join(s.physical_rows[1:]), s.last_rows
     s.send(b"\x02l")
     s.send(b"exit\n")
     deadline = time.monotonic() + 3

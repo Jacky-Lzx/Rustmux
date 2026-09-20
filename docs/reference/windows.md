@@ -247,9 +247,9 @@ Labels show a one-based position and name, for example `1 shell` and `2 editor`.
 The active window uses a green Catppuccin Mocha badge; inactive windows use
 foreground-colored badges. If a pane outside the current focus emits BEL, `[!]`
 is appended to that window's name and that pane's border turns Peach (`#fab387`).
-Focusing the pane clears its reminder; selecting a window does not clear reminders
-from its other panes. BEL used to terminate an OSC string does not create an
-activity marker.
+Its pane title also gains `[!]`. Focusing the pane clears its reminder; selecting
+a window does not clear reminders from its other panes. BEL used to terminate an
+OSC string does not create an activity marker.
 The bar uses [Catppuccin Mocha](https://catppuccin.com/palette/) with explicit RGB
 colors. It draws dark badge text (`#11111b`) on Text (`#cdd6f4`) for inactive
 windows and Green (`#a6e3a1`) for the active window, with Powerline separators

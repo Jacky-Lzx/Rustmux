@@ -107,6 +107,7 @@ pub(crate) fn compose_with_titles(
             rows,
             columns,
             title,
+            bells.contains(id),
             pane_border_style(
                 *id == layout.active(),
                 highlighted.is_some_and(|candidate| candidate == *rect),
@@ -230,13 +231,18 @@ fn draw_title(
     rows: u16,
     columns: u16,
     title: &str,
+    bell: bool,
     style: crate::style::Style,
 ) {
     let (row, left, _, right) = frame_bounds(rect, rows, columns);
     if rows < 3 || right <= left + 1 {
         return;
     }
-    let label = crate::chrome::clipped(&format!("─ {title} "), usize::from(right - left - 1));
+    let marker = if bell { " [!]" } else { "" };
+    let label = crate::chrome::clipped(
+        &format!("─ {title}{marker} "),
+        usize::from(right - left - 1),
+    );
     let mut column = usize::from(left + 1);
     for character in label.chars() {
         let width = unicode_width::UnicodeWidthChar::width(character).unwrap_or(0);
@@ -400,5 +406,28 @@ mod tests {
         assert_eq!(view.dimensions(), child.dimensions());
         assert_eq!(view.row(0), child.row(0));
         assert_eq!(view.cursor(), child.cursor());
+    }
+
+    #[test]
+    fn pending_bell_is_shown_in_the_pane_title() {
+        let layout = Layout::new(5, 20).unwrap();
+        let pane = layout.active();
+        let screen = Screen::new(3, 18).unwrap();
+        let view = compose_with_titles(
+            &layout,
+            &[(pane, &screen)],
+            None,
+            &[(pane, "shell")],
+            &[pane],
+        )
+        .unwrap();
+        let top: String = view
+            .row(0)
+            .unwrap()
+            .iter()
+            .filter(|cell| cell.width != 0)
+            .map(|cell| cell.character)
+            .collect();
+        assert!(top.contains("shell [!]"));
     }
 }
