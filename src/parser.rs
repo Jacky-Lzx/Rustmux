@@ -11,6 +11,9 @@ use crate::screen::{CursorShape, EraseMode, MouseTracking, Screen};
 // Conservative VT100-family identity: VT101 with no optional hardware features.
 // This compatibility reply does not claim complete VT101 emulation.
 const PRIMARY_DA: &[u8] = b"\x1b[?1;0c";
+// VT100-family terminal type, firmware version zero and no ROM cartridge.
+// Keep this conservative identity independent of the outer terminal.
+const SECONDARY_DA: &[u8] = b"\x1b[>0;0;0c";
 
 #[derive(Debug, Default, Clone, Copy)]
 enum State {
@@ -387,6 +390,16 @@ impl Parser {
                     }
                     _ => {}
                 }
+            }
+            return;
+        }
+        if command == b'c' && parameters.keyboard_prefix == Some(b'>') {
+            if !parameters.private
+                && parameters.index == 0
+                && parameters.values[0].unwrap_or(0) == 0
+                && !parameters.subparameter.contains(&true)
+            {
+                reply(SECONDARY_DA);
             }
             return;
         }
