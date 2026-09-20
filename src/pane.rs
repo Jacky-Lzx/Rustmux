@@ -9,13 +9,20 @@ use crate::{
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::{collections::VecDeque, ffi::OsStr, io, process::ExitStatus, time::Instant};
+use std::{
+    collections::VecDeque,
+    ffi::OsStr,
+    io,
+    process::ExitStatus,
+    time::{Duration, Instant},
+};
 use tempfile::{Builder, NamedTempFile};
 
 pub(crate) const INPUT_LIMIT: usize = 64 * 1024;
 
 pub(crate) const MAX_CELLS: usize = 64 * 1024;
 pub(crate) const MAX_REPLY_DRAIN_BYTES: usize = 8192;
+const LONG_COMMAND_BELL_AFTER: Duration = Duration::from_secs(5);
 
 /// Owns one nonblocking PTY, incremental parser and screen. Moving a pane between
 /// windows does not restart its process or reset its parsing state. Dropping it
@@ -94,6 +101,7 @@ pub(crate) struct PaneIo {
     pub semantic: SemanticOutput,
     pub prompt_start: Option<(usize, usize)>,
     pub bell_pending: bool,
+    command_bell_pending: bool,
 }
 
 impl Default for PaneIo {
@@ -108,6 +116,7 @@ impl Default for PaneIo {
             semantic: SemanticOutput::default(),
             prompt_start: None,
             bell_pending: false,
+            command_bell_pending: false,
         }
     }
 }
@@ -317,6 +326,20 @@ impl Pane {
             start = end;
         }
         self.process_output_segment(&bytes[start..], reply);
+        if self
+            .io
+            .semantic
+            .take_completed_commands()
+            .into_iter()
+            .any(|duration| duration >= LONG_COMMAND_BELL_AFTER)
+        {
+            self.io.bell_pending = true;
+            self.io.command_bell_pending = true;
+        }
+    }
+
+    pub(crate) fn take_command_bell(&mut self) -> bool {
+        std::mem::take(&mut self.io.command_bell_pending)
     }
 
     fn process_output_segment(&mut self, bytes: &[u8], reply: &mut impl FnMut(&[u8])) {

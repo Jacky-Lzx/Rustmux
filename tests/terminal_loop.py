@@ -715,6 +715,54 @@ try:
 finally:
     s.close()
 
+# OSC 133 command lifetimes are tracked independently per pane. Short commands
+# stay silent; a background command completing after five seconds rings once and
+# reuses the pane/window bell marker.
+short_command_probe = r"""
+import os, time
+os.write(1, b"\x1b]133;C\x1b\\SHORT_START")
+time.sleep(0.1)
+os.write(1, b"\x1b]133;D;0\x1b\\SHORT_DONE")
+"""
+s = Session()
+try:
+    s.expect(b"RUSTMUX_READY> ")
+    s.output.clear()
+    s.frames.clear()
+    s.send(("python3 -c " + shlex.quote(short_command_probe) + "\n").encode())
+    deadline = time.monotonic() + 3
+    while not any(b"SHORT_DONE" in row for row in s.last_rows):
+        s.read()
+        assert time.monotonic() < deadline, s.last_rows
+    s.read(0.2)
+    assert b"\x07" not in s.output, bytes(s.output)
+    os.kill(s.app_pid, signal.SIGTERM)
+    s.finish(128 + signal.SIGTERM)
+finally:
+    s.close()
+
+long_command_probe = r"""
+import os, time
+os.write(1, b"\x1b]133;C\x1b\\LONG_START")
+time.sleep(5.1)
+os.write(1, b"\x1b]133;D;0\x1b\\LONG_DONE")
+"""
+s = Session()
+try:
+    s.expect(b"RUSTMUX_READY> ")
+    s.send(("python3 -c " + shlex.quote(long_command_probe) + "\n").encode())
+    s.expect(b"LONG_START")
+    s.send(b"\x02c")
+    s.expect(b"RUSTMUX_READY> ")
+    deadline = time.monotonic() + 8
+    while b"1 shell [!]" not in s.physical_rows[0] or b"\x07" not in s.output:
+        s.read()
+        assert time.monotonic() < deadline, (s.physical_rows[0], bytes(s.output))
+    os.kill(s.app_pid, signal.SIGTERM)
+    s.finish(128 + signal.SIGTERM)
+finally:
+    s.close()
+
 # Physical mouse rows are translated past the top bar; other event fields are preserved.
 mouse_probe = r"""
 import os, select, time, tty

@@ -3,6 +3,7 @@
 use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 const MAX_OSC_BYTES: usize = 1024;
 const MAX_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
@@ -23,6 +24,8 @@ pub(crate) struct SemanticOutput {
     last: Option<String>,
     current_directory: Option<PathBuf>,
     title: Option<String>,
+    command_started_at: Option<Instant>,
+    completed_commands: Vec<Duration>,
 }
 
 #[derive(Debug, Default)]
@@ -156,6 +159,11 @@ impl SemanticOutput {
         self.semantic_boundaries = false;
         self.overflowed = false;
         self.current = Vec::new();
+        self.command_started_at = None;
+    }
+
+    pub(crate) fn take_completed_commands(&mut self) -> Vec<Duration> {
+        std::mem::take(&mut self.completed_commands)
     }
 
     /// Begin best-effort capture when input submits a command without OSC 133.
@@ -220,6 +228,7 @@ impl SemanticOutput {
                 self.capturing = true;
                 self.semantic_boundaries = true;
                 self.overflowed = false;
+                self.command_started_at = Some(Instant::now());
                 Some(PromptEvent::End)
             }
             Some(b"A") => {
@@ -245,12 +254,17 @@ impl SemanticOutput {
     }
 
     fn complete(&mut self) {
+        let duration = self
+            .command_started_at
+            .take()
+            .map(|started| started.elapsed());
         self.last = if self.overflowed {
             None
         } else {
             Some(String::from_utf8_lossy(&std::mem::take(&mut self.current)).into_owned())
         };
         self.cancel_current();
+        self.completed_commands.extend(duration);
     }
 }
 
@@ -369,6 +383,21 @@ mod tests {
             &mut |offset, event| events.push((offset, event)),
         );
         assert_eq!(events, vec![(13, PromptEvent::End), (29, PromptEvent::End)]);
+    }
+
+    #[test]
+    fn osc133_completion_reports_runtime_once_per_command() {
+        let mut output = SemanticOutput::default();
+        output.advance(b"\x1b]133;C\x07running");
+        output.command_started_at = Some(Instant::now() - Duration::from_secs(6));
+        output.advance(b"\x1b]133;D;0\x07\x1b]133;A\x07");
+        let completed = output.take_completed_commands();
+        assert_eq!(completed.len(), 1);
+        assert!(completed[0] >= Duration::from_secs(6));
+
+        output.command_submitted();
+        output.advance(b"fallback output");
+        assert!(output.take_completed_commands().is_empty());
     }
 
     #[test]

@@ -2145,7 +2145,11 @@ fn forward(
                 .expect("polled pane exists");
             let bell_was_pending = pane.io().bell_pending;
             service_pane(pane, inner_events, inner)?;
+            let command_bell = pane.take_command_bell();
             bar_dirty |= !bell_was_pending && pane.io().bell_pending;
+            if command_bell && connection == ConnectionState::Attached {
+                to_terminal.push_back(7);
+            }
         }
     }
 }

@@ -251,6 +251,13 @@ is appended to that window's name and that pane's border turns Peach (`#fab387`)
 Its pane title also gains `[!]`. Focusing the pane clears its reminder; selecting
 a window does not clear reminders from its other panes. BEL used to terminate an
 OSC string does not create an activity marker.
+
+Each pane also tracks command lifetime from shell-integration `OSC 133;C`
+(command start) through `OSC 133;D` or the following `OSC 133;A` (completion).
+Completing a command after at least five seconds rings the outer terminal once
+and enters the same pane-specific bell state. Short commands and the heuristic
+Enter-based output capture do not ring. A detached session retains the visual
+bell state but has no terminal on which to make the completion bell audible.
 The bar uses [Catppuccin Mocha](https://catppuccin.com/palette/) with explicit RGB
 colors. It draws dark badge text (`#11111b`) on Text (`#cdd6f4`) for inactive
 windows and Green (`#a6e3a1`) for the active window, with Powerline separators
