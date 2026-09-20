@@ -9,6 +9,8 @@ The parser supports DEC cursor controls described in the
   Rustmux treats them as aliases of `ESC 7` / `ESC 8`, sharing the same save slot
   and saved state, rather than a separate position-only slot. The forms can be
   mixed, and the last save replaces the slot regardless of syntax.
+- `CSI ? 1048 h` saves and `CSI ? 1048 l` restores through that same slot, as
+  specified by XTerm. It can likewise be mixed with either syntax above.
 
 Only parameterless CSI s/u are accepted. Explicit numeric parameters (including
 zero), private prefixes and intermediates are not cursor restores. This keeps
@@ -34,12 +36,12 @@ resize clamps both explicit slots and the 1049 snapshot, clearing pending wrap;
 a same-size resize leaves them unchanged.
 
 Cursor shape/blinking preference and global input modes are not in the saved
-state. [Cursor shapes](cursor-shape.md) are controlled separately. Standalone
-mode 1048 remains unsupported.
+state. [Cursor shapes](cursor-shape.md) are controlled separately.
 
-`tests/cursor.rs` verifies position/style/wrap, slot replacement, alternate-screen
+`tests/cursor.rs` and `tests/ansi_cursor.rs` verify position/style/wrap, slot replacement, alternate-screen
 isolation, resize and rendered visibility, with every two-chunk split. The real
-PTY test also drives cursor hide/show through the CLI. Run `cargo test --test cursor`.
+PTY test also drives cursor hide/show and mode 1048 save/restore through the CLI.
+Run `cargo test --test cursor` and `cargo test --test ansi_cursor`.
 
 [Origin Mode](origin-mode.md) is also included in saved cursor state. Restoring
 a saved row clamps it against the current margins when that mode is enabled.

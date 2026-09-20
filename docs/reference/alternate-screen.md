@@ -20,12 +20,12 @@ and cannot fail allocation; creating a Screen now reserves two grids.
 The parser accepts a leading private-mode `?` marker and processes 1049 in
 semicolon-separated h/l mode lists. Unknown modes in those lists are ignored.
 Other private commands remain unsupported; malformed prefixes, parameter overflow
-and intermediates invalidate the command as before. Modes 47, 1047 and standalone
-1048 remains unsupported. [Cursor State](cursor.md) describes explicit ESC 7/8
-save slots and cursor visibility.
+and intermediates invalidate the command as before. Modes 47 and 1047 remain
+unsupported. Standalone mode 1048 shares each screen's explicit cursor-save slot;
+[Cursor State](cursor.md) describes its interaction with ESC 7/8 and CSI s/u.
 [Screen Model Resize](screen-resize.md) adjusts both grids and the saved cursor.
-This implements the currently modeled subset of saved cursor state, not charset
-or origin modes that the model does not yet support.
+Saved cursor state includes coordinates, writing style, pending wrap, origin and
+automatic-wrap modes, and G0/G1 character-set state.
 
 `tests/alternate_screen.rs` checks clearing, style/cursor preservation, restoration
 after scrolling/erasing, Unicode cell isolation, repeated toggles, unsupported

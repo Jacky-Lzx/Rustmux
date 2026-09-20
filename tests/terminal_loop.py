@@ -449,6 +449,9 @@ os.write(1, b"\x1b[?6l\x1b[2;3H\x1b[s\x1b[7;8H\x1b[u\x1b[6n")
 receive(b"\x1b[2;3R")
 os.write(1, b"\x1b[3;4H\x1b7\x1b[H\x1b[u\x1b[6n")
 receive(b"\x1b[3;4R")
+# DEC private mode 1048 shares the same save slot and restores through DECRST.
+os.write(1, b"\x1b[4;5H\x1b[?1048h\x1b[8;9H\x1b[?1048l\x1b[6n")
+receive(b"\x1b[4;5R")
 os.write(1, b"\x1b[?6l\x1b[r\x1b[2J\x1b[HREPLIES_OK")
 """
 s = Session()

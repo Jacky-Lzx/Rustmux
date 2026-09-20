@@ -28,6 +28,29 @@ fn ansi_and_dec_forms_share_full_state_and_the_same_save_slot() {
     let actual = parsed(b"\x1b[2;3H\x1b[s\x1b[3;4H\x1b7\x1b[H\x1b[u");
     assert_eq!(actual.cursor(), (2, 3));
 }
+
+#[test]
+fn private_mode_1048_shares_the_cursor_slot_and_is_per_screen() {
+    let setup = b"\x1b[2;4r\x1b[?6h\x1b[31m\x1b(0abcdefgh";
+    let changed = b"\x1b[?6l\x1b[?7l\x1b[0m\x1b(B\x1b[H";
+    for (save, restore) in [
+        (b"\x1b[?1048h".as_slice(), b"\x1b8".as_slice()),
+        (b"\x1b7".as_slice(), b"\x1b[?1048l".as_slice()),
+        (b"\x1b[?1048h".as_slice(), b"\x1b[u".as_slice()),
+    ] {
+        let actual = parsed(&[setup.as_slice(), save, changed, restore].concat());
+        let expected = parsed(&[setup.as_slice(), b"\x1b7", changed, b"\x1b8"].concat());
+        assert_eq!(actual, expected);
+        assert!(actual.origin_mode() && actual.auto_wrap() && actual.wrap_pending());
+    }
+
+    let screen = parsed(
+        b"\x1b[2;3H\x1b[?1048h\x1b[?1049h\x1b[3;4H\x1b[?1048h\x1b[H\x1b[?1048l\x1b[?1049l\x1b[H\x1b[?1048l",
+    );
+    assert_eq!(screen.cursor(), (1, 2));
+    assert_eq!(parsed(b"abc\x1b[?1048l"), parsed(b"abc"));
+}
+
 #[test]
 fn repeated_restore_and_alternate_slots_work_without_reverting_global_modes() {
     let screen = parsed(b"\x1b[2;3H\x1b[s\x1b[?1049h\x1b[3;4H\x1b[s\x1b[H\x1b[u\x1b[u\x1b[?25l\x1b[?1049l\x1b[H\x1b[u");
@@ -60,6 +83,9 @@ fn parameterized_private_and_intermediate_forms_cannot_touch_the_save_slot() {
         b"\x1b[<u",
         b"\x1b[ u",
         b"\x1b]x\x1b[s\x07",
+        b"\x1b[1048h",
+        b"\x1b[?1048:1h",
+        b"\x1b[?1048 h",
     ] {
         let screen = parsed(&[b"\x1b[2;3H\x1b[s\x1b[3;4H".as_slice(), sequence].concat());
         assert_eq!(screen.cursor(), (2, 3));

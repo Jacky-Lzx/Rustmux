@@ -486,6 +486,13 @@ impl Parser {
                             screen.leave_alternate();
                         }
                     }
+                    if *mode == Some(1048) {
+                        if command == b'h' {
+                            screen.save_cursor();
+                        } else {
+                            screen.restore_cursor();
+                        }
+                    }
                 }
             }
             return;

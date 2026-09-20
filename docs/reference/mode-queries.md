@@ -25,8 +25,9 @@ See [XTerm DECRQM/DECRPM](https://invisible-island.net/xterm/ctlseqs/ctlseqs.htm
 All other numbers report 0, including unsupported DECSET aliases such as 66,
 unsupported mouse extensions and mode 2027. Keypad ESC = / ESC > and cursor
 shape commands remain supported separately; that does not imply support for
-other mode-number aliases. ANSI and private numbers are distinct namespaces.
-An omitted Ps is treated as 0, which is unrecognized.
+other mode-number aliases. Private mode 1048 is also a save/restore action rather
+than retained boolean state, so its query remains unrecognized. ANSI and private
+numbers are distinct namespaces. An omitted Ps is treated as 0, which is unrecognized.
 
 ## Parsing and delivery
 

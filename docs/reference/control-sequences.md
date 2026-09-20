@@ -32,6 +32,7 @@ CSI below means the two bytes ESC followed by `[`. The command subset follows
 | CSI 4 h / l | Enable / disable [insert mode](insert-mode.md) |
 | CSI ? 7 h / l | Enable / disable [automatic wrap](auto-wrap.md) |
 | CSI ? 6 h / l | Enable / disable [origin mode](origin-mode.md) and home |
+| CSI ? 1048 h / l | [Save / restore cursor state](cursor.md) through the shared DECSC slot |
 | CSI n G / ` / d | Set column / column / origin-relative row |
 | CSI n E / F | Next / previous line, moving to column zero |
 | CSI n @ / P / X | Insert / delete / erase columns; see [Character Editing](character-editing.md) |
