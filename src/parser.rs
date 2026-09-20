@@ -450,6 +450,16 @@ impl Parser {
             return;
         }
         if parameters.private {
+            if command == b'n'
+                && parameters.index == 0
+                && parameters.values[0] == Some(6)
+                && !parameters.subparameter.contains(&true)
+            {
+                let response = cursor_position_report(screen, true);
+                debug_assert!(response.len() <= MAX_REPLY_BYTES);
+                reply(response.as_bytes());
+                return;
+            }
             if !parameters.subparameter.contains(&true) && matches!(command, b'h' | b'l') {
                 for mode in &parameters.values[..=parameters.index] {
                     if *mode == Some(6) {
@@ -570,13 +580,7 @@ impl Parser {
             b'n' => match first {
                 5 => reply(b"\x1b[0n"),
                 6 => {
-                    let (row, column) = screen.cursor();
-                    let row = if screen.origin_mode() {
-                        row - screen.scroll_region().0
-                    } else {
-                        row
-                    };
-                    let response = format!("\x1b[{};{}R", row + 1, column + 1);
+                    let response = cursor_position_report(screen, false);
                     debug_assert!(response.len() <= MAX_REPLY_BYTES);
                     reply(response.as_bytes());
                 }
@@ -626,6 +630,17 @@ impl Parser {
             _ => {}
         }
     }
+}
+
+fn cursor_position_report(screen: &Screen, private: bool) -> String {
+    let (row, column) = screen.cursor();
+    let row = if screen.origin_mode() {
+        row - screen.scroll_region().0
+    } else {
+        row
+    };
+    let prefix = if private { "?" } else { "" };
+    format!("\x1b[{prefix}{};{}R", row + 1, column + 1)
 }
 
 #[cfg(test)]

@@ -8,6 +8,7 @@ from its screen model.
 | --- | --- |
 | CSI 5 n | CSI 0 n (ready) |
 | CSI 6 n | CSI row ; column R (cursor position) |
+| CSI ? 6 n | CSI ? row ; column R (DECXCPR) |
 
 Cursor coordinates are one-based. With DECOM enabled, the reported row is
 relative to the scrolling region's top. Otherwise it is relative to the screen.
@@ -15,9 +16,10 @@ Replies use the active grid and the state at the instant the query completes,
 including a query split across reads. A cursor at a filled right edge reports
 the last column without triggering pending wrap.
 
-Queries do not change cells, cursor, modes or style. Unsupported DSR values,
-private variants, extra parameters, colon groups and numeric overflow produce
-no reply. Query-like bytes inside OSC/DCS payloads are not interpreted.
+Queries do not change cells, cursor, modes or style. Private DSR supports only
+DECXCPR (`CSI ? 6 n`); other values, omitted or extra parameters, colon groups
+and numeric overflow produce no reply. Query-like bytes inside OSC/DCS payloads
+are not interpreted.
 
 ## Parser API and CLI delivery
 
@@ -44,8 +46,9 @@ malformed queries, incomplete-stream handling and the reply-size bound.
 The real CLI PTY test checks both queries and 20,000 status requests, producing
 more reply bytes than fit in the queue while the child reads concurrently.
 
-Secondary/tertiary device attributes, private DSR, OSC foreground/background color queries,
-and general terminal capability queries remain unsupported.
+Secondary/tertiary device attributes, other private DSR values, OSC
+foreground/background color queries, and general terminal capability queries
+remain unsupported.
 [Mode queries](mode-queries.md) support the explicitly listed ANSI/private modes. In particular, this step
 does not resolve applications waiting for an OSC background-color reply.
 

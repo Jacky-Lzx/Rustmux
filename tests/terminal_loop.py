@@ -424,10 +424,10 @@ def receive(expected):
         if select.select([0], [], [], 0.1)[0]:
             data.extend(os.read(0, len(expected) - len(data)))
     assert data == expected, repr(data[:80])
-os.write(1, b"\x1b[2;3H\x1b[5n\x1b[6n")
-receive(b"\x1b[0n\x1b[2;3R")
-os.write(1, b"\x1b[3;10r\x1b[?6h\x1b[2;4H\x1b[6n")
-receive(b"\x1b[2;4R")
+os.write(1, b"\x1b[2;3H\x1b[5n\x1b[6n\x1b[?6n")
+receive(b"\x1b[0n\x1b[2;3R\x1b[?2;3R")
+os.write(1, b"\x1b[3;10r\x1b[?6h\x1b[2;4H\x1b[6n\x1b[?6n")
+receive(b"\x1b[2;4R\x1b[?2;4R")
 def flood():
     data = b"\x1b[5n" * 20000
     while data:
