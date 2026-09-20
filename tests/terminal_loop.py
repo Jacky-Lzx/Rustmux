@@ -676,6 +676,45 @@ for terminate in (False, True):
     finally:
         s.close()
 
+# Local pane focus changes synthesize reports for each pane that requested them.
+pane_focus_probe = r"""
+import os, select, sys, time, tty
+label = sys.argv[1].encode()
+tty.setraw(0)
+def receive(expected):
+    data = bytearray()
+    end = time.monotonic() + 6
+    while len(data) < len(expected):
+        assert time.monotonic() < end, (label, repr(data))
+        if select.select([0], [], [], 0.1)[0]:
+            data.extend(os.read(0, len(expected) - len(data)))
+    assert data == expected, (label, repr(data))
+os.write(1, b"\x1b[?1004h\x1b[2J\x1b[H" + label + b"_READY")
+receive(b"\x1b[O")
+os.write(1, b"\x1b[2J\x1b[H" + label + b"_OUT")
+receive(b"\x1b[I")
+os.write(1, b"\x1b[2J\x1b[H" + label + b"_IN")
+"""
+s = Session()
+try:
+    s.expect(b"RUSTMUX_READY> ")
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py") as source:
+        source.write(pane_focus_probe)
+        source.flush()
+        s.send(("python3 " + shlex.quote(source.name) + " LEFT\n").encode())
+        s.expect(b"LEFT_READY")
+        s.send(b"\x02%")
+        s.expect(b"LEFT_OUT")
+        s.send(("python3 " + shlex.quote(source.name) + " RIGHT\n").encode())
+        s.expect(b"RIGHT_READY")
+        s.send(b"\x02h")
+        s.expect(b"LEFT_IN")
+        assert any(b"RIGHT_OUT" in row for row in s.last_rows), s.last_rows
+    os.kill(s.app_pid, signal.SIGTERM)
+    s.finish(128 + signal.SIGTERM)
+finally:
+    s.close()
+
 # Physical mouse rows are translated past the top bar; other event fields are preserved.
 mouse_probe = r"""
 import os, select, time, tty

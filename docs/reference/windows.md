@@ -177,7 +177,8 @@ their grids. SIGWINCH resizes all windows. Switching invalidates the physical
 renderer and redraws the selected screen with its modes after any queued frame
 finishes; queued frames are never discarded midway. Selecting a window forces
 one redraw even if that child's synchronized-output hold is active; later updates
-still obey the hold. Window switching does not synthesize focus-in/out events.
+still obey the hold. Window and pane focus changes synthesize focus-out/focus-in
+for children that enabled focus reporting.
 
 Raw terminal input has a shared 64 KiB staging queue; each child also retains its
 own 64 KiB input/reply queue. Input is decoded in order, so data before a shortcut

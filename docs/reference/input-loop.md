@@ -113,8 +113,8 @@ split layout or persistent session support.
 
 [Terminal Status Replies](status-replies.md) describes DSR responses and how
 reply capacity participates in PTY read backpressure.
-[Focus Reporting](focus-reporting.md) describes single-pane focus events and
-mode synchronization on changes.
+[Focus Reporting](focus-reporting.md) describes physical and multi-pane focus
+events and mode synchronization on changes.
 
 [Mouse Reporting](mouse-reporting.md) describes supported single-pane mouse modes.
 

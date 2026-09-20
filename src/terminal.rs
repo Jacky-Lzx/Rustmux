@@ -957,6 +957,44 @@ fn active_directory(windows: &Windows<PaneSet<Pane>>) -> Option<PathBuf> {
         .inherited_directory()
 }
 
+fn active_focus(windows: &Windows<PaneSet<Pane>>) -> (WindowId, PaneId) {
+    let window = windows.active().expect("at least one window");
+    (window.id(), window.content().layout().active())
+}
+
+fn queue_focus_event(pane: &mut Pane, focused: bool) {
+    if !pane.screen().focus_reporting() {
+        return;
+    }
+    let state = pane.parts_mut().3;
+    let sequence = if focused { b"\x1b[I" } else { b"\x1b[O" };
+    if state.accepts_input() && state.to_shell.len() <= LIMIT - sequence.len() {
+        state.to_shell.extend(sequence);
+    }
+}
+
+fn queue_focus_transition(
+    windows: &mut Windows<PaneSet<Pane>>,
+    old: (WindowId, PaneId),
+    new: (WindowId, PaneId),
+) {
+    if old == new {
+        return;
+    }
+    if let Some(pane) = windows
+        .get_mut(old.0)
+        .and_then(|window| window.content_mut().get_mut(old.1))
+    {
+        queue_focus_event(pane, false);
+    }
+    if let Some(pane) = windows
+        .get_mut(new.0)
+        .and_then(|window| window.content_mut().get_mut(new.1))
+    {
+        queue_focus_event(pane, true);
+    }
+}
+
 fn submits_command(byte: u8, bracketed_paste: bool) -> bool {
     matches!(byte, b'\r' | b'\n') && !bracketed_paste
 }
@@ -1105,6 +1143,7 @@ fn forward(
             let (id, pane_id) = close_requested.take().unwrap();
             // Finish the already encoded physical frame before changing ownership.
             if windows.get(id).is_some() {
+                let old = active_focus(windows);
                 // A pane request names its stable identity, never a position that
                 // could refer to another child after layout changes.
                 if let Some(pane_id) = pane_id
@@ -1155,6 +1194,7 @@ fn forward(
                     drop(windows.close(id)?);
                 }
                 bar_dirty = true;
+                queue_focus_transition(windows, old, active_focus(windows));
                 input.clear();
                 keys = WindowInput::default();
                 prompt = None;
@@ -1455,6 +1495,7 @@ fn forward(
             }
         }
         if !finished.is_empty() {
+            let old = active_focus(windows);
             bar_dirty = true;
             for (id, pane_id, code) in finished {
                 let was_active = windows.active().unwrap().id() == id;
@@ -1486,6 +1527,7 @@ fn forward(
                     force_redraw = true;
                 }
             }
+            queue_focus_transition(windows, old, active_focus(windows));
             continue;
         }
         // A lone Escape or incomplete report must not remain held indefinitely.
@@ -1678,10 +1720,7 @@ fn forward(
                 }
             }
             for action in actions.drain(..) {
-                let old = (
-                    windows.active().unwrap().id(),
-                    windows.active().unwrap().content().layout().active(),
-                );
+                let old = active_focus(windows);
                 match action {
                     WindowKey::Byte(byte) => {
                         let pane = windows.active_mut().unwrap().content_mut().active_mut();
@@ -1964,11 +2003,9 @@ fn forward(
                         }
                     }
                 }
-                if (
-                    windows.active().unwrap().id(),
-                    windows.active().unwrap().content().layout().active(),
-                ) != old
-                {
+                let new = active_focus(windows);
+                if new != old {
+                    queue_focus_transition(windows, old, new);
                     windows
                         .active_mut()
                         .unwrap()
@@ -2193,6 +2230,109 @@ mod tests {
             resize: Arc::new(AtomicBool::new(false)),
             ids: Vec::new(),
         }
+    }
+
+    #[test]
+    fn focus_transition_queues_events_only_for_reporting_panes() {
+        let mut windows = Windows::default();
+        let window = windows
+            .create(
+                "first".into(),
+                spawn_window(OsStr::new("/bin/sh"), None, 24, 80).unwrap(),
+            )
+            .unwrap();
+        let first = windows.active().unwrap().content().layout().active();
+        windows
+            .active_mut()
+            .unwrap()
+            .content_mut()
+            .active_mut()
+            .parts_mut()
+            .2
+            .set_focus_reporting(true);
+
+        let second = windows
+            .active_mut()
+            .unwrap()
+            .content_mut()
+            .split_with(SplitAxis::Columns, |_, rect| {
+                Pane::spawn(OsStr::new("/bin/sh"), rect.rows, rect.columns)
+            })
+            .unwrap();
+        windows
+            .active_mut()
+            .unwrap()
+            .content_mut()
+            .active_mut()
+            .parts_mut()
+            .2
+            .set_focus_reporting(true);
+
+        queue_focus_transition(&mut windows, (window, first), (window, second));
+        assert_eq!(
+            windows
+                .get(window)
+                .unwrap()
+                .content()
+                .get(first)
+                .unwrap()
+                .io()
+                .to_shell,
+            b"\x1b[O"
+        );
+        assert_eq!(
+            windows
+                .get(window)
+                .unwrap()
+                .content()
+                .get(second)
+                .unwrap()
+                .io()
+                .to_shell,
+            b"\x1b[I"
+        );
+
+        windows
+            .get_mut(window)
+            .unwrap()
+            .content_mut()
+            .get_mut(first)
+            .unwrap()
+            .parts_mut()
+            .3
+            .to_shell
+            .clear();
+        let second_pane = windows
+            .get_mut(window)
+            .unwrap()
+            .content_mut()
+            .get_mut(second)
+            .unwrap();
+        second_pane.parts_mut().3.to_shell.clear();
+        second_pane.parts_mut().2.set_focus_reporting(false);
+        queue_focus_transition(&mut windows, (window, second), (window, first));
+        assert!(
+            windows
+                .get(window)
+                .unwrap()
+                .content()
+                .get(second)
+                .unwrap()
+                .io()
+                .to_shell
+                .is_empty()
+        );
+        assert_eq!(
+            windows
+                .get(window)
+                .unwrap()
+                .content()
+                .get(first)
+                .unwrap()
+                .io()
+                .to_shell,
+            b"\x1b[I"
+        );
     }
 
     #[test]
