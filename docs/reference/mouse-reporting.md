@@ -8,12 +8,23 @@ The single pane can request these DEC private modes with CSI ? Ps h/l:
 | 1002 | Button events plus motion while a button is held |
 | 1003 | Button events plus all pointer motion |
 | 1006 | SGR encoding, independently of the tracking mode |
+| 1007 | Translate vertical wheel events to cursor keys on the alternate screen |
 
 Tracking modes are mutually exclusive: the last enabled mode wins. Resetting any
 supported tracking mode turns tracking off. Resetting 1006 changes only encoding.
 All start disabled. The model preserves them across cursor saves, grid switches,
 resize and soft reset; RIS clears them. DECRQM reports the selected tracking
-mode and SGR encoding state. Focus reporting remains independent.
+mode and SGR encoding state. Focus reporting remains independent. Alternate
+scroll is also global, survives cursor saves, grid switches, resize and soft
+reset, and is cleared by RIS.
+
+Mode 1007 takes effect only while the alternate screen is active and tracking
+1000/1002/1003 is off. Each vertical wheel report becomes one Up or Down key;
+application cursor mode selects SS3 (`ESC O A/B`) and ordinary mode selects CSI
+(`ESC [ A/B`). Modifiers do not change the direction. Horizontal wheel reports,
+events outside the active pane, and wheel events over Rustmux chrome are consumed.
+If the child enables mouse tracking, its mouse report takes priority and is
+forwarded normally instead of becoming a cursor key.
 
 ## Event path
 
@@ -37,16 +48,17 @@ and final m for release; coordinates are one-based. Without SGR, the legacy
 CSI M format and its coordinate limitations apply. See
 [XTerm mouse tracking](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h2-Mouse-Tracking).
 
-This does not add alternate scrolling, X10 mode 9, highlight tracking,
-UTF-8/urxvt encoding or pixel coordinates. Arbitrary
+This does not add X10 mode 9, highlight tracking, UTF-8/urxvt encoding or pixel
+coordinates. Arbitrary
 pre-existing outer modes are not captured. Already queued input is not discarded
 when an application disables reporting.
 
 ## Verification
 
 Run `cargo test --test mouse_reporting`. Tests cover exclusive transitions,
-independent encoding, split parsing, malformed commands, resets, resize, mode
-queries, renderer replay and unchanged-frame suppression. The nested PTY suite
+independent encoding, alternate-scroll precedence and cursor encoding, split
+parsing, malformed commands, resets, resize, mode queries, renderer replay and
+unchanged-frame suppression. The nested PTY suite
 injects SGR press/release, drag, motion and wheel events, then legacy button
 reports; the child checks exact bytes. Normal-exit and SIGTERM cleanup are also
 checked. Physical mouse handling by a GUI terminal is not automated by this test.

@@ -34,6 +34,7 @@ fn supported_modes_report_both_states_without_mutation() {
         ("?", 66),
         ("?", 67),
         ("?", 1004),
+        ("?", 1007),
         ("?", 47),
         ("?", 1047),
         ("?", 1049),

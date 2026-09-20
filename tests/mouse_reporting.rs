@@ -31,6 +31,8 @@ fn tracking_is_exclusive_and_encoding_is_independent() {
         screen.set_sgr_mouse(false);
         assert_eq!(screen, parsed(b"\x1b[?1004;2004h\x1b[31mabcdefgh"));
     }
+    let screen = parsed(b"\x1b[?1007h");
+    assert!(screen.alternate_scroll());
     let screen = parsed(b"\x1b[?1000;1002;1003;1006h\x1b[?1006l");
     assert_eq!(screen.mouse_tracking(), MouseTracking::Any);
     assert!(!screen.sgr_mouse());
@@ -40,13 +42,15 @@ fn tracking_is_exclusive_and_encoding_is_independent() {
 }
 #[test]
 fn global_state_survives_saves_resize_and_soft_reset_but_not_ris() {
-    let mut screen = parsed(b"\x1b7\x1b[?1049h\x1b[?1002;1006h\x1b[?1049l\x1b8\x1b[!p");
+    let mut screen = parsed(b"\x1b7\x1b[?1049h\x1b[?1002;1006;1007h\x1b[?1049l\x1b8\x1b[!p");
     screen.resize(4, 10).unwrap();
     assert_eq!(screen.mouse_tracking(), MouseTracking::Drag);
     assert!(screen.sgr_mouse());
+    assert!(screen.alternate_scroll());
     screen.reset();
     assert_eq!(screen.mouse_tracking(), MouseTracking::Off);
     assert!(!screen.sgr_mouse());
+    assert!(!screen.alternate_scroll());
 }
 #[test]
 fn malformed_modes_are_ignored_and_queries_match_exclusive_state() {
@@ -54,20 +58,21 @@ fn malformed_modes_are_ignored_and_queries_match_exclusive_state() {
         b"\x1b[1000h".as_slice(),
         b"\x1b[?1003:1h",
         b"\x1b[?1006 h",
+        b"\x1b[?1007:1h",
         b"\x1b]x\x1b[?1000h\x07",
     ] {
         assert_eq!(parsed(input), Screen::new(3, 8).unwrap());
     }
-    let mut screen = parsed(b"\x1b[?1000;1002;1006h");
+    let mut screen = parsed(b"\x1b[?1000;1002;1006;1007h");
     let mut bytes = Vec::new();
     Parser::new().advance_with_replies(
         &mut screen,
-        b"\x1b[?1000$p\x1b[?1002$p\x1b[?1003$p\x1b[?1006$p",
+        b"\x1b[?1000$p\x1b[?1002$p\x1b[?1003$p\x1b[?1006$p\x1b[?1007$p",
         &mut |r| bytes.extend_from_slice(r),
     );
     assert_eq!(
         bytes,
-        b"\x1b[?1000;2$y\x1b[?1002;1$y\x1b[?1003;2$y\x1b[?1006;1$y"
+        b"\x1b[?1000;2$y\x1b[?1002;1$y\x1b[?1003;2$y\x1b[?1006;1$y\x1b[?1007;1$y"
     );
 }
 #[test]

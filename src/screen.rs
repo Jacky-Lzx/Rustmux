@@ -125,6 +125,7 @@ pub struct Screen {
     synchronized_output: bool,
     mouse_tracking: MouseTracking,
     sgr_mouse: bool,
+    alternate_scroll: bool,
     application_cursor_keys: bool,
     application_keypad: bool,
     backarrow_sends_backspace: bool,
@@ -254,6 +255,7 @@ impl Screen {
             synchronized_output: false,
             mouse_tracking: MouseTracking::Off,
             sgr_mouse: false,
+            alternate_scroll: false,
             application_cursor_keys: false,
             application_keypad: false,
             backarrow_sends_backspace: false,
@@ -297,6 +299,7 @@ impl Screen {
         self.keyboard_alternate = KeyboardMode::default();
         self.mouse_tracking = MouseTracking::Off;
         self.sgr_mouse = false;
+        self.alternate_scroll = false;
         for (column, stop) in self.tab_stops.iter_mut().enumerate() {
             *stop = column != 0 && column % DEFAULT_TAB_WIDTH == 0;
         }
@@ -492,6 +495,7 @@ impl Screen {
         resized.synchronized_output = self.synchronized_output;
         resized.mouse_tracking = self.mouse_tracking;
         resized.sgr_mouse = self.sgr_mouse;
+        resized.alternate_scroll = self.alternate_scroll;
         resized.application_cursor_keys = self.application_cursor_keys;
         resized.application_keypad = self.application_keypad;
         resized.backarrow_sends_backspace = self.backarrow_sends_backspace;
@@ -863,6 +867,16 @@ impl Screen {
     /// Encoding alone does not enable mouse event reporting.
     pub fn set_sgr_mouse(&mut self, enabled: bool) {
         self.sgr_mouse = enabled;
+    }
+
+    pub fn alternate_scroll(&self) -> bool {
+        self.alternate_scroll
+    }
+
+    /// DEC private mode 1007 is global and takes effect only on the alternate
+    /// screen while ordinary mouse tracking is disabled.
+    pub fn set_alternate_scroll(&mut self, enabled: bool) {
+        self.alternate_scroll = enabled;
     }
 
     pub fn synchronized_output(&self) -> bool {

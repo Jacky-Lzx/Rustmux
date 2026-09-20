@@ -408,6 +408,7 @@ impl Parser {
                     (true, 67) => Some(screen.backarrow_sends_backspace()),
                     (true, 1000 | 1002 | 1003) => Some(screen.mouse_tracking() as usize == mode),
                     (true, 1006) => Some(screen.sgr_mouse()),
+                    (true, 1007) => Some(screen.alternate_scroll()),
                     (true, 1004) => Some(screen.focus_reporting()),
                     (true, 47 | 1047 | 1049) => Some(screen.is_alternate()),
                     (true, 2026) => Some(screen.synchronized_output()),
@@ -480,6 +481,9 @@ impl Parser {
                     }
                     if *mode == Some(1006) {
                         screen.set_sgr_mouse(command == b'h');
+                    }
+                    if *mode == Some(1007) {
+                        screen.set_alternate_scroll(command == b'h');
                     }
                     if *mode == Some(1004) {
                         screen.set_focus_reporting(command == b'h');

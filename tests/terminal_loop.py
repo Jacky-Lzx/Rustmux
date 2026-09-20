@@ -955,6 +955,43 @@ for terminate in (False, True):
     finally:
         s.close()
 
+# Alternate scroll converts vertical wheel reports to cursor keys only while
+# the alternate screen is active and the child has not requested mouse tracking.
+alternate_scroll_probe = r"""
+import os, select, time, tty
+tty.setraw(0)
+def receive(expected):
+    data = bytearray()
+    end = time.monotonic() + 6
+    while len(data) < len(expected):
+        assert time.monotonic() < end, repr(data)
+        if select.select([0], [], [], 0.1)[0]:
+            data.extend(os.read(0, len(expected) - len(data)))
+    assert data == expected, repr(data)
+os.write(1, b"\x1b[?1007h\x1b[?1049h\x1b[2J\x1b[HALT_SCROLL_NORMAL")
+receive(b"\x1b[A\x1b[B")
+os.write(1, b"\x1b[?1h\x1b[2J\x1b[HALT_SCROLL_APP")
+receive(b"\x1bOA\x1bOB")
+os.write(1, b"\x1b[?1000;1006h\x1b[2J\x1b[HALT_SCROLL_MOUSE")
+receive(b"\x1b[<64;10;4M")
+os.write(1, b"\x1b[?1000;1006l\x1b[?1l\x1b[?1049l\x1b[?1007l")
+"""
+s = Session()
+try:
+    s.expect(b"RUSTMUX_READY> ")
+    s.send(("exec python3 -c " + shlex.quote(alternate_scroll_probe) + "\n").encode())
+    s.expect(b"\r\nALT_SCROLL_NORMAL\r\n")
+    assert s.private_modes.get(1002)
+    assert s.private_modes.get(1006)
+    s.send(b"\x1b[<64;11;6M\x1b[<65;11;6M")
+    s.expect(b"\r\nALT_SCROLL_APP\r\n")
+    s.send(b"\x1b[<64;11;6M\x1b[<65;11;6M")
+    s.expect(b"\r\nALT_SCROLL_MOUSE\r\n")
+    s.send(b"\x1b[<64;11;6M")
+    s.finish(0)
+finally:
+    s.close()
+
 # Queries and input continue during a batch; intermediate screen text stays hidden.
 sync_probe = r"""
 import os, select, time, tty

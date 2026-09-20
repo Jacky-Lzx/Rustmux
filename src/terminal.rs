@@ -613,6 +613,8 @@ struct WindowInput {
     pane_left: usize,
     pane_width: usize,
     mouse_tracking: MouseTracking,
+    alternate_scroll: bool,
+    application_cursor_keys: bool,
     kitty_keyboard_flags: u8,
     bar_enabled: bool,
     footer_row: Option<usize>,
@@ -642,6 +644,7 @@ impl WindowInput {
             || (self.mouse.is_empty()
                 && (!(self.kitty_keyboard_flags != 0
                     || self.mouse_tracking != MouseTracking::Off
+                    || self.alternate_scroll
                     || self.bar_enabled
                     || self.footer_row.is_some()
                     || self.pane_hitboxes.len() > 1)
@@ -833,7 +836,20 @@ impl WindowInput {
                 output.push(WindowKey::SelectPane(*id));
                 return;
             }
+            let child_row = row.saturating_sub(self.pane_top);
+            let child_column = column.saturating_sub(self.pane_left);
+            let inside = child_row != 0
+                && child_row <= self.pane_height
+                && child_column != 0
+                && child_column <= self.pane_width;
             if self.mouse_tracking == MouseTracking::Off {
+                if self.alternate_scroll
+                    && inside
+                    && let Some(sequence) =
+                        alternate_scroll_key(&bytes, self.application_cursor_keys)
+                {
+                    output.extend(sequence.iter().copied().map(WindowKey::Byte));
+                }
                 return;
             }
             if mouse_motion(&bytes)
@@ -845,14 +861,7 @@ impl WindowInput {
             {
                 return;
             }
-            let child_row = row.saturating_sub(self.pane_top);
-            let child_column = column.saturating_sub(self.pane_left);
-            if (child_row == 0
-                || child_row > self.pane_height
-                || child_column == 0
-                || child_column > self.pane_width)
-                && !release
-            {
+            if !inside && !release {
                 return;
             }
             // Translate physical coordinates to the active pane. A release outside
@@ -1067,6 +1076,16 @@ fn bar_scroll(bytes: &[u8]) -> Option<WindowKey> {
     match mouse_button(bytes)? & 0b1100_0011 {
         64 => Some(WindowKey::Previous),
         65 => Some(WindowKey::Next),
+        _ => None,
+    }
+}
+
+fn alternate_scroll_key(bytes: &[u8], application: bool) -> Option<&'static [u8]> {
+    match (mouse_button(bytes)? & 0b1100_0011, application) {
+        (64, false) => Some(b"\x1b[A"),
+        (65, false) => Some(b"\x1b[B"),
+        (64, true) => Some(b"\x1bOA"),
+        (65, true) => Some(b"\x1bOB"),
         _ => None,
     }
 }
@@ -1868,6 +1887,9 @@ fn forward(
             keys.pane_left = usize::from(rect.column);
             keys.pane_width = usize::from(rect.columns);
             keys.mouse_tracking = pane.screen().mouse_tracking();
+            keys.alternate_scroll =
+                pane.screen().is_alternate() && pane.screen().alternate_scroll();
+            keys.application_cursor_keys = pane.screen().application_cursor_keys();
             keys.kitty_keyboard_flags = pane.screen().kitty_keyboard_flags();
             keys.bar_enabled = *outer_rows > 1;
             keys.footer_row = footer_enabled(*outer_rows).then_some(usize::from(*outer_rows));
@@ -3345,6 +3367,60 @@ mod window_input_tests {
             keys.feed(byte, &mut output);
         }
         assert!(output.is_empty());
+    }
+
+    #[test]
+    fn alternate_scroll_translates_vertical_wheel_only_inside_active_pane() {
+        let mut keys = WindowInput {
+            pane_height: 20,
+            pane_width: 38,
+            pane_top: 2,
+            pane_left: 41,
+            alternate_scroll: true,
+            bar_enabled: true,
+            ..WindowInput::default()
+        };
+        let mut output = Vec::new();
+        for &byte in b"\x1b[<64;50;10M\x1b[<69;50;10M\x1b[<66;50;10M\x1b[<64;20;10M\x1b[<64;50;1M" {
+            keys.feed(byte, &mut output);
+        }
+        assert_eq!(
+            output,
+            b"\x1b[A\x1b[B"
+                .iter()
+                .copied()
+                .map(WindowKey::Byte)
+                .chain([WindowKey::Previous])
+                .collect::<Vec<_>>()
+        );
+
+        output.clear();
+        keys.application_cursor_keys = true;
+        for &byte in b"\x1b[M`R*\x1b[MaR*" {
+            keys.feed(byte, &mut output);
+        }
+        assert_eq!(
+            output,
+            b"\x1bOA\x1bOB"
+                .iter()
+                .copied()
+                .map(WindowKey::Byte)
+                .collect::<Vec<_>>()
+        );
+
+        output.clear();
+        keys.mouse_tracking = MouseTracking::Button;
+        for &byte in b"\x1b[<64;50;10M" {
+            keys.feed(byte, &mut output);
+        }
+        assert_eq!(
+            output,
+            b"\x1b[<64;9;8M"
+                .iter()
+                .copied()
+                .map(WindowKey::Byte)
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]

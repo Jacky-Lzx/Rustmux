@@ -558,6 +558,15 @@ pub(crate) fn compose(
     normal_mode: bool,
 ) -> io::Result<Screen> {
     let mut screen = child.clone();
+    if screen.is_alternate()
+        && screen.alternate_scroll()
+        && screen.mouse_tracking() == MouseTracking::Off
+    {
+        // Rustmux translates wheel reports to cursor keys. Ask for SGR button
+        // reports even when there is no chrome row to request drag tracking.
+        screen.set_sgr_mouse(true);
+        screen.set_mouse_tracking(MouseTracking::Button);
+    }
     if outer_rows <= 1 {
         return Ok(screen);
     }
@@ -692,6 +701,28 @@ mod tests {
         mouse_child.set_mouse_tracking(MouseTracking::Any);
         let view = compose(&mouse_child, 4, None, &["shell".into()], 0, false).unwrap();
         assert_eq!(view.mouse_tracking(), MouseTracking::Any);
+    }
+
+    #[test]
+    fn alternate_scroll_requests_outer_mouse_reports_without_changing_child() {
+        let mut child = Screen::new(2, 20).unwrap();
+        Parser::new().advance(&mut child, b"\x1b[?1007h\x1b[?1049h");
+        let before = child.clone();
+
+        let hidden = compose(&child, 1, None, &["shell".into()], 0, false).unwrap();
+        assert_eq!(hidden.mouse_tracking(), MouseTracking::Button);
+        assert!(hidden.sgr_mouse());
+
+        let visible = compose(&child, 4, None, &["shell".into()], 0, false).unwrap();
+        assert_eq!(visible.mouse_tracking(), MouseTracking::Drag);
+        assert!(visible.sgr_mouse());
+        assert_eq!(child, before);
+
+        child.set_mouse_tracking(MouseTracking::Any);
+        child.set_sgr_mouse(false);
+        let tracked = compose(&child, 4, None, &["shell".into()], 0, false).unwrap();
+        assert_eq!(tracked.mouse_tracking(), MouseTracking::Any);
+        assert!(!tracked.sgr_mouse());
     }
 
     #[test]
