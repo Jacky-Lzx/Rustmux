@@ -1352,22 +1352,33 @@ fn forward(
                         view.set_cursor_visible(true);
                         view.set_cursor_shape(crate::screen::CursorShape::SteadyBar);
                     }
-                    if let Some(history) = &history
-                        && *outer_rows > 1
-                    {
-                        crate::chrome::prepare_row(&mut view, crate::chrome::bar_style(true));
-                        for character in crate::chrome::clipped(
-                            &history.label(view.dimensions().1),
-                            view.dimensions().1,
-                        )
-                        .chars()
-                        {
-                            view.print(character);
-                        }
-                        if let Some(column) = history.query_cursor(view.dimensions().1) {
-                            view.position(0, column);
-                            view.set_cursor_visible(true);
-                            view.set_cursor_shape(crate::screen::CursorShape::SteadyBar);
+                    if let Some(history) = &history {
+                        let (rows, columns) = view.dimensions();
+                        if footer_enabled(*outer_rows) {
+                            let content_columns =
+                                crate::chrome::history_footer_content_columns(columns);
+                            let label = history.label(content_columns);
+                            let label = label.strip_prefix("History ").unwrap_or(&label);
+                            if let Some(start) =
+                                crate::chrome::draw_history_footer(&mut view, label)
+                                && let Some(column) = history.query_cursor(content_columns)
+                            {
+                                view.position(rows - 1, start + column);
+                                view.set_cursor_visible(true);
+                                view.set_cursor_shape(crate::screen::CursorShape::SteadyBar);
+                            }
+                        } else if *outer_rows > 1 {
+                            crate::chrome::prepare_row(&mut view, crate::chrome::bar_style(true));
+                            for character in
+                                crate::chrome::clipped(&history.label(columns), columns).chars()
+                            {
+                                view.print(character);
+                            }
+                            if let Some(column) = history.query_cursor(columns) {
+                                view.position(0, column);
+                                view.set_cursor_visible(true);
+                                view.set_cursor_shape(crate::screen::CursorShape::SteadyBar);
+                            }
                         }
                     }
                     if let Some(prompt) = &prompt {

@@ -4,7 +4,7 @@ use crate::{
     style::{Color, Style},
 };
 use std::io;
-use unicode_width::UnicodeWidthChar;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const TOP_BAR_ROWS: u16 = 1;
 const BOTTOM_BAR_ROWS: u16 = 1;
@@ -19,6 +19,7 @@ const LAVENDER: Color = Color::Rgb(0xb4, 0xbe, 0xfe);
 const RED: Color = Color::Rgb(0xf3, 0x8b, 0xa8);
 const GREEN: Color = Color::Rgb(0xa6, 0xe3, 0xa1);
 const PEACH: Color = Color::Rgb(0xfa, 0xb3, 0x87);
+const HISTORY_MODE: &str = " HISTORY ";
 
 pub(crate) fn pane_rows(outer_rows: u16) -> u16 {
     let chrome_rows = TOP_BAR_ROWS + u16::from(footer_enabled(outer_rows)) * BOTTOM_BAR_ROWS;
@@ -362,6 +363,44 @@ fn draw_footer(screen: &mut Screen, row: usize, columns: usize, normal: bool, se
     for hint in shortcuts {
         draw_shortcut_segment(screen, hint);
     }
+}
+
+pub(crate) fn draw_history_footer(screen: &mut Screen, label: &str) -> Option<usize> {
+    let (rows, columns) = screen.dimensions();
+    if rows < 3 || columns == 0 {
+        return None;
+    }
+    let row = rows - 1;
+    screen.save_cursor();
+    screen.set_origin_mode(false);
+    screen.set_insert_mode(false);
+    screen.set_auto_wrap(false);
+    screen.designate_character_set(false, false);
+    screen.select_character_set(false);
+    screen.set_style(bar_background_style());
+    screen.position(row, 0);
+    screen.erase_line(EraseMode::All);
+    screen.set_style(Style {
+        foreground: BADGE_TEXT,
+        background: PEACH,
+        bold: true,
+        ..Style::default()
+    });
+    let mode = clipped(HISTORY_MODE, columns);
+    print(screen, &mode);
+    let used = mode.width();
+    let content_start = used + usize::from(used < columns);
+    if used < columns {
+        screen.set_style(bar_background_style());
+        print(screen, " ");
+        print(screen, &clipped(label, columns - content_start));
+    }
+    screen.restore_cursor();
+    Some(content_start.min(columns.saturating_sub(1)))
+}
+
+pub(crate) fn history_footer_content_columns(columns: usize) -> usize {
+    columns.saturating_sub(HISTORY_MODE.width() + 1)
 }
 
 struct BarLayout {
@@ -752,6 +791,24 @@ mod tests {
         assert!(!footer.contains("New"));
         assert!(!footer.contains("Split ↓"));
         assert!(!footer.contains("Focus"));
+
+        let mut history = compose(&child, 3, None, &["shell".into()], 0, false).unwrap();
+        let saved_top = history.row(0).unwrap().to_vec();
+        let saved_cursor = history.cursor();
+        assert_eq!(draw_history_footer(&mut history, "2/40 · q:exit"), Some(10));
+        assert_eq!(history.row(0).unwrap(), saved_top);
+        assert_eq!(history.cursor(), saved_cursor);
+        let footer = history.row(2).unwrap();
+        let text: String = footer
+            .iter()
+            .filter(|cell| cell.width != 0)
+            .map(|cell| cell.character)
+            .collect();
+        assert!(text.starts_with(" HISTORY  2/40 · q:exit"));
+        assert_eq!(footer[0].style.background, PEACH);
+        assert_eq!(footer[9].style.background, BASE);
+        assert_eq!(history_footer_content_columns(80), 70);
+        assert_eq!(history_footer_content_columns(8), 0);
     }
 
     #[test]

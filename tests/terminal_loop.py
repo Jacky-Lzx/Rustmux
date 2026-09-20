@@ -1659,33 +1659,34 @@ s = Session()
 try:
     s.expect(b"RUSTMUX_READY> ")
     s.send(b"\x02[")
-    s.expect(b"History 0/0")
+    expect_footer(s, b"HISTORY  0/0")
+    assert b"1 shell" in s.physical_rows[0]
     assert b"RUSTMUX_READY>" in b"".join(s.last_rows)
     assert b"\x1b[?1002h" in s.last_frame
     s.output.clear()
     s.send(b"/RUSTMUX_READY\r")
-    s.expect(b"1/1 /RUSTMUX_READY")
+    expect_footer(s, b"1/1 /RUSTMUX_READY")
     s.output.clear()
     s.send(b"\x1b")
     deadline = time.monotonic() + 3
-    while b"/RUSTMUX_READY" in s.last_rows[0]:
+    while b"/RUSTMUX_READY" in s.physical_rows[-1]:
         s.read()
         assert time.monotonic() < deadline, bytes(s.output[-1000:])
-    assert b"History 0/0" in s.last_rows[0]
+    assert b"HISTORY  0/0" in s.physical_rows[-1]
     s.output.clear()
     s.send(b"/draft")
-    s.expect(b"/draft")
+    expect_footer(s, b"/draft")
     s.output.clear()
     s.send(b"\x1b")
     deadline = time.monotonic() + 3
-    while b"/draft" in s.last_rows[0]:
+    while b"/draft" in s.physical_rows[-1]:
         s.read()
         assert time.monotonic() < deadline, bytes(s.output[-1000:])
-    assert b"History 0/0" in s.last_rows[0]
+    assert b"HISTORY  0/0" in s.physical_rows[-1]
     s.send(b"/still-in-history")
-    s.expect(b"Search /still-in-history")
+    expect_footer(s, b"Search /still-in-history")
     s.send(b"\x03")
-    s.expect(b"History 0/0")
+    expect_footer(s, b"HISTORY  0/0")
     s.output.clear()
     s.send(b"\x1b")
     deadline = time.monotonic() + 3
@@ -1719,7 +1720,7 @@ try:
         s.expect(b"HIST_44")
         s.send(b"\x02[g")
         s.expect(b"HIST_00")
-        assert b"History " in s.last_rows[0]
+        expect_footer(s, b"HISTORY ")
         assert b"\x1b[?1002h" in s.last_frame
         assert b"\x1b[?1006h" in s.last_frame
         assert any(b"HISTORY_LEFT" in row for row in s.last_rows)
@@ -1735,7 +1736,7 @@ try:
         assert b"HIST_00" in decoded[0] and b"HISTORY_LEFT" not in decoded[0]
         s.output.clear()
         s.send(b"/SELECT_TARGET\r")
-        s.expect(b"1/1 /SELECT_TARGET")
+        expect_footer(s, b"1/1 /SELECT_TARGET")
         s.output.clear()
         s.send(b"y")
         deadline = time.monotonic() + 3
@@ -1745,11 +1746,12 @@ try:
         assert base64.b64decode(matched.group(1), validate=True) == b"SELECT_TARGET"
         s.output.clear()
         s.send(b"v")
-        s.expect(b"Select ")
+        expect_footer(s, b"Select ")
         s.output.clear()
         s.send(b"\x1b")
         deadline = time.monotonic() + 3
-        while b"/SELECT_TARGET" not in s.last_rows[0] or b"Select " in s.last_rows[0]:
+        while (b"/SELECT_TARGET" not in s.physical_rows[-1]
+               or b"Select " in s.physical_rows[-1]):
             s.read()
             assert time.monotonic() < deadline, bytes(s.output[-1000:])
         s.output.clear()
@@ -1760,13 +1762,13 @@ try:
             assert time.monotonic() < deadline, bytes(s.output[-1000:])
         selected_text = base64.b64decode(selected.group(1), validate=True)
         assert selected_text == b"SELECT_TARGET", (selected_text, s.last_rows, bytes(s.output[-500:]))
-        s.expect(b"Copy sent to terminal")
+        expect_footer(s, b"Copy sent to terminal")
         s.output.clear()
         s.send(b"\x1b")
         deadline = time.monotonic() + 3
         while not (
-            s.last_rows[0].startswith(b"History ")
-            and b"/SELECT_TARGET" not in s.last_rows[0]
+            re.search(rb"HISTORY  [0-9]+/[0-9]+", s.physical_rows[-1])
+            and b"/SELECT_TARGET" not in s.physical_rows[-1]
         ):
             s.read()
             assert time.monotonic() < deadline, bytes(s.output[-1000:])
@@ -1861,14 +1863,14 @@ try:
             assert time.monotonic() < deadline, bytes(s.output[-1000:])
         selected_text = base64.b64decode(selected.group(1), validate=True)
         assert selected_text == b"HIST", (selected_text, s.last_rows, bytes(s.output[-500:]))
-        s.expect(b"Copy sent to terminal")
+        expect_footer(s, b"Copy sent to terminal")
         s.send(b"G")
         s.expect(b"HIST_44")
         s.output.clear()
         # One motion report above the pane keeps scrolling while the button is held.
         s.send(b"\x1b[<0;42;13M\x1b[<32;42;1M")
         deadline = time.monotonic() + 3
-        while not re.search(rb"History [1-9][0-9]*/", s.last_rows[0]):
+        while not re.search(rb"HISTORY  [1-9][0-9]*/", s.physical_rows[-1]):
             s.read()
             assert time.monotonic() < deadline, bytes(s.output[-1000:])
         s.output.clear()
@@ -1879,12 +1881,12 @@ try:
             assert time.monotonic() < deadline, bytes(s.output[-1000:])
         selected_text = base64.b64decode(selected.group(1), validate=True)
         assert b"\n" in selected_text, (selected_text, s.last_rows, bytes(s.output[-500:]))
-        s.expect(b"Copy sent to terminal")
+        expect_footer(s, b"Copy sent to terminal")
         deadline = time.monotonic() + 3
-        while b"Copy sent to terminal" in s.last_rows[0]:
+        while b"Copy sent to terminal" in s.physical_rows[-1]:
             s.read()
             assert time.monotonic() < deadline, (s.last_rows, bytes(s.output[-1000:]))
-        assert s.last_rows[0].startswith(b"History "), s.last_rows
+        assert re.search(rb"HISTORY  [0-9]+/[0-9]+", s.physical_rows[-1]), s.physical_rows
         frozen = list(s.last_rows)
         with open(trigger, "w") as file:
             file.write("go")
@@ -1896,48 +1898,48 @@ try:
         s.read(0.1)
         assert s.last_rows == frozen
         s.send(b"/HIST_0\r")
-        s.expect(b"1/10 /HIST_0")
+        expect_footer(s, b"1/10 /HIST_0")
         s.send(b"N")
-        s.expect(b"10/10 /HIST_0")
+        expect_footer(s, b"10/10 /HIST_0")
         s.send(b"n")
-        s.expect(b"1/10 /HIST_0")
+        expect_footer(s, b"1/10 /HIST_0")
         assert any(b"HIST_00" in row for row in s.last_rows[1:])
         s.send(b"G?HIST_0\r")
-        s.expect(b"10/10 ?HIST_0")
+        expect_footer(s, b"10/10 ?HIST_0")
         s.send(b"n")
-        s.expect(b"9/10 ?HIST_0")
+        expect_footer(s, b"9/10 ?HIST_0")
         s.send(b"N")
-        s.expect(b"10/10 ?HIST_0")
+        expect_footer(s, b"10/10 ?HIST_0")
         s.send(b"/cancelled\x03n")
-        s.expect(b"9/10 ?HIST_0")
+        expect_footer(s, b"9/10 ?HIST_0")
         s.send(b"?HIST_0\rn")
-        s.expect(b"8/10 ?HIST_0")
+        expect_footer(s, b"8/10 ?HIST_0")
         s.send(b"/DOES_NOT_EXIST\r")
-        s.expect(b"no match")
+        expect_footer(s, b"no match")
         s.send(b"/qjk\x03")
-        s.expect(b"no match")
+        expect_footer(s, b"no match")
         s.send(b"?DRAFT\x1b[A")
-        s.expect(b"Search ?DOES_NOT_EXIST")
+        expect_footer(s, b"Search ?DOES_NOT_EXIST")
         s.send(b"\x1bOA")
-        s.expect(b"Search ?HIST_0")
+        expect_footer(s, b"Search ?HIST_0")
         s.send(b"\x1bOB\x1b[B")
-        s.expect(b"Search ?DRAFT")
+        expect_footer(s, b"Search ?DRAFT")
         s.send(b"\x1b[A\x1b[A\r")
-        s.expect(b"8/10 ?HIST_0")
-        assert b"Search " not in s.last_rows[0]
+        expect_footer(s, b"8/10 ?HIST_0")
+        assert b"Search " not in s.physical_rows[-1]
         s.send(b"/HIST_X\x1b[D\x1b[3~0")
-        s.expect(b"Search /HIST_0")
+        expect_footer(s, b"Search /HIST_0")
         assert b"\x1b[?25h" in s.last_frame
         s.send(b"\x1b[H\x1b[C\x1b[F\r")
-        s.expect(b"8/10 /HIST_0")
+        expect_footer(s, b"8/10 /HIST_0")
         assert b"\x1b[?25l" in s.last_frame
         s.send(b"/HIST_\x1b[200~0\r\n\x03\x02\x15\x7f\x1b[201~")
-        s.expect(b"Search /HIST_0")
+        expect_footer(s, b"Search /HIST_0")
         assert b"\x1b[?25h" in s.last_frame
         s.send(b"\r")
-        s.expect(b"8/10 /HIST_0")
+        expect_footer(s, b"8/10 /HIST_0")
         s.send(b"G")
-        s.expect(b"History 0/")
+        expect_footer(s, b"HISTORY  0/")
         assert not any(b"LATE_HISTORY_OUTPUT" in row for row in s.last_rows)
         # Mouse coordinates are outer-terminal coordinates: bar row 1 and the
         # left pane / column-40 separator must not scroll the right snapshot.
@@ -1946,18 +1948,21 @@ try:
         s.read(0.1)
         assert s.last_rows == frozen
         s.send(b"\x1b[<64;50;5M")
-        s.expect(b"History 3/")
+        expect_footer(s, b"HISTORY  3/")
         assert any(b"HISTORY_LEFT" in row for row in s.last_rows)
         s.send(b"\x1b[<65;50;5M")
-        s.expect(b"History 0/")
+        expect_footer(s, b"HISTORY  0/")
         s.send(b"q")
         s.expect(b"LATE_HISTORY_OUTPUT")
-        assert b"\x1b[?1002h" in s.last_frame
-        assert b"\x1b[?1006l" in s.last_frame
+        deadline = time.monotonic() + 3
+        while s.private_modes.get(1006) is not False:
+            s.read()
+            assert time.monotonic() < deadline, (s.private_modes, s.last_frame, s.output[-1000:])
+        assert s.private_modes.get(1002) is True
         s.send(b"printf '\\n%s%s\\n' INPUT_ INTACT\n")
         s.expect(b"INPUT_INTACT")
         s.send(b"\x02[\x1b[5~")
-        s.expect(b"History ")
+        expect_footer(s, b"HISTORY ")
         fcntl.ioctl(s.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
         expect_bar(s, b"1 shell")
         s.send(b"printf '\\n%s%s\\n' RESIZE_ LIVE\n")
@@ -1985,7 +1990,7 @@ try:
     assert not any(b"RESIZE_HIST_00" in row for row in s.last_rows)
     s.send(b"\x02[g")
     s.expect(b"RESIZE_HIST_00")
-    assert b"History " in s.last_rows[0]
+    expect_footer(s, b"HISTORY ")
     s.send(b"qprintf '\\n%s%s\\n' RESIZE_PROMPT_ OK\n")
     s.expect(b"RESIZE_PROMPT_OK")
     s.send(b"\x02Z")

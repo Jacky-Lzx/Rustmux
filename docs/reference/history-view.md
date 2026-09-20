@@ -4,11 +4,14 @@ Ctrl-B `[` opens a read-only snapshot of the active pane's retained primary
 history and current screen. It initially moves up one pane-height, clamped to
 available history. When no rows have scrolled out yet, it opens at `History 0/0`
 and still freezes the current visible screen. Alternate-screen applications ignore entry.
-Other panes continue displaying live output. The window bar shows `History`, the
-number of rows above the snapshot's bottom, and the snapshot history length.
+Other panes continue displaying live output. The top window bar remains visible.
+The bottom bar replaces `LOCKED` or `NORMAL` with a rectangular `HISTORY` badge,
+followed by the number of rows above the snapshot's bottom and the snapshot
+history length.
 The browsed pane's complete border changes to Catppuccin Mocha Peach and returns
 to Catppuccin Mocha Green on exit.
-The cursor is hidden while browsing and shown in the bar while editing a query.
+The cursor is hidden while browsing and shown in the bottom bar while editing a
+query.
 History mode enables drag-event mouse reporting with SGR
 coordinates; exiting restores the live application's mouse modes.
 
@@ -69,7 +72,7 @@ leftmost and `?` the rightmost. There is no text cursor in this mode.
 
 `n` repeats in the submitted search direction and `N` goes in the opposite
 direction; both wrap at either end. The matched row moves to the top where
-possible, clamped at the snapshot's bottom. The bar shows the current result
+possible, clamped at the snapshot's bottom. The bottom bar shows the current result
 number in oldest-to-newest order, total count and `/` or `?`, or `no match`.
 Only the selected match is highlighted by reversing its cell colors, including
 both columns of wide glyphs and entire
@@ -202,7 +205,7 @@ are omitted. The same 32 KiB all-or-nothing limit applies.
 Drag the left mouse button across the active pane in history mode to select
 text. Selection endpoints are inclusive and may be dragged in either direction.
 Releasing the button copies the selected text immediately through OSC 52 and
-clears its highlight. The bar reports `Copy sent to terminal` after a successful
+clears its highlight. The bottom bar reports `Copy sent to terminal` after a successful
 keyboard or mouse copy, then restores the ordinary history status after one
 second. Navigation also clears the confirmation immediately. A press must begin
 inside the active pane; dragging beyond its content clamps the active endpoint
@@ -255,7 +258,10 @@ clipped to the pane width, with clipped wide characters replaced by blank cells.
 There is no snapshot text reflow or disk persistence yet. Copying
 uses the outer terminal's OSC 52 clipboard support; terminals or multiplexers
 that disable OSC 52 will ignore it.
-This does not recover content previously discarded by resize. A one-row outer terminal has no bar, so the history indicator is hidden.
+This does not recover content previously discarded by resize. A two-row outer
+terminal has no bottom bar, so history status temporarily replaces the top bar
+to keep search input visible. A one-row outer terminal has no bar, so the
+history indicator is hidden.
 
 Unit tests cover snapshot independence, navigation, wide-cell clipping, paste
 isolation, logical-line and Unicode search, overlapping results, highlighting,
