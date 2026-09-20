@@ -159,8 +159,15 @@ class Session:
                     if target in rows:
                         return True
                 elif target == b"RUSTMUX_READY> ":
-                    nonempty = [row for row in (rows[1:] if len(rows) > 1 else rows) if row]
-                    if nonempty and target.rstrip() in nonempty[-1]:
+                    # Alternate-screen restoration can leave stale cells on and
+                    # below the prompt row, confusing the simplified row cache.
+                    # Match the renderer's exact prompt write instead; an echoed
+                    # "prompt + command" has command bytes before the SGR reset.
+                    prompt = (rb"\x1b\[[0-9]+;[0-9]+H"
+                              + re.escape(target.rstrip()) + rb" *\x1b\[0m")
+                    content = rows[1:] if len(rows) > 1 else rows
+                    if (any(row.rstrip() == target.rstrip() for row in content)
+                            or re.search(prompt, self.output)):
                         return True
                 elif any(target in row for row in rows):
                     return True
