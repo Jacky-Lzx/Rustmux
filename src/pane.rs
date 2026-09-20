@@ -93,6 +93,7 @@ pub(crate) struct PaneIo {
     pub status: Option<ExitStatus>,
     pub semantic: SemanticOutput,
     pub prompt_start: Option<(usize, usize)>,
+    pub bell_pending: bool,
 }
 
 impl Default for PaneIo {
@@ -106,6 +107,7 @@ impl Default for PaneIo {
             status: None,
             semantic: SemanticOutput::default(),
             prompt_start: None,
+            bell_pending: false,
         }
     }
 }
@@ -321,6 +323,7 @@ impl Pane {
         let before = self.screen.primary_scroll_count();
         self.parser
             .advance_with_replies(&mut self.screen, bytes, reply);
+        self.io.bell_pending |= self.parser.take_bell();
         let scrolled = self.screen.primary_scroll_count().saturating_sub(before);
         if let Some((row, column)) = self.io.prompt_start {
             self.io.prompt_start = Some((row.saturating_sub(scrolled as usize), column));

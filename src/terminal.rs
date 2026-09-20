@@ -993,6 +993,23 @@ fn frontend_exit(state: ConnectionState, input: &VecDeque<u8>) -> Option<Forward
     }
 }
 
+fn window_names(windows: &Windows<PaneSet<Pane>>) -> Vec<String> {
+    windows
+        .iter()
+        .map(|window| {
+            let mut name = window.name().to_owned();
+            if window
+                .content()
+                .iter()
+                .any(|(_, pane)| pane.io().bell_pending)
+            {
+                name.push_str(" [!]");
+            }
+            name
+        })
+        .collect()
+}
+
 fn service_pane(pane: &mut Pane, requested: PollFlags, ready: PollFlags) -> io::Result<()> {
     if ready.contains(PollFlags::POLLNVAL) {
         return Err(io::Error::new(
@@ -1257,10 +1274,16 @@ fn forward(
             .iter()
             .position(|window| window.id() == active)
             .unwrap();
-        let mut names: Vec<_> = windows
-            .iter()
-            .map(|window| window.name().to_owned())
-            .collect();
+        if connection == ConnectionState::Attached {
+            for (_, pane) in windows.active_mut().unwrap().content_mut().iter_mut() {
+                let state = pane.parts_mut().3;
+                if state.bell_pending {
+                    state.bell_pending = false;
+                    bar_dirty = true;
+                }
+            }
+        }
+        let mut names = window_names(windows);
         if let Some(editor) = prompt.as_ref().filter(|editor| editor.is_rename()) {
             names[active_index].clone_from(&editor.text);
         }
@@ -1613,10 +1636,7 @@ fn forward(
             keys.footer_row = footer_enabled(*outer_rows).then_some(usize::from(*outer_rows));
             if help_action.is_none() && keys.mouse.is_empty() && input.front() == Some(&27) {
                 let active = windows.active().unwrap().id();
-                let names: Vec<_> = windows
-                    .iter()
-                    .map(|window| window.name().to_owned())
-                    .collect();
+                let names = window_names(windows);
                 let active_index = windows
                     .iter()
                     .position(|window| window.id() == active)
@@ -2071,16 +2091,15 @@ fn forward(
         // One bounded read/write per pane per iteration prevents a busy background
         // process from starving the other panes, keyboard or signal handling.
         for ((id, pane_id, inner_events), inner) in interests.into_iter().zip(events) {
-            service_pane(
-                windows
-                    .get_mut(id)
-                    .unwrap()
-                    .content_mut()
-                    .get_mut(pane_id)
-                    .expect("polled pane exists"),
-                inner_events,
-                inner,
-            )?;
+            let pane = windows
+                .get_mut(id)
+                .unwrap()
+                .content_mut()
+                .get_mut(pane_id)
+                .expect("polled pane exists");
+            let bell_was_pending = pane.io().bell_pending;
+            service_pane(pane, inner_events, inner)?;
+            bar_dirty |= !bell_was_pending && pane.io().bell_pending;
         }
     }
 }

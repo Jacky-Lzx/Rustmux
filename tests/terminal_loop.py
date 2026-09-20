@@ -886,7 +886,7 @@ try:
     s.expect(b"RUSTMUX_READY> ")
     s.send(b"WIN=A; printf '\\033[2J\\033[H%s%s\\n' READY _A\n")
     s.expect(b"READY_A")
-    s.send(b"sleep 0.2; printf '\\033[?2004h\\033[2J\\033[H%s%s\\n' BACK _A\n")
+    s.send(b"sleep 0.2; printf '\\a\\033[?2004h\\033[2J\\033[H%s%s\\n' BACK _A\n")
     s.send(b"\x02")
     s.send(b"c")
     s.expect(b"RUSTMUX_READY> ")
@@ -894,10 +894,18 @@ try:
     s.expect(b"WINDOW_B:unset")
     s.read(0.3)
     assert not any(b"BACK_A" in row for row in s.last_rows)
+    deadline = time.monotonic() + 3
+    while b"1 shell [!]" not in s.physical_rows[0]:
+        s.read()
+        assert time.monotonic() < deadline, s.physical_rows[0]
     fcntl.ioctl(s.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 100, 0, 0))
     s.read(0.1)
     s.send(b"\x02p")
     s.expect(b"BACK_A")
+    deadline = time.monotonic() + 3
+    while b"1 shell [!]" in s.physical_rows[0]:
+        s.read()
+        assert time.monotonic() < deadline, s.physical_rows[0]
     assert s.private_modes[2004]
     s.send(b"printf '\\n%s:%s:%s\\n' RETAINED $WIN \"$(stty size)\"\n")
     s.expect(b"RETAINED:A:36 98")

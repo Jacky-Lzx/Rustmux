@@ -91,6 +91,7 @@ pub struct Parser {
     parameters: Parameters,
     utf8: [u8; 4],
     utf8_len: usize,
+    bell_received: bool,
 }
 
 impl Parser {
@@ -125,6 +126,10 @@ impl Parser {
         }
         self.utf8_len = 0;
         self.state = State::Ground;
+    }
+
+    pub(crate) fn take_bell(&mut self) -> bool {
+        std::mem::take(&mut self.bell_received)
     }
 
     fn text_byte(&mut self, screen: &mut Screen, byte: u8, reply: &mut impl FnMut(&[u8])) {
@@ -174,6 +179,10 @@ impl Parser {
             };
             return;
         }
+        if byte == 7 {
+            self.bell_received = true;
+            return;
+        }
         if byte == 0x1b {
             self.state = State::Escape;
             return;
@@ -217,7 +226,9 @@ impl Parser {
                 }
                 b'c' => {
                     screen.reset();
+                    let bell_received = self.bell_received;
                     *self = Self::new();
+                    self.bell_received = bell_received;
                     State::Ground
                 }
                 b'(' | b')' => State::DesignateCharacterSet { g1: byte == b')' },
@@ -657,6 +668,22 @@ mod tests {
     fn string_payload_is_skipped_and_split_terminators_work() {
         fixture(b"A\x1b]0;hidden\x07B\x1b]more\x1b\\C\x1bPpayload\x07\n\x1b[2J\x1b\\D\x1bXhidden\x1b\\E\x1b^hidden\x1b\\F\x1b_hidden\x1b\\G",
             &["ABCDEFG   "], (0, 7));
+    }
+
+    #[test]
+    fn terminal_bells_are_reported_but_string_terminators_are_not() {
+        let mut parser = Parser::new();
+        let mut screen = Screen::new(1, 8).unwrap();
+
+        parser.advance(&mut screen, b"before\x07after");
+        assert!(parser.take_bell());
+        assert!(!parser.take_bell());
+
+        parser.advance(&mut screen, b"\x1b]0;title\x07\x1bPpayload\x07\x1b\\");
+        assert!(!parser.take_bell());
+
+        parser.advance(&mut screen, b"\x07\x1bc");
+        assert!(parser.take_bell());
     }
 
     #[test]
