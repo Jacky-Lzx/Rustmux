@@ -71,7 +71,7 @@ at most two; one-parameter commands reject extra parameters. Parser storage is c
 sequence length. Unsupported ESC sequences are consumed without printing their
 sequence bytes.
 
-The display parser retains at most 32 OSC payload bytes to recognize OSC 10/11
+The display parser retains at most 64 OSC payload bytes to recognize OSC 10/11
 default-color operations and OSC 110/111 resets, and otherwise discards OSC
 through BEL or ST (ESC followed by backslash). A separate bounded observer
 recognizes OSC 7 working-directory metadata and OSC 133 command-output boundaries

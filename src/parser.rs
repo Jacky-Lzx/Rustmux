@@ -1,14 +1,20 @@
 //! Incremental UTF-8/CSI parsing for the CLI screen model.
 
 /// Maximum reply bytes per consumed input byte, including a final byte that
-/// completes a query begun in an earlier chunk. Two decimal usize coordinates
-/// plus CSI, separator and final byte fit in this conservative bound. A DECRPM
-/// reply with one usize mode number and a one-digit status also fits.
-pub const MAX_REPLY_BYTES: usize = 4 + 2 * (usize::BITS as usize / 3 + 1);
+/// completes a query begun in an earlier chunk. This covers either two
+/// full-width OSC 10/11 replies completed by one terminator, or a CSI reply
+/// containing two decimal usize values.
+const MAX_CSI_REPLY_BYTES: usize = 4 + 2 * (usize::BITS as usize / 3 + 1);
+const MAX_OSC_COLOR_REPLY_BYTES: usize = 25;
+pub const MAX_REPLY_BYTES: usize = if MAX_CSI_REPLY_BYTES > 2 * MAX_OSC_COLOR_REPLY_BYTES {
+    MAX_CSI_REPLY_BYTES
+} else {
+    2 * MAX_OSC_COLOR_REPLY_BYTES
+};
 
 use crate::screen::{CursorShape, EraseMode, MouseTracking, Screen};
 
-const MAX_OSC_CONTROL_BYTES: usize = 32;
+const MAX_OSC_CONTROL_BYTES: usize = 64;
 
 // Conservative VT100-family identity: VT101 with no optional hardware features.
 // This compatibility reply does not claim complete VT101 emulation.
@@ -413,33 +419,63 @@ impl Parser {
         let Some(separator) = control.iter().position(|&byte| byte == b';') else {
             return;
         };
-        let (code, value) = (&control[..separator], &control[separator + 1..]);
-        let (code, current) = match code {
-            b"10" => (10, screen.default_foreground()),
-            b"11" => (11, screen.default_background()),
+        let (code, values) = (&control[..separator], &control[separator + 1..]);
+        let start = match code {
+            b"10" => 10,
+            b"11" => 11,
             _ => return,
         };
-        if value != b"?" {
-            if let Ok(value) = std::str::from_utf8(value)
+
+        #[derive(Clone, Copy)]
+        enum Operation {
+            Query,
+            Set((u8, u8, u8)),
+        }
+
+        let mut operations = [Operation::Query; 2];
+        let mut count = 0;
+        for value in values.split(|&byte| byte == b';') {
+            if count == operations.len() || start + count >= 12 || value.is_empty() {
+                return;
+            }
+            operations[count] = if value == b"?" {
+                Operation::Query
+            } else if let Ok(value) = std::str::from_utf8(value)
                 && let Some(color) = parse_color(value)
             {
-                if code == 10 {
-                    screen.set_default_foreground(color);
-                } else {
-                    screen.set_default_background(color);
-                }
-            }
+                Operation::Set(color)
+            } else {
+                return;
+            };
+            count += 1;
+        }
+        if count == 0 {
             return;
         }
+
         let terminator = if bell_terminated { "\x07" } else { "\x1b\\" };
-        let response = format!(
-            "\x1b]{code};rgb:{:04x}/{:04x}/{:04x}{terminator}",
-            u16::from(current.0) * 257,
-            u16::from(current.1) * 257,
-            u16::from(current.2) * 257,
-        );
-        debug_assert!(response.len() <= MAX_REPLY_BYTES);
-        reply(response.as_bytes());
+        for (offset, operation) in operations[..count].iter().enumerate() {
+            let code = start + offset;
+            match operation {
+                Operation::Set(color) if code == 10 => screen.set_default_foreground(*color),
+                Operation::Set(color) => screen.set_default_background(*color),
+                Operation::Query => {
+                    let current = if code == 10 {
+                        screen.default_foreground()
+                    } else {
+                        screen.default_background()
+                    };
+                    let response = format!(
+                        "\x1b]{code};rgb:{:04x}/{:04x}/{:04x}{terminator}",
+                        u16::from(current.0) * 257,
+                        u16::from(current.1) * 257,
+                        u16::from(current.2) * 257,
+                    );
+                    debug_assert!(response.len() <= MAX_OSC_COLOR_REPLY_BYTES);
+                    reply(response.as_bytes());
+                }
+            }
+        }
     }
 
     fn dispatch(

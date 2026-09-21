@@ -13,6 +13,7 @@ from its screen model.
 | OSC 11 ; ? BEL/ST | OSC 11 ; current background BEL/ST |
 | OSC 10 ; color BEL/ST | Set this pane's default foreground |
 | OSC 11 ; color BEL/ST | Set this pane's default background |
+| OSC 10 ; value ; value BEL/ST | Apply successive values to foreground, then background |
 | OSC 110 / 111 BEL/ST | Reset this pane's foreground / background default |
 
 Cursor coordinates are one-based. With DECOM enabled, the reported row is
@@ -38,7 +39,14 @@ digits per component. The values are normalized to eight-bit RGB and remain loca
 to the pane across alternate-screen changes, resize, detach/attach and RIS. OSC
 110/111 restore the initial Mocha defaults. Existing cells retain symbolic default
 colors, so changing a default recolors them on the next frame; explicitly indexed
-or RGB-colored cells are unchanged. Invalid and multi-color setters are atomic no-ops.
+or RGB-colored cells are unchanged.
+
+Following XTerm's successive-parameter convention, OSC 10 accepts one or two
+values: the first targets foreground and the second targets background. Either
+value can be `?`, and replies are emitted in parameter order with the request's
+terminator. OSC 11 accepts one value because the next dynamic color, cursor color
+12, is not supported. Empty, malformed, or extra values make the entire operation
+an atomic no-op, including suppressing any query replies.
 
 ## Parser API and CLI delivery
 
@@ -50,7 +58,7 @@ for display only and discards replies, which is useful for frame replay.
 The CLI appends replies to the same 64 KiB queue as keyboard input. It reserves
 worst-case reply space before each PTY read, using `MAX_REPLY_BYTES` per input
 byte. This accounts for a single final byte completing a previously buffered
-query. When capacity is unavailable, PTY reads pause while queued writes drain.
+two-color query and emitting two replies. When capacity is unavailable, PTY reads pause while queued writes drain.
 Partial writes and retryable errors retain the existing queue behavior.
 
 Replies are sent to the child, not to the outer terminal. Once the direct child
@@ -66,7 +74,7 @@ The real CLI PTY test checks both queries and 20,000 status requests, producing
 more reply bytes than fit in the queue while the child reads concurrently.
 
 Tertiary device attributes, other private DSR values, OSC palette/cursor colors,
-multi-color operations, named colors and general terminal capability queries
+dynamic colors after background, named colors and general terminal capability queries
 remain unsupported.
 [Mode queries](mode-queries.md) support the explicitly listed ANSI/private modes.
 
