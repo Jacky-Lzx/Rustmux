@@ -9,6 +9,9 @@ from its screen model.
 | CSI 5 n | CSI 0 n (ready) |
 | CSI 6 n | CSI row ; column R (cursor position) |
 | CSI ? 6 n | CSI ? row ; column R (DECXCPR) |
+| OSC 4 ; index ; ? BEL/ST | OSC 4 ; index ; current palette color BEL/ST |
+| OSC 4 ; index ; color BEL/ST | Set one pane-local palette entry |
+| OSC 104 ; index / OSC 104 BEL/ST | Reset one / all palette entries |
 | OSC 10 ; ? BEL/ST | OSC 10 ; current foreground BEL/ST |
 | OSC 11 ; ? BEL/ST | OSC 11 ; current background BEL/ST |
 | OSC 10 ; color BEL/ST | Set this pane's default foreground |
@@ -48,6 +51,14 @@ terminator. OSC 11 accepts one value because the next dynamic color, cursor colo
 12, is not supported. Empty, malformed, or extra values make the entire operation
 an atomic no-op, including suppressing any query replies.
 
+OSC 4 accepts one decimal index from 0 through 255 and one color or `?` value.
+The initial table uses XTerm's conventional 16 ANSI colors, 6x6x6 color cube and
+24 grayscale entries. Setters use the same RGB formats as OSC 10/11. OSC 104
+resets one index, or the entire table when no index is supplied. Palette changes
+are pane-local and recolor existing indexed foreground, background and underline
+colors on the next frame. Multiple index/color pairs and multiple reset indices
+are deliberately deferred; extra, empty or malformed fields are atomic no-ops.
+
 ## Parser API and CLI delivery
 
 `Parser::advance_with_replies` takes a synchronous callback receiving each reply
@@ -73,9 +84,9 @@ malformed queries, incomplete-stream handling and the reply-size bound.
 The real CLI PTY test checks both queries and 20,000 status requests, producing
 more reply bytes than fit in the queue while the child reads concurrently.
 
-Tertiary device attributes, other private DSR values, OSC palette/cursor colors,
-dynamic colors after background, named colors and general terminal capability queries
-remain unsupported.
+Tertiary device attributes, other private DSR values, OSC cursor colors,
+multi-entry palette operations, dynamic colors after background, named colors
+and general terminal capability queries remain unsupported.
 [Mode queries](mode-queries.md) support the explicitly listed ANSI/private modes.
 
 [Primary device attributes](device-attributes.md) provide a conservative DA1 reply.

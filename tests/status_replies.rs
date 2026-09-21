@@ -107,6 +107,56 @@ fn mixed_default_color_operations_preserve_reply_order() {
 }
 
 #[test]
+fn palette_queries_report_the_xterm_256_color_defaults() {
+    let (_, output) = replies(
+        b"\x1b]4;0;?\x07\x1b]4;15;?\x1b\\\x1b]4;16;?\x07\
+          \x1b]4;231;?\x1b\\\x1b]4;232;?\x07\x1b]4;255;?\x1b\\",
+    );
+    assert_eq!(
+        output,
+        b"\x1b]4;0;rgb:0000/0000/0000\x07\x1b]4;15;rgb:ffff/ffff/ffff\x1b\\\
+          \x1b]4;16;rgb:0000/0000/0000\x07\x1b]4;231;rgb:ffff/ffff/ffff\x1b\\\
+          \x1b]4;232;rgb:0808/0808/0808\x07\x1b]4;255;rgb:eeee/eeee/eeee\x1b\\"
+    );
+}
+
+#[test]
+fn palette_entries_are_stateful_and_resettable() {
+    let (_, output) = replies(
+        b"\x1b]4;1;#010203\x1b\\\x1b]4;2;rgb:1111/2222/3333\x07\
+          \x1bc\
+          \x1b]4;1;?\x1b\\\x1b]4;2;?\x07\
+          \x1b]104;1\x1b\\\x1b]4;1;?\x07\x1b]4;2;?\x1b\\\
+          \x1b]104\x07\x1b]4;2;?\x07",
+    );
+    assert_eq!(
+        output,
+        b"\x1b]4;1;rgb:0101/0202/0303\x1b\\\x1b]4;2;rgb:1111/2222/3333\x07\
+          \x1b]4;1;rgb:cdcd/0000/0000\x07\x1b]4;2;rgb:1111/2222/3333\x1b\\\
+          \x1b]4;2;rgb:0000/cdcd/0000\x07"
+    );
+}
+
+#[test]
+fn malformed_and_multi_pair_palette_operations_are_atomic() {
+    for invalid in [
+        "4;;?",
+        "4;+1;?",
+        "4;256;?",
+        "4;1;red",
+        "4;1;#010203;2;?",
+        "104;1;2",
+        "104;+1",
+    ] {
+        let input = format!("\x1b]4;1;#123456\x1b\\\x1b]{invalid}\x07\x1b]4;1;?\x1b\\");
+        assert_eq!(
+            replies(input.as_bytes()).1,
+            b"\x1b]4;1;rgb:1212/3434/5656\x1b\\"
+        );
+    }
+}
+
+#[test]
 fn default_colors_are_stateful_resettable_and_survive_ris() {
     let (_, output) = replies(
         b"\x1b]10;#010203\x1b\\\x1b]11;rgb:1111/2222/3333\x07\

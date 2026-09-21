@@ -279,7 +279,7 @@ try:
     s.expect(b"RUSTMUX_READY> ")
     s.send(b"printf '\\033[2J\\033[Habc\\033[1;2H\\033[31mX\\033[0m\\n'\n")
     s.expect(b"\r\naXc\r\n")
-    assert b"\x1b[0;38;5;1;48;2;30;30;46mX" in s.last_frame, s.last_frame
+    assert b"\x1b[0;38;2;205;0;0;48;2;30;30;46mX" in s.last_frame, s.last_frame
     s.send(
         b"stty -echo; printf '\\n\\033[4:3;58:2::1:2:3mUNDER\\033[0m'; "
         b"stty echo; printf '\\nSTYLE_''DONE\\n'\n"
@@ -438,6 +438,9 @@ receive(b"\x1b]10;rgb:cdcd/d6d6/f4f4\x07\x1b]11;rgb:1e1e/1e1e/2e2e\x07")
 os.write(1, b"\x1b]10;#010203;rgb:1111/2222/3333\x1b\\\x1b]10;?;?\x1b\\")
 receive(b"\x1b]10;rgb:0101/0202/0303\x1b\\\x1b]11;rgb:1111/2222/3333\x1b\\")
 os.write(1, b"\x1b]110\x1b\\\x1b]111\x07")
+os.write(1, b"\x1b]4;1;?\x07\x1b]4;1;#010203\x1b\\\x1b]4;1;?\x1b\\")
+receive(b"\x1b]4;1;rgb:cdcd/0000/0000\x07\x1b]4;1;rgb:0101/0202/0303\x1b\\")
+os.write(1, b"\x1b]104;1\x07")
 os.write(1, b"\x1b[3;10r\x1b[?6h\x1b[2;4H\x1b[6n\x1b[?6n")
 receive(b"\x1b[2;4R\x1b[?2;4R")
 def flood():

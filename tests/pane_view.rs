@@ -18,6 +18,9 @@ fn resolved(cells: &[Cell]) -> Vec<Cell> {
             if cell.style.background == Color::Default {
                 cell.style.background = Color::Rgb(0x1e, 0x1e, 0x2e);
             }
+            if cell.style.foreground == Color::Indexed(1) {
+                cell.style.foreground = Color::Rgb(0xcd, 0, 0);
+            }
             cell
         })
         .collect()
@@ -194,5 +197,26 @@ fn panes_render_independent_dynamic_default_colors() {
     assert_eq!(
         frame.row(1).unwrap()[6].style.background,
         Color::Rgb(160, 176, 192)
+    );
+}
+
+#[test]
+fn panes_render_independent_dynamic_palette_entries() {
+    let mut layout = Layout::new(5, 10).unwrap();
+    let left = layout.active();
+    let right = layout.split_active(SplitAxis::Columns).unwrap();
+    let mut left_screen = Screen::new(3, 3).unwrap();
+    let mut right_screen = Screen::new(3, 3).unwrap();
+    Parser::new().advance(&mut left_screen, b"\x1b[31mL\x1b]4;1;#010203\x07");
+    Parser::new().advance(&mut right_screen, b"\x1b[31mR");
+
+    let frame = compose(&layout, &[(left, &left_screen), (right, &right_screen)]).unwrap();
+    assert_eq!(
+        frame.row(1).unwrap()[1].style.foreground,
+        Color::Rgb(1, 2, 3)
+    );
+    assert_eq!(
+        frame.row(1).unwrap()[6].style.foreground,
+        Color::Rgb(205, 0, 0)
     );
 }

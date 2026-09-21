@@ -141,6 +141,7 @@ pub struct Screen {
     character_sets: CharacterSets,
     default_foreground: (u8, u8, u8),
     default_background: (u8, u8, u8),
+    palette: [Option<(u8, u8, u8)>; 256],
 }
 
 impl Screen {
@@ -273,6 +274,7 @@ impl Screen {
             character_sets: CharacterSets::default(),
             default_foreground: crate::theme::DEFAULT_FOREGROUND_RGB,
             default_background: crate::theme::DEFAULT_BACKGROUND_RGB,
+            palette: [None; 256],
         })
     }
 
@@ -300,9 +302,27 @@ impl Screen {
         self.default_background = crate::theme::DEFAULT_BACKGROUND_RGB;
     }
 
-    pub(crate) fn copy_default_colors(&mut self, source: &Self) {
+    pub(crate) fn palette_color(&self, index: u8) -> (u8, u8, u8) {
+        self.palette[usize::from(index)]
+            .unwrap_or_else(|| crate::theme::default_palette_color(index))
+    }
+
+    pub(crate) fn set_palette_color(&mut self, index: u8, color: (u8, u8, u8)) {
+        self.palette[usize::from(index)] = Some(color);
+    }
+
+    pub(crate) fn reset_palette_color(&mut self, index: u8) {
+        self.palette[usize::from(index)] = None;
+    }
+
+    pub(crate) fn reset_palette(&mut self) {
+        self.palette.fill(None);
+    }
+
+    pub(crate) fn copy_dynamic_colors(&mut self, source: &Self) {
         self.default_foreground = source.default_foreground;
         self.default_background = source.default_background;
+        self.palette = source.palette;
     }
 
     /// RIS: restore initial model state at the current size without allocating.
@@ -536,6 +556,9 @@ impl Screen {
         resized.origin_mode = self.origin_mode;
         resized.auto_wrap = self.auto_wrap;
         resized.character_sets = self.character_sets;
+        resized.default_foreground = self.default_foreground;
+        resized.default_background = self.default_background;
+        resized.palette = self.palette;
         let retained_columns = self.columns.min(columns);
         resized.tab_stops[..retained_columns].copy_from_slice(&self.tab_stops[..retained_columns]);
         let clamp = |saved: SavedCursor, shift: usize, restore: usize| SavedCursor {
@@ -705,30 +728,44 @@ impl Screen {
 
     // Display-only assembly helpers. The compositor validates all rectangles before
     // calling these; copies preserve attributes, wide cells and suffixes while
-    // resolving the pane's symbolic default foreground/background.
-    pub(crate) fn copy_display_cells(&mut self, source: &Screen, row: usize, column: usize) {
+    // resolving the pane's symbolic default and indexed colors.
+    pub(crate) fn copy_display_cells(&mut self, source_screen: &Screen, row: usize, column: usize) {
         let default_foreground = crate::style::Color::Rgb(
-            source.default_foreground.0,
-            source.default_foreground.1,
-            source.default_foreground.2,
+            source_screen.default_foreground.0,
+            source_screen.default_foreground.1,
+            source_screen.default_foreground.2,
         );
         let default_background = crate::style::Color::Rgb(
-            source.default_background.0,
-            source.default_background.1,
-            source.default_background.2,
+            source_screen.default_background.0,
+            source_screen.default_background.1,
+            source_screen.default_background.2,
         );
-        for offset in 0..source.rows {
+        for offset in 0..source_screen.rows {
             let start = (row + offset) * self.columns + column;
-            for (target, source) in self.cells[start..start + source.columns]
+            for (target, source) in self.cells[start..start + source_screen.columns]
                 .iter_mut()
-                .zip(source.row(offset).expect("source row exists"))
+                .zip(source_screen.row(offset).expect("source row exists"))
             {
                 *target = source.clone();
-                if target.style.foreground == crate::style::Color::Default {
-                    target.style.foreground = default_foreground;
-                }
-                if target.style.background == crate::style::Color::Default {
-                    target.style.background = default_background;
+                target.style.foreground = match target.style.foreground {
+                    crate::style::Color::Default => default_foreground,
+                    crate::style::Color::Indexed(index) => {
+                        let (red, green, blue) = source_screen.palette_color(index);
+                        crate::style::Color::Rgb(red, green, blue)
+                    }
+                    color => color,
+                };
+                target.style.background = match target.style.background {
+                    crate::style::Color::Default => default_background,
+                    crate::style::Color::Indexed(index) => {
+                        let (red, green, blue) = source_screen.palette_color(index);
+                        crate::style::Color::Rgb(red, green, blue)
+                    }
+                    color => color,
+                };
+                if let crate::style::Color::Indexed(index) = target.style.underline_color {
+                    let (red, green, blue) = source_screen.palette_color(index);
+                    target.style.underline_color = crate::style::Color::Rgb(red, green, blue);
                 }
             }
         }

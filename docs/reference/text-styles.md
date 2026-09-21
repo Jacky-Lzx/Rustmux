@@ -30,8 +30,10 @@ Parameters are applied from left to right; omitted parameters mean reset.
 | 59 | Default underline color |
 
 Default colors remain symbolic and distinct from palette index zero. Indexed
-colors are not converted to RGB, and bold does not implicitly select bright
-colors. Inverse and other attributes are stored and emitted by the renderer.
+colors remain symbolic in each pane, then composition resolves them through that
+pane's XTerm-compatible 256-color table so OSC 4 updates also recolor existing
+cells. Bold does not implicitly select bright colors. Inverse and other
+attributes are stored and emitted by the renderer.
 
 ## Erase and scrolling
 
