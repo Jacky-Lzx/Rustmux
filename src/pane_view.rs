@@ -6,7 +6,6 @@ use crate::{
     pane::MAX_CELLS,
     screen::Screen,
     style::Cell,
-    theme::{DEFAULT_BACKGROUND, DEFAULT_FOREGROUND},
 };
 use std::io;
 
@@ -77,13 +76,7 @@ pub(crate) fn compose_with_titles(
     let mut frame = (*active).clone();
     frame.resize_display(usize::from(rows), usize::from(columns))?;
     for (_, rect, source) in &visible {
-        frame.copy_display_cells(
-            source,
-            usize::from(rect.row),
-            usize::from(rect.column),
-            DEFAULT_FOREGROUND,
-            DEFAULT_BACKGROUND,
-        );
+        frame.copy_display_cells(source, usize::from(rect.row), usize::from(rect.column));
     }
     // Each pane owns all four sides of its frame. A split reserves two cells so
     // adjacent panes remain visually distinct instead of sharing one separator.
@@ -289,6 +282,7 @@ fn invalid(message: &str) -> io::Error {
 mod tests {
     use super::*;
     use crate::layout::SplitAxis;
+    use crate::theme::{DEFAULT_BACKGROUND, DEFAULT_FOREGROUND};
 
     #[test]
     fn active_and_history_highlights_follow_only_the_selected_pane_border() {

@@ -78,12 +78,59 @@ fn default_color_queries_use_matching_terminators_and_are_ordered() {
 }
 
 #[test]
+fn default_colors_are_stateful_resettable_and_survive_ris() {
+    let (_, output) = replies(
+        b"\x1b]10;#010203\x1b\\\x1b]11;rgb:1111/2222/3333\x07\
+          \x1b]10;?\x1b\\\x1b]11;?\x07\
+          \x1bc\x1b]10;?\x1b\\\x1b]11;?\x07\
+          \x1b]110\x1b\\\x1b]111\x07\x1b]10;?\x1b\\\x1b]11;?\x07",
+    );
+    assert_eq!(
+        output,
+        b"\x1b]10;rgb:0101/0202/0303\x1b\\\x1b]11;rgb:1111/2222/3333\x07\
+          \x1b]10;rgb:0101/0202/0303\x1b\\\x1b]11;rgb:1111/2222/3333\x07\
+          \x1b]10;rgb:cdcd/d6d6/f4f4\x1b\\\x1b]11;rgb:1e1e/1e1e/2e2e\x07"
+    );
+}
+
+#[test]
+fn invalid_default_color_setters_are_atomic() {
+    for invalid in [
+        "#12345",
+        "#gg0000",
+        "rgb:/2/3",
+        "rgb:1/2",
+        "rgb:1/2/3/4",
+        "rgb:12345/2/3",
+        "red",
+        "#010203;?",
+    ] {
+        let input = format!("\x1b]10;#123456\x1b\\\x1b]10;{invalid}\x07\x1b]10;?\x1b\\");
+        assert_eq!(
+            replies(input.as_bytes()).1,
+            b"\x1b]10;rgb:1212/3434/5656\x1b\\"
+        );
+    }
+}
+
+#[test]
+fn rgb_components_scale_from_one_to_four_hex_digits() {
+    let (_, output) = replies(b"\x1b]10;rgb:f/80/0000\x07\x1b]10;?\x1b\\");
+    assert_eq!(output, b"\x1b]10;rgb:ffff/8080/0000\x1b\\");
+
+    let overlong = format!("\x1b]11;#{}\x07\x1b]11;?\x1b\\", "f".repeat(80));
+    assert_eq!(
+        replies(overlong.as_bytes()).1,
+        b"\x1b]11;rgb:1e1e/1e1e/2e2e\x1b\\"
+    );
+}
+
+#[test]
 fn unsupported_malformed_and_cancelled_color_queries_do_not_reply() {
     for input in [
         b"\x1b]9;?\x07".as_slice(),
         b"\x1b]10\x07",
         b"\x1b]10;?;?\x07",
-        b"\x1b]10;#ffffff\x07",
         b"\x1b]11;?\x18",
         b"\x1b]11;?\x1bX\x1b\\",
         b"\x1b]11;?\x1b\x07",

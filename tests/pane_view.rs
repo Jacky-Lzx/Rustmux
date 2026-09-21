@@ -167,3 +167,32 @@ fn composing_taller_canvas_does_not_restore_history_or_shift_cursor() {
     assert_eq!(view.history_len(), b.history_len());
     assert_eq!(b, snapshot);
 }
+
+#[test]
+fn panes_render_independent_dynamic_default_colors() {
+    let mut layout = Layout::new(5, 10).unwrap();
+    let left = layout.active();
+    let right = layout.split_active(SplitAxis::Columns).unwrap();
+    let mut left_screen = Screen::new(3, 3).unwrap();
+    let mut right_screen = Screen::new(3, 3).unwrap();
+    Parser::new().advance(&mut left_screen, b"\x1b]10;#010203\x07L");
+    Parser::new().advance(&mut right_screen, b"\x1b]11;#a0b0c0\x1b\\R");
+
+    let frame = compose(&layout, &[(left, &left_screen), (right, &right_screen)]).unwrap();
+    assert_eq!(
+        frame.row(1).unwrap()[1].style.foreground,
+        Color::Rgb(1, 2, 3)
+    );
+    assert_eq!(
+        frame.row(1).unwrap()[1].style.background,
+        Color::Rgb(30, 30, 46)
+    );
+    assert_eq!(
+        frame.row(1).unwrap()[6].style.foreground,
+        Color::Rgb(205, 214, 244)
+    );
+    assert_eq!(
+        frame.row(1).unwrap()[6].style.background,
+        Color::Rgb(160, 176, 192)
+    );
+}

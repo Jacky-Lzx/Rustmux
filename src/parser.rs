@@ -8,6 +8,8 @@ pub const MAX_REPLY_BYTES: usize = 4 + 2 * (usize::BITS as usize / 3 + 1);
 
 use crate::screen::{CursorShape, EraseMode, MouseTracking, Screen};
 
+const MAX_OSC_CONTROL_BYTES: usize = 32;
+
 // Conservative VT100-family identity: VT101 with no optional hardware features.
 // This compatibility reply does not claim complete VT101 emulation.
 const PRIMARY_DA: &[u8] = b"\x1b[?1;0c";
@@ -28,7 +30,7 @@ enum State {
     String {
         osc: bool,
         escape: bool,
-        bytes: [u8; 4],
+        bytes: [u8; MAX_OSC_CONTROL_BYTES],
         len: u8,
         overflowed: bool,
     },
@@ -188,11 +190,11 @@ impl Parser {
         } = self.state
         {
             // OSC accepts BEL or ST (ESC backslash); other strings require ST.
-            // Retain only enough payload for the bounded OSC 10/11 queries.
+            // Retain only enough payload for bounded default-color operations.
             let bell_terminated = osc && byte == 7;
             if bell_terminated || (escape && byte == b'\\') {
                 if osc && !overflowed && (!bell_terminated || !escape) {
-                    Self::osc(&bytes[..usize::from(len)], byte == 7, reply);
+                    Self::osc(screen, &bytes[..usize::from(len)], byte == 7, reply);
                 }
                 self.state = State::Ground;
             } else {
@@ -302,7 +304,7 @@ impl Parser {
                 b']' | b'P' | b'X' | b'^' | b'_' => State::String {
                     osc: byte == b']',
                     escape: false,
-                    bytes: [0; 4],
+                    bytes: [0; MAX_OSC_CONTROL_BYTES],
                     len: 0,
                     overflowed: false,
                 },
@@ -394,18 +396,47 @@ impl Parser {
         };
     }
 
-    fn osc(control: &[u8], bell_terminated: bool, reply: &mut impl FnMut(&[u8])) {
-        let (code, color) = match control {
-            b"10;?" => (10, crate::theme::DEFAULT_FOREGROUND_RGB),
-            b"11;?" => (11, crate::theme::DEFAULT_BACKGROUND_RGB),
+    fn osc(
+        screen: &mut Screen,
+        control: &[u8],
+        bell_terminated: bool,
+        reply: &mut impl FnMut(&[u8]),
+    ) {
+        if control == b"110" {
+            screen.reset_default_foreground();
+            return;
+        }
+        if control == b"111" {
+            screen.reset_default_background();
+            return;
+        }
+        let Some(separator) = control.iter().position(|&byte| byte == b';') else {
+            return;
+        };
+        let (code, value) = (&control[..separator], &control[separator + 1..]);
+        let (code, current) = match code {
+            b"10" => (10, screen.default_foreground()),
+            b"11" => (11, screen.default_background()),
             _ => return,
         };
+        if value != b"?" {
+            if let Ok(value) = std::str::from_utf8(value)
+                && let Some(color) = parse_color(value)
+            {
+                if code == 10 {
+                    screen.set_default_foreground(color);
+                } else {
+                    screen.set_default_background(color);
+                }
+            }
+            return;
+        }
         let terminator = if bell_terminated { "\x07" } else { "\x1b\\" };
         let response = format!(
             "\x1b]{code};rgb:{:04x}/{:04x}/{:04x}{terminator}",
-            u16::from(color.0) * 257,
-            u16::from(color.1) * 257,
-            u16::from(color.2) * 257,
+            u16::from(current.0) * 257,
+            u16::from(current.1) * 257,
+            u16::from(current.2) * 257,
         );
         debug_assert!(response.len() <= MAX_REPLY_BYTES);
         reply(response.as_bytes());
@@ -693,6 +724,31 @@ impl Parser {
             _ => {}
         }
     }
+}
+
+fn parse_color(value: &str) -> Option<(u8, u8, u8)> {
+    if let Some(hex) = value.strip_prefix('#').filter(|value| value.len() == 6) {
+        return Some((
+            u8::from_str_radix(&hex[..2], 16).ok()?,
+            u8::from_str_radix(&hex[2..4], 16).ok()?,
+            u8::from_str_radix(&hex[4..], 16).ok()?,
+        ));
+    }
+    let mut components = value.strip_prefix("rgb:")?.split('/');
+    let component = |value: &str| -> Option<u8> {
+        if !(1..=4).contains(&value.len()) {
+            return None;
+        }
+        let parsed = u16::from_str_radix(value, 16).ok()?;
+        let max = (1_u32 << (value.len() * 4)) - 1;
+        Some(((u32::from(parsed) * 255 + max / 2) / max) as u8)
+    };
+    let color = (
+        component(components.next()?)?,
+        component(components.next()?)?,
+        component(components.next()?)?,
+    );
+    components.next().is_none().then_some(color)
 }
 
 fn cursor_position_report(screen: &Screen, private: bool) -> String {

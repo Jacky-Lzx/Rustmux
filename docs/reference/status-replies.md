@@ -1,4 +1,4 @@
-# Terminal Status Replies
+# Terminal Status Replies and Default Colors
 
 Rustmux now answers the standard
 [XTerm device status reports](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html)
@@ -9,8 +9,11 @@ from its screen model.
 | CSI 5 n | CSI 0 n (ready) |
 | CSI 6 n | CSI row ; column R (cursor position) |
 | CSI ? 6 n | CSI ? row ; column R (DECXCPR) |
-| OSC 10 ; ? BEL/ST | OSC 10 ; rgb:cdcd/d6d6/f4f4 BEL/ST |
-| OSC 11 ; ? BEL/ST | OSC 11 ; rgb:1e1e/1e1e/2e2e BEL/ST |
+| OSC 10 ; ? BEL/ST | OSC 10 ; current foreground BEL/ST |
+| OSC 11 ; ? BEL/ST | OSC 11 ; current background BEL/ST |
+| OSC 10 ; color BEL/ST | Set this pane's default foreground |
+| OSC 11 ; color BEL/ST | Set this pane's default background |
+| OSC 110 / 111 BEL/ST | Reset this pane's foreground / background default |
 
 Cursor coordinates are one-based. With DECOM enabled, the reported row is
 relative to the scrolling region's top. Otherwise it is relative to the screen.
@@ -23,11 +26,19 @@ DECXCPR (`CSI ? 6 n`); other values, omitted or extra parameters, colon groups
 and numeric overflow produce no reply. CSI-like bytes inside OSC/DCS payloads
 are not interpreted.
 
-OSC 10 and OSC 11 report Rustmux's default pane foreground and background,
-respectively. Pane cells using SGR 39/49 or the initial default style are rendered
-with those same Catppuccin Mocha colors, so the reported values match the visible
-defaults rather than the attaching terminal's theme. Replies preserve the query's
-BEL or ST terminator. Dynamic color setters and multi-color queries are ignored.
+OSC 10 and OSC 11 report Rustmux's current pane foreground and background,
+respectively. Their initial values are Catppuccin Mocha `rgb:cdcd/d6d6/f4f4`
+and `rgb:1e1e/1e1e/2e2e`. Pane cells using SGR 39/49 or the initial default style
+are rendered with those same colors, so the reported values match the visible
+defaults rather than the attaching terminal's theme. Replies preserve the
+query's BEL or ST terminator.
+
+OSC 10/11 setters accept `#RRGGBB` and X-style `rgb:R/G/B`, with one to four hex
+digits per component. The values are normalized to eight-bit RGB and remain local
+to the pane across alternate-screen changes, resize, detach/attach and RIS. OSC
+110/111 restore the initial Mocha defaults. Existing cells retain symbolic default
+colors, so changing a default recolors them on the next frame; explicitly indexed
+or RGB-colored cells are unchanged. Invalid and multi-color setters are atomic no-ops.
 
 ## Parser API and CLI delivery
 
@@ -54,8 +65,9 @@ malformed queries, incomplete-stream handling and the reply-size bound.
 The real CLI PTY test checks both queries and 20,000 status requests, producing
 more reply bytes than fit in the queue while the child reads concurrently.
 
-Tertiary device attributes, other private DSR values, dynamic OSC color setters,
-palette/cursor color queries, and general terminal capability queries remain unsupported.
+Tertiary device attributes, other private DSR values, OSC palette/cursor colors,
+multi-color operations, named colors and general terminal capability queries
+remain unsupported.
 [Mode queries](mode-queries.md) support the explicitly listed ANSI/private modes.
 
 [Primary device attributes](device-attributes.md) provide a conservative DA1 reply.

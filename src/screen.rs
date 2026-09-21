@@ -139,6 +139,8 @@ pub struct Screen {
     origin_mode: bool,
     auto_wrap: bool,
     character_sets: CharacterSets,
+    default_foreground: (u8, u8, u8),
+    default_background: (u8, u8, u8),
 }
 
 impl Screen {
@@ -269,7 +271,38 @@ impl Screen {
             origin_mode: false,
             auto_wrap: true,
             character_sets: CharacterSets::default(),
+            default_foreground: crate::theme::DEFAULT_FOREGROUND_RGB,
+            default_background: crate::theme::DEFAULT_BACKGROUND_RGB,
         })
+    }
+
+    pub(crate) fn default_foreground(&self) -> (u8, u8, u8) {
+        self.default_foreground
+    }
+
+    pub(crate) fn default_background(&self) -> (u8, u8, u8) {
+        self.default_background
+    }
+
+    pub(crate) fn set_default_foreground(&mut self, color: (u8, u8, u8)) {
+        self.default_foreground = color;
+    }
+
+    pub(crate) fn set_default_background(&mut self, color: (u8, u8, u8)) {
+        self.default_background = color;
+    }
+
+    pub(crate) fn reset_default_foreground(&mut self) {
+        self.default_foreground = crate::theme::DEFAULT_FOREGROUND_RGB;
+    }
+
+    pub(crate) fn reset_default_background(&mut self) {
+        self.default_background = crate::theme::DEFAULT_BACKGROUND_RGB;
+    }
+
+    pub(crate) fn copy_default_colors(&mut self, source: &Self) {
+        self.default_foreground = source.default_foreground;
+        self.default_background = source.default_background;
     }
 
     /// RIS: restore initial model state at the current size without allocating.
@@ -673,14 +706,17 @@ impl Screen {
     // Display-only assembly helpers. The compositor validates all rectangles before
     // calling these; copies preserve attributes, wide cells and suffixes while
     // resolving the pane's symbolic default foreground/background.
-    pub(crate) fn copy_display_cells(
-        &mut self,
-        source: &Screen,
-        row: usize,
-        column: usize,
-        default_foreground: crate::style::Color,
-        default_background: crate::style::Color,
-    ) {
+    pub(crate) fn copy_display_cells(&mut self, source: &Screen, row: usize, column: usize) {
+        let default_foreground = crate::style::Color::Rgb(
+            source.default_foreground.0,
+            source.default_foreground.1,
+            source.default_foreground.2,
+        );
+        let default_background = crate::style::Color::Rgb(
+            source.default_background.0,
+            source.default_background.1,
+            source.default_background.2,
+        );
         for offset in 0..source.rows {
             let start = (row + offset) * self.columns + column;
             for (target, source) in self.cells[start..start + source.columns]

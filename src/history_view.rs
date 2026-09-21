@@ -1202,6 +1202,7 @@ impl HistoryView {
     pub fn render(&self) -> io::Result<Screen> {
         let (rows, columns) = self.source.dimensions();
         let mut view = Screen::new(rows, columns)?;
+        view.copy_default_colors(&self.source);
         view.set_cursor_visible(false);
         view.set_bracketed_paste(true);
         view.set_mouse_tracking(MouseTracking::Drag);
@@ -1260,6 +1261,23 @@ impl HistoryView {
 mod tests {
     use super::*;
     use crate::parser::Parser;
+
+    #[test]
+    fn snapshot_preserves_dynamic_default_colors() {
+        let mut source = Screen::new(2, 4).unwrap();
+        Parser::new().advance(&mut source, b"\x1b]10;#010203\x07\x1b]11;#a0b0c0\x1b\\text");
+        let mut rendered = HistoryView::new(&source).unwrap().render().unwrap();
+        let mut replies = Vec::new();
+        Parser::new().advance_with_replies(
+            &mut rendered,
+            b"\x1b]10;?\x1b\\\x1b]11;?\x1b\\",
+            &mut |reply| replies.extend_from_slice(reply),
+        );
+        assert_eq!(
+            replies,
+            b"\x1b]10;rgb:0101/0202/0303\x1b\\\x1b]11;rgb:a0a0/b0b0/c0c0\x1b\\"
+        );
+    }
 
     #[test]
     fn snapshot_navigation_clips_wide_cells_and_does_not_follow_new_output() {
