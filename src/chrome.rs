@@ -2,6 +2,7 @@
 use crate::{
     screen::{EraseMode, MouseTracking, Screen},
     style::{Color, Style},
+    theme::{DEFAULT_BACKGROUND, DEFAULT_FOREGROUND},
 };
 use std::io;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -12,9 +13,9 @@ const MIN_PANE_ROWS: u16 = 1;
 const POWERLINE_RIGHT: char = '';
 const HISTORY_MINIMUM_STATUS_COLUMNS: usize = 24;
 const BADGE_TEXT: Color = Color::Rgb(0x11, 0x11, 0x1b);
-const BASE: Color = Color::Rgb(0x1e, 0x1e, 0x2e);
+const BASE: Color = DEFAULT_BACKGROUND;
 const SUBTEXT0: Color = Color::Rgb(0xa6, 0xad, 0xc8);
-const TEXT: Color = Color::Rgb(0xcd, 0xd6, 0xf4);
+const TEXT: Color = DEFAULT_FOREGROUND;
 const PINK: Color = Color::Rgb(0xf5, 0xc2, 0xe7);
 const LAVENDER: Color = Color::Rgb(0xb4, 0xbe, 0xfe);
 const RED: Color = Color::Rgb(0xf3, 0x8b, 0xa8);

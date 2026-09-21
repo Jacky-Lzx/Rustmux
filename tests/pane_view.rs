@@ -4,7 +4,24 @@ use rustmux::{
     parser::Parser,
     render::Renderer,
     screen::Screen,
+    style::{Cell, Color},
 };
+
+fn resolved(cells: &[Cell]) -> Vec<Cell> {
+    cells
+        .iter()
+        .cloned()
+        .map(|mut cell| {
+            if cell.style.foreground == Color::Default {
+                cell.style.foreground = Color::Rgb(0xcd, 0xd6, 0xf4);
+            }
+            if cell.style.background == Color::Default {
+                cell.style.background = Color::Rgb(0x1e, 0x1e, 0x2e);
+            }
+            cell
+        })
+        .collect()
+}
 
 #[test]
 fn composition_preserves_cells_maps_cursor_and_replays_through_renderer() {
@@ -24,9 +41,12 @@ fn composition_preserves_cells_maps_cursor_and_replays_through_renderer() {
     let originals = (a.clone(), b.clone(), c.clone());
     let frame = compose(&layout, &[(bottom, &c), (left, &a), (top, &b)]).unwrap();
     for row in 0..5 {
-        assert_eq!(&frame.row(row + 1).unwrap()[1..5], a.row(row).unwrap());
+        assert_eq!(
+            &frame.row(row + 1).unwrap()[1..5],
+            resolved(a.row(row).unwrap())
+        );
     }
-    assert_eq!(&frame.row(4).unwrap()[7..12], c.row(0).unwrap());
+    assert_eq!(&frame.row(4).unwrap()[7..12], resolved(c.row(0).unwrap()));
     assert_eq!(frame.row(2).unwrap()[5].character, '│');
     assert_eq!(frame.row(2).unwrap()[6].character, '└');
     assert_eq!(frame.row(3).unwrap()[6].character, '┌');
@@ -80,7 +100,10 @@ fn zoom_needs_only_the_visible_full_size_screen() {
     Parser::new().advance(&mut full, b"ZOOM\x1b[2;3H");
     let frame = compose(&layout, &[(second, &full)]).unwrap();
     for row in 0..3 {
-        assert_eq!(&frame.row(row + 1).unwrap()[1..8], full.row(row).unwrap());
+        assert_eq!(
+            &frame.row(row + 1).unwrap()[1..8],
+            resolved(full.row(row).unwrap())
+        );
     }
     assert_eq!(frame.cursor(), (full.cursor().0 + 1, full.cursor().1 + 1));
     let hidden = Screen::new(3, 3).unwrap();
@@ -139,8 +162,8 @@ fn composing_taller_canvas_does_not_restore_history_or_shift_cursor() {
     let snapshot = b.clone();
     let view = compose(&layout, &[(top, &a), (bottom, &b)]).unwrap();
     assert_eq!(view.cursor(), (5, 4));
-    assert_eq!(&view.row(4).unwrap()[1..5], b.row(0).unwrap());
-    assert_eq!(&view.row(5).unwrap()[1..5], b.row(1).unwrap());
+    assert_eq!(&view.row(4).unwrap()[1..5], resolved(b.row(0).unwrap()));
+    assert_eq!(&view.row(5).unwrap()[1..5], resolved(b.row(1).unwrap()));
     assert_eq!(view.history_len(), b.history_len());
     assert_eq!(b, snapshot);
 }

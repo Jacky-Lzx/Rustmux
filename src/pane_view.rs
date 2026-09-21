@@ -6,6 +6,7 @@ use crate::{
     pane::MAX_CELLS,
     screen::Screen,
     style::Cell,
+    theme::{DEFAULT_BACKGROUND, DEFAULT_FOREGROUND},
 };
 use std::io;
 
@@ -76,7 +77,13 @@ pub(crate) fn compose_with_titles(
     let mut frame = (*active).clone();
     frame.resize_display(usize::from(rows), usize::from(columns))?;
     for (_, rect, source) in &visible {
-        frame.copy_display_cells(source, usize::from(rect.row), usize::from(rect.column));
+        frame.copy_display_cells(
+            source,
+            usize::from(rect.row),
+            usize::from(rect.column),
+            DEFAULT_FOREGROUND,
+            DEFAULT_BACKGROUND,
+        );
     }
     // Each pane owns all four sides of its frame. A split reserves two cells so
     // adjacent panes remain visually distinct instead of sharing one separator.
@@ -404,7 +411,16 @@ mod tests {
         child.print('k');
         let view = compose(&layout, &[(layout.active(), &child)]).unwrap();
         assert_eq!(view.dimensions(), child.dimensions());
-        assert_eq!(view.row(0), child.row(0));
+        assert_eq!(view.row(0).unwrap()[0].style.foreground, DEFAULT_FOREGROUND);
+        assert_eq!(view.row(0).unwrap()[0].style.background, DEFAULT_BACKGROUND);
+        assert_eq!(
+            view.row(0)
+                .unwrap()
+                .iter()
+                .map(|cell| cell.character)
+                .collect::<String>(),
+            "ok"
+        );
         assert_eq!(view.cursor(), child.cursor());
     }
 

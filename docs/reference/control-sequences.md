@@ -27,6 +27,7 @@ CSI below means the two bytes ESC followed by `[`. The command subset follows
 | CSI n A / B / C / D | Move up / down / right / left; omitted or zero count means one |
 | CSI row ; column H / f | Position relative to the active origin using one-based coordinates; omitted or zero values mean one |
 | CSI 5 n / 6 n | Reply with status / cursor position; see [Terminal Status Replies](status-replies.md) |
+| OSC 10 ; ? / OSC 11 ; ? | Reply with the default foreground / background color; see [Terminal Status Replies](status-replies.md) |
 | CSI n J | Erase display: 0 cursor through end, 1 start through cursor, 2 whole grid |
 | CSI parameters m | Set text attributes and colors; see [Text Styles](text-styles.md) |
 | CSI 4 h / l | Enable / disable [insert mode](insert-mode.md) |
@@ -69,8 +70,9 @@ at most two; one-parameter commands reject extra parameters. Parser storage is c
 sequence length. Unsupported ESC sequences are consumed without printing their
 sequence bytes.
 
-The display parser discards OSC payload through BEL or ST (ESC followed by
-backslash). A separate bounded observer recognizes OSC 7 working-directory
+The display parser retains at most four OSC payload bytes to recognize OSC 10/11
+default-color queries, and otherwise discards OSC through BEL or ST (ESC followed
+by backslash). A separate bounded observer recognizes OSC 7 working-directory
 metadata and OSC 133 command-output boundaries for Ctrl-B `e`; other OSC payload
 remains uninterpreted.
 DCS, SOS, PM and APC payloads are discarded through ST. These strings are not

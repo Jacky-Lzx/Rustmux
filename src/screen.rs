@@ -671,12 +671,30 @@ impl Screen {
     }
 
     // Display-only assembly helpers. The compositor validates all rectangles before
-    // calling these; direct cell copies preserve styles, wide cells and suffixes.
-    pub(crate) fn copy_display_cells(&mut self, source: &Screen, row: usize, column: usize) {
+    // calling these; copies preserve attributes, wide cells and suffixes while
+    // resolving the pane's symbolic default foreground/background.
+    pub(crate) fn copy_display_cells(
+        &mut self,
+        source: &Screen,
+        row: usize,
+        column: usize,
+        default_foreground: crate::style::Color,
+        default_background: crate::style::Color,
+    ) {
         for offset in 0..source.rows {
             let start = (row + offset) * self.columns + column;
-            self.cells[start..start + source.columns]
-                .clone_from_slice(source.row(offset).expect("source row exists"));
+            for (target, source) in self.cells[start..start + source.columns]
+                .iter_mut()
+                .zip(source.row(offset).expect("source row exists"))
+            {
+                *target = source.clone();
+                if target.style.foreground == crate::style::Color::Default {
+                    target.style.foreground = default_foreground;
+                }
+                if target.style.background == crate::style::Color::Default {
+                    target.style.background = default_background;
+                }
+            }
         }
     }
 

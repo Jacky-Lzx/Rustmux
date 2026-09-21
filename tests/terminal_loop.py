@@ -163,7 +163,7 @@ class Session:
                     # below the prompt row, confusing the simplified row cache.
                     # Match the renderer's exact prompt write instead; an echoed
                     # "prompt + command" has command bytes before the SGR reset.
-                    prompt = (rb"\x1b\[[0-9]+;[0-9]+H"
+                    prompt = (rb"\x1b\[[0-9]+;[0-9]+H(?:\x1b\[[0-9;:]*m)*"
                               + re.escape(target.rstrip()) + rb" *\x1b\[0m")
                     content = rows[1:] if len(rows) > 1 else rows
                     if (any(row.rstrip() == target.rstrip() for row in content)
@@ -279,13 +279,13 @@ try:
     s.expect(b"RUSTMUX_READY> ")
     s.send(b"printf '\\033[2J\\033[Habc\\033[1;2H\\033[31mX\\033[0m\\n'\n")
     s.expect(b"\r\naXc\r\n")
-    assert b"\x1b[0;38;5;1mX" in s.last_frame, s.last_frame
+    assert b"\x1b[0;38;5;1;48;2;30;30;46mX" in s.last_frame, s.last_frame
     s.send(
         b"stty -echo; printf '\\n\\033[4:3;58:2::1:2:3mUNDER\\033[0m'; "
         b"stty echo; printf '\\nSTYLE_''DONE\\n'\n"
     )
-    s.expect(b"\r\nSTYLE_DONE\r\n")
-    assert b"\x1b[0;4:3;58;2;1;2;3mUNDER" in s.last_frame, s.last_frame
+    style_output = s.expect(b"\r\nSTYLE_DONE\r\n")
+    assert b"\x1b[0;4:3;38;2;205;214;244;48;2;30;30;46;58;2;1;2;3mUNDER" in style_output, style_output[-2000:]
     s.send(b"printf '\\033[?1049h\\033[HALTSCREEN'; read answer; printf '\\033[?1049l'\n")
     s.expect(b"\r\nALTSCREEN\r\n")
     s.send(b"\n")
@@ -433,6 +433,8 @@ def receive(expected):
     assert data == expected, repr(data[:80])
 os.write(1, b"\x1b[2;3H\x1b[5n\x1b[6n\x1b[?6n")
 receive(b"\x1b[0n\x1b[2;3R\x1b[?2;3R")
+os.write(1, b"\x1b]10;?\x07\x1b]11;?\x1b\\")
+receive(b"\x1b]10;rgb:cdcd/d6d6/f4f4\x07\x1b]11;rgb:1e1e/1e1e/2e2e\x1b\\")
 os.write(1, b"\x1b[3;10r\x1b[?6h\x1b[2;4H\x1b[6n\x1b[?6n")
 receive(b"\x1b[2;4R\x1b[?2;4R")
 def flood():

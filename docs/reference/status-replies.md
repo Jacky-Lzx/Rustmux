@@ -9,6 +9,8 @@ from its screen model.
 | CSI 5 n | CSI 0 n (ready) |
 | CSI 6 n | CSI row ; column R (cursor position) |
 | CSI ? 6 n | CSI ? row ; column R (DECXCPR) |
+| OSC 10 ; ? BEL/ST | OSC 10 ; rgb:cdcd/d6d6/f4f4 BEL/ST |
+| OSC 11 ; ? BEL/ST | OSC 11 ; rgb:1e1e/1e1e/2e2e BEL/ST |
 
 Cursor coordinates are one-based. With DECOM enabled, the reported row is
 relative to the scrolling region's top. Otherwise it is relative to the screen.
@@ -18,8 +20,14 @@ the last column without triggering pending wrap.
 
 Queries do not change cells, cursor, modes or style. Private DSR supports only
 DECXCPR (`CSI ? 6 n`); other values, omitted or extra parameters, colon groups
-and numeric overflow produce no reply. Query-like bytes inside OSC/DCS payloads
+and numeric overflow produce no reply. CSI-like bytes inside OSC/DCS payloads
 are not interpreted.
+
+OSC 10 and OSC 11 report Rustmux's default pane foreground and background,
+respectively. Pane cells using SGR 39/49 or the initial default style are rendered
+with those same Catppuccin Mocha colors, so the reported values match the visible
+defaults rather than the attaching terminal's theme. Replies preserve the query's
+BEL or ST terminator. Dynamic color setters and multi-color queries are ignored.
 
 ## Parser API and CLI delivery
 
@@ -46,9 +54,8 @@ malformed queries, incomplete-stream handling and the reply-size bound.
 The real CLI PTY test checks both queries and 20,000 status requests, producing
 more reply bytes than fit in the queue while the child reads concurrently.
 
-Tertiary device attributes, other private DSR values, OSC foreground/background
-color queries, and general terminal capability queries remain unsupported.
-[Mode queries](mode-queries.md) support the explicitly listed ANSI/private modes. In particular, this step
-does not resolve applications waiting for an OSC background-color reply.
+Tertiary device attributes, other private DSR values, dynamic OSC color setters,
+palette/cursor color queries, and general terminal capability queries remain unsupported.
+[Mode queries](mode-queries.md) support the explicitly listed ANSI/private modes.
 
 [Primary device attributes](device-attributes.md) provide a conservative DA1 reply.

@@ -66,6 +66,37 @@ fn malformed_unsupported_and_string_queries_produce_no_reply() {
 }
 
 #[test]
+fn default_color_queries_use_matching_terminators_and_are_ordered() {
+    let (screen, output) = replies(b"before\x1b]10;?\x07middle\x1b]11;?\x1b\\after\x1b[5n");
+    assert_eq!(
+        output,
+        b"\x1b]10;rgb:cdcd/d6d6/f4f4\x07\x1b]11;rgb:1e1e/1e1e/2e2e\x1b\\\x1b[0n"
+    );
+    let mut expected = Screen::new(8, 12).unwrap();
+    Parser::new().advance(&mut expected, b"beforemiddleafter");
+    assert_eq!(screen, expected);
+}
+
+#[test]
+fn unsupported_malformed_and_cancelled_color_queries_do_not_reply() {
+    for input in [
+        b"\x1b]9;?\x07".as_slice(),
+        b"\x1b]10\x07",
+        b"\x1b]10;?;?\x07",
+        b"\x1b]10;#ffffff\x07",
+        b"\x1b]11;?\x18",
+        b"\x1b]11;?\x1bX\x1b\\",
+        b"\x1b]11;?\x1b\x07",
+        b"\x1bP10;?\x1b\\",
+    ] {
+        assert!(
+            replies(input).1.is_empty(),
+            "unexpected reply for {input:?}"
+        );
+    }
+}
+
+#[test]
 fn split_final_byte_is_budgeted_and_finish_discards_incomplete_queries() {
     let mut screen = Screen::new(1, 1).unwrap();
     let mut parser = Parser::new();

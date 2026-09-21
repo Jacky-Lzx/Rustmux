@@ -28,6 +28,9 @@ enum State {
     String {
         osc: bool,
         escape: bool,
+        bytes: [u8; 4],
+        len: u8,
+        overflowed: bool,
     },
 }
 
@@ -176,17 +179,44 @@ impl Parser {
             self.state = State::Ground;
             return;
         }
-        if let State::String { osc, escape } = self.state {
+        if let State::String {
+            osc,
+            escape,
+            mut bytes,
+            mut len,
+            mut overflowed,
+        } = self.state
+        {
             // OSC accepts BEL or ST (ESC backslash); other strings require ST.
-            // Never buffer or render string payload, including embedded controls.
-            self.state = if (osc && byte == 7) || (escape && byte == b'\\') {
-                State::Ground
-            } else {
-                State::String {
-                    osc,
-                    escape: byte == 0x1b,
+            // Retain only enough payload for the bounded OSC 10/11 queries.
+            let bell_terminated = osc && byte == 7;
+            if bell_terminated || (escape && byte == b'\\') {
+                if osc && !overflowed && (!bell_terminated || !escape) {
+                    Self::osc(&bytes[..usize::from(len)], byte == 7, reply);
                 }
-            };
+                self.state = State::Ground;
+            } else {
+                if escape {
+                    // A non-terminating ESC is payload and cannot form a supported query.
+                    overflowed = true;
+                }
+                let next_escape = byte == 0x1b;
+                if osc && !next_escape && !overflowed {
+                    if let Some(slot) = bytes.get_mut(usize::from(len)) {
+                        *slot = byte;
+                        len += 1;
+                    } else {
+                        overflowed = true;
+                    }
+                }
+                self.state = State::String {
+                    osc,
+                    escape: next_escape,
+                    bytes,
+                    len,
+                    overflowed,
+                };
+            }
             return;
         }
         if byte == 7 {
@@ -272,6 +302,9 @@ impl Parser {
                 b']' | b'P' | b'X' | b'^' | b'_' => State::String {
                     osc: byte == b']',
                     escape: false,
+                    bytes: [0; 4],
+                    len: 0,
+                    overflowed: false,
                 },
                 0x20..=0x2f => State::EscapeIntermediate,
                 _ => State::Ground,
@@ -359,6 +392,23 @@ impl Parser {
             }
             State::String { .. } => unreachable!("strings handled above"),
         };
+    }
+
+    fn osc(control: &[u8], bell_terminated: bool, reply: &mut impl FnMut(&[u8])) {
+        let (code, color) = match control {
+            b"10;?" => (10, crate::theme::DEFAULT_FOREGROUND_RGB),
+            b"11;?" => (11, crate::theme::DEFAULT_BACKGROUND_RGB),
+            _ => return,
+        };
+        let terminator = if bell_terminated { "\x07" } else { "\x1b\\" };
+        let response = format!(
+            "\x1b]{code};rgb:{:04x}/{:04x}/{:04x}{terminator}",
+            u16::from(color.0) * 257,
+            u16::from(color.1) * 257,
+            u16::from(color.2) * 257,
+        );
+        debug_assert!(response.len() <= MAX_REPLY_BYTES);
+        reply(response.as_bytes());
     }
 
     fn dispatch(
