@@ -39,6 +39,7 @@ struct OutputModes {
     keypad: bool,
     backarrow: bool,
     cursor_shape: CursorShape,
+    cursor_color: (u8, u8, u8),
     focus: bool,
     mouse: (MouseTracking, bool),
 }
@@ -52,6 +53,7 @@ impl OutputModes {
             keypad: screen.application_keypad(),
             backarrow: screen.backarrow_sends_backspace(),
             cursor_shape: screen.cursor_shape(),
+            cursor_color: screen.cursor_color(),
             focus: screen.focus_reporting(),
             mouse: (screen.mouse_tracking(), screen.sgr_mouse()),
         }
@@ -139,6 +141,10 @@ fn render_frame(
     // Set shape while hidden; the frame ending restores requested visibility.
     if previous_modes.is_none_or(|modes| modes.cursor_shape != screen.cursor_shape()) {
         write!(output, "\x1b[{} q", screen.cursor_shape() as u8)?;
+    }
+    if previous_modes.is_none_or(|modes| modes.cursor_color != screen.cursor_color()) {
+        let (red, green, blue) = screen.cursor_color();
+        write!(output, "\x1b]12;#{red:02x}{green:02x}{blue:02x}\x1b\\")?;
     }
     if previous_modes.is_none_or(|modes| modes.focus != screen.focus_reporting()) {
         output.write_all(if screen.focus_reporting() {

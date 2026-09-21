@@ -269,6 +269,7 @@ try:
     s.finish(7)
     assert any(row.endswith(b"BURST_DONE") for row in s.last_rows), s.last_rows
     assert b"LAST_OUTPUT" in s.last_rows, s.last_rows
+    assert b"\x1b]112\x1b\\" in s.output
     assert b"\x1b[?1049l" in s.output
 finally:
     s.close()
@@ -433,11 +434,11 @@ def receive(expected):
     assert data == expected, repr(data[:80])
 os.write(1, b"\x1b[2;3H\x1b[5n\x1b[6n\x1b[?6n")
 receive(b"\x1b[0n\x1b[2;3R\x1b[?2;3R")
-os.write(1, b"\x1b]10;?;?\x07")
-receive(b"\x1b]10;rgb:cdcd/d6d6/f4f4\x07\x1b]11;rgb:1e1e/1e1e/2e2e\x07")
-os.write(1, b"\x1b]10;#010203;rgb:1111/2222/3333\x1b\\\x1b]10;?;?\x1b\\")
-receive(b"\x1b]10;rgb:0101/0202/0303\x1b\\\x1b]11;rgb:1111/2222/3333\x1b\\")
-os.write(1, b"\x1b]110\x1b\\\x1b]111\x07")
+os.write(1, b"\x1b]10;?;?;?\x07")
+receive(b"\x1b]10;rgb:cdcd/d6d6/f4f4\x07\x1b]11;rgb:1e1e/1e1e/2e2e\x07\x1b]12;rgb:f5f5/e0e0/dcdc\x07")
+os.write(1, b"\x1b]10;#010203;rgb:1111/2222/3333;#a0b0c0\x1b\\\x1b]10;?;?;?\x1b\\")
+receive(b"\x1b]10;rgb:0101/0202/0303\x1b\\\x1b]11;rgb:1111/2222/3333\x1b\\\x1b]12;rgb:a0a0/b0b0/c0c0\x1b\\")
+os.write(1, b"\x1b]110\x1b\\\x1b]111\x07\x1b]112\x1b\\")
 os.write(1, b"\x1b]4;1;?;1;#010203;1;?\x07")
 receive(b"\x1b]4;1;rgb:cdcd/0000/0000\x07\x1b]4;1;rgb:0101/0202/0303\x07")
 os.write(1, b"\x1b]104;1;2\x07")

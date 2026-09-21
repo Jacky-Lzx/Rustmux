@@ -28,13 +28,14 @@ const ENTER: &[u8] = b"\x1b[?1049h";
 // ?1003l: disable reporting of all mouse motion.
 // ?1004l: disable focus-in/focus-out event reporting.
 // ?1006l: disable SGR mouse report encoding.
+// OSC 112 ST: restore the terminal's configured cursor color.
 // 0m: reset text attributes, including colors and bold.
 // ?25h: show the cursor.
 // ?1049l: return to the main screen buffer and restore the saved cursor.
 // These are baseline resets, not a snapshot of the previous display modes.
 // Raw mode and other termios attributes are restored separately.
 const LEAVE: &[u8] =
-    b"\x1b[0 q\x1b>\x1b[?1l\x1b[?67l\x1b[=0u\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1004l\x1b[?1006l\x1b[0m\x1b[?25h\x1b[?1049l";
+    b"\x1b[0 q\x1b>\x1b[?1l\x1b[?67l\x1b[=0u\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1004l\x1b[?1006l\x1b]112\x1b\\\x1b[0m\x1b[?25h\x1b[?1049l";
 
 /// One nonblocking file description for terminal input and output.
 pub(crate) struct TerminalDevice {

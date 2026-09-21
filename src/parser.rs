@@ -424,6 +424,10 @@ impl Parser {
             screen.reset_default_background();
             return;
         }
+        if control == b"112" {
+            screen.reset_cursor_color();
+            return;
+        }
         if control == b"104" {
             screen.reset_palette();
             return;
@@ -488,13 +492,14 @@ impl Parser {
         let start = match code {
             b"10" => 10,
             b"11" => 11,
+            b"12" => 12,
             _ => return,
         };
 
-        let mut operations = [ColorOperation::Query; 2];
+        let mut operations = [ColorOperation::Query; 3];
         let mut count = 0;
         for value in values.split(|&byte| byte == b';') {
-            if count == operations.len() || start + count >= 12 || value.is_empty() {
+            if count == operations.len() || start + count >= 13 || value.is_empty() {
                 return;
             }
             operations[count] = if value == b"?" {
@@ -517,12 +522,13 @@ impl Parser {
             let code = start + offset;
             match operation {
                 ColorOperation::Set(color) if code == 10 => screen.set_default_foreground(*color),
-                ColorOperation::Set(color) => screen.set_default_background(*color),
+                ColorOperation::Set(color) if code == 11 => screen.set_default_background(*color),
+                ColorOperation::Set(color) => screen.set_cursor_color(*color),
                 ColorOperation::Query => {
-                    let current = if code == 10 {
-                        screen.default_foreground()
-                    } else {
-                        screen.default_background()
+                    let current = match code {
+                        10 => screen.default_foreground(),
+                        11 => screen.default_background(),
+                        _ => screen.cursor_color(),
                     };
                     let response = format!(
                         "\x1b]{code};rgb:{:04x}/{:04x}/{:04x}{terminator}",

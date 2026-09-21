@@ -67,10 +67,12 @@ fn malformed_unsupported_and_string_queries_produce_no_reply() {
 
 #[test]
 fn default_color_queries_use_matching_terminators_and_are_ordered() {
-    let (screen, output) = replies(b"before\x1b]10;?\x07middle\x1b]11;?\x1b\\after\x1b[5n");
+    let (screen, output) =
+        replies(b"before\x1b]10;?\x07middle\x1b]11;?\x1b\\after\x1b]12;?\x07\x1b[5n");
     assert_eq!(
         output,
-        b"\x1b]10;rgb:cdcd/d6d6/f4f4\x07\x1b]11;rgb:1e1e/1e1e/2e2e\x1b\\\x1b[0n"
+        b"\x1b]10;rgb:cdcd/d6d6/f4f4\x07\x1b]11;rgb:1e1e/1e1e/2e2e\x1b\\\
+          \x1b]12;rgb:f5f5/e0e0/dcdc\x07\x1b[0n"
     );
     let mut expected = Screen::new(8, 12).unwrap();
     Parser::new().advance(&mut expected, b"beforemiddleafter");
@@ -78,16 +80,18 @@ fn default_color_queries_use_matching_terminators_and_are_ordered() {
 }
 
 #[test]
-fn successive_default_color_parameters_target_foreground_then_background() {
+fn successive_dynamic_color_parameters_include_the_cursor() {
     let (_, output) = replies(
-        b"\x1b]10;?;?\x07\
-          \x1b]10;#010203;rgb:1111/2222/3333\x1b\\\
-          \x1b]10;?;?\x1b\\",
+        b"\x1b]10;?;?;?\x07\
+          \x1b]10;#010203;rgb:1111/2222/3333;#a0b0c0\x1b\\\
+          \x1b]10;?;?;?\x1b\\",
     );
     assert_eq!(
         output,
         b"\x1b]10;rgb:cdcd/d6d6/f4f4\x07\x1b]11;rgb:1e1e/1e1e/2e2e\x07\
-          \x1b]10;rgb:0101/0202/0303\x1b\\\x1b]11;rgb:1111/2222/3333\x1b\\"
+          \x1b]12;rgb:f5f5/e0e0/dcdc\x07\
+          \x1b]10;rgb:0101/0202/0303\x1b\\\x1b]11;rgb:1111/2222/3333\x1b\\\
+          \x1b]12;rgb:a0a0/b0b0/c0c0\x1b\\"
     );
 }
 
@@ -183,18 +187,20 @@ fn maximum_buffered_palette_query_fits_the_final_byte_reply_budget() {
 }
 
 #[test]
-fn default_colors_are_stateful_resettable_and_survive_ris() {
+fn dynamic_colors_are_stateful_resettable_and_survive_ris() {
     let (_, output) = replies(
-        b"\x1b]10;#010203\x1b\\\x1b]11;rgb:1111/2222/3333\x07\
-          \x1b]10;?\x1b\\\x1b]11;?\x07\
-          \x1bc\x1b]10;?\x1b\\\x1b]11;?\x07\
-          \x1b]110\x1b\\\x1b]111\x07\x1b]10;?\x1b\\\x1b]11;?\x07",
+        b"\x1b]10;#010203;rgb:1111/2222/3333;#a0b0c0\x07\
+          \x1b]10;?;?;?\x1b\\\x1bc\x1b]10;?;?;?\x07\
+          \x1b]110\x1b\\\x1b]111\x07\x1b]112\x1b\\\x1b]10;?;?;?\x07",
     );
     assert_eq!(
         output,
-        b"\x1b]10;rgb:0101/0202/0303\x1b\\\x1b]11;rgb:1111/2222/3333\x07\
-          \x1b]10;rgb:0101/0202/0303\x1b\\\x1b]11;rgb:1111/2222/3333\x07\
-          \x1b]10;rgb:cdcd/d6d6/f4f4\x1b\\\x1b]11;rgb:1e1e/1e1e/2e2e\x07"
+        b"\x1b]10;rgb:0101/0202/0303\x1b\\\x1b]11;rgb:1111/2222/3333\x1b\\\
+          \x1b]12;rgb:a0a0/b0b0/c0c0\x1b\\\
+          \x1b]10;rgb:0101/0202/0303\x07\x1b]11;rgb:1111/2222/3333\x07\
+          \x1b]12;rgb:a0a0/b0b0/c0c0\x07\
+          \x1b]10;rgb:cdcd/d6d6/f4f4\x07\x1b]11;rgb:1e1e/1e1e/2e2e\x07\
+          \x1b]12;rgb:f5f5/e0e0/dcdc\x07"
     );
 }
 
@@ -216,13 +222,18 @@ fn invalid_default_color_setters_are_atomic() {
         );
     }
 
-    for invalid in ["#010203;invalid", "#010203;#040506;#070809", "?;?"] {
-        let code = if invalid == "?;?" { 11 } else { 10 };
-        let input =
-            format!("\x1b]10;#123456;#654321\x1b\\\x1b]{code};{invalid}\x07\x1b]10;?;?\x1b\\");
+    for (code, invalid) in [
+        (10, "#010203;invalid"),
+        (10, "#010203;#040506;#070809;?"),
+        (12, "?;?"),
+    ] {
+        let input = format!(
+            "\x1b]10;#123456;#654321;#abcdef\x1b\\\x1b]{code};{invalid}\x07\x1b]10;?;?;?\x1b\\"
+        );
         assert_eq!(
             replies(input.as_bytes()).1,
-            b"\x1b]10;rgb:1212/3434/5656\x1b\\\x1b]11;rgb:6565/4343/2121\x1b\\"
+            b"\x1b]10;rgb:1212/3434/5656\x1b\\\x1b]11;rgb:6565/4343/2121\x1b\\\
+              \x1b]12;rgb:abab/cdcd/efef\x1b\\"
         );
     }
 }
@@ -244,7 +255,7 @@ fn unsupported_malformed_and_cancelled_color_queries_do_not_reply() {
     for input in [
         b"\x1b]9;?\x07".as_slice(),
         b"\x1b]10\x07",
-        b"\x1b]10;?;?;?\x07",
+        b"\x1b]10;?;?;?;?\x07",
         b"\x1b]11;?\x18",
         b"\x1b]11;?\x1bX\x1b\\",
         b"\x1b]11;?\x1b\x07",

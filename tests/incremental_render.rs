@@ -15,6 +15,7 @@ fn assert_grid(screen: &Screen, replay: &Screen) {
     assert_eq!(screen.cursor(), replay.cursor());
     assert_eq!(screen.cursor_visible(), replay.cursor_visible());
     assert_eq!(screen.cursor_shape(), replay.cursor_shape());
+    assert_eq!(screen.cursor_color(), replay.cursor_color());
 }
 #[test]
 fn one_changed_row_and_cursor_only_frames_preserve_untouched_rows() {

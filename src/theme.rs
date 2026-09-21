@@ -4,6 +4,7 @@ use crate::style::Color;
 
 pub(crate) const DEFAULT_FOREGROUND_RGB: (u8, u8, u8) = (0xcd, 0xd6, 0xf4);
 pub(crate) const DEFAULT_BACKGROUND_RGB: (u8, u8, u8) = (0x1e, 0x1e, 0x2e);
+pub(crate) const DEFAULT_CURSOR_RGB: (u8, u8, u8) = (0xf5, 0xe0, 0xdc);
 
 pub(crate) const DEFAULT_FOREGROUND: Color = Color::Rgb(
     DEFAULT_FOREGROUND_RGB.0,

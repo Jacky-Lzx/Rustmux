@@ -220,3 +220,20 @@ fn panes_render_independent_dynamic_palette_entries() {
         Color::Rgb(205, 0, 0)
     );
 }
+
+#[test]
+fn active_pane_supplies_the_composed_cursor_color() {
+    let mut layout = Layout::new(5, 10).unwrap();
+    let left = layout.active();
+    let right = layout.split_active(SplitAxis::Columns).unwrap();
+    let mut left_screen = Screen::new(3, 3).unwrap();
+    let mut right_screen = Screen::new(3, 3).unwrap();
+    Parser::new().advance(&mut left_screen, b"\x1b]12;#010203\x07");
+    Parser::new().advance(&mut right_screen, b"\x1b]12;#a0b0c0\x1b\\");
+
+    let frame = compose(&layout, &[(left, &left_screen), (right, &right_screen)]).unwrap();
+    assert_eq!(frame.cursor_color(), (160, 176, 192));
+    layout.select(left).unwrap();
+    let frame = compose(&layout, &[(left, &left_screen), (right, &right_screen)]).unwrap();
+    assert_eq!(frame.cursor_color(), (1, 2, 3));
+}

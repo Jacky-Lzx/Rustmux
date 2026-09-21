@@ -26,6 +26,7 @@ fn assert_modes(actual: &Screen, expected: &Screen) {
         expected.backarrow_sends_backspace()
     );
     assert_eq!(actual.cursor_shape(), expected.cursor_shape());
+    assert_eq!(actual.cursor_color(), expected.cursor_color());
     assert_eq!(actual.focus_reporting(), expected.focus_reporting());
     assert_eq!(actual.mouse_tracking(), expected.mouse_tracking());
     assert_eq!(actual.sgr_mouse(), expected.sgr_mouse());
@@ -75,6 +76,8 @@ fn individual_mode_changes_and_resets_replay_without_redundant_commands() {
         b"\x1b[?67l",
         b"\x1b[5 q",
         b"\x1b[0 q",
+        b"\x1b]12;#010203\x1b\\",
+        b"\x1b]112\x1b\\",
         b"\x1b[?1004h",
         b"\x1b[?1004l",
         b"\x1b[?1003;1006h",

@@ -24,6 +24,11 @@ resize, and is not part of a cursor save. The renderer hides the cursor while
 painting and ends with the model's requested visibility. CLI exit cleanup still
 shows the outer cursor.
 
+Cursor color is pane-local and controlled by OSC 12/112; see
+[Terminal Status Replies and Default Colors](status-replies.md). The active
+pane's color is synchronized on first render and pane switches. CLI exit cleanup
+uses OSC 112 to restore the outer terminal's configured cursor color.
+
 Each grid has one explicit save slot, containing coordinates, current text style,
 pending wrap, origin/autowrap modes and G0/G1 character-set state. Saving again replaces it; restoring does not consume it. Restore
 without a save is a no-op. Main and alternate slots are independent. A fresh

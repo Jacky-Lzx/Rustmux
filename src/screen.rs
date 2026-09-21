@@ -141,6 +141,7 @@ pub struct Screen {
     character_sets: CharacterSets,
     default_foreground: (u8, u8, u8),
     default_background: (u8, u8, u8),
+    cursor_color: (u8, u8, u8),
     palette: [Option<(u8, u8, u8)>; 256],
 }
 
@@ -274,6 +275,7 @@ impl Screen {
             character_sets: CharacterSets::default(),
             default_foreground: crate::theme::DEFAULT_FOREGROUND_RGB,
             default_background: crate::theme::DEFAULT_BACKGROUND_RGB,
+            cursor_color: crate::theme::DEFAULT_CURSOR_RGB,
             palette: [None; 256],
         })
     }
@@ -302,6 +304,18 @@ impl Screen {
         self.default_background = crate::theme::DEFAULT_BACKGROUND_RGB;
     }
 
+    pub fn cursor_color(&self) -> (u8, u8, u8) {
+        self.cursor_color
+    }
+
+    pub(crate) fn set_cursor_color(&mut self, color: (u8, u8, u8)) {
+        self.cursor_color = color;
+    }
+
+    pub(crate) fn reset_cursor_color(&mut self) {
+        self.cursor_color = crate::theme::DEFAULT_CURSOR_RGB;
+    }
+
     pub(crate) fn palette_color(&self, index: u8) -> (u8, u8, u8) {
         self.palette[usize::from(index)]
             .unwrap_or_else(|| crate::theme::default_palette_color(index))
@@ -322,6 +336,7 @@ impl Screen {
     pub(crate) fn copy_dynamic_colors(&mut self, source: &Self) {
         self.default_foreground = source.default_foreground;
         self.default_background = source.default_background;
+        self.cursor_color = source.cursor_color;
         self.palette = source.palette;
     }
 
@@ -558,6 +573,7 @@ impl Screen {
         resized.character_sets = self.character_sets;
         resized.default_foreground = self.default_foreground;
         resized.default_background = self.default_background;
+        resized.cursor_color = self.cursor_color;
         resized.palette = self.palette;
         let retained_columns = self.columns.min(columns);
         resized.tab_stops[..retained_columns].copy_from_slice(&self.tab_stops[..retained_columns]);

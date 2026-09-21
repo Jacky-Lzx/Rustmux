@@ -46,18 +46,19 @@ fn resize_preserves_dynamic_default_and_palette_colors() {
     let mut parser = Parser::new();
     parser.advance(
         &mut screen,
-        b"\x1b]10;#010203\x07\x1b]11;#040506\x07\x1b]4;1;#070809\x07",
+        b"\x1b]10;#010203;#040506;#0a0b0c\x07\x1b]4;1;#070809\x07",
     );
     screen.resize(3, 4).unwrap();
     let mut replies = Vec::new();
     parser.advance_with_replies(
         &mut screen,
-        b"\x1b]10;?;?\x1b\\\x1b]4;1;?\x1b\\",
+        b"\x1b]10;?;?;?\x1b\\\x1b]4;1;?\x1b\\",
         &mut |reply| replies.extend_from_slice(reply),
     );
     assert_eq!(
         replies,
         b"\x1b]10;rgb:0101/0202/0303\x1b\\\x1b]11;rgb:0404/0505/0606\x1b\\\
+          \x1b]12;rgb:0a0a/0b0b/0c0c\x1b\\\
           \x1b]4;1;rgb:0707/0808/0909\x1b\\"
     );
 }
