@@ -90,9 +90,8 @@ malformed queries, incomplete-stream handling and the reply-size bound.
 The real CLI PTY test checks both queries and 20,000 status requests, producing
 more reply bytes than fit in the queue while the child reads concurrently.
 
-Tertiary device attributes, other private DSR values, dynamic colors after the
-text cursor, named colors
+Other private DSR values, dynamic colors after the text cursor, named colors
 and general terminal capability queries remain unsupported.
 [Mode queries](mode-queries.md) support the explicitly listed ANSI/private modes.
 
-[Primary device attributes](device-attributes.md) provide a conservative DA1 reply.
+[Device attributes](device-attributes.md) provide conservative DA1, DA2 and DA3 replies.

@@ -26,10 +26,11 @@ fn replies(input: &[u8]) -> Vec<u8> {
     expected.unwrap()
 }
 #[test]
-fn primary_secondary_and_legacy_requests_reply_in_order_without_changing_state() {
+fn all_device_attribute_requests_reply_in_order_without_changing_state() {
     assert_eq!(
-        replies(b"\x1b[c\x1b[0c\x1b[>c\x1b[>0c\x1bZ\x1b[5n"),
-        b"\x1b[?1;0c\x1b[?1;0c\x1b[>0;0;0c\x1b[>0;0;0c\x1b[?1;0c\x1b[0n"
+        replies(b"\x1b[c\x1b[0c\x1b[>c\x1b[>0c\x1b[=c\x1b[=0c\x1bZ\x1b[5n"),
+        b"\x1b[?1;0c\x1b[?1;0c\x1b[>0;0;0c\x1b[>0;0;0c\
+          \x1bP!|00000000\x1b\\\x1bP!|00000000\x1b\\\x1b[?1;0c\x1b[0n"
     );
 }
 #[test]
@@ -39,7 +40,9 @@ fn unsupported_variants_malformed_queries_and_response_echoes_are_silent() {
         b"\x1b[>1c",
         b"\x1b[>0;0c",
         b"\x1b[>0:0c",
-        b"\x1b[=c",
+        b"\x1b[=1c",
+        b"\x1b[=0;0c",
+        b"\x1b[=0:0c",
         b"\x1b[?c",
         b"\x1b[0;0c",
         b"\x1b[0:0c",
@@ -48,6 +51,7 @@ fn unsupported_variants_malformed_queries_and_response_echoes_are_silent() {
         b"\x1b[999999999999999999999999c",
         b"\x1b[?1;0c",
         b"\x1b[>0;0;0c",
+        b"\x1bP!|00000000\x1b\\",
         b"\x1b Z",
         b"\x1b]ignored\x1b[c\x07",
         b"\x1bPignored\x1bZ\x1b\\",
@@ -77,11 +81,15 @@ fn bytewise_requests_fit_the_single_final_byte_reply_budget() {
     let mut parser = Parser::new();
     let mut screen = Screen::new(3, 8).unwrap();
     let mut output = Vec::new();
-    for byte in b"\x1b[0c\x1b[>c\x1b[>0c\x1bZ" {
+    for byte in b"\x1b[0c\x1b[>c\x1b[>0c\x1b[=c\x1b[=0c\x1bZ" {
         parser.advance_with_replies(&mut screen, &[*byte], &mut |r| {
             assert!(r.len() <= MAX_REPLY_BYTES);
             output.extend_from_slice(r);
         });
     }
-    assert_eq!(output, b"\x1b[?1;0c\x1b[>0;0;0c\x1b[>0;0;0c\x1b[?1;0c");
+    assert_eq!(
+        output,
+        b"\x1b[?1;0c\x1b[>0;0;0c\x1b[>0;0;0c\
+          \x1bP!|00000000\x1b\\\x1bP!|00000000\x1b\\\x1b[?1;0c"
+    );
 }

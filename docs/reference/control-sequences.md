@@ -27,6 +27,7 @@ CSI below means the two bytes ESC followed by `[`. The command subset follows
 | CSI n A / B / C / D | Move up / down / right / left; omitted or zero count means one |
 | CSI row ; column H / f | Position relative to the active origin using one-based coordinates; omitted or zero values mean one |
 | CSI 5 n / 6 n | Reply with status / cursor position; see [Terminal Status Replies](status-replies.md) |
+| CSI c / > c / = c | Reply with conservative primary / secondary / tertiary [device attributes](device-attributes.md) |
 | OSC 10 / 11 / 12 ; color | Set the pane's foreground / background / cursor color; `?` queries it; see [Terminal Status Replies](status-replies.md) |
 | OSC 110 / 111 / 112 | Reset the pane's foreground / background / cursor color |
 | OSC 4 ; index ; color ... | Set or query pane-local 256-color palette entries |

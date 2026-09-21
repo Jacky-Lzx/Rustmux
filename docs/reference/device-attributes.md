@@ -1,6 +1,7 @@
 # Device Attributes
 
-Rustmux answers primary and secondary device attributes (DA1 and DA2):
+Rustmux answers primary, secondary and tertiary device attributes (DA1, DA2 and
+DA3):
 
 | Request | Reply |
 | --- | --- |
@@ -9,6 +10,8 @@ Rustmux answers primary and secondary device attributes (DA1 and DA2):
 | ESC Z (legacy DECID) | CSI ? 1 ; 0 c |
 | CSI > c | CSI > 0 ; 0 ; 0 c |
 | CSI > 0 c | CSI > 0 ; 0 ; 0 c |
+| CSI = c | DCS ! \| 00000000 ST |
+| CSI = 0 c | DCS ! \| 00000000 ST |
 
 [XTerm's table](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html) identifies
 this response as VT101 with no options, in the VT100 family. Rustmux uses it as
@@ -19,14 +22,18 @@ The DA2 response likewise identifies the VT100 terminal type, firmware version
 zero and no ROM cartridge; it does not identify Rustmux as xterm or another
 outer terminal.
 
+The DA3 response is the VT400 Terminal Unit ID report. Like XTerm, Rustmux uses
+zeros for both the site code and serial number. This stable value avoids exposing
+host identifiers and does not claim a real hardware serial number.
+
 The reply is constant and independent of the outer terminal or TERM environment.
 It does not enumerate Rustmux's RGB, mouse or other extensions. Supported mode
 states can be queried through [DECRQM](mode-queries.md). No capabilities are
 inferred from Kitty or another outer terminal and passed through to the child.
 
-Only zero or omitted DA1/DA2 parameters are accepted. Nonzero values, extra
-parameters, colon groups, intermediates, overflow, and DA3 prefixes are ignored.
-An echoed DA1 or DA2 response is not a request and produces no reply.
+Only zero or omitted DA1/DA2/DA3 parameters are accepted. Nonzero values, extra
+parameters, colon groups, intermediates and overflow are ignored. An echoed DA1,
+DA2 or DA3 response is not a request and produces no reply.
 OSC/DCS payloads remain uninterpreted. C0 controls and cancellation keep the
 existing parser rules.
 
@@ -39,6 +46,6 @@ output pauses painting. There is no new queue or dependency.
 Run `cargo test --test device_attributes`. Tests cover all request forms, every
 split boundary, bytewise parsing, unchanged state, invalid requests, response
 echoes, cancellation and EOF. The nested PTY suite checks all forms and 10,000
-paired DA1/DA2 requests whose replies exceed the 64 KiB queue. It also checks
+grouped DA1/DA2/DA3 requests whose replies exceed the 64 KiB queue. It also checks
 both queries during a synchronized batch. These tests verify the protocol path,
 not universal terminal application compatibility.

@@ -24,6 +24,9 @@ const PRIMARY_DA: &[u8] = b"\x1b[?1;0c";
 // VT100-family terminal type, firmware version zero and no ROM cartridge.
 // Keep this conservative identity independent of the outer terminal.
 const SECONDARY_DA: &[u8] = b"\x1b[>0;0;0c";
+// VT400-style terminal unit identifier with zero site code and serial number.
+// This matches XTerm's privacy-preserving DECRPTUI response.
+const TERTIARY_DA: &[u8] = b"\x1bP!|00000000\x1b\\";
 
 #[derive(Clone, Copy)]
 enum ColorOperation {
@@ -575,14 +578,19 @@ impl Parser {
             }
             return;
         }
-        if command == b'c' && parameters.keyboard_prefix == Some(b'>') {
-            if !parameters.private
-                && parameters.index == 0
-                && parameters.values[0].unwrap_or(0) == 0
-                && !parameters.subparameter.contains(&true)
+        if command == b'c' && matches!(parameters.keyboard_prefix, Some(b'>' | b'=')) {
+            if parameters.private
+                || parameters.index != 0
+                || parameters.values[0].unwrap_or(0) != 0
+                || parameters.subparameter.contains(&true)
             {
-                reply(SECONDARY_DA);
+                return;
             }
+            reply(if parameters.keyboard_prefix == Some(b'>') {
+                SECONDARY_DA
+            } else {
+                TERTIARY_DA
+            });
             return;
         }
         if parameters.keyboard_prefix.is_some() {
