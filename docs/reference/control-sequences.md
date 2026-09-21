@@ -29,8 +29,8 @@ CSI below means the two bytes ESC followed by `[`. The command subset follows
 | CSI 5 n / 6 n | Reply with status / cursor position; see [Terminal Status Replies](status-replies.md) |
 | OSC 10 / 11 ; color | Set the pane's default foreground / background; `?` queries it; see [Terminal Status Replies](status-replies.md) |
 | OSC 110 / 111 | Reset the pane's default foreground / background |
-| OSC 4 ; index ; color | Set or query one pane-local 256-color palette entry |
-| OSC 104 ; index | Reset one palette entry; omit index to reset all entries |
+| OSC 4 ; index ; color ... | Set or query pane-local 256-color palette entries |
+| OSC 104 ; index ... | Reset selected palette entries; omit indices to reset all |
 | CSI n J | Erase display: 0 cursor through end, 1 start through cursor, 2 whole grid |
 | CSI parameters m | Set text attributes and colors; see [Text Styles](text-styles.md) |
 | CSI 4 h / l | Enable / disable [insert mode](insert-mode.md) |

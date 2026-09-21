@@ -126,26 +126,42 @@ fn palette_entries_are_stateful_and_resettable() {
         b"\x1b]4;1;#010203\x1b\\\x1b]4;2;rgb:1111/2222/3333\x07\
           \x1bc\
           \x1b]4;1;?\x1b\\\x1b]4;2;?\x07\
-          \x1b]104;1\x1b\\\x1b]4;1;?\x07\x1b]4;2;?\x1b\\\
-          \x1b]104\x07\x1b]4;2;?\x07",
+          \x1b]104;1;2\x1b\\\x1b]4;1;?;2;?\x07\
+          \x1b]4;1;#010203;2;#040506\x07\x1b]104\x07\x1b]4;1;?;2;?\x1b\\",
     );
     assert_eq!(
         output,
         b"\x1b]4;1;rgb:0101/0202/0303\x1b\\\x1b]4;2;rgb:1111/2222/3333\x07\
-          \x1b]4;1;rgb:cdcd/0000/0000\x07\x1b]4;2;rgb:1111/2222/3333\x1b\\\
-          \x1b]4;2;rgb:0000/cdcd/0000\x07"
+          \x1b]4;1;rgb:cdcd/0000/0000\x07\x1b]4;2;rgb:0000/cdcd/0000\x07\
+          \x1b]4;1;rgb:cdcd/0000/0000\x1b\\\x1b]4;2;rgb:0000/cdcd/0000\x1b\\"
     );
 }
 
 #[test]
-fn malformed_and_multi_pair_palette_operations_are_atomic() {
+fn multi_pair_palette_operations_execute_in_parameter_order() {
+    let (_, output) = replies(
+        b"\x1b]4;1;?;2;#010203;2;?;1;#040506;1;?\x07\
+          \x1b]4;1;?;2;?\x1b\\",
+    );
+    assert_eq!(
+        output,
+        b"\x1b]4;1;rgb:cdcd/0000/0000\x07\x1b]4;2;rgb:0101/0202/0303\x07\
+          \x1b]4;1;rgb:0404/0505/0606\x07\
+          \x1b]4;1;rgb:0404/0505/0606\x1b\\\x1b]4;2;rgb:0101/0202/0303\x1b\\"
+    );
+}
+
+#[test]
+fn malformed_palette_operations_are_atomic() {
     for invalid in [
         "4;;?",
         "4;+1;?",
         "4;256;?",
         "4;1;red",
-        "4;1;#010203;2;?",
-        "104;1;2",
+        "4;1;#010203;2",
+        "4;1;#010203;2;invalid;1;?",
+        "4;1;?;2;invalid",
+        "104;1;invalid",
         "104;+1",
     ] {
         let input = format!("\x1b]4;1;#123456\x1b\\\x1b]{invalid}\x07\x1b]4;1;?\x1b\\");
@@ -154,6 +170,16 @@ fn malformed_and_multi_pair_palette_operations_are_atomic() {
             b"\x1b]4;1;rgb:1212/3434/5656\x1b\\"
         );
     }
+}
+
+#[test]
+fn maximum_buffered_palette_query_fits_the_final_byte_reply_budget() {
+    let pairs = std::iter::repeat_n("0;?", 15).collect::<Vec<_>>().join(";");
+    let input = format!("\x1b]4;{pairs}\x07");
+    assert_eq!(
+        replies(input.as_bytes()).1,
+        b"\x1b]4;0;rgb:0000/0000/0000\x07".repeat(15)
+    );
 }
 
 #[test]

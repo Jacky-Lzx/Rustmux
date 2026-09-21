@@ -1,15 +1,17 @@
 //! Incremental UTF-8/CSI parsing for the CLI screen model.
 
 /// Maximum reply bytes per consumed input byte, including a final byte that
-/// completes a query begun in an earlier chunk. This covers either two
-/// full-width OSC color replies completed by one terminator, or a CSI reply
-/// containing two decimal usize values.
+/// completes a query begun in an earlier chunk. A 64-byte OSC payload can hold
+/// at most 15 minimum-length palette queries; reserve a maximum-width reply for
+/// each. CSI replies are smaller, including two decimal usize values.
 const MAX_CSI_REPLY_BYTES: usize = 4 + 2 * (usize::BITS as usize / 3 + 1);
 const MAX_OSC_COLOR_REPLY_BYTES: usize = 28;
-pub const MAX_REPLY_BYTES: usize = if MAX_CSI_REPLY_BYTES > 2 * MAX_OSC_COLOR_REPLY_BYTES {
+const MAX_OSC_PALETTE_PAIRS: usize = (MAX_OSC_CONTROL_BYTES - 1) / 4;
+const MAX_OSC_PALETTE_REPLY_BYTES: usize = MAX_OSC_PALETTE_PAIRS * MAX_OSC_COLOR_REPLY_BYTES;
+pub const MAX_REPLY_BYTES: usize = if MAX_CSI_REPLY_BYTES > MAX_OSC_PALETTE_REPLY_BYTES {
     MAX_CSI_REPLY_BYTES
 } else {
-    2 * MAX_OSC_COLOR_REPLY_BYTES
+    MAX_OSC_PALETTE_REPLY_BYTES
 };
 
 use crate::screen::{CursorShape, EraseMode, MouseTracking, Screen};
@@ -22,6 +24,12 @@ const PRIMARY_DA: &[u8] = b"\x1b[?1;0c";
 // VT100-family terminal type, firmware version zero and no ROM cartridge.
 // Keep this conservative identity independent of the outer terminal.
 const SECONDARY_DA: &[u8] = b"\x1b[>0;0;0c";
+
+#[derive(Clone, Copy)]
+enum ColorOperation {
+    Query,
+    Set((u8, u8, u8)),
+}
 
 #[derive(Debug, Default, Clone, Copy)]
 enum State {
@@ -426,36 +434,54 @@ impl Parser {
         let (code, values) = (&control[..separator], &control[separator + 1..]);
         if code == b"4" {
             let mut fields = values.split(|&byte| byte == b';');
-            let (Some(index), Some(value), None) = (fields.next(), fields.next(), fields.next())
-            else {
+            let mut count = 0;
+            while let Some(index) = fields.next() {
+                let Some(value) = fields.next() else {
+                    return;
+                };
+                if count == MAX_OSC_PALETTE_PAIRS || parse_palette_operation(index, value).is_none()
+                {
+                    return;
+                }
+                count += 1;
+            }
+            if count == 0 {
                 return;
-            };
-            let Some(index) = parse_palette_index(index) else {
-                return;
-            };
-            if value == b"?" {
-                let (red, green, blue) = screen.palette_color(index);
-                let terminator = if bell_terminated { "\x07" } else { "\x1b\\" };
-                let response = format!(
-                    "\x1b]4;{index};rgb:{:04x}/{:04x}/{:04x}{terminator}",
-                    u16::from(red) * 257,
-                    u16::from(green) * 257,
-                    u16::from(blue) * 257,
-                );
-                debug_assert!(response.len() <= MAX_OSC_COLOR_REPLY_BYTES);
-                reply(response.as_bytes());
-            } else if let Ok(value) = std::str::from_utf8(value)
-                && let Some(color) = parse_color(value)
-            {
-                screen.set_palette_color(index, color);
+            }
+
+            let terminator = if bell_terminated { "\x07" } else { "\x1b\\" };
+            let mut fields = values.split(|&byte| byte == b';');
+            while let (Some(index), Some(value)) = (fields.next(), fields.next()) {
+                let (index, operation) =
+                    parse_palette_operation(index, value).expect("validated palette operation");
+                match operation {
+                    ColorOperation::Set(color) => screen.set_palette_color(index, color),
+                    ColorOperation::Query => {
+                        let (red, green, blue) = screen.palette_color(index);
+                        let response = format!(
+                            "\x1b]4;{index};rgb:{:04x}/{:04x}/{:04x}{terminator}",
+                            u16::from(red) * 257,
+                            u16::from(green) * 257,
+                            u16::from(blue) * 257,
+                        );
+                        debug_assert!(response.len() <= MAX_OSC_COLOR_REPLY_BYTES);
+                        reply(response.as_bytes());
+                    }
+                }
             }
             return;
         }
         if code == b"104" {
-            if !values.contains(&b';')
-                && let Some(index) = parse_palette_index(values)
+            if values
+                .split(|&byte| byte == b';')
+                .any(|value| parse_palette_index(value).is_none())
             {
-                screen.reset_palette_color(index);
+                return;
+            }
+            for value in values.split(|&byte| byte == b';') {
+                screen.reset_palette_color(
+                    parse_palette_index(value).expect("validated palette reset index"),
+                );
             }
             return;
         }
@@ -465,24 +491,18 @@ impl Parser {
             _ => return,
         };
 
-        #[derive(Clone, Copy)]
-        enum Operation {
-            Query,
-            Set((u8, u8, u8)),
-        }
-
-        let mut operations = [Operation::Query; 2];
+        let mut operations = [ColorOperation::Query; 2];
         let mut count = 0;
         for value in values.split(|&byte| byte == b';') {
             if count == operations.len() || start + count >= 12 || value.is_empty() {
                 return;
             }
             operations[count] = if value == b"?" {
-                Operation::Query
+                ColorOperation::Query
             } else if let Ok(value) = std::str::from_utf8(value)
                 && let Some(color) = parse_color(value)
             {
-                Operation::Set(color)
+                ColorOperation::Set(color)
             } else {
                 return;
             };
@@ -496,9 +516,9 @@ impl Parser {
         for (offset, operation) in operations[..count].iter().enumerate() {
             let code = start + offset;
             match operation {
-                Operation::Set(color) if code == 10 => screen.set_default_foreground(*color),
-                Operation::Set(color) => screen.set_default_background(*color),
-                Operation::Query => {
+                ColorOperation::Set(color) if code == 10 => screen.set_default_foreground(*color),
+                ColorOperation::Set(color) => screen.set_default_background(*color),
+                ColorOperation::Query => {
                     let current = if code == 10 {
                         screen.default_foreground()
                     } else {
@@ -831,6 +851,16 @@ fn parse_palette_index(value: &[u8]) -> Option<u8> {
         return None;
     }
     std::str::from_utf8(value).ok()?.parse().ok()
+}
+
+fn parse_palette_operation(index: &[u8], value: &[u8]) -> Option<(u8, ColorOperation)> {
+    let index = parse_palette_index(index)?;
+    let operation = if value == b"?" {
+        ColorOperation::Query
+    } else {
+        ColorOperation::Set(parse_color(std::str::from_utf8(value).ok()?)?)
+    };
+    Some((index, operation))
 }
 
 fn cursor_position_report(screen: &Screen, private: bool) -> String {
