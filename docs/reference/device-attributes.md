@@ -26,6 +26,17 @@ The DA3 response is the VT400 Terminal Unit ID report. Like XTerm, Rustmux uses
 zeros for both the site code and serial number. This stable value avoids exposing
 host identifiers and does not claim a real hardware serial number.
 
+Rustmux also answers XTerm's terminal-version query:
+
+| Request | Reply |
+| --- | --- |
+| CSI > q | DCS > \| rustmux(0.1.0) ST |
+| CSI > 0 q | DCS > \| rustmux(0.1.0) ST |
+
+The response version comes from the package version at compile time. It identifies
+Rustmux rather than imitating the outer terminal or XTerm. Only an omitted or zero
+parameter is accepted.
+
 The reply is constant and independent of the outer terminal or TERM environment.
 It does not enumerate Rustmux's RGB, mouse or other extensions. Supported mode
 states can be queried through [DECRQM](mode-queries.md). No capabilities are
@@ -46,6 +57,6 @@ output pauses painting. There is no new queue or dependency.
 Run `cargo test --test device_attributes`. Tests cover all request forms, every
 split boundary, bytewise parsing, unchanged state, invalid requests, response
 echoes, cancellation and EOF. The nested PTY suite checks all forms and 10,000
-grouped DA1/DA2/DA3 requests whose replies exceed the 64 KiB queue. It also checks
+grouped identity requests whose replies exceed the 64 KiB queue. It also checks
 both queries during a synchronized batch. These tests verify the protocol path,
 not universal terminal application compatibility.

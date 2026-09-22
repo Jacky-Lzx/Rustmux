@@ -8,8 +8,15 @@ const MAX_CSI_REPLY_BYTES: usize = 4 + 2 * (usize::BITS as usize / 3 + 1);
 const MAX_OSC_COLOR_REPLY_BYTES: usize = 28;
 const MAX_OSC_PALETTE_PAIRS: usize = (MAX_OSC_CONTROL_BYTES - 1) / 4;
 const MAX_OSC_PALETTE_REPLY_BYTES: usize = MAX_OSC_PALETTE_PAIRS * MAX_OSC_COLOR_REPLY_BYTES;
-pub const MAX_REPLY_BYTES: usize = if MAX_CSI_REPLY_BYTES > MAX_OSC_PALETTE_REPLY_BYTES {
+const TERMINAL_VERSION_REPLY: &str =
+    concat!("\x1bP>|rustmux(", env!("CARGO_PKG_VERSION"), ")\x1b\\");
+const MAX_FIXED_REPLY_BYTES: usize = if MAX_CSI_REPLY_BYTES > TERMINAL_VERSION_REPLY.len() {
     MAX_CSI_REPLY_BYTES
+} else {
+    TERMINAL_VERSION_REPLY.len()
+};
+pub const MAX_REPLY_BYTES: usize = if MAX_FIXED_REPLY_BYTES > MAX_OSC_PALETTE_REPLY_BYTES {
+    MAX_FIXED_REPLY_BYTES
 } else {
     MAX_OSC_PALETTE_REPLY_BYTES
 };
@@ -70,6 +77,17 @@ struct Parameters {
 }
 
 impl Parameters {
+    fn is_prefixed_zero_query(&self, prefix: u8) -> bool {
+        !self.private
+            && self.keyboard_prefix == Some(prefix)
+            && self.index == 0
+            && self.values[0].unwrap_or(0) == 0
+            && !self.subparameter.contains(&true)
+            && !self.soft_reset
+            && !self.cursor_shape
+            && !self.mode_query
+    }
+
     fn sgr(&self, mut style: crate::style::Style) -> Option<crate::style::Style> {
         let len = self.index + 1;
         let mut start = 0;
@@ -578,19 +596,23 @@ impl Parser {
             }
             return;
         }
-        if command == b'c' && matches!(parameters.keyboard_prefix, Some(b'>' | b'=')) {
-            if parameters.private
-                || parameters.index != 0
-                || parameters.values[0].unwrap_or(0) != 0
-                || parameters.subparameter.contains(&true)
-            {
-                return;
+        if command == b'c'
+            && let Some(prefix @ (b'>' | b'=')) = parameters.keyboard_prefix
+        {
+            if parameters.is_prefixed_zero_query(prefix) {
+                reply(if prefix == b'>' {
+                    SECONDARY_DA
+                } else {
+                    TERTIARY_DA
+                });
             }
-            reply(if parameters.keyboard_prefix == Some(b'>') {
-                SECONDARY_DA
-            } else {
-                TERTIARY_DA
-            });
+            return;
+        }
+        if command == b'q' && parameters.keyboard_prefix == Some(b'>') {
+            if parameters.is_prefixed_zero_query(b'>') {
+                debug_assert!(TERMINAL_VERSION_REPLY.len() <= MAX_REPLY_BYTES);
+                reply(TERMINAL_VERSION_REPLY.as_bytes());
+            }
             return;
         }
         if parameters.keyboard_prefix.is_some() {
