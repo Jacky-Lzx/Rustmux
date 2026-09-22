@@ -58,9 +58,9 @@ fn cursor_report_uses_current_origin_and_active_grid() {
 }
 
 #[test]
-fn text_area_size_report_uses_current_screen_dimensions() {
-    let (screen, output) = replies(b"abc\x1b[18t\x1b[5n");
-    assert_eq!(output, b"\x1b[8;8;12t\x1b[0n");
+fn character_size_reports_use_current_screen_dimensions() {
+    let (screen, output) = replies(b"abc\x1b[18t\x1b[19t\x1b[5n");
+    assert_eq!(output, b"\x1b[8;8;12t\x1b[9;8;12t\x1b[0n");
     let mut expected = Screen::new(8, 12).unwrap();
     Parser::new().advance(&mut expected, b"abc");
     assert_eq!(screen, expected);
@@ -69,10 +69,10 @@ fn text_area_size_report_uses_current_screen_dimensions() {
     resized.resize(24, 80).unwrap();
     let before = resized.clone();
     let mut output = Vec::new();
-    Parser::new().advance_with_replies(&mut resized, b"\x1b[18t", &mut |reply| {
+    Parser::new().advance_with_replies(&mut resized, b"\x1b[18t\x1b[19t", &mut |reply| {
         output.extend_from_slice(reply)
     });
-    assert_eq!(output, b"\x1b[8;24;80t");
+    assert_eq!(output, b"\x1b[8;24;80t\x1b[9;24;80t");
     assert_eq!(resized, before);
 }
 
@@ -100,11 +100,14 @@ fn malformed_and_unsupported_window_reports_are_silent() {
     for input in [
         b"\x1b[t".as_slice(),
         b"\x1b[0t",
-        b"\x1b[19t",
         b"\x1b[18;0t",
+        b"\x1b[19;0t",
         b"\x1b[18:0t",
+        b"\x1b[19:0t",
         b"\x1b[>18t",
+        b"\x1b[>19t",
         b"\x1b[?18t",
+        b"\x1b[?19t",
         b"\x1b[18 t",
         b"\x1b[18$t",
         b"\x1b[8;8;12t",

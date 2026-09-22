@@ -669,9 +669,15 @@ impl Parser {
             return;
         }
         if command == b't' {
-            if parameters.is_plain_single_parameter(18) {
+            if parameters.is_plain_single_parameter(18) || parameters.is_plain_single_parameter(19)
+            {
                 let (rows, columns) = screen.dimensions();
-                let response = format!("\x1b[8;{rows};{columns}t");
+                let operation = if parameters.values[0] == Some(18) {
+                    8
+                } else {
+                    9
+                };
+                let response = format!("\x1b[{operation};{rows};{columns}t");
                 debug_assert!(response.len() <= MAX_REPLY_BYTES);
                 reply(response.as_bytes());
             }

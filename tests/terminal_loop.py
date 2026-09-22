@@ -471,16 +471,16 @@ time.sleep(0.1)
 receive(b"\x1b[?7;1$y\x1b[0n" * 10000)
 writer.join(timeout=2)
 assert not writer.is_alive()
-os.write(1, b"\x1b[c\x1b[0c\x1bZ\x1b[>c\x1b[>0c\x1b[=c\x1b[=0c\x1b[>q\x1b[>0q\x1b[18t\x1b[\"v")
-receive(b"\x1b[?1;0c" * 3 + b"\x1b[>0;0;0c" * 2 + b"\x1bP!|00000000\x1b\\" * 2 + b"\x1bP>|rustmux(0.1.0)\x1b\\" * 2 + b"\x1b[8;20;78t\x1b[20;78;1;1;1\"w")
+os.write(1, b"\x1b[c\x1b[0c\x1bZ\x1b[>c\x1b[>0c\x1b[=c\x1b[=0c\x1b[>q\x1b[>0q\x1b[18t\x1b[19t\x1b[\"v")
+receive(b"\x1b[?1;0c" * 3 + b"\x1b[>0;0;0c" * 2 + b"\x1bP!|00000000\x1b\\" * 2 + b"\x1bP>|rustmux(0.1.0)\x1b\\" * 2 + b"\x1b[8;20;78t\x1b[9;20;78t\x1b[20;78;1;1;1\"w")
 def identity_flood():
-    data = b"\x1b[c\x1b[>c\x1b[=c\x1b[>q\x1b[18t\x1b[\"v\x1bP$q q\x1b\\\x1bP$qr\x1b\\\x1bP$qm\x1b\\" * 10000
+    data = b"\x1b[c\x1b[>c\x1b[=c\x1b[>q\x1b[18t\x1b[19t\x1b[\"v\x1bP$q q\x1b\\\x1bP$qr\x1b\\\x1bP$qm\x1b\\" * 10000
     while data:
         data = data[os.write(1, data):]
 writer = threading.Thread(target=identity_flood)
 writer.start()
 time.sleep(0.1)
-receive(b"\x1b[?1;0c\x1b[>0;0;0c\x1bP!|00000000\x1b\\\x1bP>|rustmux(0.1.0)\x1b\\\x1b[8;20;78t\x1b[20;78;1;1;1\"w\x1bP1$r1 q\x1b\\\x1bP1$r3;10r\x1b\\\x1bP1$r0m\x1b\\" * 10000)
+receive(b"\x1b[?1;0c\x1b[>0;0;0c\x1bP!|00000000\x1b\\\x1bP>|rustmux(0.1.0)\x1b\\\x1b[8;20;78t\x1b[9;20;78t\x1b[20;78;1;1;1\"w\x1bP1$r1 q\x1b\\\x1bP1$r3;10r\x1b\\\x1bP1$r0m\x1b\\" * 10000)
 writer.join(timeout=2)
 assert not writer.is_alive()
 # CSI s/u share the DEC save slot, and the restored position reaches real DSR.
