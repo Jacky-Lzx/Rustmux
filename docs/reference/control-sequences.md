@@ -29,6 +29,7 @@ CSI below means the two bytes ESC followed by `[`. The command subset follows
 | CSI 5 n / 6 n | Reply with status / cursor position; see [Terminal Status Replies](status-replies.md) |
 | CSI 18 t | Reply with the current pane text-area size in rows and columns |
 | CSI " v | Reply with the pane-local displayed extent and page coordinates |
+| DCS $ q SP q ST | Reply with the current DECSCUSR cursor style through DECRQSS |
 | CSI c / > c / = c | Reply with conservative primary / secondary / tertiary [device attributes](device-attributes.md) |
 | CSI > q | Reply with the Rustmux name and compile-time package version |
 | OSC 10 / 11 / 12 ; color | Set the pane's foreground / background / cursor color; `?` queries it; see [Terminal Status Replies](status-replies.md) |
@@ -82,9 +83,10 @@ default-color operations and OSC 110/111 resets, and otherwise discards OSC
 through BEL or ST (ESC followed by backslash). A separate bounded observer
 recognizes OSC 7 working-directory metadata and OSC 133 command-output boundaries
 for Ctrl-B `e`; other OSC payload remains uninterpreted.
-DCS, SOS, PM and APC payloads are discarded through ST. These strings are not
-interpreted or buffered; an unterminated string continues to discard input until
-its terminator or cancellation. Other unsupported controls are ignored.
+DCS retains at most 64 bytes to recognize the DECRQSS cursor-style query; other
+DCS, SOS, PM and APC payloads are discarded through ST. An unterminated string
+continues to discard input until its terminator or cancellation. Other unsupported
+controls are ignored.
 UTF-8 decoding and replacement are
 described in [UTF-8 and Character Width](unicode.md). There is no 8-bit C1 command
 support. Standard DSR replies are described in [Terminal Status Replies](status-replies.md). Cursor visibility and ESC 7/8 are described in [Cursor State](cursor.md).

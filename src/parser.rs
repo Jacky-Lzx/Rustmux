@@ -6,7 +6,7 @@
 /// each. CSI replies are smaller, including two decimal usize values.
 const MAX_CSI_REPLY_BYTES: usize = 10 + 2 * (usize::BITS as usize / 3 + 1);
 const MAX_OSC_COLOR_REPLY_BYTES: usize = 28;
-const MAX_OSC_PALETTE_PAIRS: usize = (MAX_OSC_CONTROL_BYTES - 1) / 4;
+const MAX_OSC_PALETTE_PAIRS: usize = (MAX_STRING_CONTROL_BYTES - 1) / 4;
 const MAX_OSC_PALETTE_REPLY_BYTES: usize = MAX_OSC_PALETTE_PAIRS * MAX_OSC_COLOR_REPLY_BYTES;
 const TERMINAL_VERSION_REPLY: &str =
     concat!("\x1bP>|rustmux(", env!("CARGO_PKG_VERSION"), ")\x1b\\");
@@ -23,7 +23,7 @@ pub const MAX_REPLY_BYTES: usize = if MAX_FIXED_REPLY_BYTES > MAX_OSC_PALETTE_RE
 
 use crate::screen::{CursorShape, EraseMode, MouseTracking, Screen};
 
-const MAX_OSC_CONTROL_BYTES: usize = 64;
+const MAX_STRING_CONTROL_BYTES: usize = 64;
 
 // Conservative VT100-family identity: VT101 with no optional hardware features.
 // This compatibility reply does not claim complete VT101 emulation.
@@ -53,8 +53,9 @@ enum State {
     Csi,
     String {
         osc: bool,
+        dcs: bool,
         escape: bool,
-        bytes: [u8; MAX_OSC_CONTROL_BYTES],
+        bytes: [u8; MAX_STRING_CONTROL_BYTES],
         len: u8,
         overflowed: bool,
     },
@@ -230,6 +231,7 @@ impl Parser {
         }
         if let State::String {
             osc,
+            dcs,
             escape,
             mut bytes,
             mut len,
@@ -237,11 +239,15 @@ impl Parser {
         } = self.state
         {
             // OSC accepts BEL or ST (ESC backslash); other strings require ST.
-            // Retain only enough payload for bounded default-color operations.
+            // Retain only enough payload for bounded OSC/DECRQSS operations.
             let bell_terminated = osc && byte == 7;
             if bell_terminated || (escape && byte == b'\\') {
-                if osc && !overflowed && (!bell_terminated || !escape) {
-                    Self::osc(screen, &bytes[..usize::from(len)], byte == 7, reply);
+                if !overflowed && (!bell_terminated || !escape) {
+                    if osc {
+                        Self::osc(screen, &bytes[..usize::from(len)], byte == 7, reply);
+                    } else if dcs {
+                        Self::dcs(screen, &bytes[..usize::from(len)], reply);
+                    }
                 }
                 self.state = State::Ground;
             } else {
@@ -250,7 +256,7 @@ impl Parser {
                     overflowed = true;
                 }
                 let next_escape = byte == 0x1b;
-                if osc && !next_escape && !overflowed {
+                if (osc || dcs) && !next_escape && !overflowed {
                     if let Some(slot) = bytes.get_mut(usize::from(len)) {
                         *slot = byte;
                         len += 1;
@@ -260,6 +266,7 @@ impl Parser {
                 }
                 self.state = State::String {
                     osc,
+                    dcs,
                     escape: next_escape,
                     bytes,
                     len,
@@ -350,8 +357,9 @@ impl Parser {
                 }
                 b']' | b'P' | b'X' | b'^' | b'_' => State::String {
                     osc: byte == b']',
+                    dcs: byte == b'P',
                     escape: false,
-                    bytes: [0; MAX_OSC_CONTROL_BYTES],
+                    bytes: [0; MAX_STRING_CONTROL_BYTES],
                     len: 0,
                     overflowed: false,
                 },
@@ -581,6 +589,16 @@ impl Parser {
                     reply(response.as_bytes());
                 }
             }
+        }
+    }
+
+    fn dcs(screen: &Screen, control: &[u8], reply: &mut impl FnMut(&[u8])) {
+        if control == b"$q q" {
+            let response = format!("\x1bP1$r{} q\x1b\\", screen.cursor_shape() as u8);
+            debug_assert!(response.len() <= MAX_REPLY_BYTES);
+            reply(response.as_bytes());
+        } else if control.starts_with(b"$q") {
+            reply(b"\x1bP0$r\x1b\\");
         }
     }
 

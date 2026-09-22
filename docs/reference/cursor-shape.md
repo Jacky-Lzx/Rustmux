@@ -16,6 +16,11 @@ parameters and extra intermediates are ignored. C0 controls retain their existin
 behavior inside CSI; CAN/SUB cancel it. This adds the specific space-q command,
 not general support for all CSI intermediates.
 
+`DCS $ q SP q ST` requests the current DECSCUSR value through DECRQSS. Rustmux
+answers `DCS 1 $ r Ps SP q ST`, where `Ps` is one of 1 through 6 from the table
+above. Other bounded DECRQSS items receive `DCS 0 $ r ST`; unrelated DCS strings,
+cancelled requests, overlong payloads and malformed ESC termination remain silent.
+
 ## State and rendering
 
 Screen stores a typed CursorShape, initially BlinkingBlock. Changing it does not
@@ -34,6 +39,6 @@ reset; the outer terminal's pre-existing cursor shape is not captured.
 
 Run `cargo test --test cursor_shape` for all values and split boundaries,
 malformed sequences, state preservation, reset, hidden cursor and renderer replay.
-The nested PTY test handshakes through all six shapes, checks the emitted bytes,
-checks soft reset, and verifies normal-exit and SIGTERM cleanup from a bar cursor.
+The nested PTY test handshakes through all six shapes, queries the live shape,
+checks the emitted bytes, checks soft reset, and verifies normal-exit and SIGTERM cleanup from a bar cursor.
 It does not measure a GUI terminal's blink timing or visual shape.

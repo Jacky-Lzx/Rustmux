@@ -1,9 +1,29 @@
 mod common;
 use rustmux::{
-    parser::Parser,
+    parser::{MAX_REPLY_BYTES, Parser},
     render::render,
     screen::{CursorShape, Screen},
 };
+
+fn replies(input: &[u8]) -> (Screen, Vec<u8>) {
+    let run = |split: usize| {
+        let mut screen = Screen::new(3, 8).unwrap();
+        let mut parser = Parser::new();
+        let mut output = Vec::new();
+        for chunk in [&input[..split], &input[split..]] {
+            parser.advance_with_replies(&mut screen, chunk, &mut |reply| {
+                assert!(reply.len() <= MAX_REPLY_BYTES);
+                output.extend_from_slice(reply)
+            });
+        }
+        (screen, output)
+    };
+    let expected = run(input.len());
+    for split in 0..=input.len() {
+        assert_eq!(run(split), expected);
+    }
+    expected
+}
 
 fn parsed(input: &[u8]) -> Screen {
     let mut expected = Screen::new(3, 8).unwrap();
@@ -94,4 +114,37 @@ fn frames_emit_shape_even_when_hidden_and_replay_without_mutation() {
         Parser::new().advance(&mut replay, &bytes);
         common::assert_rendered_screen_eq(&replay, &screen);
     }
+}
+
+#[test]
+fn status_string_reports_the_current_cursor_style() {
+    let (screen, output) = replies(b"\x1bP$q q\x1b\\\x1b[6 q\x1bP$q q\x1b\\\x1b[!p\x1bP$q q\x1b\\");
+    assert_eq!(screen.cursor_shape(), CursorShape::BlinkingBlock);
+    assert_eq!(
+        output,
+        b"\x1bP1$r1 q\x1b\\\x1bP1$r6 q\x1b\\\x1bP1$r1 q\x1b\\"
+    );
+}
+
+#[test]
+fn unsupported_malformed_and_cancelled_status_strings_are_bounded() {
+    for input in [
+        b"\x1bP$qm\x1b\\".as_slice(),
+        b"\x1bP$q\x1b\\",
+        b"\x1bP$q qx\x1b\\",
+        b"\x1bP$q q\x07\x1b\\",
+    ] {
+        assert_eq!(replies(input).1, b"\x1bP0$r\x1b\\");
+    }
+    for input in [
+        b"\x1bP+q q\x1b\\".as_slice(),
+        b"\x1bP1$r6 q\x1b\\",
+        b"\x1bP$q q\x18",
+        b"\x1bP$q q\x1bX\x1b\\",
+    ] {
+        assert!(replies(input).1.is_empty());
+    }
+
+    let oversized = [b"\x1bP$q".as_slice(), &[b'x'; 64], b"\x1b\\"].concat();
+    assert!(replies(&oversized).1.is_empty());
 }
