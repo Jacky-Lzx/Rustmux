@@ -17,6 +17,11 @@ single-row regions are ignored without changing the cursor or pending wrap.
 A one-row screen accepts its full-height region. Extra parameters and private
 or colon forms of DECSTBM are ignored.
 
+`DCS $ q r ST` requests the active grid's current margins through DECRQSS.
+Rustmux answers `DCS 1 $ r top ; bottom r ST` using inclusive one-based rows.
+The reply follows main/alternate grid switches and reports the reset full-height
+region after a dimension change.
+
 ## Scrolling and movement
 
 LF, IND and RI preserve the column and cancel pending wrap. Delayed automatic
@@ -41,7 +46,8 @@ resets both regions to full height; same-size and failed resizes preserve them.
 
 ## Verification and limits
 
-Run `cargo test --test scroll_region` for exact header/footer contents, both
+Run `cargo test --test scroll_region` for exact header/footer contents, status
+queries across main and alternate grids, both
 scroll directions, wrapping, invalid input, chunk boundaries, Unicode cell
 integrity, renderer replay, alternate isolation and resize behavior.
 The real CLI PTY test also checks a fixed header/footer through LF and RI.

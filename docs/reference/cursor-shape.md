@@ -18,7 +18,7 @@ not general support for all CSI intermediates.
 
 `DCS $ q SP q ST` requests the current DECSCUSR value through DECRQSS. Rustmux
 answers `DCS 1 $ r Ps SP q ST`, where `Ps` is one of 1 through 6 from the table
-above. Other bounded DECRQSS items receive `DCS 0 $ r ST`; unrelated DCS strings,
+above. Other unsupported bounded DECRQSS items receive `DCS 0 $ r ST`; unrelated DCS strings,
 cancelled requests, overlong payloads and malformed ESC termination remain silent.
 
 ## State and rendering

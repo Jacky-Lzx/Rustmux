@@ -597,6 +597,11 @@ impl Parser {
             let response = format!("\x1bP1$r{} q\x1b\\", screen.cursor_shape() as u8);
             debug_assert!(response.len() <= MAX_REPLY_BYTES);
             reply(response.as_bytes());
+        } else if control == b"$qr" {
+            let (top, bottom) = screen.scroll_region();
+            let response = format!("\x1bP1$r{};{}r\x1b\\", top + 1, bottom + 1);
+            debug_assert!(response.len() <= MAX_REPLY_BYTES);
+            reply(response.as_bytes());
         } else if control.starts_with(b"$q") {
             reply(b"\x1bP0$r\x1b\\");
         }

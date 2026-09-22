@@ -1,4 +1,29 @@
-use rustmux::{parser::Parser, render::render, screen::Screen, style::Color};
+use rustmux::{
+    parser::{MAX_REPLY_BYTES, Parser},
+    render::render,
+    screen::Screen,
+    style::Color,
+};
+
+fn replies(input: &[u8]) -> (Screen, Vec<u8>) {
+    let run = |split: usize| {
+        let mut screen = Screen::new(5, 4).unwrap();
+        let mut parser = Parser::new();
+        let mut output = Vec::new();
+        for chunk in [&input[..split], &input[split..]] {
+            parser.advance_with_replies(&mut screen, chunk, &mut |reply| {
+                assert!(reply.len() <= MAX_REPLY_BYTES);
+                output.extend_from_slice(reply);
+            });
+        }
+        (screen, output)
+    };
+    let expected = run(input.len());
+    for split in 0..=input.len() {
+        assert_eq!(run(split), expected, "split {split}");
+    }
+    expected
+}
 
 fn parsed(input: &[u8]) -> Screen {
     let mut expected = Screen::new(5, 4).unwrap();
@@ -143,4 +168,16 @@ fn a_single_row_screen_can_scroll_both_directions() {
     parser.advance(&mut screen, b"Y\x1bD");
     assert_eq!(rows(&screen), [" "]);
     assert_eq!(screen.scroll_region(), (0, 0));
+}
+
+#[test]
+fn status_string_reports_the_active_grids_scroll_region() {
+    let (screen, output) = replies(
+        b"\x1bP$qr\x1b\\\x1b[2;4r\x1bP$qr\x1b\\\x1b[?1049h\x1bP$qr\x1b\\\x1b[1;3r\x1bP$qr\x1b\\\x1b[?1049l\x1bP$qr\x1b\\",
+    );
+    assert_eq!(screen.scroll_region(), (1, 3));
+    assert_eq!(
+        output,
+        b"\x1bP1$r1;5r\x1b\\\x1bP1$r2;4r\x1b\\\x1bP1$r1;5r\x1b\\\x1bP1$r1;3r\x1b\\\x1bP1$r2;4r\x1b\\"
+    );
 }
