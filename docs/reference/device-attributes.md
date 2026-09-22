@@ -18,6 +18,8 @@ this response as VT101 with no options, in the VT100 family. Rustmux uses it as
 a conservative compatibility identity rather than advertising optional hardware
 or a larger VT420/VT520 feature set. It is not a claim of complete VT101 emulation.
 Applications may still need behavior outside the currently supported subset.
+Consistently with omitting the printer option, the private printer-status query
+reports not ready; Rustmux does not implement media-copy commands.
 The DA2 response likewise identifies the VT100 terminal type, firmware version
 zero and no ROM cartridge; it does not identify Rustmux as xterm or another
 outer terminal.

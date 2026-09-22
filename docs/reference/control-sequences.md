@@ -27,6 +27,7 @@ CSI below means the two bytes ESC followed by `[`. The command subset follows
 | CSI n A / B / C / D | Move up / down / right / left; omitted or zero count means one |
 | CSI row ; column H / f | Position relative to the active origin using one-based coordinates; omitted or zero values mean one |
 | CSI 5 n / 6 n | Reply with status / cursor position; see [Terminal Status Replies](status-replies.md) |
+| CSI ? 15 n | Reply that no printer is ready |
 | CSI 18 t | Reply with the current pane text-area size in rows and columns |
 | CSI 19 t | Reply with the pane's terminal-screen size in rows and columns |
 | CSI " v | Reply with the pane-local displayed extent and page coordinates |

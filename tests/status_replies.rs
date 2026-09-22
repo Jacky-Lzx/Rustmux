@@ -58,6 +58,15 @@ fn cursor_report_uses_current_origin_and_active_grid() {
 }
 
 #[test]
+fn printer_status_reports_not_ready_without_changing_screen() {
+    let (screen, output) = replies(b"abc\x1b[?15n\x1b[5n");
+    assert_eq!(output, b"\x1b[?11n\x1b[0n");
+    let mut expected = Screen::new(8, 12).unwrap();
+    Parser::new().advance(&mut expected, b"abc");
+    assert_eq!(screen, expected);
+}
+
+#[test]
 fn character_size_reports_use_current_screen_dimensions() {
     let (screen, output) = replies(b"abc\x1b[18t\x1b[19t\x1b[5n");
     assert_eq!(output, b"\x1b[8;8;12t\x1b[9;8;12t\x1b[0n");
@@ -127,7 +136,7 @@ fn malformed_and_unsupported_window_reports_are_silent() {
 
 #[test]
 fn malformed_unsupported_and_string_queries_produce_no_reply() {
-    let (_, output) = replies(b"\x1b[n\x1b[0n\x1b[?n\x1b[?0n\x1b[?5n\x1b[?6;1n\x1b[?6:1n\x1b[5;6n\x1b[6:1n\x1b[999999999999999999999999n\x1b[?999999999999999999999999n\x1b]text\x1b[6n\x07\x1b[6\x18n");
+    let (_, output) = replies(b"\x1b[n\x1b[0n\x1b[?n\x1b[?0n\x1b[?5n\x1b[?6;1n\x1b[?6:1n\x1b[?15;0n\x1b[?15:0n\x1b[5;6n\x1b[6:1n\x1b[999999999999999999999999n\x1b[?999999999999999999999999n\x1b]text\x1b[6n\x07\x1b[6\x18n");
     assert!(output.is_empty());
     let (_, output) = replies(b"\xff\x1b[6n");
     assert_eq!(output, b"\x1b[1;2R");

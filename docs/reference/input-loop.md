@@ -108,7 +108,7 @@ are required. Local validation is on macOS; Linux results require the CI run.
 
 ## Current compatibility
 
-The CLI now depends on our parser's supported subset. Queries beyond standard DSR and the [pane text-area/screen size and extent reports](status-replies.md), [terminal identity](device-attributes.md), [DECRQM](mode-queries.md), DECRQSS [cursor-style](cursor-shape.md), [scroll-region](scrolling-regions.md) and [SGR](text-styles.md) queries and the [Kitty keyboard query](kitty-keyboard.md), mouse extensions and full emoji shaping are not implemented. Programs requiring
+The CLI now depends on our parser's supported subset. Queries beyond standard/private [DSR and pane size/extent reports](status-replies.md), [terminal identity](device-attributes.md), [DECRQM](mode-queries.md), DECRQSS [cursor-style](cursor-shape.md), [scroll-region](scrolling-regions.md) and [SGR](text-styles.md) queries and the [Kitty keyboard query](kitty-keyboard.md), mouse extensions and full emoji shaping are not implemented. Programs requiring
 those features may display incorrectly or wait for an unsupported terminal reply.
 Full-screen editor compatibility is not yet an acceptance claim. There is no
 split layout or persistent session support.

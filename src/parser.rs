@@ -749,14 +749,17 @@ impl Parser {
             return;
         }
         if parameters.private {
-            if command == b'n'
-                && parameters.index == 0
-                && parameters.values[0] == Some(6)
-                && !parameters.subparameter.contains(&true)
+            if command == b'n' && parameters.index == 0 && !parameters.subparameter.contains(&true)
             {
-                let response = cursor_position_report(screen, true);
-                debug_assert!(response.len() <= MAX_REPLY_BYTES);
-                reply(response.as_bytes());
+                match parameters.values[0] {
+                    Some(6) => {
+                        let response = cursor_position_report(screen, true);
+                        debug_assert!(response.len() <= MAX_REPLY_BYTES);
+                        reply(response.as_bytes());
+                    }
+                    Some(15) => reply(b"\x1b[?11n"),
+                    _ => {}
+                }
                 return;
             }
             if !parameters.subparameter.contains(&true) && matches!(command, b'h' | b'l') {
