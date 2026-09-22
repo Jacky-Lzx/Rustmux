@@ -10,6 +10,7 @@ from its screen model.
 | CSI 6 n | CSI row ; column R (cursor position) |
 | CSI ? 6 n | CSI ? row ; column R (DECXCPR) |
 | CSI 18 t | CSI 8 ; rows ; columns t (pane text-area size) |
+| CSI " v | CSI rows ; columns ; 1 ; 1 ; 1 " w (displayed extent) |
 | OSC 4 ; index ; value ... BEL/ST | Query or set one or more pane-local palette entries |
 | OSC 104 ; index ... / OSC 104 BEL/ST | Reset selected / all palette entries |
 | OSC 10 ; ? BEL/ST | OSC 10 ; current foreground BEL/ST |
@@ -30,6 +31,10 @@ the last column without triggering pending wrap.
 The text-area size report uses the active pane's current `Screen` dimensions.
 It therefore excludes Rustmux's top bar, footer and pane borders, and changes
 after an outer resize or layout change. Querying it does not resize anything.
+
+DECRQDE reports the same pane-local dimensions as one complete visible page.
+The pane starts at column 1, row 1 of that page, and Rustmux exposes page 1 only;
+therefore the final three response fields are always `1;1;1`.
 
 Queries do not change cells, cursor, modes or style. Private DSR supports only
 DECXCPR (`CSI ? 6 n`); other values, omitted or extra parameters, colon groups
@@ -93,8 +98,8 @@ Run `cargo test --test status_replies`. Tests cover exact replies, ordering,
 every input split, origin/alternate coordinates, unchanged screen state,
 malformed queries, incomplete-stream handling and the reply-size bound.
 The real CLI PTY test checks all replies and large bursts of status, identity and
-text-area-size requests, producing more reply bytes than fit in the queue while
-the child reads concurrently.
+text-area-size and displayed-extent requests, producing more reply bytes than fit
+in the queue while the child reads concurrently.
 
 Other private DSR values, dynamic colors after the text cursor, named colors
 and other terminal capability queries remain unsupported.

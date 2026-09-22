@@ -77,6 +77,25 @@ fn text_area_size_report_uses_current_screen_dimensions() {
 }
 
 #[test]
+fn displayed_extent_report_describes_the_single_visible_pane_page() {
+    let (screen, output) = replies(b"abc\x1b[\"v\x1b[5n");
+    assert_eq!(output, b"\x1b[8;12;1;1;1\"w\x1b[0n");
+    let mut expected = Screen::new(8, 12).unwrap();
+    Parser::new().advance(&mut expected, b"abc");
+    assert_eq!(screen, expected);
+
+    let mut resized = Screen::new(2, 3).unwrap();
+    resized.resize(24, 80).unwrap();
+    let before = resized.clone();
+    let mut output = Vec::new();
+    Parser::new().advance_with_replies(&mut resized, b"\x1b[\"v", &mut |reply| {
+        output.extend_from_slice(reply)
+    });
+    assert_eq!(output, b"\x1b[24;80;1;1;1\"w");
+    assert_eq!(resized, before);
+}
+
+#[test]
 fn malformed_and_unsupported_window_reports_are_silent() {
     for input in [
         b"\x1b[t".as_slice(),
@@ -90,6 +109,14 @@ fn malformed_and_unsupported_window_reports_are_silent() {
         b"\x1b[18$t",
         b"\x1b[8;8;12t",
         b"\x1b[999999999999999999999999t",
+        b"\x1b[v",
+        b"\x1b[0\"v",
+        b"\x1b[?\"v",
+        b"\x1b[>\"v",
+        b"\x1b[ \"v",
+        b"\x1b[\"0v",
+        b"\x1b[\"w",
+        b"\x1b[8;12;1;1;1\"w",
     ] {
         assert!(replies(input).1.is_empty());
     }

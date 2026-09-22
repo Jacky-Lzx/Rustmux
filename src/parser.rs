@@ -4,7 +4,7 @@
 /// completes a query begun in an earlier chunk. A 64-byte OSC payload can hold
 /// at most 15 minimum-length palette queries; reserve a maximum-width reply for
 /// each. CSI replies are smaller, including two decimal usize values.
-const MAX_CSI_REPLY_BYTES: usize = 4 + 2 * (usize::BITS as usize / 3 + 1);
+const MAX_CSI_REPLY_BYTES: usize = 10 + 2 * (usize::BITS as usize / 3 + 1);
 const MAX_OSC_COLOR_REPLY_BYTES: usize = 28;
 const MAX_OSC_PALETTE_PAIRS: usize = (MAX_OSC_CONTROL_BYTES - 1) / 4;
 const MAX_OSC_PALETTE_REPLY_BYTES: usize = MAX_OSC_PALETTE_PAIRS * MAX_OSC_COLOR_REPLY_BYTES;
@@ -74,6 +74,7 @@ struct Parameters {
     soft_reset: bool,
     cursor_shape: bool,
     mode_query: bool,
+    displayed_extent_query: bool,
 }
 
 impl Parameters {
@@ -386,7 +387,8 @@ impl Parser {
                         match byte {
                             _ if parameters.soft_reset
                                 || parameters.cursor_shape
-                                || parameters.mode_query =>
+                                || parameters.mode_query
+                                || parameters.displayed_extent_query =>
                             {
                                 parameters.invalid = true
                             }
@@ -399,6 +401,13 @@ impl Parser {
                                 && parameters.values[0].is_none() =>
                             {
                                 parameters.soft_reset = true
+                            }
+                            b'"' if !parameters.private
+                                && parameters.keyboard_prefix.is_none()
+                                && parameters.index == 0
+                                && parameters.values[0].is_none() =>
+                            {
+                                parameters.displayed_extent_query = true
                             }
                             b'0'..=b'9' => {
                                 let value = parameters.values[parameters.index]
@@ -633,6 +642,15 @@ impl Parser {
             if parameters.is_plain_single_parameter(18) {
                 let (rows, columns) = screen.dimensions();
                 let response = format!("\x1b[8;{rows};{columns}t");
+                debug_assert!(response.len() <= MAX_REPLY_BYTES);
+                reply(response.as_bytes());
+            }
+            return;
+        }
+        if parameters.displayed_extent_query {
+            if command == b'v' {
+                let (rows, columns) = screen.dimensions();
+                let response = format!("\x1b[{rows};{columns};1;1;1\"w");
                 debug_assert!(response.len() <= MAX_REPLY_BYTES);
                 reply(response.as_bytes());
             }
