@@ -35,6 +35,11 @@ pane's XTerm-compatible 256-color table so OSC 4 updates also recolor existing
 cells. Bold does not implicitly select bright colors. Inverse and other
 attributes are stored and emitted by the renderer.
 
+`DCS $ q m ST` requests the current writing style through DECRQSS. Rustmux
+answers `DCS 1 $ r Ps...m ST` with a canonical parameter list beginning at SGR
+reset (`0`). It includes every active attribute plus foreground, background and
+underline colors, so replaying the reported SGR reconstructs the complete style.
+
 ## Erase and scrolling
 
 Overwriting a cell replaces its character and style together. Scrolling copies
@@ -58,7 +63,8 @@ empty or zero color-space slot (38:2::r:g:b), plus underline styles 4:0 through
 a unit; malformed color groups reject the whole SGR.
 The fixed buffer counts both parameters and subparameters toward its limit.
 
-`tests/text_style.rs` checks style snapshots, individual/global resets, all 16
+`tests/text_style.rs` checks style snapshots, DECRQSS replies at every input
+split, individual/global resets, all 16
 palette entries, indexed/RGB colors, malformed groups, parameter limits, wrapping,
 overwrite, erase and scroll. Tests repeat each input at every two-chunk split
 and byte by byte. Run `cargo test --test text_style`.

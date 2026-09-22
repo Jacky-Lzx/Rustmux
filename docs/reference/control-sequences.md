@@ -31,6 +31,7 @@ CSI below means the two bytes ESC followed by `[`. The command subset follows
 | CSI " v | Reply with the pane-local displayed extent and page coordinates |
 | DCS $ q SP q ST | Reply with the current DECSCUSR cursor style through DECRQSS |
 | DCS $ q r ST | Reply with the current DECSTBM vertical margins through DECRQSS |
+| DCS $ q m ST | Reply with the current SGR writing style through DECRQSS |
 | CSI c / > c / = c | Reply with conservative primary / secondary / tertiary [device attributes](device-attributes.md) |
 | CSI > q | Reply with the Rustmux name and compile-time package version |
 | OSC 10 / 11 / 12 ; color | Set the pane's foreground / background / cursor color; `?` queries it; see [Terminal Status Replies](status-replies.md) |

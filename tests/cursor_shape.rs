@@ -129,7 +129,7 @@ fn status_string_reports_the_current_cursor_style() {
 #[test]
 fn unsupported_malformed_and_cancelled_status_strings_are_bounded() {
     for input in [
-        b"\x1bP$qm\x1b\\".as_slice(),
+        b"\x1bP$q\"q\x1b\\".as_slice(),
         b"\x1bP$q\x1b\\",
         b"\x1bP$q qx\x1b\\",
         b"\x1bP$q q\x07\x1b\\",

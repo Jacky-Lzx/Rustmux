@@ -3,7 +3,7 @@
 use std::io::{self, Write};
 
 use crate::screen::{CursorShape, MouseTracking, Screen};
-use crate::style::{Cell, Color, Style, UnderlineStyle};
+use crate::style::{Cell, Style, write_sgr};
 
 /// Draw the active grid from the top-left corner onto an equally sized terminal.
 ///
@@ -341,42 +341,8 @@ fn restart_cost(row: usize, column: usize, next: Style, mut style: Style) -> io:
 
 fn write_style(output: &mut impl Write, style: Style) -> io::Result<()> {
     // Start from reset so attributes absent from the next cell cannot leak.
-    output.write_all(b"\x1b[0")?;
-    for (enabled, code) in [(style.bold, 1), (style.dim, 2), (style.italic, 3)] {
-        if enabled {
-            write!(output, ";{code}")?;
-        }
-    }
-    match style.underline {
-        UnderlineStyle::None => {}
-        UnderlineStyle::Single => output.write_all(b";4")?,
-        UnderlineStyle::Double => output.write_all(b";4:2")?,
-        UnderlineStyle::Curly => output.write_all(b";4:3")?,
-        UnderlineStyle::Dotted => output.write_all(b";4:4")?,
-        UnderlineStyle::Dashed => output.write_all(b";4:5")?,
-    }
-    for (enabled, code) in [
-        (style.blink, 5),
-        (style.inverse, 7),
-        (style.hidden, 8),
-        (style.strikethrough, 9),
-    ] {
-        if enabled {
-            write!(output, ";{code}")?;
-        }
-    }
-    write_color(output, style.foreground, 38)?;
-    write_color(output, style.background, 48)?;
-    write_color(output, style.underline_color, 58)?;
-    output.write_all(b"m")
-}
-
-fn write_color(output: &mut impl Write, color: Color, selector: u8) -> io::Result<()> {
-    match color {
-        Color::Default => Ok(()), // The leading reset already selects default colors.
-        Color::Indexed(index) => write!(output, ";{selector};5;{index}"),
-        Color::Rgb(red, green, blue) => write!(output, ";{selector};2;{red};{green};{blue}"),
-    }
+    output.write_all(b"\x1b[")?;
+    write_sgr(output, style)
 }
 
 #[cfg(test)]

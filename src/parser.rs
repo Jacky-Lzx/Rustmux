@@ -602,6 +602,13 @@ impl Parser {
             let response = format!("\x1bP1$r{};{}r\x1b\\", top + 1, bottom + 1);
             debug_assert!(response.len() <= MAX_REPLY_BYTES);
             reply(response.as_bytes());
+        } else if control == b"$qm" {
+            let mut response = b"\x1bP1$r".to_vec();
+            crate::style::write_sgr(&mut response, screen.style())
+                .expect("writing to a byte vector cannot fail");
+            response.extend_from_slice(b"\x1b\\");
+            debug_assert!(response.len() <= MAX_REPLY_BYTES);
+            reply(&response);
         } else if control.starts_with(b"$q") {
             reply(b"\x1bP0$r\x1b\\");
         }

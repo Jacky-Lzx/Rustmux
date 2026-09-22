@@ -1,4 +1,4 @@
-use rustmux::parser::Parser;
+use rustmux::parser::{MAX_REPLY_BYTES, Parser};
 use rustmux::screen::Screen;
 use rustmux::style::{Cell, Color, Style, UnderlineStyle};
 
@@ -18,6 +18,26 @@ fn parsed(rows: usize, columns: usize, input: &[u8]) -> Screen {
         parser.advance(&mut screen, &[*byte]);
     }
     assert_eq!(screen, expected);
+    expected
+}
+
+fn replies(input: &[u8]) -> (Screen, Vec<u8>) {
+    let run = |split: usize| {
+        let mut screen = Screen::new(2, 4).unwrap();
+        let mut parser = Parser::new();
+        let mut output = Vec::new();
+        for chunk in [&input[..split], &input[split..]] {
+            parser.advance_with_replies(&mut screen, chunk, &mut |reply| {
+                assert!(reply.len() <= MAX_REPLY_BYTES);
+                output.extend_from_slice(reply);
+            });
+        }
+        (screen, output)
+    };
+    let expected = run(input.len());
+    for split in 0..=input.len() {
+        assert_eq!(run(split), expected, "split {split}");
+    }
     expected
 }
 
@@ -59,6 +79,18 @@ fn attributes_and_individual_resets_are_saved_per_cell() {
     );
     assert_eq!(row[3].style, Style::default());
     assert_eq!(screen.style(), Style::default());
+}
+
+#[test]
+fn status_string_reports_the_complete_current_style() {
+    let (screen, output) = replies(
+        b"\x1bP$qm\x1b\\\x1b[1;2;3;4:3;5;7;8;9;38;5;255;48;2;1;2;3;58;5;4m\x1bP$qm\x1b\\\x1b[0m\x1bP$qm\x1b\\",
+    );
+    assert_eq!(screen.style(), Style::default());
+    assert_eq!(
+        output,
+        b"\x1bP1$r0m\x1b\\\x1bP1$r0;1;2;3;4:3;5;7;8;9;38;5;255;48;2;1;2;3;58;5;4m\x1b\\\x1bP1$r0m\x1b\\"
+    );
 }
 
 #[test]
