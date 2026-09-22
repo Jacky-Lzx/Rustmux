@@ -58,6 +58,44 @@ fn cursor_report_uses_current_origin_and_active_grid() {
 }
 
 #[test]
+fn text_area_size_report_uses_current_screen_dimensions() {
+    let (screen, output) = replies(b"abc\x1b[18t\x1b[5n");
+    assert_eq!(output, b"\x1b[8;8;12t\x1b[0n");
+    let mut expected = Screen::new(8, 12).unwrap();
+    Parser::new().advance(&mut expected, b"abc");
+    assert_eq!(screen, expected);
+
+    let mut resized = Screen::new(2, 3).unwrap();
+    resized.resize(24, 80).unwrap();
+    let before = resized.clone();
+    let mut output = Vec::new();
+    Parser::new().advance_with_replies(&mut resized, b"\x1b[18t", &mut |reply| {
+        output.extend_from_slice(reply)
+    });
+    assert_eq!(output, b"\x1b[8;24;80t");
+    assert_eq!(resized, before);
+}
+
+#[test]
+fn malformed_and_unsupported_window_reports_are_silent() {
+    for input in [
+        b"\x1b[t".as_slice(),
+        b"\x1b[0t",
+        b"\x1b[19t",
+        b"\x1b[18;0t",
+        b"\x1b[18:0t",
+        b"\x1b[>18t",
+        b"\x1b[?18t",
+        b"\x1b[18 t",
+        b"\x1b[18$t",
+        b"\x1b[8;8;12t",
+        b"\x1b[999999999999999999999999t",
+    ] {
+        assert!(replies(input).1.is_empty());
+    }
+}
+
+#[test]
 fn malformed_unsupported_and_string_queries_produce_no_reply() {
     let (_, output) = replies(b"\x1b[n\x1b[0n\x1b[?n\x1b[?0n\x1b[?5n\x1b[?6;1n\x1b[?6:1n\x1b[5;6n\x1b[6:1n\x1b[999999999999999999999999n\x1b[?999999999999999999999999n\x1b]text\x1b[6n\x07\x1b[6\x18n");
     assert!(output.is_empty());

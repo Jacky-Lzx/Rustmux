@@ -77,6 +77,17 @@ struct Parameters {
 }
 
 impl Parameters {
+    fn is_plain_single_parameter(&self, value: usize) -> bool {
+        !self.private
+            && self.keyboard_prefix.is_none()
+            && self.index == 0
+            && self.values[0] == Some(value)
+            && !self.subparameter.contains(&true)
+            && !self.soft_reset
+            && !self.cursor_shape
+            && !self.mode_query
+    }
+
     fn is_prefixed_zero_query(&self, prefix: u8) -> bool {
         !self.private
             && self.keyboard_prefix == Some(prefix)
@@ -616,6 +627,15 @@ impl Parser {
             return;
         }
         if parameters.keyboard_prefix.is_some() {
+            return;
+        }
+        if command == b't' {
+            if parameters.is_plain_single_parameter(18) {
+                let (rows, columns) = screen.dimensions();
+                let response = format!("\x1b[8;{rows};{columns}t");
+                debug_assert!(response.len() <= MAX_REPLY_BYTES);
+                reply(response.as_bytes());
+            }
             return;
         }
         if parameters.mode_query {
