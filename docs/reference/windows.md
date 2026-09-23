@@ -187,6 +187,9 @@ to LOCKED. Unmodified left/right arrow aliases are local to the mode, and the
 footer exposes clickable configured keys. Esc returns to LOCKED locally.
 NORMAL's footer also shows the configured TAB entry key as a clickable `Tab`
 hint when it fits; an unconfigured TAB mode adds no hint.
+Standalone configured `switch-mode` actions also move directly among PANE,
+RESIZE, MOVE, and TAB without passing the key to a child. Legacy byte input
+cannot distinguish `Ctrl-M` from Enter when both are configured in one mode.
 
 Ctrl-B, then `E` writes a plain-text snapshot of the active pane's retained
 primary-screen history and meaningful visible rows to a private temporary file.

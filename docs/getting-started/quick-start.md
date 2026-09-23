@@ -112,6 +112,12 @@ Other mode tables and unsupported actions from main's larger configuration are
 still ignored. `clear_defaults` is not implemented yet. Ctrl-B remains the only
 supported LOCKED-to-NORMAL key. PANE's floating action is not yet supported.
 
+Standalone `switch-mode` bindings can now jump directly among the supported
+PANE, RESIZE, MOVE, and TAB modes. Main's `Ctrl-M` and `Ctrl-T` transitions work
+without returning through NORMAL or sending input to the shell. In byte-only
+terminal input, `Ctrl-M` and Enter are the same byte, so they cannot be separate
+bindings in one mode; Esc remains an unambiguous LOCKED exit.
+
 NORMAL mode also recognizes main-style `close-window`, `next-window`,
 `previous-window` (including `tab`), `move-window-left`, and `move-window-right`
 bindings followed by `switch-mode` to `locked`, plus `rename-window` with no

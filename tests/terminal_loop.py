@@ -1126,6 +1126,57 @@ with tempfile.TemporaryDirectory(prefix="rustmux-resize-mode-") as directory:
     finally:
         s.close()
 
+with tempfile.TemporaryDirectory(prefix="rustmux-mode-transitions-") as directory:
+    os.mkdir(os.path.join(directory, "rustmux"))
+    with open(os.path.join(directory, "rustmux", "config.toml"), "w", encoding="utf-8") as config:
+        config.write(
+            "[keybinds.normal]\n"
+            "'Ctrl p' = { actions = [{ action = 'switch-mode', mode = 'pane' }] }\n"
+            "[keybinds.pane]\n"
+            "'Ctrl t' = { actions = [{ action = 'switch-mode', mode = 'tab' }] }\n"
+            "'Ctrl m' = { actions = [{ action = 'switch-mode', mode = 'move' }] }\n"
+            "esc = { actions = [{ action = 'switch-mode', mode = 'locked' }] }\n"
+            "[keybinds.tab]\n"
+            "'Ctrl r' = { actions = [{ action = 'switch-mode', mode = 'resize' }] }\n"
+            "'Ctrl p' = { actions = [{ action = 'switch-mode', mode = 'pane' }] }\n"
+            "'Ctrl m' = { actions = [{ action = 'switch-mode', mode = 'move' }] }\n"
+            "[keybinds.move]\n"
+            "'Ctrl r' = { actions = [{ action = 'switch-mode', mode = 'resize' }] }\n"
+            "'Ctrl t' = { actions = [{ action = 'switch-mode', mode = 'tab' }] }\n"
+            "[keybinds.resize]\n"
+            "'Ctrl p' = { actions = [{ action = 'switch-mode', mode = 'pane' }] }\n"
+            "'Ctrl t' = { actions = [{ action = 'switch-mode', mode = 'tab' }] }\n"
+        )
+    s = Session(extra_env={"XDG_CONFIG_HOME": directory})
+    try:
+        s.expect(b"RUSTMUX_READY> ")
+        for keys, badge in [
+            (b"\x02\x10", b"PANE"),
+            (b"\x14", b"TAB"),
+            (b"\x0d", b"MOVE"),
+            (b"\x12", b"RESIZE"),
+            (b"\x10", b"PANE"),
+            (b"\x0d", b"MOVE"),
+            (b"\x14", b"TAB"),
+            (b"\x12", b"RESIZE"),
+        ]:
+            s.send(keys)
+            deadline = time.monotonic() + 3
+            while badge not in s.physical_rows[-1]:
+                s.read()
+                assert time.monotonic() < deadline, s.physical_rows[-1]
+        s.send(b"\x1b")
+        deadline = time.monotonic() + 3
+        while b"LOCKED" not in s.physical_rows[-1]:
+            s.read()
+            assert time.monotonic() < deadline, s.physical_rows[-1]
+        s.send(b"printf 'MODE_TRANSITIONS_DONE\\n'\n")
+        s.expect(b"MODE_TRANSITIONS_DONE")
+        os.kill(s.app_pid, signal.SIGTERM)
+        s.finish(128 + signal.SIGTERM)
+    finally:
+        s.close()
+
 with tempfile.TemporaryDirectory(prefix="rustmux-tab-mode-") as directory:
     os.mkdir(os.path.join(directory, "rustmux"))
     with open(os.path.join(directory, "rustmux", "config.toml"), "w", encoding="utf-8") as config:

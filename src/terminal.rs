@@ -1067,6 +1067,9 @@ impl WindowInput {
             PaneAction::Zoom => output.push(WindowKey::ToggleZoom),
             PaneAction::Close => output.push(WindowKey::ClosePane),
             PaneAction::Normal => self.mode = InputMode::Normal,
+            PaneAction::Resize => self.mode = InputMode::Resize,
+            PaneAction::Move => self.mode = InputMode::Move,
+            PaneAction::Tab => self.mode = InputMode::Tab,
             PaneAction::Locked => self.mode = InputMode::Locked,
         }
     }
@@ -1091,6 +1094,8 @@ impl WindowInput {
             ResizeAction::Resize(direction) => output.push(WindowKey::ResizePane(direction)),
             ResizeAction::Normal => self.mode = InputMode::Normal,
             ResizeAction::Pane => self.mode = InputMode::Pane,
+            ResizeAction::Move => self.mode = InputMode::Move,
+            ResizeAction::Tab => self.mode = InputMode::Tab,
             ResizeAction::Locked => self.mode = InputMode::Locked,
         }
     }
@@ -1116,6 +1121,7 @@ impl WindowInput {
             MoveAction::Normal => self.mode = InputMode::Normal,
             MoveAction::Pane => self.mode = InputMode::Pane,
             MoveAction::Resize => self.mode = InputMode::Resize,
+            MoveAction::Tab => self.mode = InputMode::Tab,
             MoveAction::Locked => self.mode = InputMode::Locked,
         }
     }
@@ -1158,6 +1164,7 @@ impl WindowInput {
             TabAction::Help => output.push(WindowKey::Help),
             TabAction::Normal => self.mode = InputMode::Normal,
             TabAction::Pane => self.mode = InputMode::Pane,
+            TabAction::Resize => self.mode = InputMode::Resize,
             TabAction::Move => self.mode = InputMode::Move,
             TabAction::Locked => self.mode = InputMode::Locked,
         }
@@ -3781,6 +3788,50 @@ n = { actions = ["new-window", { action = "switch-mode", mode = "locked" }] }
         }
         assert_eq!(keys.mode, InputMode::Tab);
         assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn supported_modes_switch_directly_without_sending_keys_to_child() {
+        let shortcuts = crate::config::Shortcuts::test_from_config(
+            r#"
+[keybinds.normal]
+"Ctrl p" = { actions = [{ action = "switch-mode", mode = "pane" }] }
+[keybinds.pane]
+"Ctrl t" = { actions = [{ action = "switch-mode", mode = "tab" }] }
+"Ctrl m" = { actions = [{ action = "switch-mode", mode = "move" }] }
+[keybinds.tab]
+"Ctrl r" = { actions = [{ action = "switch-mode", mode = "resize" }] }
+"Ctrl p" = { actions = [{ action = "switch-mode", mode = "pane" }] }
+[keybinds.resize]
+"Ctrl m" = { actions = [{ action = "switch-mode", mode = "move" }] }
+"Ctrl t" = { actions = [{ action = "switch-mode", mode = "tab" }] }
+[keybinds.move]
+"Ctrl t" = { actions = [{ action = "switch-mode", mode = "tab" }] }
+"Ctrl r" = { actions = [{ action = "switch-mode", mode = "resize" }] }
+"#,
+        );
+        let mut keys = WindowInput {
+            shortcuts,
+            ..WindowInput::default()
+        };
+        let mut output = Vec::new();
+        let hops = [
+            (2, InputMode::Normal),
+            (16, InputMode::Pane),
+            (20, InputMode::Tab),
+            (18, InputMode::Resize),
+            (13, InputMode::Move),
+            (20, InputMode::Tab),
+            (16, InputMode::Pane),
+            (13, InputMode::Move),
+            (18, InputMode::Resize),
+            (20, InputMode::Tab),
+        ];
+        for (byte, mode) in hops {
+            keys.feed(byte, &mut output);
+            assert_eq!(keys.mode, mode);
+            assert!(output.is_empty());
+        }
     }
 
     #[test]

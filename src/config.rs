@@ -29,6 +29,9 @@ pub enum PaneAction {
     Zoom,
     Close,
     Normal,
+    Resize,
+    Move,
+    Tab,
     Locked,
 }
 
@@ -51,6 +54,8 @@ pub enum ResizeAction {
     Resize(Direction),
     Normal,
     Pane,
+    Move,
+    Tab,
     Locked,
 }
 
@@ -67,6 +72,7 @@ pub enum MoveAction {
     Normal,
     Pane,
     Resize,
+    Tab,
     Locked,
 }
 
@@ -90,6 +96,7 @@ pub enum TabAction {
     Help,
     Normal,
     Pane,
+    Resize,
     Move,
     Locked,
 }
@@ -773,31 +780,18 @@ fn parse_pane_bindings(
                 Some("focus-up") => Some((PaneAction::FocusUp, true)),
                 Some("focus-right") => Some((PaneAction::FocusRight, true)),
                 Some("focus-next-pane") => Some((PaneAction::Next, true)),
-                _ => match single
-                    .as_table()
-                    .and_then(|value| value.get("mode"))
-                    .and_then(toml::Value::as_str)
-                {
-                    Some("locked")
-                        if single
-                            .as_table()
-                            .and_then(|value| value.get("action"))
-                            .and_then(toml::Value::as_str)
-                            == Some("switch-mode") =>
-                    {
-                        Some((PaneAction::Locked, false))
-                    }
-                    Some("normal")
-                        if single
-                            .as_table()
-                            .and_then(|value| value.get("action"))
-                            .and_then(toml::Value::as_str)
-                            == Some("switch-mode") =>
-                    {
-                        Some((PaneAction::Normal, false))
-                    }
-                    _ => None,
-                },
+                _ => single.as_table().and_then(|value| {
+                    (value.get("action").and_then(toml::Value::as_str) == Some("switch-mode"))
+                        .then(|| match value.get("mode").and_then(toml::Value::as_str) {
+                            Some("normal") => Some((PaneAction::Normal, false)),
+                            Some("resize") => Some((PaneAction::Resize, false)),
+                            Some("move") => Some((PaneAction::Move, false)),
+                            Some("tab") => Some((PaneAction::Tab, false)),
+                            Some("locked") => Some((PaneAction::Locked, false)),
+                            _ => None,
+                        })
+                        .flatten()
+                }),
             },
             [first, second]
                 if second.as_table().is_some_and(|table| {
@@ -873,6 +867,8 @@ fn parse_resize_bindings(
                     .then(|| match value.get("mode").and_then(toml::Value::as_str) {
                         Some("normal") => Some(ResizeAction::Normal),
                         Some("pane") => Some(ResizeAction::Pane),
+                        Some("move") => Some(ResizeAction::Move),
+                        Some("tab") => Some(ResizeAction::Tab),
                         Some("locked") => Some(ResizeAction::Locked),
                         _ => None,
                     })
@@ -931,6 +927,7 @@ fn parse_move_bindings(
                         Some("normal") => Some(MoveAction::Normal),
                         Some("pane") => Some(MoveAction::Pane),
                         Some("resize") => Some(MoveAction::Resize),
+                        Some("tab") => Some(MoveAction::Tab),
                         Some("locked") => Some(MoveAction::Locked),
                         _ => None,
                     })
@@ -1008,6 +1005,7 @@ fn parse_tab_bindings(
                         match value.get("mode").and_then(toml::Value::as_str) {
                             Some("normal") => Some(TabAction::Normal),
                             Some("pane") => Some(TabAction::Pane),
+                            Some("resize") => Some(TabAction::Resize),
                             Some("move") => Some(TabAction::Move),
                             Some("locked") => Some(TabAction::Locked),
                             _ => None,
@@ -1482,6 +1480,46 @@ esc = { actions = [{ action = "switch-mode", mode = "locked" }] }
         );
         assert_eq!(shortcuts.tab_binding(13).unwrap().action, TabAction::Move);
         assert_eq!(shortcuts.tab_binding(27).unwrap().action, TabAction::Locked);
+    }
+
+    #[test]
+    fn supported_modes_accept_direct_cross_mode_transitions() {
+        let shortcuts = Shortcuts::test_from_config(
+            r#"
+[keybinds.normal]
+[keybinds.pane]
+"Ctrl r" = { actions = [{ action = "switch-mode", mode = "resize" }] }
+"Ctrl m" = { actions = [{ action = "switch-mode", mode = "move" }] }
+"Ctrl t" = { actions = [{ action = "switch-mode", mode = "tab" }] }
+[keybinds.resize]
+"Ctrl m" = { actions = [{ action = "switch-mode", mode = "move" }] }
+"Ctrl t" = { actions = [{ action = "switch-mode", mode = "tab" }] }
+[keybinds.move]
+"Ctrl t" = { actions = [{ action = "switch-mode", mode = "tab" }] }
+[keybinds.tab]
+"Ctrl r" = { actions = [{ action = "switch-mode", mode = "resize" }] }
+"Ctrl p" = { actions = [{ action = "switch-mode", mode = "pane" }] }
+"Ctrl m" = { actions = [{ action = "switch-mode", mode = "move" }] }
+"#,
+        );
+        assert_eq!(
+            shortcuts.pane_binding(18).unwrap().action,
+            PaneAction::Resize
+        );
+        assert_eq!(shortcuts.pane_binding(13).unwrap().action, PaneAction::Move);
+        assert_eq!(shortcuts.pane_binding(20).unwrap().action, PaneAction::Tab);
+        assert_eq!(
+            shortcuts.resize_binding(13).unwrap().action,
+            ResizeAction::Move
+        );
+        assert_eq!(
+            shortcuts.resize_binding(20).unwrap().action,
+            ResizeAction::Tab
+        );
+        assert_eq!(shortcuts.move_binding(20).unwrap().action, MoveAction::Tab);
+        assert_eq!(shortcuts.tab_binding(18).unwrap().action, TabAction::Resize);
+        assert_eq!(shortcuts.tab_binding(16).unwrap().action, TabAction::Pane);
+        assert_eq!(shortcuts.tab_binding(13).unwrap().action, TabAction::Move);
     }
 
     #[test]
