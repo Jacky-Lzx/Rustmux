@@ -932,6 +932,47 @@ with tempfile.TemporaryDirectory(prefix="rustmux-mode-keybinds-") as directory:
     finally:
         s.close()
 
+with tempfile.TemporaryDirectory(prefix="rustmux-pane-mode-") as directory:
+    os.mkdir(os.path.join(directory, "rustmux"))
+    with open(os.path.join(directory, "rustmux", "config.toml"), "w", encoding="utf-8") as config:
+        config.write(
+            "[keybinds.normal]\n"
+            "'Ctrl p' = { actions = [{ action = 'switch-mode', mode = 'pane' }] }\n"
+            "[keybinds.pane]\n"
+            "h = { actions = ['focus-left'] }\n"
+            "j = { actions = ['focus-down'] }\n"
+            "k = { actions = ['focus-up'] }\n"
+            "l = { actions = ['focus-right'] }\n"
+            "r = { actions = ['new-pane-right', { action = 'switch-mode', mode = 'locked' }], display = 'always' }\n"
+            "esc = { actions = [{ action = 'switch-mode', mode = 'locked' }] }\n"
+        )
+    s = Session(extra_env={"XDG_CONFIG_HOME": directory})
+    try:
+        s.expect(b"RUSTMUX_READY> ")
+        s.send(b"\x02\x10")
+        deadline = time.monotonic() + 3
+        while b"PANE" not in s.physical_rows[-1]:
+            s.read()
+            assert time.monotonic() < deadline, s.physical_rows[-1]
+        assert b"Focus" in s.physical_rows[-1], s.physical_rows[-1]
+        s.send(b"h")
+        s.read(0.1)
+        assert b"PANE" in s.physical_rows[-1], s.physical_rows[-1]
+        s.send(b"\x1b")
+        deadline = time.monotonic() + 3
+        while b"LOCKED" not in s.physical_rows[-1]:
+            s.read()
+            assert time.monotonic() < deadline, s.physical_rows[-1]
+        s.send(b"\x02\x10r")
+        deadline = time.monotonic() + 3
+        while b"LOCKED" not in s.physical_rows[-1] or s.physical_rows[2].count(b"RUSTMUX_READY>") != 2:
+            s.read()
+            assert time.monotonic() < deadline, s.physical_rows
+        os.kill(s.app_pid, signal.SIGTERM)
+        s.finish(128 + signal.SIGTERM)
+    finally:
+        s.close()
+
 with tempfile.TemporaryDirectory(prefix="rustmux-normal-window-") as directory:
     os.mkdir(os.path.join(directory, "rustmux"))
     with open(os.path.join(directory, "rustmux", "config.toml"), "w", encoding="utf-8") as config:

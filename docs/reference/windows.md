@@ -145,7 +145,13 @@ the prior `x` close-pane behavior for that key.
 
 The left side of the bottom bar shows `LOCKED` in red during ordinary child
 input. Pressing Ctrl-B changes it to green `NORMAL` while Rustmux waits for the
-second shortcut byte; completing the shortcut returns it to `LOCKED`. Attached
+second shortcut byte; completing most shortcuts returns it to `LOCKED`.
+With a configured NORMAL-to-PANE binding, the badge changes to lavender `PANE`.
+Its footer shows the configured break, split, focus, zoom, and close keys that
+fit; clicking one invokes the same binding. Focus remains in PANE mode, while
+structural actions followed by `switch-mode locked` return to LOCKED. A
+configured Esc exit is consumed locally, including when received as a lone
+Escape byte. Attached
 session clients forward Ctrl-B immediately, so the server displays the same mode
 transition as a foreground-only run. The top bar uses all of its available width
 for the session name and window labels.
@@ -286,7 +292,7 @@ a drag that begins in a mouse-aware child can still release on the bar. On
 extremely narrow terminals the visible label may consist only of its highlighted
 prefix.
 
-The bottom bar starts with the current mode in a plain rectangular red or green
+The bottom bar starts with the current mode in a plain rectangular red, green, or lavender
 badge, followed by `Ctrl-B Commands` in locked mode or the available window/pane
 keys in normal mode. The mode badge has no Powerline arrows. Each shortcut uses
 Pink key text on the Base background, followed by a Powerline transition into

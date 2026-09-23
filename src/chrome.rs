@@ -190,6 +190,92 @@ const NORMAL_SHORTCUTS: &[ShortcutHint] = &[
     },
 ];
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FooterMode {
+    Locked,
+    Normal,
+    Pane,
+}
+
+const PANE_SHORTCUTS: &[ShortcutHint] = &[
+    ShortcutHint {
+        key: "b",
+        label: "Break",
+        actions: &[(0, b'b')],
+    },
+    ShortcutHint {
+        key: "r",
+        label: "Split →",
+        actions: &[(0, b'r')],
+    },
+    ShortcutHint {
+        key: "d",
+        label: "Split ↓",
+        actions: &[(0, b'd')],
+    },
+    ShortcutHint {
+        key: "h/j/k/l",
+        label: "Focus",
+        actions: &[(0, b'h'), (2, b'j'), (4, b'k'), (6, b'l')],
+    },
+    ShortcutHint {
+        key: "f",
+        label: "Zoom",
+        actions: &[(0, b'f')],
+    },
+    ShortcutHint {
+        key: "x",
+        label: "Close",
+        actions: &[(0, b'x')],
+    },
+];
+
+fn pane_action(key: u8) -> Option<crate::config::PaneAction> {
+    use crate::config::PaneAction;
+    Some(match key {
+        b'b' => PaneAction::Break,
+        b'r' => PaneAction::SplitRight,
+        b'd' => PaneAction::SplitDown,
+        b'h' => PaneAction::FocusLeft,
+        b'j' => PaneAction::FocusDown,
+        b'k' => PaneAction::FocusUp,
+        b'l' => PaneAction::FocusRight,
+        b'f' => PaneAction::Zoom,
+        b'x' => PaneAction::Close,
+        _ => return None,
+    })
+}
+
+fn displayed_key(key: u8) -> String {
+    match key {
+        9 => "Tab".to_owned(),
+        13 => "Enter".to_owned(),
+        27 => "Esc".to_owned(),
+        1..=26 => format!("Ctrl-{}", char::from(b'A' + key - 1)),
+        _ => char::from(key).to_string(),
+    }
+}
+
+fn pane_hint_key(hint: ShortcutHint, shortcuts: crate::config::Shortcuts) -> String {
+    hint.actions
+        .iter()
+        .filter_map(|(_, key)| shortcuts.pane_key(pane_action(*key)?).map(displayed_key))
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn hint_key_for_mode(
+    hint: ShortcutHint,
+    mode: FooterMode,
+    shortcuts: crate::config::Shortcuts,
+) -> String {
+    if mode == FooterMode::Pane {
+        pane_hint_key(hint, shortcuts)
+    } else {
+        hint_key(hint, shortcuts)
+    }
+}
+
 fn hint_key(hint: ShortcutHint, shortcuts: crate::config::Shortcuts) -> String {
     if hint.key == "n/p" {
         format!(
@@ -204,35 +290,39 @@ fn hint_key(hint: ShortcutHint, shortcuts: crate::config::Shortcuts) -> String {
     }
 }
 
-fn shortcut_width(hint: ShortcutHint, shortcuts: crate::config::Shortcuts) -> usize {
-    display_width(&hint_key(hint, shortcuts)) + display_width(hint.label) + 6
+fn shortcut_width(
+    hint: ShortcutHint,
+    mode: FooterMode,
+    shortcuts: crate::config::Shortcuts,
+) -> usize {
+    display_width(&hint_key_for_mode(hint, mode, shortcuts)) + display_width(hint.label) + 6
 }
 
 fn visible_shortcuts(
     columns: usize,
-    normal: bool,
+    mode: FooterMode,
     session: bool,
     bindings: crate::config::Shortcuts,
 ) -> Vec<ShortcutHint> {
-    let shortcuts = if normal {
-        NORMAL_SHORTCUTS
-    } else {
-        LOCKED_SHORTCUTS
+    let shortcuts = match mode {
+        FooterMode::Normal => NORMAL_SHORTCUTS,
+        FooterMode::Pane => PANE_SHORTCUTS,
+        FooterMode::Locked => LOCKED_SHORTCUTS,
     };
     let mut visible = Vec::new();
     let mut remaining = columns;
-    if normal {
+    if mode == FooterMode::Normal {
         let (help, primary) = shortcuts
             .split_last()
             .expect("normal shortcuts include help");
-        let help_width = shortcut_width(*help, bindings);
+        let help_width = shortcut_width(*help, mode, bindings);
         if help_width <= remaining {
             remaining -= help_width;
             let session_hint = session
                 .then_some(SESSION_SHORTCUT)
-                .filter(|hint| shortcut_width(*hint, bindings) <= remaining);
+                .filter(|hint| shortcut_width(*hint, mode, bindings) <= remaining);
             if let Some(hint) = session_hint {
-                remaining -= shortcut_width(hint, bindings);
+                remaining -= shortcut_width(hint, mode, bindings);
             }
             for hint in primary {
                 if !hint
@@ -242,7 +332,7 @@ fn visible_shortcuts(
                 {
                     continue;
                 }
-                let width = shortcut_width(*hint, bindings);
+                let width = shortcut_width(*hint, mode, bindings);
                 if width > remaining {
                     break;
                 }
@@ -255,14 +345,15 @@ fn visible_shortcuts(
         }
     }
     for hint in shortcuts {
-        if !hint
-            .actions
-            .iter()
-            .all(|(_, action)| bindings.action_is_active(*action))
-        {
+        if !hint.actions.iter().all(|(_, action)| match mode {
+            FooterMode::Pane => pane_action(*action)
+                .and_then(|action| bindings.pane_key(action))
+                .is_some(),
+            _ => bindings.action_is_active(*action),
+        }) {
             continue;
         }
-        let width = shortcut_width(*hint, bindings);
+        let width = shortcut_width(*hint, mode, bindings);
         if width > remaining {
             break;
         }
@@ -275,9 +366,10 @@ fn visible_shortcuts(
 fn draw_shortcut_segment(
     screen: &mut Screen,
     hint: ShortcutHint,
+    mode: FooterMode,
     bindings: crate::config::Shortcuts,
 ) {
-    draw_key_label_segment(screen, &hint_key(hint, bindings), hint.label);
+    draw_key_label_segment(screen, &hint_key_for_mode(hint, mode, bindings), hint.label);
 }
 
 fn draw_key_label_segment(screen: &mut Screen, key: &str, label: &str) {
@@ -312,23 +404,63 @@ pub(crate) fn footer_hitboxes(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn footer_hitboxes_with_shortcuts(
     columns: usize,
     normal: bool,
     session: bool,
     bindings: crate::config::Shortcuts,
 ) -> Vec<(usize, usize, u8)> {
+    footer_hitboxes_for_mode(
+        columns,
+        if normal {
+            FooterMode::Normal
+        } else {
+            FooterMode::Locked
+        },
+        session,
+        bindings,
+    )
+}
+
+pub(crate) fn footer_hitboxes_for_mode(
+    columns: usize,
+    mode: FooterMode,
+    session: bool,
+    bindings: crate::config::Shortcuts,
+) -> Vec<(usize, usize, u8)> {
     let mut hitboxes = Vec::new();
-    let shortcuts = footer_shortcuts(columns, normal, session, bindings);
-    let mut used = footer_mode_width(columns, normal) + usize::from(!shortcuts.is_empty());
+    let shortcuts = footer_shortcuts(columns, mode, session, bindings);
+    let mut used = footer_mode_width(columns, mode) + usize::from(!shortcuts.is_empty());
     for hint in shortcuts {
-        let width = shortcut_width(hint, bindings);
-        for (offset, action) in hint.actions {
-            let column = used + 2 + offset;
-            hitboxes.push((column, column + 1, *action));
+        let width = shortcut_width(hint, mode, bindings);
+        let mut key_offset = 0;
+        for (index, (_, action)) in hint.actions.iter().enumerate() {
+            if index != 0 {
+                key_offset += 1;
+            }
+            let action = if mode == FooterMode::Pane {
+                pane_action(*action).and_then(|action| bindings.pane_key(action))
+            } else {
+                Some(*action)
+            };
+            if let Some(action) = action {
+                let width = display_width(&displayed_key(action));
+                let width = if mode == FooterMode::Pane { width } else { 1 };
+                let column = used + 2 + key_offset;
+                hitboxes.push((column, column + width, action));
+                key_offset += width;
+            }
         }
         if let Some((_, action)) = hint.actions.first() {
-            hitboxes.push((used + 1, used + width + 1, *action));
+            let action = if mode == FooterMode::Pane {
+                pane_action(*action).and_then(|action| bindings.pane_key(action))
+            } else {
+                Some(*action)
+            };
+            if let Some(action) = action {
+                hitboxes.push((used + 1, used + width + 1, action));
+            }
         }
         used += width;
     }
@@ -383,31 +515,35 @@ fn draw_powerline_segment(screen: &mut Screen, label: &str, active: bool, remain
     );
 }
 
-fn mode_label(normal: bool) -> &'static str {
-    if normal { " NORMAL " } else { " LOCKED " }
+fn mode_label(mode: FooterMode) -> &'static str {
+    match mode {
+        FooterMode::Normal => " NORMAL ",
+        FooterMode::Pane => " PANE ",
+        FooterMode::Locked => " LOCKED ",
+    }
 }
 
-fn footer_mode_width(columns: usize, normal: bool) -> usize {
-    display_width(mode_label(normal)).min(columns)
+fn footer_mode_width(columns: usize, mode: FooterMode) -> usize {
+    display_width(mode_label(mode)).min(columns)
 }
 
 fn footer_shortcuts(
     columns: usize,
-    normal: bool,
+    mode: FooterMode,
     session: bool,
     bindings: crate::config::Shortcuts,
 ) -> Vec<ShortcutHint> {
     let remaining = columns
-        .saturating_sub(footer_mode_width(columns, normal))
+        .saturating_sub(footer_mode_width(columns, mode))
         .saturating_sub(1);
-    visible_shortcuts(remaining, normal, session, bindings)
+    visible_shortcuts(remaining, mode, session, bindings)
 }
 
 fn draw_footer(
     screen: &mut Screen,
     row: usize,
     columns: usize,
-    normal: bool,
+    mode: FooterMode,
     session: bool,
     bindings: crate::config::Shortcuts,
 ) {
@@ -419,21 +555,25 @@ fn draw_footer(
     screen.set_style(bar_background_style());
     screen.position(row, 0);
     screen.erase_line(EraseMode::All);
-    let mode_width = footer_mode_width(columns, normal);
-    let shortcuts = footer_shortcuts(columns, normal, session, bindings);
+    let mode_width = footer_mode_width(columns, mode);
+    let shortcuts = footer_shortcuts(columns, mode, session, bindings);
     screen.set_style(Style {
         foreground: BADGE_TEXT,
-        background: if normal { GREEN } else { RED },
+        background: match mode {
+            FooterMode::Normal => GREEN,
+            FooterMode::Pane => LAVENDER,
+            FooterMode::Locked => RED,
+        },
         bold: true,
         ..Style::default()
     });
-    print(screen, &clipped(mode_label(normal), mode_width));
+    print(screen, &clipped(mode_label(mode), mode_width));
     if !shortcuts.is_empty() {
         screen.set_style(bar_background_style());
         print(screen, " ");
     }
     for hint in shortcuts {
-        draw_shortcut_segment(screen, hint, bindings);
+        draw_shortcut_segment(screen, hint, mode, bindings);
     }
 }
 
@@ -634,6 +774,7 @@ pub(crate) fn compose(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn compose_with_shortcuts(
     child: &Screen,
     outer_rows: u16,
@@ -641,6 +782,30 @@ pub(crate) fn compose_with_shortcuts(
     names: &[String],
     active: usize,
     normal_mode: bool,
+    shortcuts: crate::config::Shortcuts,
+) -> io::Result<Screen> {
+    compose_with_mode(
+        child,
+        outer_rows,
+        session_name,
+        names,
+        active,
+        if normal_mode {
+            FooterMode::Normal
+        } else {
+            FooterMode::Locked
+        },
+        shortcuts,
+    )
+}
+
+pub(crate) fn compose_with_mode(
+    child: &Screen,
+    outer_rows: u16,
+    session_name: Option<&str>,
+    names: &[String],
+    active: usize,
+    mode: FooterMode,
     shortcuts: crate::config::Shortcuts,
 ) -> io::Result<Screen> {
     let mut screen = child.clone();
@@ -688,7 +853,7 @@ pub(crate) fn compose_with_shortcuts(
             &mut screen,
             row,
             columns,
-            normal_mode,
+            mode,
             session_name.is_some(),
             shortcuts,
         );

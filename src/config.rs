@@ -13,10 +13,37 @@ const DEFAULT_SHORTCUT_KEYS: [u8; 3] = *b"c%\"";
 const FIXED_SHORTCUT_KEYS: &[u8] = b"np\t&x<> {}!moZz[Ee?hjkl,1234567890dq";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PaneAction {
+    Break,
+    SplitRight,
+    SplitDown,
+    FocusLeft,
+    FocusDown,
+    FocusUp,
+    FocusRight,
+    Next,
+    Zoom,
+    Close,
+    Normal,
+    Locked,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PaneBinding {
+    key: u8,
+    pub action: PaneAction,
+    pub stay: bool,
+    preferred: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Shortcuts {
     keys: [u8; 3],
     normal_actions: [Option<(u8, u8)>; 16],
     normal_action_len: usize,
+    pane_enter: Option<u8>,
+    pane_bindings: [Option<PaneBinding>; 32],
+    pane_binding_len: usize,
     normal_exit: [u8; 8],
     normal_exit_len: usize,
 }
@@ -27,6 +54,9 @@ impl Default for Shortcuts {
             keys: DEFAULT_SHORTCUT_KEYS,
             normal_actions: [None; 16],
             normal_action_len: 0,
+            pane_enter: None,
+            pane_bindings: [None; 32],
+            pane_binding_len: 0,
             normal_exit: [0; 8],
             normal_exit_len: 0,
         }
@@ -34,6 +64,10 @@ impl Default for Shortcuts {
 }
 
 impl Shortcuts {
+    #[cfg(test)]
+    pub(crate) fn test_from_config(source: &str) -> Self {
+        parse_config(source).unwrap().shortcuts
+    }
     #[cfg(test)]
     pub(crate) fn test_keys(keys: [u8; 3]) -> Self {
         Self {
@@ -107,6 +141,27 @@ impl Shortcuts {
 
     pub fn exits_normal(self, key: u8) -> bool {
         self.normal_exit[..self.normal_exit_len].contains(&key)
+    }
+
+    pub fn enters_pane(self, key: u8) -> bool {
+        self.pane_enter == Some(key)
+    }
+
+    pub fn pane_binding(self, key: u8) -> Option<PaneBinding> {
+        self.pane_bindings[..self.pane_binding_len]
+            .iter()
+            .flatten()
+            .find(|binding| binding.key == key)
+            .copied()
+    }
+
+    pub fn pane_key(self, action: PaneAction) -> Option<u8> {
+        self.pane_bindings[..self.pane_binding_len]
+            .iter()
+            .flatten()
+            .filter(|binding| binding.action == action)
+            .max_by_key(|binding| binding.preferred)
+            .map(|binding| binding.key)
     }
 }
 
@@ -419,6 +474,22 @@ fn parse_keybinds(
                 .as_table()
                 .and_then(|table| table.get("mode"))
                 .and_then(toml::Value::as_str)
+                == Some("pane")
+            && let Some(byte) = parse_mode_key(key)
+        {
+            if shortcuts.pane_enter.replace(byte).is_some() {
+                return Err(
+                    "multiple keybinds.normal pane-mode entry keys are not supported yet"
+                        .to_owned(),
+                );
+            }
+        } else if actions.len() == 1
+            && names.len() == 1
+            && names[0] == "switch-mode"
+            && actions[0]
+                .as_table()
+                .and_then(|table| table.get("mode"))
+                .and_then(toml::Value::as_str)
                 == Some("locked")
             && let Some(byte) = parse_mode_key(key)
         {
@@ -433,6 +504,7 @@ fn parse_keybinds(
         }
     }
     validate_shortcuts(shortcuts)?;
+    parse_pane_bindings(keybinds.get("pane"), &mut shortcuts)?;
     for (key, _) in shortcuts.normal_actions[..shortcuts.normal_action_len]
         .iter()
         .flatten()
@@ -454,6 +526,91 @@ fn parse_keybinds(
     Ok(shortcuts)
 }
 
+fn parse_pane_bindings(
+    value: Option<&toml::Value>,
+    shortcuts: &mut Shortcuts,
+) -> Result<(), String> {
+    let Some(value) = value else {
+        return Ok(());
+    };
+    let pane = value.as_table().ok_or("keybinds.pane must be a table")?;
+    for (key, binding) in pane {
+        let Some(table) = binding.as_table() else {
+            continue;
+        };
+        let Some(actions) = table.get("actions").and_then(toml::Value::as_array) else {
+            continue;
+        };
+        let parsed = match actions.as_slice() {
+            [single] => match single.as_str() {
+                Some("focus-left") => Some((PaneAction::FocusLeft, true)),
+                Some("focus-down") => Some((PaneAction::FocusDown, true)),
+                Some("focus-up") => Some((PaneAction::FocusUp, true)),
+                Some("focus-right") => Some((PaneAction::FocusRight, true)),
+                Some("focus-next-pane") => Some((PaneAction::Next, true)),
+                _ => match single
+                    .as_table()
+                    .and_then(|value| value.get("mode"))
+                    .and_then(toml::Value::as_str)
+                {
+                    Some("locked")
+                        if single
+                            .as_table()
+                            .and_then(|value| value.get("action"))
+                            .and_then(toml::Value::as_str)
+                            == Some("switch-mode") =>
+                    {
+                        Some((PaneAction::Locked, false))
+                    }
+                    Some("normal")
+                        if single
+                            .as_table()
+                            .and_then(|value| value.get("action"))
+                            .and_then(toml::Value::as_str)
+                            == Some("switch-mode") =>
+                    {
+                        Some((PaneAction::Normal, false))
+                    }
+                    _ => None,
+                },
+            },
+            [first, second]
+                if second.as_table().is_some_and(|table| {
+                    table.get("action").and_then(toml::Value::as_str) == Some("switch-mode")
+                        && table.get("mode").and_then(toml::Value::as_str) == Some("locked")
+                }) =>
+            {
+                match first.as_str() {
+                    Some("break-pane") => Some((PaneAction::Break, false)),
+                    Some("new-pane-right") => Some((PaneAction::SplitRight, false)),
+                    Some("new-pane-down") => Some((PaneAction::SplitDown, false)),
+                    Some("toggle-pane-zoom") => Some((PaneAction::Zoom, false)),
+                    Some("close-pane") => Some((PaneAction::Close, false)),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        let Some((action, stay)) = parsed else {
+            continue;
+        };
+        let Some(key) = parse_mode_key(key) else {
+            continue;
+        };
+        if shortcuts.pane_binding_len == shortcuts.pane_bindings.len() {
+            return Err("too many supported keybinds.pane bindings".to_owned());
+        }
+        shortcuts.pane_bindings[shortcuts.pane_binding_len] = Some(PaneBinding {
+            key,
+            action,
+            stay,
+            preferred: table.get("display").and_then(toml::Value::as_str) == Some("always"),
+        });
+        shortcuts.pane_binding_len += 1;
+    }
+    Ok(())
+}
+
 fn parse_printable_key(key: &str) -> Option<u8> {
     (key.len() == 1 && key.as_bytes()[0].is_ascii_graphic()).then(|| key.as_bytes()[0])
 }
@@ -467,6 +624,12 @@ fn parse_normal_action_key(key: &str) -> Option<u8> {
 fn parse_mode_key(key: &str) -> Option<u8> {
     if key.eq_ignore_ascii_case("esc") {
         return Some(27);
+    }
+    if key.eq_ignore_ascii_case("enter") {
+        return Some(13);
+    }
+    if key.eq_ignore_ascii_case("tab") {
+        return Some(9);
     }
     if let Some(letter) = key.strip_prefix("Ctrl ") {
         let byte = parse_printable_key(letter)?.to_ascii_lowercase();
@@ -642,6 +805,41 @@ esc = { actions = [{ action = "switch-mode", mode = "locked" }], display = "help
             parse_config("[keybinds.normal]\nN = { actions = ['new-window', 'future-action'] }")
                 .unwrap();
         assert_eq!(unsupported.shortcuts.key_for(b'c'), b'c');
+    }
+
+    #[test]
+    fn pane_mode_reads_supported_actions_and_ignores_unsupported_sequences() {
+        let shortcuts = Shortcuts::test_from_config(
+            r#"
+[keybinds.normal]
+"Ctrl p" = { actions = [{ action = "switch-mode", mode = "pane" }] }
+[keybinds.pane]
+b = { actions = ["break-pane", { action = "switch-mode", mode = "locked" }] }
+n = { actions = ["new-pane-right", { action = "switch-mode", mode = "locked" }] }
+r = { actions = ["new-pane-right", { action = "switch-mode", mode = "locked" }], display = "always" }
+d = { actions = ["new-pane-down", { action = "switch-mode", mode = "locked" }] }
+h = { actions = ["focus-left"] }
+tab = { actions = ["focus-next-pane"] }
+f = { actions = ["toggle-pane-zoom", { action = "switch-mode", mode = "locked" }] }
+x = { actions = ["close-pane", { action = "switch-mode", mode = "locked" }] }
+p = { actions = [{ action = "switch-mode", mode = "normal" }] }
+esc = { actions = [{ action = "switch-mode", mode = "locked" }] }
+"[" = { actions = ["move-pane-previous-window", { action = "switch-mode", mode = "locked" }] }
+"#,
+        );
+        assert!(shortcuts.enters_pane(16));
+        assert_eq!(shortcuts.pane_key(PaneAction::SplitRight), Some(b'r'));
+        assert_eq!(
+            shortcuts.pane_binding(b'h').unwrap().action,
+            PaneAction::FocusLeft
+        );
+        assert!(shortcuts.pane_binding(b'h').unwrap().stay);
+        assert_eq!(shortcuts.pane_binding(9).unwrap().action, PaneAction::Next);
+        assert_eq!(
+            shortcuts.pane_binding(27).unwrap().action,
+            PaneAction::Locked
+        );
+        assert!(shortcuts.pane_binding(b'[').is_none());
     }
 
     #[test]

@@ -21,7 +21,7 @@ use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGWINCH};
 
 use crate::pane::{INPUT_LIMIT as LIMIT, MAX_CELLS, Pane};
 use crate::{
-    chrome::{compose_with_shortcuts, footer_enabled, pane_rows},
+    chrome::{FooterMode, compose_with_mode, footer_enabled, pane_rows},
     layout::{Direction, PaneId, Rect, SplitAxis},
     pane_set::PaneSet,
     pane_view,
@@ -608,6 +608,7 @@ enum InputMode {
     #[default]
     Locked,
     Normal,
+    Pane,
 }
 
 #[derive(Default)]
@@ -716,16 +717,22 @@ impl WindowInput {
                 }
                 return;
             }
-            if self.mode == InputMode::Normal {
+            if self.mode != InputMode::Locked {
                 if key.event_type == 3 {
                     return;
                 }
                 if let Some(byte) = key.shortcut_byte() {
-                    self.shortcut(byte, output);
+                    match self.mode {
+                        InputMode::Normal => self.shortcut(byte, output),
+                        InputMode::Pane => self.pane_shortcut(byte, output),
+                        InputMode::Locked => unreachable!(),
+                    }
                 } else {
-                    self.mode = InputMode::Locked;
-                    output.push(WindowKey::Byte(2));
-                    output.extend(bytes.into_iter().map(WindowKey::Byte));
+                    if self.mode == InputMode::Normal {
+                        self.mode = InputMode::Locked;
+                        output.push(WindowKey::Byte(2));
+                        output.extend(bytes.into_iter().map(WindowKey::Byte));
+                    }
                 }
                 return;
             }
@@ -742,6 +749,7 @@ impl WindowInput {
                 }
                 return;
             }
+            let footer_mode = self.mode;
             self.mode = InputMode::Locked;
             if let Some(mut drag) = self.pane_drag {
                 if release {
@@ -777,7 +785,10 @@ impl WindowInput {
                         .find(|(start, end, _)| column >= *start && column < *end)
                         .copied()
                     {
-                        if action == 2 {
+                        if footer_mode == InputMode::Pane {
+                            self.mode = InputMode::Pane;
+                            self.pane_shortcut(action, output);
+                        } else if action == 2 {
                             self.mode = InputMode::Normal;
                         } else if action == 23 {
                             self.mode = InputMode::Locked;
@@ -921,16 +932,21 @@ impl WindowInput {
         }
         if was_paste {
             output.push(WindowKey::Byte(byte));
-        } else if self.mode == InputMode::Normal {
-            self.shortcut(byte, output);
-        } else if byte == 2 {
-            self.mode = InputMode::Normal;
         } else {
-            output.push(WindowKey::Byte(byte));
+            match self.mode {
+                InputMode::Normal => self.shortcut(byte, output),
+                InputMode::Pane => self.pane_shortcut(byte, output),
+                InputMode::Locked if byte == 2 => self.mode = InputMode::Normal,
+                InputMode::Locked => output.push(WindowKey::Byte(byte)),
+            }
         }
     }
 
     fn shortcut(&mut self, byte: u8, output: &mut Vec<WindowKey>) {
+        if self.shortcuts.enters_pane(byte) {
+            self.mode = InputMode::Pane;
+            return;
+        }
         self.mode = InputMode::Locked;
         if self.shortcuts.exits_normal(byte) {
             return;
@@ -940,6 +956,32 @@ impl WindowInput {
         } else {
             output.push(WindowKey::Byte(2));
             output.push(WindowKey::Byte(byte));
+        }
+    }
+
+    fn pane_shortcut(&mut self, byte: u8, output: &mut Vec<WindowKey>) {
+        use crate::config::PaneAction;
+        let Some(binding) = self.shortcuts.pane_binding(byte) else {
+            return;
+        };
+        self.mode = if binding.stay {
+            InputMode::Pane
+        } else {
+            InputMode::Locked
+        };
+        match binding.action {
+            PaneAction::Break => output.push(WindowKey::BreakPane),
+            PaneAction::SplitRight => output.push(WindowKey::Split(SplitAxis::Columns)),
+            PaneAction::SplitDown => output.push(WindowKey::Split(SplitAxis::Rows)),
+            PaneAction::FocusLeft => output.push(WindowKey::FocusPane(Direction::Left)),
+            PaneAction::FocusDown => output.push(WindowKey::FocusPane(Direction::Down)),
+            PaneAction::FocusUp => output.push(WindowKey::FocusPane(Direction::Up)),
+            PaneAction::FocusRight => output.push(WindowKey::FocusPane(Direction::Right)),
+            PaneAction::Next => output.push(WindowKey::NextPane),
+            PaneAction::Zoom => output.push(WindowKey::ToggleZoom),
+            PaneAction::Close => output.push(WindowKey::ClosePane),
+            PaneAction::Normal => self.mode = InputMode::Normal,
+            PaneAction::Locked => self.mode = InputMode::Locked,
         }
     }
 }
@@ -1617,16 +1659,20 @@ fn forward(
                         &titles,
                         &bells,
                     )?;
-                    let mut view = compose_with_shortcuts(
+                    let mut view = compose_with_mode(
                         &content,
                         *outer_rows,
                         session_name,
                         &names,
                         active_index,
-                        keys.mode == InputMode::Normal,
+                        match keys.mode {
+                            InputMode::Normal => FooterMode::Normal,
+                            InputMode::Pane => FooterMode::Pane,
+                            InputMode::Locked => FooterMode::Locked,
+                        },
                         shortcuts,
                     )?;
-                    if keys.mode == InputMode::Normal
+                    if keys.mode != InputMode::Locked
                         || prompt.is_some()
                         || history.is_some()
                         || help.is_some()
@@ -1763,6 +1809,12 @@ fn forward(
                 let pending = keys.take_mouse();
                 let cancel_normal =
                     keys.mode == InputMode::Normal && pending == [27] && shortcuts.exits_normal(27);
+                let cancel_pane = keys.mode == InputMode::Pane
+                    && pending == [27]
+                    && shortcuts
+                        .pane_binding(27)
+                        .is_some_and(|binding| binding.action == crate::config::PaneAction::Locked);
+                let was_pane = keys.mode == InputMode::Pane;
                 if keys.mode == InputMode::Normal {
                     keys.mode = InputMode::Locked;
                     if !cancel_normal {
@@ -1771,7 +1823,12 @@ fn forward(
                     bar_dirty = true;
                     force_redraw = true;
                 }
-                if !cancel_normal {
+                if keys.mode == InputMode::Pane {
+                    keys.mode = InputMode::Locked;
+                    bar_dirty = true;
+                    force_redraw = true;
+                }
+                if !cancel_normal && !cancel_pane && !was_pane {
                     state.to_shell.extend(pending);
                 }
             }
@@ -1936,9 +1993,13 @@ fn forward(
                     &names,
                     active_index,
                 );
-                keys.footer_hitboxes = crate::chrome::footer_hitboxes_with_shortcuts(
+                keys.footer_hitboxes = crate::chrome::footer_hitboxes_for_mode(
                     usize::from(columns),
-                    keys.mode == InputMode::Normal,
+                    match keys.mode {
+                        InputMode::Normal => FooterMode::Normal,
+                        InputMode::Pane => FooterMode::Pane,
+                        InputMode::Locked => FooterMode::Locked,
+                    },
                     session_name.is_some(),
                     shortcuts,
                 );
@@ -2989,6 +3050,94 @@ mod window_input_tests {
         decoder.feed(b'n', &mut actions);
         assert_eq!(actions, [WindowKey::Next]);
         assert_eq!(decoder.mode, InputMode::Locked);
+    }
+
+    #[test]
+    fn pane_mode_runs_configured_actions_and_keeps_focus_mode() {
+        let shortcuts = crate::config::Shortcuts::test_from_config(
+            r#"
+[keybinds.normal]
+"Ctrl p" = { actions = [{ action = "switch-mode", mode = "pane" }] }
+[keybinds.pane]
+h = { actions = ["focus-left"] }
+r = { actions = ["new-pane-right", { action = "switch-mode", mode = "locked" }] }
+p = { actions = [{ action = "switch-mode", mode = "normal" }] }
+esc = { actions = [{ action = "switch-mode", mode = "locked" }] }
+"#,
+        );
+        let mut keys = WindowInput {
+            shortcuts,
+            ..WindowInput::default()
+        };
+        let mut actions = Vec::new();
+        for &byte in b"\x02\x10h?" {
+            keys.feed(byte, &mut actions);
+        }
+        assert_eq!(actions, [WindowKey::FocusPane(Direction::Left)]);
+        assert_eq!(keys.mode, InputMode::Pane);
+        keys.feed(b'r', &mut actions);
+        assert_eq!(actions.last(), Some(&WindowKey::Split(SplitAxis::Columns)));
+        assert_eq!(keys.mode, InputMode::Locked);
+        for &byte in b"\x02\x10p" {
+            keys.feed(byte, &mut actions);
+        }
+        assert_eq!(keys.mode, InputMode::Normal);
+        keys.feed(b'n', &mut actions);
+        assert_eq!(actions.last(), Some(&WindowKey::Next));
+        for &byte in b"\x02\x10" {
+            keys.feed(byte, &mut actions);
+        }
+        assert_eq!(keys.mode, InputMode::Pane);
+        keys.feed(27, &mut actions);
+        assert_eq!(keys.mode, InputMode::Locked);
+    }
+
+    #[test]
+    fn pane_footer_click_uses_configured_key_and_stay_semantics() {
+        let shortcuts = crate::config::Shortcuts::test_from_config(
+            r#"
+[keybinds.normal]
+"Ctrl p" = { actions = [{ action = "switch-mode", mode = "pane" }] }
+[keybinds.pane]
+h = { actions = ["focus-left"] }
+l = { actions = ["focus-right"] }
+j = { actions = ["focus-down"] }
+k = { actions = ["focus-up"] }
+r = { actions = ["new-pane-right", { action = "switch-mode", mode = "locked" }] }
+"#,
+        );
+        let boxes =
+            crate::chrome::footer_hitboxes_for_mode(120, FooterMode::Pane, false, shortcuts);
+        let focus = boxes
+            .iter()
+            .find(|(_, _, key)| *key == b'h')
+            .copied()
+            .unwrap()
+            .0;
+        let split = boxes
+            .iter()
+            .find(|(_, _, key)| *key == b'r')
+            .copied()
+            .unwrap()
+            .0;
+        let mut keys = WindowInput {
+            mode: InputMode::Pane,
+            shortcuts,
+            footer_row: Some(24),
+            footer_hitboxes: boxes,
+            ..WindowInput::default()
+        };
+        let mut actions = Vec::new();
+        for byte in format!("\x1b[<0;{focus};24M\x1b[<0;{focus};24m").bytes() {
+            keys.feed(byte, &mut actions);
+        }
+        assert_eq!(actions, [WindowKey::FocusPane(Direction::Left)]);
+        assert_eq!(keys.mode, InputMode::Pane);
+        for byte in format!("\x1b[<0;{split};24M\x1b[<0;{split};24m").bytes() {
+            keys.feed(byte, &mut actions);
+        }
+        assert_eq!(actions.last(), Some(&WindowKey::Split(SplitAxis::Columns)));
+        assert_eq!(keys.mode, InputMode::Locked);
     }
 
     #[test]

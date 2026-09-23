@@ -61,11 +61,21 @@ N = { actions = ["new-window", { action = "switch-mode", mode = "locked" }] }
 "Ctrl g" = { actions = [{ action = "switch-mode", mode = "locked" }] }
 ```
 
-For now, only these actions are applied; other mode tables and unsupported
-actions from main's larger configuration are ignored. `display` and
-`clear_defaults` are not implemented yet. Ctrl-B remains the only supported
-LOCKED-to-NORMAL key. An existing main configuration can still be loaded, but
-its other mode bindings do not take effect in this increment.
+The first PANE-mode bindings from main's configuration also work. Bind a
+NORMAL-mode key to `switch-mode` `pane`, then use `[keybinds.pane]` for
+`break-pane`, `new-pane-right`, `new-pane-down`, `focus-left/down/up/right`,
+`focus-next-pane`, `toggle-pane-zoom`, `close-pane`, and `switch-mode` back to
+`normal` or `locked`. Focus commands keep PANE mode; structural commands return
+to LOCKED when followed by `switch-mode` `locked`. `display = "always"` picks
+the preferred key shown in the footer when more than one key invokes an action.
+For example, with main's configuration, Ctrl-B then Ctrl-P opens PANE mode;
+`h/j/k/l` changes focus without leaving it, while `r` splits right and exits.
+Esc exits without reaching the shell.
+
+Other mode tables and unsupported actions from main's larger configuration are
+still ignored. `clear_defaults` is not implemented yet. Ctrl-B remains the only
+supported LOCKED-to-NORMAL key. PANE's arrow-key aliases and cross-window pane
+move/floating actions are not yet supported.
 
 NORMAL mode also recognizes main-style `close-window`, `next-window`,
 `previous-window` (including `tab`), `move-window-left`, and `move-window-right`
