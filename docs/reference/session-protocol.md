@@ -22,9 +22,11 @@ The server-to-client messages are:
 - `Output`: arbitrary bytes for the outer terminal.
 - `Exit`: the server's signed process status.
 - `OpenSessionManager`: a zero-payload terminal control request.
+- `Detach`: a zero-payload request for the client to restore its terminal and leave the session running.
 - `Rejected`: a UTF-8 reason limited to 1 KiB.
 
-Protocol version 2 adds `OpenSessionManager`. The version is carried explicitly
+Protocol version 3 adds server-requested `Detach` after version 2's
+`OpenSessionManager`. The version is carried explicitly
 so the handshake can reject an
 incompatible peer before forwarding terminal bytes. Encoding validates sizes
 and limits just like decoding. Unit tests exercise every-byte fragmentation,

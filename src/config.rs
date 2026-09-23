@@ -32,6 +32,7 @@ pub enum PaneAction {
     Resize,
     Move,
     Tab,
+    Session,
     Locked,
 }
 
@@ -56,6 +57,7 @@ pub enum ResizeAction {
     Pane,
     Move,
     Tab,
+    Session,
     Locked,
 }
 
@@ -73,6 +75,7 @@ pub enum MoveAction {
     Pane,
     Resize,
     Tab,
+    Session,
     Locked,
 }
 
@@ -98,6 +101,7 @@ pub enum TabAction {
     Pane,
     Resize,
     Move,
+    Session,
     Locked,
 }
 
@@ -110,6 +114,26 @@ pub struct TabBinding {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SessionAction {
+    Detach,
+    Manager,
+    Help,
+    Normal,
+    Pane,
+    Resize,
+    Move,
+    Tab,
+    Locked,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SessionBinding {
+    key: u8,
+    pub action: SessionAction,
+    preferred: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Shortcuts {
     keys: [u8; 3],
     normal_actions: [Option<(u8, u8)>; 16],
@@ -118,6 +142,7 @@ pub struct Shortcuts {
     resize_enter: Option<u8>,
     move_enter: Option<u8>,
     tab_enter: Option<u8>,
+    session_enter: Option<u8>,
     pane_bindings: [Option<PaneBinding>; 32],
     pane_binding_len: usize,
     pane_arrows: [Option<PaneArrowBinding>; 4],
@@ -130,6 +155,8 @@ pub struct Shortcuts {
     tab_bindings: [Option<TabBinding>; 32],
     tab_binding_len: usize,
     tab_arrows: [Option<TabBinding>; 4],
+    session_bindings: [Option<SessionBinding>; 16],
+    session_binding_len: usize,
     normal_exit: [u8; 8],
     normal_exit_len: usize,
 }
@@ -144,6 +171,7 @@ impl Default for Shortcuts {
             resize_enter: None,
             move_enter: None,
             tab_enter: None,
+            session_enter: None,
             pane_bindings: [None; 32],
             pane_binding_len: 0,
             pane_arrows: [None; 4],
@@ -156,6 +184,8 @@ impl Default for Shortcuts {
             tab_bindings: [None; 32],
             tab_binding_len: 0,
             tab_arrows: [None; 4],
+            session_bindings: [None; 16],
+            session_binding_len: 0,
             normal_exit: [0; 8],
             normal_exit_len: 0,
         }
@@ -262,6 +292,14 @@ impl Shortcuts {
         self.tab_enter
     }
 
+    pub fn enters_session(self, key: u8) -> bool {
+        self.session_enter == Some(key)
+    }
+
+    pub fn session_entry_key(self) -> Option<u8> {
+        self.session_enter
+    }
+
     pub fn pane_binding(self, key: u8) -> Option<PaneBinding> {
         self.pane_bindings[..self.pane_binding_len]
             .iter()
@@ -339,6 +377,23 @@ impl Shortcuts {
 
     pub fn tab_key(self, action: TabAction) -> Option<u8> {
         self.tab_bindings[..self.tab_binding_len]
+            .iter()
+            .flatten()
+            .filter(|binding| binding.action == action)
+            .max_by_key(|binding| binding.preferred)
+            .map(|binding| binding.key)
+    }
+
+    pub fn session_binding(self, key: u8) -> Option<SessionBinding> {
+        self.session_bindings[..self.session_binding_len]
+            .iter()
+            .flatten()
+            .find(|binding| binding.key == key)
+            .copied()
+    }
+
+    pub fn session_key(self, action: SessionAction) -> Option<u8> {
+        self.session_bindings[..self.session_binding_len]
             .iter()
             .flatten()
             .filter(|binding| binding.action == action)
@@ -719,6 +774,22 @@ fn parse_keybinds(
                 .as_table()
                 .and_then(|table| table.get("mode"))
                 .and_then(toml::Value::as_str)
+                == Some("session")
+            && let Some(byte) = parse_mode_key(key)
+        {
+            if shortcuts.session_enter.replace(byte).is_some() {
+                return Err(
+                    "multiple keybinds.normal session-mode entry keys are not supported yet"
+                        .to_owned(),
+                );
+            }
+        } else if actions.len() == 1
+            && names.len() == 1
+            && names[0] == "switch-mode"
+            && actions[0]
+                .as_table()
+                .and_then(|table| table.get("mode"))
+                .and_then(toml::Value::as_str)
                 == Some("locked")
             && let Some(byte) = parse_mode_key(key)
         {
@@ -737,6 +808,7 @@ fn parse_keybinds(
     parse_resize_bindings(keybinds.get("resize"), &mut shortcuts)?;
     parse_move_bindings(keybinds.get("move"), &mut shortcuts)?;
     parse_tab_bindings(keybinds.get("tab"), &mut shortcuts)?;
+    parse_session_bindings(keybinds.get("session"), &mut shortcuts)?;
     for (key, _) in shortcuts.normal_actions[..shortcuts.normal_action_len]
         .iter()
         .flatten()
@@ -787,6 +859,7 @@ fn parse_pane_bindings(
                             Some("resize") => Some((PaneAction::Resize, false)),
                             Some("move") => Some((PaneAction::Move, false)),
                             Some("tab") => Some((PaneAction::Tab, false)),
+                            Some("session") => Some((PaneAction::Session, false)),
                             Some("locked") => Some((PaneAction::Locked, false)),
                             _ => None,
                         })
@@ -869,6 +942,7 @@ fn parse_resize_bindings(
                         Some("pane") => Some(ResizeAction::Pane),
                         Some("move") => Some(ResizeAction::Move),
                         Some("tab") => Some(ResizeAction::Tab),
+                        Some("session") => Some(ResizeAction::Session),
                         Some("locked") => Some(ResizeAction::Locked),
                         _ => None,
                     })
@@ -928,6 +1002,7 @@ fn parse_move_bindings(
                         Some("pane") => Some(MoveAction::Pane),
                         Some("resize") => Some(MoveAction::Resize),
                         Some("tab") => Some(MoveAction::Tab),
+                        Some("session") => Some(MoveAction::Session),
                         Some("locked") => Some(MoveAction::Locked),
                         _ => None,
                     })
@@ -1007,6 +1082,7 @@ fn parse_tab_bindings(
                             Some("pane") => Some(TabAction::Pane),
                             Some("resize") => Some(TabAction::Resize),
                             Some("move") => Some(TabAction::Move),
+                            Some("session") => Some(TabAction::Session),
                             Some("locked") => Some(TabAction::Locked),
                             _ => None,
                         }
@@ -1036,6 +1112,66 @@ fn parse_tab_bindings(
         }
         shortcuts.tab_bindings[shortcuts.tab_binding_len] = Some(TabBinding { key, ..binding });
         shortcuts.tab_binding_len += 1;
+    }
+    Ok(())
+}
+
+fn parse_session_bindings(
+    value: Option<&toml::Value>,
+    shortcuts: &mut Shortcuts,
+) -> Result<(), String> {
+    let Some(value) = value else {
+        return Ok(());
+    };
+    let session = value.as_table().ok_or("keybinds.session must be a table")?;
+    for (key, binding) in session {
+        let Some(table) = binding.as_table() else {
+            continue;
+        };
+        let Some(actions) = table.get("actions").and_then(toml::Value::as_array) else {
+            continue;
+        };
+        let action = match actions.as_slice() {
+            [single] => match single.as_str() {
+                Some("detach") => Some(SessionAction::Detach),
+                Some("show-help") => Some(SessionAction::Help),
+                _ => single.as_table().and_then(|value| {
+                    (value.get("action").and_then(toml::Value::as_str) == Some("switch-mode"))
+                        .then(|| match value.get("mode").and_then(toml::Value::as_str) {
+                            Some("normal") => Some(SessionAction::Normal),
+                            Some("pane") => Some(SessionAction::Pane),
+                            Some("resize") => Some(SessionAction::Resize),
+                            Some("move") => Some(SessionAction::Move),
+                            Some("tab") => Some(SessionAction::Tab),
+                            Some("locked") => Some(SessionAction::Locked),
+                            _ => None,
+                        })
+                        .flatten()
+                }),
+            },
+            [first, second]
+                if first.as_str() == Some("switch-session")
+                    && second.as_table().is_some_and(|value| {
+                        value.get("action").and_then(toml::Value::as_str) == Some("switch-mode")
+                            && value.get("mode").and_then(toml::Value::as_str) == Some("locked")
+                    }) =>
+            {
+                Some(SessionAction::Manager)
+            }
+            _ => None,
+        };
+        let (Some(action), Some(key)) = (action, parse_mode_key(key)) else {
+            continue;
+        };
+        if shortcuts.session_binding_len == shortcuts.session_bindings.len() {
+            return Err("too many supported keybinds.session bindings".to_owned());
+        }
+        shortcuts.session_bindings[shortcuts.session_binding_len] = Some(SessionBinding {
+            key,
+            action,
+            preferred: table.get("display").and_then(toml::Value::as_str) == Some("always"),
+        });
+        shortcuts.session_binding_len += 1;
     }
     Ok(())
 }
@@ -1480,6 +1616,62 @@ esc = { actions = [{ action = "switch-mode", mode = "locked" }] }
         );
         assert_eq!(shortcuts.tab_binding(13).unwrap().action, TabAction::Move);
         assert_eq!(shortcuts.tab_binding(27).unwrap().action, TabAction::Locked);
+    }
+
+    #[test]
+    fn session_mode_reads_main_style_bindings_and_cross_mode_entries() {
+        let shortcuts = Shortcuts::test_from_config(
+            r#"
+[keybinds.normal]
+"Ctrl o" = { actions = [{ action = "switch-mode", mode = "session" }] }
+[keybinds.pane]
+"Ctrl o" = { actions = [{ action = "switch-mode", mode = "session" }] }
+[keybinds.tab]
+"Ctrl o" = { actions = [{ action = "switch-mode", mode = "session" }] }
+[keybinds.resize]
+"Ctrl o" = { actions = [{ action = "switch-mode", mode = "session" }] }
+[keybinds.move]
+"Ctrl o" = { actions = [{ action = "switch-mode", mode = "session" }] }
+[keybinds.session]
+d = { actions = ["detach"], display = "always" }
+w = { actions = ["switch-session", { action = "switch-mode", mode = "locked" }], display = "always" }
+o = { actions = [{ action = "switch-mode", mode = "normal" }], display = "always" }
+"Ctrl p" = { actions = [{ action = "switch-mode", mode = "pane" }] }
+esc = { actions = [{ action = "switch-mode", mode = "locked" }] }
+"?" = { actions = ["show-help"] }
+x = { actions = ["unsupported-action"] }
+"#,
+        );
+        assert!(shortcuts.enters_session(15));
+        assert_eq!(shortcuts.session_entry_key(), Some(15));
+        assert_eq!(
+            shortcuts.pane_binding(15).unwrap().action,
+            PaneAction::Session
+        );
+        assert_eq!(
+            shortcuts.tab_binding(15).unwrap().action,
+            TabAction::Session
+        );
+        assert_eq!(
+            shortcuts.resize_binding(15).unwrap().action,
+            ResizeAction::Session
+        );
+        assert_eq!(
+            shortcuts.move_binding(15).unwrap().action,
+            MoveAction::Session
+        );
+        for (key, action) in [
+            (b'd', SessionAction::Detach),
+            (b'w', SessionAction::Manager),
+            (b'o', SessionAction::Normal),
+            (16, SessionAction::Pane),
+            (27, SessionAction::Locked),
+            (b'?', SessionAction::Help),
+        ] {
+            assert_eq!(shortcuts.session_binding(key).unwrap().action, action);
+        }
+        assert_eq!(shortcuts.session_key(SessionAction::Manager), Some(b'w'));
+        assert!(shortcuts.session_binding(b'x').is_none());
     }
 
     #[test]

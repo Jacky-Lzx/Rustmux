@@ -3418,6 +3418,57 @@ finally:
     s.close()
 
 
+# SESSION mode uses configured keys and server-requested detach. Both ordinary
+# and Kitty-encoded input must stay out of the child shell.
+with tempfile.TemporaryDirectory(prefix="rustmux-session-mode-") as directory:
+    os.mkdir(os.path.join(directory, "rustmux"))
+    with open(os.path.join(directory, "rustmux", "config.toml"), "w", encoding="utf-8") as config:
+        config.write(
+            "[keybinds.normal]\n"
+            "'Ctrl o' = { actions = [{ action = 'switch-mode', mode = 'session' }] }\n"
+            "[keybinds.session]\n"
+            "d = { actions = ['detach'], display = 'always' }\n"
+            "w = { actions = ['switch-session', { action = 'switch-mode', mode = 'locked' }], display = 'always' }\n"
+            "o = { actions = [{ action = 'switch-mode', mode = 'normal' }], display = 'always' }\n"
+            "esc = { actions = [{ action = 'switch-mode', mode = 'locked' }] }\n"
+        )
+    session_mode_name = f"mode-{os.getpid()}"
+    s = Session(arguments=("new", session_mode_name), extra_env={"XDG_CONFIG_HOME": directory})
+    try:
+        s.expect(b"RUSTMUX_READY> ")
+        s.send(b"\x02\x0f")
+        expect_footer(s, b"SESSION")
+        expect_footer(s, b"Detach")
+        s.send(b"o")
+        expect_footer(s, b"NORMAL")
+        s.send(b"\x0f")
+        expect_footer(s, b"SESSION")
+        s.output.clear()
+        s.send(b"w")
+        end = time.monotonic() + 8
+        while b"Session Manager" not in s.output:
+            s.read()
+            assert time.monotonic() < end, bytes(s.output[-2000:])
+        s.send(b"q")
+        s.expect(b"RUSTMUX_READY> ")
+        s.output.clear()
+        s.frames.clear()
+        s.send(b"printf '\\033[=1u'\n")
+        end = time.monotonic() + 8
+        while b"\x1b[=1u" not in s.output:
+            s.read()
+            assert time.monotonic() < end, bytes(s.output[-2000:])
+        s.send(b"\x1b[98;5u\x1b[111;5u")
+        expect_footer(s, b"SESSION")
+        s.send(b"\x1b[100;1u")
+        s.finish(0)
+        assert session_mode_name in subprocess.run(
+            [BINARY, "list"], check=True, capture_output=True, text=True,
+        ).stdout.splitlines()
+    finally:
+        s.close()
+        subprocess.run([BINARY, "kill", session_mode_name], capture_output=True, text=True, timeout=5)
+
 # Omitting the attach name opens a picker when several sessions are live. Its
 # selection is based on the same sorted list as the CLI and restores the outer
 # terminal before the selected session client takes over.
@@ -3524,8 +3575,13 @@ try:
     picker.send(b"q")
     picker.expect(b"RUSTMUX_READY>")
     expect_bar(picker, f"Rustmux ({picker_helper})".encode())
+    picker.output.clear()
+    picker.frames.clear()
     picker.send(b"printf '\\033[=0u'\n")
-    picker.expect(b"RUSTMUX_READY>")
+    end = time.monotonic() + 8
+    while b"\x1b[=0u" not in picker.output:
+        picker.read()
+        assert time.monotonic() < end, bytes(picker.output[-2000:])
     picker.send(b"\x02d")
     picker.finish(0)
 

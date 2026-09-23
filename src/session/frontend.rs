@@ -152,6 +152,11 @@ impl ServerFrontend {
         self.send_control(ServerMessage::OpenSessionManager)
     }
 
+    /// Ask the attached client to restore its terminal and detach.
+    pub fn send_detach(&mut self) -> io::Result<()> {
+        self.send_control(ServerMessage::Detach)
+    }
+
     fn send_control(&mut self, message: ServerMessage) -> io::Result<()> {
         if self.state != ConnectionState::Attached {
             return Err(io::Error::new(
@@ -410,6 +415,18 @@ mod tests {
                 ServerMessage::Output(b"frame".to_vec()),
                 ServerMessage::OpenSessionManager,
             ]
+        );
+    }
+
+    #[test]
+    fn sends_detach_control_to_attached_client() {
+        let (mut client, mut frontend) = connected(24, 80);
+        frontend.send_detach().unwrap();
+        let mut bytes = [0; 64];
+        let count = client.stream_mut().read(&mut bytes).unwrap();
+        assert_eq!(
+            client.decode(&bytes[..count]).unwrap(),
+            [ServerMessage::Detach]
         );
     }
 

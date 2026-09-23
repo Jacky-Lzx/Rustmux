@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-pub const PROTOCOL_VERSION: u16 = 2;
+pub const PROTOCOL_VERSION: u16 = 3;
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
 pub const MAX_ERROR_BYTES: usize = 1024;
 
@@ -16,6 +16,7 @@ const SERVER_OUTPUT: u8 = 129;
 const SERVER_EXIT: u8 = 130;
 const SERVER_REJECTED: u8 = 131;
 const SERVER_OPEN_SESSION_MANAGER: u8 = 132;
+const SERVER_DETACH: u8 = 133;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ClientMessage {
@@ -67,6 +68,7 @@ pub enum ServerMessage {
     Exit { status: i32 },
     Rejected(String),
     OpenSessionManager,
+    Detach,
 }
 
 impl ServerMessage {
@@ -82,6 +84,7 @@ impl ServerMessage {
                 encode_frame(SERVER_REJECTED, message.as_bytes())
             }
             Self::OpenSessionManager => encode_frame(SERVER_OPEN_SESSION_MANAGER, &[]),
+            Self::Detach => encode_frame(SERVER_DETACH, &[]),
         }
     }
 }
@@ -294,6 +297,10 @@ fn decode_server(frame: Frame) -> Result<ServerMessage, ProtocolError> {
             require_length(&frame, 0)?;
             Ok(ServerMessage::OpenSessionManager)
         }
+        SERVER_DETACH => {
+            require_length(&frame, 0)?;
+            Ok(ServerMessage::Detach)
+        }
         message => Err(ProtocolError::UnknownMessage(message)),
     }
 }
@@ -359,6 +366,7 @@ mod tests {
             ServerMessage::Output(vec![b'\x1b', b'[', b'2', b'J', 0]),
             ServerMessage::Rejected("already attached".to_owned()),
             ServerMessage::OpenSessionManager,
+            ServerMessage::Detach,
             ServerMessage::Exit { status: -15 },
         ];
         let encoded: Vec<u8> = expected
@@ -412,6 +420,16 @@ mod tests {
                 message: CLIENT_RESIZE,
                 expected: 4,
                 actual: 2,
+            })
+        );
+
+        let malformed_detach = encode_frame(SERVER_DETACH, &[0]).unwrap();
+        assert_eq!(
+            ServerDecoder::default().push(&malformed_detach),
+            Err(ProtocolError::InvalidLength {
+                message: SERVER_DETACH,
+                expected: 0,
+                actual: 1,
             })
         );
 

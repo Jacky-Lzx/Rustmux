@@ -108,12 +108,23 @@ Renaming returns to TAB mode after save or cancel, while the close confirmation
 returns to LOCKED. Unmodified left/right arrows, Tab, and numbered keys are
 accepted when bound. The footer shows available TAB actions; Esc exits locally.
 
+Named sessions also support main-style SESSION mode. Bind `switch-mode session`
+in `[keybinds.normal]` (main's `Ctrl o`), then use `[keybinds.session]` for
+`detach`, `switch-session` followed by `switch-mode locked`, and standalone
+`switch-mode` actions. With main's bindings, Ctrl-B then Ctrl-O enters SESSION;
+`d` detaches, `w` opens the Session Manager, `o` returns to NORMAL, and Esc
+returns to LOCKED. The footer shows the configured actions and accepts clicks.
+SESSION mode is unavailable in a local unnamed process. Recreate an existing
+named session before testing this change because its server retains the code
+and configuration from when it started.
+
 Other mode tables and unsupported actions from main's larger configuration are
 still ignored. `clear_defaults` is not implemented yet. Ctrl-B remains the only
 supported LOCKED-to-NORMAL key. PANE's floating action is not yet supported.
 
 Standalone `switch-mode` bindings can now jump directly among the supported
-PANE, RESIZE, MOVE, and TAB modes. Main's `Ctrl-M` and `Ctrl-T` transitions work
+PANE, RESIZE, MOVE, TAB, and (for named sessions) SESSION modes. Main's
+`Ctrl-M`, `Ctrl-T`, and `Ctrl-O` transitions work
 without returning through NORMAL or sending input to the shell. In byte-only
 terminal input, `Ctrl-M` and Enter are the same byte, so they cannot be separate
 bindings in one mode; Esc remains an unambiguous LOCKED exit.

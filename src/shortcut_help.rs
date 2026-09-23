@@ -188,6 +188,13 @@ const SESSION_COMMAND: Command = Command {
     actions: &[(2, 23)],
 };
 
+const SESSION_MODE_COMMAND: Command = Command {
+    group: CommandGroup::General,
+    key: "C-o",
+    label: "Session mode",
+    actions: &[(2, 15)],
+};
+
 #[cfg(test)]
 pub(crate) fn documented_actions(session: bool) -> Vec<u8> {
     let mut actions: Vec<_> = COMMANDS
@@ -311,10 +318,13 @@ impl ShortcutHelp {
         if matches!(byte, b'q' | b'?') {
             return HelpEvent::Close;
         }
+        if self.session && self.shortcuts.enters_session(byte) {
+            return HelpEvent::Action(15);
+        }
         if let Some(action) = self
             .shortcuts
             .resolve(byte)
-            .filter(|&action| self.has_action(action))
+            .filter(|&action| action != 15 && self.has_action(action))
         {
             HelpEvent::Action(action)
         } else {
@@ -466,6 +476,9 @@ impl ShortcutHelp {
             .collect();
         if self.session {
             commands.push(SESSION_COMMAND);
+            if self.shortcuts.session_entry_key().is_some() {
+                commands.push(SESSION_MODE_COMMAND);
+            }
         }
         commands
     }
@@ -615,6 +628,15 @@ impl ShortcutHelp {
             && matches!(command.actions[0].1, b'c' | b'%' | b'"' | b'&' | b',')
         {
             char::from(self.shortcuts.key_for(command.actions[0].1)).to_string()
+        } else if command.actions.first().is_some_and(|(_, key)| *key == 15) {
+            self.shortcuts.session_entry_key().map_or_else(
+                || command.key.to_owned(),
+                |key| match key {
+                    1..=26 => format!("Ctrl-{}", char::from(b'A' + key - 1)),
+                    27 => "Esc".to_owned(),
+                    _ => char::from(key).to_string(),
+                },
+            )
         } else {
             command.key.to_owned()
         };
@@ -810,6 +832,23 @@ mod tests {
         assert!(body.contains("R/D"));
         assert_eq!(help.feed(b'N', Instant::now()), HelpEvent::Action(b'c'));
         assert_eq!(help.feed(b'c', Instant::now()), HelpEvent::Continue);
+    }
+
+    #[test]
+    fn named_help_shows_and_activates_configured_session_mode_entry() {
+        let shortcuts = crate::config::Shortcuts::test_from_config(
+            "[keybinds.normal]\n'Ctrl u' = { actions = [{ action = 'switch-mode', mode = 'session' }] }",
+        );
+        let mut named = ShortcutHelp::with_shortcuts(true, shortcuts);
+        let body = text(&named.overlay(&Screen::new(24, 80).unwrap()));
+        assert!(body.contains("Session mode"));
+        assert!(body.contains("Ctrl-U"));
+        assert_eq!(named.feed(15, Instant::now()), HelpEvent::Continue);
+        assert_eq!(named.feed(21, Instant::now()), HelpEvent::Action(15));
+
+        let mut local = ShortcutHelp::with_shortcuts(false, shortcuts);
+        assert!(!text(&local.overlay(&Screen::new(24, 80).unwrap())).contains("Session mode"));
+        assert_eq!(local.feed(21, Instant::now()), HelpEvent::Continue);
     }
 
     #[test]

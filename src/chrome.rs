@@ -158,6 +158,12 @@ const TAB_MODE_SHORTCUT: ShortcutHint = ShortcutHint {
     actions: &[(0, 20)],
 };
 
+const SESSION_MODE_SHORTCUT: ShortcutHint = ShortcutHint {
+    key: "Ctrl-O",
+    label: "Session",
+    actions: &[(0, 15)],
+};
+
 const NORMAL_SHORTCUTS: &[ShortcutHint] = &[
     ShortcutHint {
         key: "c",
@@ -165,6 +171,7 @@ const NORMAL_SHORTCUTS: &[ShortcutHint] = &[
         actions: &[(0, b'c')],
     },
     TAB_MODE_SHORTCUT,
+    SESSION_MODE_SHORTCUT,
     ShortcutHint {
         key: "%",
         label: "Split →",
@@ -205,6 +212,7 @@ pub(crate) enum FooterMode {
     Resize,
     Move,
     Tab,
+    Session,
 }
 
 const PANE_SHORTCUTS: &[ShortcutHint] = &[
@@ -314,6 +322,29 @@ const TAB_SHORTCUTS: &[ShortcutHint] = &[
     },
 ];
 
+const SESSION_MODE_SHORTCUTS: &[ShortcutHint] = &[
+    ShortcutHint {
+        key: "d",
+        label: "Detach",
+        actions: &[(0, b'd')],
+    },
+    ShortcutHint {
+        key: "w",
+        label: "Sessions",
+        actions: &[(0, b'w')],
+    },
+    ShortcutHint {
+        key: "o",
+        label: "Normal",
+        actions: &[(0, b'o')],
+    },
+    ShortcutHint {
+        key: "Esc",
+        label: "Lock",
+        actions: &[(0, 27)],
+    },
+];
+
 fn resize_action(key: u8) -> Option<crate::config::ResizeAction> {
     use crate::config::ResizeAction;
     use crate::layout::Direction;
@@ -357,12 +388,24 @@ fn tab_action(key: u8) -> Option<crate::config::TabAction> {
     })
 }
 
+fn session_action(key: u8) -> Option<crate::config::SessionAction> {
+    use crate::config::SessionAction;
+    Some(match key {
+        b'd' => SessionAction::Detach,
+        b'w' => SessionAction::Manager,
+        b'o' => SessionAction::Normal,
+        27 => SessionAction::Locked,
+        _ => return None,
+    })
+}
+
 fn hint_action_key(key: u8, mode: FooterMode, shortcuts: crate::config::Shortcuts) -> Option<u8> {
     match mode {
         FooterMode::Pane => shortcuts.pane_key(pane_action(key)?),
         FooterMode::Resize => shortcuts.resize_key(resize_action(key)?),
         FooterMode::Move => shortcuts.move_key(move_action(key)?),
         FooterMode::Tab => shortcuts.tab_key(tab_action(key)?),
+        FooterMode::Session => shortcuts.session_key(session_action(key)?),
         _ => Some(key),
     }
 }
@@ -431,6 +474,18 @@ fn tab_hint_key(hint: ShortcutHint, shortcuts: crate::config::Shortcuts) -> Stri
         .join("/")
 }
 
+fn session_hint_key(hint: ShortcutHint, shortcuts: crate::config::Shortcuts) -> String {
+    hint.actions
+        .iter()
+        .filter_map(|(_, key)| {
+            shortcuts
+                .session_key(session_action(*key)?)
+                .map(displayed_key)
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 fn hint_key_for_mode(
     hint: ShortcutHint,
     mode: FooterMode,
@@ -441,6 +496,7 @@ fn hint_key_for_mode(
         FooterMode::Resize => resize_hint_key(hint, shortcuts),
         FooterMode::Move => move_hint_key(hint, shortcuts),
         FooterMode::Tab => tab_hint_key(hint, shortcuts),
+        FooterMode::Session => session_hint_key(hint, shortcuts),
         _ => hint_key(hint, shortcuts),
     }
 }
@@ -449,6 +505,11 @@ fn hint_key(hint: ShortcutHint, shortcuts: crate::config::Shortcuts) -> String {
     if hint.key == TAB_MODE_SHORTCUT.key {
         shortcuts
             .tab_entry_key()
+            .map(displayed_key)
+            .unwrap_or_default()
+    } else if hint.key == SESSION_MODE_SHORTCUT.key {
+        shortcuts
+            .session_entry_key()
             .map(displayed_key)
             .unwrap_or_default()
     } else if hint.key == "n/p" {
@@ -484,6 +545,7 @@ fn visible_shortcuts(
         FooterMode::Resize => RESIZE_SHORTCUTS,
         FooterMode::Move => MOVE_SHORTCUTS,
         FooterMode::Tab => TAB_SHORTCUTS,
+        FooterMode::Session => SESSION_MODE_SHORTCUTS,
         FooterMode::Locked => LOCKED_SHORTCUTS,
     };
     let mut visible = Vec::new();
@@ -505,6 +567,8 @@ fn visible_shortcuts(
                 if !hint.actions.iter().all(|(_, action)| {
                     if *action == 20 {
                         bindings.tab_entry_key().is_some()
+                    } else if *action == 15 {
+                        session && bindings.session_entry_key().is_some()
                     } else {
                         bindings.action_is_active(*action)
                     }
@@ -525,10 +589,15 @@ fn visible_shortcuts(
     }
     for hint in shortcuts {
         if !hint.actions.iter().all(|(_, action)| match mode {
-            FooterMode::Pane | FooterMode::Resize | FooterMode::Move | FooterMode::Tab => {
-                hint_action_key(*action, mode, bindings).is_some()
-            }
+            FooterMode::Pane
+            | FooterMode::Resize
+            | FooterMode::Move
+            | FooterMode::Tab
+            | FooterMode::Session => hint_action_key(*action, mode, bindings).is_some(),
             FooterMode::Normal if *action == 20 => bindings.tab_entry_key().is_some(),
+            FooterMode::Normal if *action == 15 => {
+                session && bindings.session_entry_key().is_some()
+            }
             _ => bindings.action_is_active(*action),
         }) {
             continue;
@@ -624,7 +693,11 @@ pub(crate) fn footer_hitboxes_for_mode(
                 let width = display_width(&displayed_key(action));
                 let width = if matches!(
                     mode,
-                    FooterMode::Pane | FooterMode::Resize | FooterMode::Move | FooterMode::Tab
+                    FooterMode::Pane
+                        | FooterMode::Resize
+                        | FooterMode::Move
+                        | FooterMode::Tab
+                        | FooterMode::Session
                 ) {
                     width
                 } else {
@@ -701,6 +774,7 @@ fn mode_label(mode: FooterMode) -> &'static str {
         FooterMode::Resize => " RESIZE ",
         FooterMode::Move => " MOVE ",
         FooterMode::Tab => " TAB ",
+        FooterMode::Session => " SESSION ",
         FooterMode::Locked => " LOCKED ",
     }
 }
@@ -747,6 +821,7 @@ fn draw_footer(
             FooterMode::Resize => PEACH,
             FooterMode::Move => PEACH,
             FooterMode::Tab => LAVENDER,
+            FooterMode::Session => LAVENDER,
             FooterMode::Locked => RED,
         },
         bold: true,
@@ -1352,6 +1427,49 @@ mod tests {
             .collect();
         assert!(narrow_text.contains("Search /still-in-history"));
         assert!(!narrow_text.contains("/?"));
+    }
+
+    #[test]
+    fn named_session_mode_footer_uses_configured_keys_and_click_targets() {
+        let shortcuts = crate::config::Shortcuts::test_from_config(
+            r#"
+[keybinds.normal]
+"Ctrl o" = { actions = [{ action = "switch-mode", mode = "session" }] }
+[keybinds.session]
+d = { actions = ["detach"], display = "always" }
+w = { actions = ["switch-session", { action = "switch-mode", mode = "locked" }], display = "always" }
+o = { actions = [{ action = "switch-mode", mode = "normal" }], display = "always" }
+esc = { actions = [{ action = "switch-mode", mode = "locked" }] }
+"#,
+        );
+        let child = Screen::new(1, 120).unwrap();
+        let footer_text = |mode| {
+            let view = compose_with_mode(
+                &child,
+                3,
+                Some("work"),
+                &["shell".into()],
+                0,
+                mode,
+                shortcuts,
+            )
+            .unwrap();
+            view.row(2)
+                .unwrap()
+                .iter()
+                .filter(|cell| cell.width != 0)
+                .map(|cell| cell.character)
+                .collect::<String>()
+        };
+        assert!(footer_text(FooterMode::Normal).contains("Ctrl-O"));
+        let session = footer_text(FooterMode::Session);
+        for label in ["SESSION", "Detach", "Sessions", "Normal", "Lock"] {
+            assert!(session.contains(label), "missing {label} in {session:?}");
+        }
+        let hitboxes = footer_hitboxes_for_mode(120, FooterMode::Session, true, shortcuts);
+        for key in [b'd', b'w', b'o', 27] {
+            assert!(hitboxes.iter().any(|(_, _, action)| *action == key));
+        }
     }
 
     #[test]

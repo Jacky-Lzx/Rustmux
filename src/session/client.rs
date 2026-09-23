@@ -53,7 +53,7 @@ fn bridge(
     let mut to_terminal = VecDeque::new();
     let mut pending_resize = signals.resize.swap(false, Ordering::Relaxed);
     let mut exit = None;
-    let mut session_manager = false;
+    let mut server_control = None;
     let mut input = ClientInput::default();
     let mut client_exit = None;
 
@@ -61,7 +61,7 @@ fn bridge(
         peer.decode(&[])?,
         &mut to_terminal,
         &mut exit,
-        &mut session_manager,
+        &mut server_control,
     )?;
     loop {
         let signal = signals.pending.load(Ordering::Relaxed);
@@ -84,8 +84,10 @@ fn bridge(
         {
             return exit_status(status);
         }
-        if session_manager && to_terminal.is_empty() {
-            return Ok(ClientExit::SessionManager);
+        if let Some(control) = server_control
+            && to_terminal.is_empty()
+        {
+            return Ok(control);
         }
         if let Some(client_exit) = client_exit
             && outbound.is_empty()
@@ -96,7 +98,7 @@ fn bridge(
         let (terminal_ready, socket_ready) = {
             let mut terminal_flags = PollFlags::empty();
             if exit.is_none()
-                && !session_manager
+                && server_control.is_none()
                 && client_exit.is_none()
                 && outbound.is_empty()
                 && !pending_resize
@@ -107,7 +109,10 @@ fn bridge(
                 terminal_flags |= PollFlags::POLLOUT;
             }
             let mut socket_flags = PollFlags::empty();
-            if exit.is_none() && !session_manager && client_exit.is_none() && to_terminal.is_empty()
+            if exit.is_none()
+                && server_control.is_none()
+                && client_exit.is_none()
+                && to_terminal.is_empty()
             {
                 socket_flags |= PollFlags::POLLIN;
             }
@@ -182,7 +187,7 @@ fn bridge(
                     peer.decode(&bytes[..count])?,
                     &mut to_terminal,
                     &mut exit,
-                    &mut session_manager,
+                    &mut server_control,
                 )?,
                 Err(error)
                     if matches!(
@@ -202,10 +207,10 @@ fn apply_server_messages(
     messages: Vec<ServerMessage>,
     output: &mut VecDeque<u8>,
     exit: &mut Option<i32>,
-    session_manager: &mut bool,
+    server_control: &mut Option<ClientExit>,
 ) -> io::Result<()> {
     for message in messages {
-        if exit.is_some() || *session_manager {
+        if exit.is_some() || server_control.is_some() {
             return Err(invalid_data("server sent a message after terminal control"));
         }
         match message {
@@ -216,7 +221,8 @@ fn apply_server_messages(
                 output.extend(bytes);
             }
             ServerMessage::Exit { status } => *exit = Some(status),
-            ServerMessage::OpenSessionManager => *session_manager = true,
+            ServerMessage::OpenSessionManager => *server_control = Some(ClientExit::SessionManager),
+            ServerMessage::Detach => *server_control = Some(ClientExit::Detached),
             ServerMessage::Rejected(message) => {
                 return Err(io::Error::new(io::ErrorKind::ConnectionRefused, message));
             }
@@ -559,7 +565,7 @@ mod tests {
     fn rejects_messages_after_exit_and_invalid_statuses() {
         let mut output = VecDeque::new();
         let mut exit = None;
-        let mut session_manager = false;
+        let mut server_control = None;
         assert!(
             apply_server_messages(
                 vec![
@@ -568,7 +574,7 @@ mod tests {
                 ],
                 &mut output,
                 &mut exit,
-                &mut session_manager,
+                &mut server_control,
             )
             .is_err()
         );
@@ -587,7 +593,7 @@ mod tests {
     fn session_manager_control_preserves_prior_output_and_is_terminal() {
         let mut output = VecDeque::new();
         let mut exit = None;
-        let mut session_manager = false;
+        let mut server_control = None;
         apply_server_messages(
             vec![
                 ServerMessage::Output(b"last frame".to_vec()),
@@ -595,17 +601,45 @@ mod tests {
             ],
             &mut output,
             &mut exit,
-            &mut session_manager,
+            &mut server_control,
         )
         .unwrap();
         assert_eq!(output, b"last frame".to_vec());
-        assert!(session_manager);
+        assert_eq!(server_control, Some(ClientExit::SessionManager));
         assert!(
             apply_server_messages(
                 vec![ServerMessage::Output(vec![1])],
                 &mut output,
                 &mut exit,
-                &mut session_manager,
+                &mut server_control,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn server_detach_control_preserves_prior_output_and_is_terminal() {
+        let mut output = VecDeque::new();
+        let mut exit = None;
+        let mut server_control = None;
+        apply_server_messages(
+            vec![
+                ServerMessage::Output(b"last frame".to_vec()),
+                ServerMessage::Detach,
+            ],
+            &mut output,
+            &mut exit,
+            &mut server_control,
+        )
+        .unwrap();
+        assert_eq!(output, b"last frame".to_vec());
+        assert_eq!(server_control, Some(ClientExit::Detached));
+        assert!(
+            apply_server_messages(
+                vec![ServerMessage::Output(vec![1])],
+                &mut output,
+                &mut exit,
+                &mut server_control,
             )
             .is_err()
         );

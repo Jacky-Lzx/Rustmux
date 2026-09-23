@@ -382,6 +382,7 @@ trait Frontend {
     fn receive(&mut self, pending: &mut VecDeque<u8>) -> io::Result<ConnectionState>;
     fn send(&mut self, pending: &mut VecDeque<u8>) -> io::Result<()>;
     fn open_session_manager(&mut self) -> io::Result<bool>;
+    fn detach_client(&mut self) -> io::Result<bool>;
 }
 
 struct LocalFrontend {
@@ -437,6 +438,10 @@ impl Frontend for LocalFrontend {
     fn open_session_manager(&mut self) -> io::Result<bool> {
         Ok(false)
     }
+
+    fn detach_client(&mut self) -> io::Result<bool> {
+        Ok(false)
+    }
 }
 
 impl Frontend for ServerFrontend {
@@ -469,6 +474,11 @@ impl Frontend for ServerFrontend {
 
     fn open_session_manager(&mut self) -> io::Result<bool> {
         self.send_session_manager()?;
+        Ok(true)
+    }
+
+    fn detach_client(&mut self) -> io::Result<bool> {
+        self.send_detach()?;
         Ok(true)
     }
 }
@@ -598,6 +608,7 @@ enum WindowKey {
     HistoryEditor,
     LastCommandEditor,
     SessionManager,
+    Detach,
     Help,
     FocusPane(Direction),
     ResizePane(Direction),
@@ -615,6 +626,7 @@ enum InputMode {
     Resize,
     Move,
     Tab,
+    Session,
 }
 
 #[derive(Default)]
@@ -668,7 +680,11 @@ impl WindowInput {
                     || self.pane_hitboxes.len() > 1
                     || matches!(
                         self.mode,
-                        InputMode::Pane | InputMode::Resize | InputMode::Move | InputMode::Tab
+                        InputMode::Pane
+                            | InputMode::Resize
+                            | InputMode::Move
+                            | InputMode::Tab
+                            | InputMode::Session
                     ))
                     || byte != 27))
         {
@@ -739,6 +755,7 @@ impl WindowInput {
                         InputMode::Resize => self.resize_shortcut(byte, output),
                         InputMode::Move => self.move_shortcut(byte, output),
                         InputMode::Tab => self.tab_shortcut(byte, output),
+                        InputMode::Session => self.session_shortcut(byte, output),
                         InputMode::Locked => unreachable!(),
                     }
                 } else {
@@ -753,7 +770,11 @@ impl WindowInput {
         }
         if matches!(
             self.mode,
-            InputMode::Pane | InputMode::Resize | InputMode::Move | InputMode::Tab
+            InputMode::Pane
+                | InputMode::Resize
+                | InputMode::Move
+                | InputMode::Tab
+                | InputMode::Session
         ) && coordinates.is_none()
             && bytes.starts_with(b"\x1b")
         {
@@ -773,6 +794,7 @@ impl WindowInput {
                     InputMode::Resize => self.resize_arrow_shortcut(direction, output),
                     InputMode::Move => self.move_arrow_shortcut(direction, output),
                     InputMode::Tab => self.tab_arrow_shortcut(direction, output),
+                    InputMode::Session => {}
                     _ => unreachable!(),
                 }
             }
@@ -830,7 +852,11 @@ impl WindowInput {
                     {
                         if matches!(
                             footer_mode,
-                            InputMode::Pane | InputMode::Resize | InputMode::Move | InputMode::Tab
+                            InputMode::Pane
+                                | InputMode::Resize
+                                | InputMode::Move
+                                | InputMode::Tab
+                                | InputMode::Session
                         ) {
                             self.mode = footer_mode;
                             match footer_mode {
@@ -838,12 +864,18 @@ impl WindowInput {
                                 InputMode::Resize => self.resize_shortcut(action, output),
                                 InputMode::Move => self.move_shortcut(action, output),
                                 InputMode::Tab => self.tab_shortcut(action, output),
+                                InputMode::Session => self.session_shortcut(action, output),
                                 _ => unreachable!(),
                             }
                         } else if action == 2 {
                             self.mode = InputMode::Normal;
                         } else if action == 20 && self.shortcuts.tab_entry_key().is_some() {
                             self.mode = InputMode::Tab;
+                        } else if action == 15
+                            && self.session_available
+                            && self.shortcuts.session_entry_key().is_some()
+                        {
+                            self.mode = InputMode::Session;
                         } else if action == 23 {
                             self.mode = InputMode::Locked;
                             output.push(WindowKey::SessionManager);
@@ -993,6 +1025,7 @@ impl WindowInput {
                 InputMode::Resize => self.resize_shortcut(byte, output),
                 InputMode::Move => self.move_shortcut(byte, output),
                 InputMode::Tab => self.tab_shortcut(byte, output),
+                InputMode::Session => self.session_shortcut(byte, output),
                 InputMode::Locked if byte == 2 => self.mode = InputMode::Normal,
                 InputMode::Locked => output.push(WindowKey::Byte(byte)),
             }
@@ -1019,6 +1052,10 @@ impl WindowInput {
         }
         if self.shortcuts.enters_tab(byte) {
             self.mode = InputMode::Tab;
+            return;
+        }
+        if self.session_available && self.shortcuts.enters_session(byte) {
+            self.mode = InputMode::Session;
             return;
         }
         self.mode = InputMode::Locked;
@@ -1076,6 +1113,8 @@ impl WindowInput {
             PaneAction::Resize => self.mode = InputMode::Resize,
             PaneAction::Move => self.mode = InputMode::Move,
             PaneAction::Tab => self.mode = InputMode::Tab,
+            PaneAction::Session if self.session_available => self.mode = InputMode::Session,
+            PaneAction::Session => self.mode = InputMode::Pane,
             PaneAction::Locked => self.mode = InputMode::Locked,
         }
     }
@@ -1102,6 +1141,8 @@ impl WindowInput {
             ResizeAction::Pane => self.mode = InputMode::Pane,
             ResizeAction::Move => self.mode = InputMode::Move,
             ResizeAction::Tab => self.mode = InputMode::Tab,
+            ResizeAction::Session if self.session_available => self.mode = InputMode::Session,
+            ResizeAction::Session => {}
             ResizeAction::Locked => self.mode = InputMode::Locked,
         }
     }
@@ -1128,6 +1169,8 @@ impl WindowInput {
             MoveAction::Pane => self.mode = InputMode::Pane,
             MoveAction::Resize => self.mode = InputMode::Resize,
             MoveAction::Tab => self.mode = InputMode::Tab,
+            MoveAction::Session if self.session_available => self.mode = InputMode::Session,
+            MoveAction::Session => {}
             MoveAction::Locked => self.mode = InputMode::Locked,
         }
     }
@@ -1172,7 +1215,33 @@ impl WindowInput {
             TabAction::Pane => self.mode = InputMode::Pane,
             TabAction::Resize => self.mode = InputMode::Resize,
             TabAction::Move => self.mode = InputMode::Move,
+            TabAction::Session if self.session_available => self.mode = InputMode::Session,
+            TabAction::Session => self.mode = InputMode::Tab,
             TabAction::Locked => self.mode = InputMode::Locked,
+        }
+    }
+
+    fn session_shortcut(&mut self, byte: u8, output: &mut Vec<WindowKey>) {
+        let Some(binding) = self.shortcuts.session_binding(byte) else {
+            return;
+        };
+        use crate::config::SessionAction;
+        match binding.action {
+            SessionAction::Detach => {
+                self.mode = InputMode::Locked;
+                output.push(WindowKey::Detach);
+            }
+            SessionAction::Manager => {
+                self.mode = InputMode::Locked;
+                output.push(WindowKey::SessionManager);
+            }
+            SessionAction::Help => output.push(WindowKey::Help),
+            SessionAction::Normal => self.mode = InputMode::Normal,
+            SessionAction::Pane => self.mode = InputMode::Pane,
+            SessionAction::Resize => self.mode = InputMode::Resize,
+            SessionAction::Move => self.mode = InputMode::Move,
+            SessionAction::Tab => self.mode = InputMode::Tab,
+            SessionAction::Locked => self.mode = InputMode::Locked,
         }
     }
 }
@@ -1593,6 +1662,7 @@ fn forward(
     let mut close_requested = None;
     let mut connection = ConnectionState::Attached;
     let mut session_manager_requested = false;
+    let mut detach_requested = false;
     let mut pane_resize_pending: Option<(WindowId, Instant)> = None;
     loop {
         frontend.drain_input(&mut input);
@@ -1844,6 +1914,7 @@ fn forward(
                 active_paused = paused;
                 if close_requested.is_none()
                     && !session_manager_requested
+                    && !detach_requested
                     && (dirty || force_redraw || bar_dirty)
                     && pane_resize_pending.is_none()
                     && (!paused || force_redraw)
@@ -1889,6 +1960,7 @@ fn forward(
                             InputMode::Resize => FooterMode::Resize,
                             InputMode::Move => FooterMode::Move,
                             InputMode::Tab => FooterMode::Tab,
+                            InputMode::Session => FooterMode::Session,
                             InputMode::Locked => FooterMode::Locked,
                         },
                         shortcuts,
@@ -2037,7 +2109,11 @@ fn forward(
                         .is_some_and(|binding| binding.action == crate::config::PaneAction::Locked);
                 let was_local_mode = matches!(
                     keys.mode,
-                    InputMode::Pane | InputMode::Resize | InputMode::Move | InputMode::Tab
+                    InputMode::Pane
+                        | InputMode::Resize
+                        | InputMode::Move
+                        | InputMode::Tab
+                        | InputMode::Session
                 );
                 if keys.mode == InputMode::Normal {
                     keys.mode = InputMode::Locked;
@@ -2049,7 +2125,11 @@ fn forward(
                 }
                 if matches!(
                     keys.mode,
-                    InputMode::Pane | InputMode::Resize | InputMode::Move | InputMode::Tab
+                    InputMode::Pane
+                        | InputMode::Resize
+                        | InputMode::Move
+                        | InputMode::Tab
+                        | InputMode::Session
                 ) {
                     keys.mode = InputMode::Locked;
                     bar_dirty = true;
@@ -2188,6 +2268,19 @@ fn forward(
                         continue;
                     }
                     crate::shortcut_help::HelpEvent::Action(23) => Some(WindowKey::SessionManager),
+                    crate::shortcut_help::HelpEvent::Action(15)
+                        if session_name.is_some() && shortcuts.session_entry_key().is_some() =>
+                    {
+                        help = None;
+                        keys = WindowInput {
+                            mode: InputMode::Session,
+                            shortcuts,
+                            ..WindowInput::default()
+                        };
+                        renderer.invalidate();
+                        force_redraw = true;
+                        continue;
+                    }
                     crate::shortcut_help::HelpEvent::Action(byte) => shortcut_action(byte),
                 }
             } else {
@@ -2247,6 +2340,7 @@ fn forward(
                         InputMode::Resize => FooterMode::Resize,
                         InputMode::Move => FooterMode::Move,
                         InputMode::Tab => FooterMode::Tab,
+                        InputMode::Session => FooterMode::Session,
                         InputMode::Locked => FooterMode::Locked,
                     },
                     session_name.is_some(),
@@ -2281,6 +2375,11 @@ fn forward(
                         input.clear();
                         keys = WindowInput::default();
                         session_manager_requested = true;
+                    }
+                    WindowKey::Detach => {
+                        input.clear();
+                        keys = WindowInput::default();
+                        detach_requested = true;
                     }
                     WindowKey::Help => {
                         help = Some(crate::shortcut_help::ShortcutHelp::with_shortcuts(
@@ -2621,6 +2720,12 @@ fn forward(
             }
             session_manager_requested = false;
         }
+        if detach_requested && to_terminal.is_empty() {
+            if frontend.detach_client()? {
+                return Ok(ForwardExit::Detached);
+            }
+            detach_requested = false;
+        }
         if let Some(exit) = frontend_exit(connection, &input) {
             return Ok(exit);
         }
@@ -2641,6 +2746,7 @@ fn forward(
         let mut outer_events = PollFlags::empty();
         if connection == ConnectionState::Attached
             && !session_manager_requested
+            && !detach_requested
             && input.len() < LIMIT
             && frontend.can_receive()
         {
@@ -3842,6 +3948,86 @@ n = { actions = ["new-window", { action = "switch-mode", mode = "locked" }] }
     }
 
     #[test]
+    fn named_session_mode_dispatches_manager_detach_and_transitions_locally() {
+        let shortcuts = crate::config::Shortcuts::test_from_config(
+            r#"
+[keybinds.normal]
+"Ctrl o" = { actions = [{ action = "switch-mode", mode = "session" }] }
+[keybinds.session]
+d = { actions = ["detach"] }
+w = { actions = ["switch-session", { action = "switch-mode", mode = "locked" }] }
+o = { actions = [{ action = "switch-mode", mode = "normal" }] }
+esc = { actions = [{ action = "switch-mode", mode = "locked" }] }
+"#,
+        );
+        let mut keys = WindowInput {
+            session_available: true,
+            shortcuts,
+            ..WindowInput::default()
+        };
+        let mut output = Vec::new();
+        for &byte in b"\x02\x0f" {
+            keys.feed(byte, &mut output);
+        }
+        assert_eq!(keys.mode, InputMode::Session);
+        assert!(output.is_empty());
+        keys.feed(b'w', &mut output);
+        assert_eq!(output, [WindowKey::SessionManager]);
+        assert_eq!(keys.mode, InputMode::Locked);
+
+        output.clear();
+        for &byte in b"\x02\x0fd" {
+            keys.feed(byte, &mut output);
+        }
+        assert_eq!(output, [WindowKey::Detach]);
+        assert_eq!(keys.mode, InputMode::Locked);
+
+        output.clear();
+        for &byte in b"\x02\x0fo\x0f\x1b" {
+            keys.feed(byte, &mut output);
+        }
+        assert!(output.is_empty());
+        assert_eq!(keys.mode, InputMode::Session);
+        assert_eq!(keys.take_mouse(), b"\x1b");
+        keys.session_shortcut(27, &mut output);
+        assert_eq!(keys.mode, InputMode::Locked);
+
+        let mut local = WindowInput {
+            shortcuts,
+            ..WindowInput::default()
+        };
+        for &byte in b"\x02\x0f" {
+            local.feed(byte, &mut output);
+        }
+        assert_eq!(output, [WindowKey::Byte(2), WindowKey::Byte(15)]);
+        assert_eq!(local.mode, InputMode::Locked);
+    }
+
+    #[test]
+    fn kitty_encoded_session_mode_opens_manager_without_child_input() {
+        let shortcuts = crate::config::Shortcuts::test_from_config(
+            r#"
+[keybinds.normal]
+"Ctrl o" = { actions = [{ action = "switch-mode", mode = "session" }] }
+[keybinds.session]
+w = { actions = ["switch-session", { action = "switch-mode", mode = "locked" }] }
+"#,
+        );
+        let mut keys = WindowInput {
+            session_available: true,
+            kitty_keyboard_flags: 1,
+            shortcuts,
+            ..WindowInput::default()
+        };
+        let mut output = Vec::new();
+        for &byte in b"\x1b[98;5u\x1b[111;5u\x1b[119;1u" {
+            keys.feed(byte, &mut output);
+        }
+        assert_eq!(output, [WindowKey::SessionManager]);
+        assert_eq!(keys.mode, InputMode::Locked);
+    }
+
+    #[test]
     fn configured_shortcuts_replace_old_keys() {
         let mut decoder = WindowInput {
             shortcuts: crate::config::Shortcuts::test_keys(*b"NRD"),
@@ -4527,6 +4713,43 @@ n = { actions = ["new-window", { action = "switch-mode", mode = "locked" }] }
         assert_eq!(keys.mode, InputMode::Normal);
         keys.footer_hitboxes = crate::chrome::footer_hitboxes(80, true, true);
         for &byte in b"\x1b[<0;49;24M\x1b[<0;49;24m" {
+            keys.feed(byte, &mut output);
+        }
+        assert_eq!(output, [WindowKey::SessionManager]);
+        assert_eq!(keys.mode, InputMode::Locked);
+    }
+
+    #[test]
+    fn session_mode_footer_click_dispatches_configured_manager_action() {
+        let shortcuts = crate::config::Shortcuts::test_from_config(
+            r#"
+[keybinds.normal]
+"Ctrl o" = { actions = [{ action = "switch-mode", mode = "session" }] }
+[keybinds.session]
+m = { actions = ["switch-session", { action = "switch-mode", mode = "locked" }], display = "always" }
+"#,
+        );
+        let footer_hitboxes =
+            crate::chrome::footer_hitboxes_for_mode(120, FooterMode::Session, true, shortcuts);
+        let column = footer_hitboxes
+            .iter()
+            .find(|(_, _, action)| *action == b'm')
+            .unwrap()
+            .0;
+        let mut keys = WindowInput {
+            mode: InputMode::Session,
+            session_available: true,
+            shortcuts,
+            pane_height: 22,
+            pane_width: 120,
+            pane_top: 1,
+            bar_enabled: true,
+            footer_row: Some(24),
+            footer_hitboxes,
+            ..WindowInput::default()
+        };
+        let mut output = Vec::new();
+        for byte in format!("\x1b[<0;{column};24M\x1b[<0;{column};24m").bytes() {
             keys.feed(byte, &mut output);
         }
         assert_eq!(output, [WindowKey::SessionManager]);

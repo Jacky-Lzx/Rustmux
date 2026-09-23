@@ -187,8 +187,14 @@ to LOCKED. Unmodified left/right arrow aliases are local to the mode, and the
 footer exposes clickable configured keys. Esc returns to LOCKED locally.
 NORMAL's footer also shows the configured TAB entry key as a clickable `Tab`
 hint when it fits; an unconfigured TAB mode adds no hint.
+In named sessions, a configured NORMAL-to-SESSION binding enters a lavender
+`SESSION` badge. Main-style `[keybinds.session]` binds `detach`,
+`switch-session` followed by `switch-mode locked`, and standalone transitions
+to NORMAL, PANE, RESIZE, MOVE, TAB, or LOCKED. The configured `d`, `w`, `o`,
+and Esc actions appear as clickable footer hints; unsupported actions and keys
+remain local to SESSION mode. Local unnamed processes do not enter this mode.
 Standalone configured `switch-mode` actions also move directly among PANE,
-RESIZE, MOVE, and TAB without passing the key to a child. Legacy byte input
+RESIZE, MOVE, TAB, and named-session SESSION without passing the key to a child. Legacy byte input
 cannot distinguish `Ctrl-M` from Enter when both are configured in one mode.
 
 Ctrl-B, then `E` writes a plain-text snapshot of the active pane's retained
