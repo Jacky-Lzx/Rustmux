@@ -69,13 +69,15 @@ NORMAL-mode key to `switch-mode` `pane`, then use `[keybinds.pane]` for
 to LOCKED when followed by `switch-mode` `locked`. `display = "always"` picks
 the preferred key shown in the footer when more than one key invokes an action.
 For example, with main's configuration, Ctrl-B then Ctrl-P opens PANE mode;
-`h/j/k/l` changes focus without leaving it, while `r` splits right and exits.
+`h/j/k/l` or unmodified arrow keys change focus without leaving it, while `r`
+splits right and exits. Both CSI and application-cursor (SS3) arrow reports
+work; modified arrows are not treated as unmodified bindings.
 Esc exits without reaching the shell.
 
 Other mode tables and unsupported actions from main's larger configuration are
 still ignored. `clear_defaults` is not implemented yet. Ctrl-B remains the only
-supported LOCKED-to-NORMAL key. PANE's arrow-key aliases and cross-window pane
-move/floating actions are not yet supported.
+supported LOCKED-to-NORMAL key. PANE's cross-window pane move and floating
+actions are not yet supported.
 
 NORMAL mode also recognizes main-style `close-window`, `next-window`,
 `previous-window` (including `tab`), `move-window-left`, and `move-window-right`

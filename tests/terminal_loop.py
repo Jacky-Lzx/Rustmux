@@ -943,6 +943,10 @@ with tempfile.TemporaryDirectory(prefix="rustmux-pane-mode-") as directory:
             "j = { actions = ['focus-down'] }\n"
             "k = { actions = ['focus-up'] }\n"
             "l = { actions = ['focus-right'] }\n"
+            "left = { actions = ['focus-left'] }\n"
+            "down = { actions = ['focus-down'] }\n"
+            "up = { actions = ['focus-up'] }\n"
+            "right = { actions = ['focus-right'] }\n"
             "r = { actions = ['new-pane-right', { action = 'switch-mode', mode = 'locked' }], display = 'always' }\n"
             "esc = { actions = [{ action = 'switch-mode', mode = 'locked' }] }\n"
         )
@@ -968,6 +972,32 @@ with tempfile.TemporaryDirectory(prefix="rustmux-pane-mode-") as directory:
         while b"LOCKED" not in s.physical_rows[-1] or s.physical_rows[2].count(b"RUSTMUX_READY>") != 2:
             s.read()
             assert time.monotonic() < deadline, s.physical_rows
+        s.send(b"\x02\x10")
+        deadline = time.monotonic() + 3
+        while b"PANE" not in s.physical_rows[-1]:
+            s.read()
+            assert time.monotonic() < deadline, s.physical_rows[-1]
+        s.send(b"\x1b[D\x1b")
+        deadline = time.monotonic() + 3
+        while b"LOCKED" not in s.physical_rows[-1]:
+            s.read()
+            assert time.monotonic() < deadline, s.physical_rows[-1]
+        s.send(b"printf 'LEFT_ARROW_MARK\\n'\n")
+        s.expect(b"LEFT_ARROW_MARK")
+        assert any(b"LEFT_ARROW_MARK" in row[:40] for row in s.physical_rows), s.physical_rows
+        s.send(b"\x02\x10")
+        deadline = time.monotonic() + 3
+        while b"PANE" not in s.physical_rows[-1]:
+            s.read()
+            assert time.monotonic() < deadline, s.physical_rows[-1]
+        s.send(b"\x1bOC\x1b")
+        deadline = time.monotonic() + 3
+        while b"LOCKED" not in s.physical_rows[-1]:
+            s.read()
+            assert time.monotonic() < deadline, s.physical_rows[-1]
+        s.send(b"printf 'RIGHT_ARROW_MARK\\n'\n")
+        s.expect(b"RIGHT_ARROW_MARK")
+        assert any(b"RIGHT_ARROW_MARK" in row[40:] for row in s.physical_rows), s.physical_rows
         os.kill(s.app_pid, signal.SIGTERM)
         s.finish(128 + signal.SIGTERM)
     finally:

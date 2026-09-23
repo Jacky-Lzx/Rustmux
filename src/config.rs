@@ -6,6 +6,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use crate::layout::Direction;
+
 const DEFAULT_COMMAND_DURATION_SECONDS: u64 = 5;
 pub const DEFAULT_SCROLLBACK_LINES: usize = crate::screen::SCROLLBACK_MAX_LINES;
 const SHORTCUT_NAMES: [&str; 3] = ["new_window", "split_right", "split_down"];
@@ -37,6 +39,12 @@ pub struct PaneBinding {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PaneArrowBinding {
+    pub action: PaneAction,
+    pub stay: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Shortcuts {
     keys: [u8; 3],
     normal_actions: [Option<(u8, u8)>; 16],
@@ -44,6 +52,7 @@ pub struct Shortcuts {
     pane_enter: Option<u8>,
     pane_bindings: [Option<PaneBinding>; 32],
     pane_binding_len: usize,
+    pane_arrows: [Option<PaneArrowBinding>; 4],
     normal_exit: [u8; 8],
     normal_exit_len: usize,
 }
@@ -57,6 +66,7 @@ impl Default for Shortcuts {
             pane_enter: None,
             pane_bindings: [None; 32],
             pane_binding_len: 0,
+            pane_arrows: [None; 4],
             normal_exit: [0; 8],
             normal_exit_len: 0,
         }
@@ -153,6 +163,10 @@ impl Shortcuts {
             .flatten()
             .find(|binding| binding.key == key)
             .copied()
+    }
+
+    pub fn pane_arrow_binding(self, direction: Direction) -> Option<PaneArrowBinding> {
+        self.pane_arrows[arrow_index(direction)]
     }
 
     pub fn pane_key(self, action: PaneAction) -> Option<u8> {
@@ -594,6 +608,11 @@ fn parse_pane_bindings(
         let Some((action, stay)) = parsed else {
             continue;
         };
+        let preferred = table.get("display").and_then(toml::Value::as_str) == Some("always");
+        if let Some(direction) = parse_arrow_key(key) {
+            shortcuts.pane_arrows[arrow_index(direction)] = Some(PaneArrowBinding { action, stay });
+            continue;
+        }
         let Some(key) = parse_mode_key(key) else {
             continue;
         };
@@ -604,11 +623,30 @@ fn parse_pane_bindings(
             key,
             action,
             stay,
-            preferred: table.get("display").and_then(toml::Value::as_str) == Some("always"),
+            preferred,
         });
         shortcuts.pane_binding_len += 1;
     }
     Ok(())
+}
+
+fn parse_arrow_key(key: &str) -> Option<Direction> {
+    Some(match key {
+        "left" => Direction::Left,
+        "down" => Direction::Down,
+        "up" => Direction::Up,
+        "right" => Direction::Right,
+        _ => return None,
+    })
+}
+
+fn arrow_index(direction: Direction) -> usize {
+    match direction {
+        Direction::Left => 0,
+        Direction::Down => 1,
+        Direction::Up => 2,
+        Direction::Right => 3,
+    }
 }
 
 fn parse_printable_key(key: &str) -> Option<u8> {
@@ -819,6 +857,10 @@ n = { actions = ["new-pane-right", { action = "switch-mode", mode = "locked" }] 
 r = { actions = ["new-pane-right", { action = "switch-mode", mode = "locked" }], display = "always" }
 d = { actions = ["new-pane-down", { action = "switch-mode", mode = "locked" }] }
 h = { actions = ["focus-left"] }
+left = { actions = ["focus-left"] }
+down = { actions = ["focus-down"] }
+up = { actions = ["focus-up"] }
+right = { actions = ["focus-right"] }
 tab = { actions = ["focus-next-pane"] }
 f = { actions = ["toggle-pane-zoom", { action = "switch-mode", mode = "locked" }] }
 x = { actions = ["close-pane", { action = "switch-mode", mode = "locked" }] }
@@ -834,6 +876,16 @@ esc = { actions = [{ action = "switch-mode", mode = "locked" }] }
             PaneAction::FocusLeft
         );
         assert!(shortcuts.pane_binding(b'h').unwrap().stay);
+        for (direction, action) in [
+            (Direction::Left, PaneAction::FocusLeft),
+            (Direction::Down, PaneAction::FocusDown),
+            (Direction::Up, PaneAction::FocusUp),
+            (Direction::Right, PaneAction::FocusRight),
+        ] {
+            let binding = shortcuts.pane_arrow_binding(direction).unwrap();
+            assert_eq!(binding.action, action);
+            assert!(binding.stay);
+        }
         assert_eq!(shortcuts.pane_binding(9).unwrap().action, PaneAction::Next);
         assert_eq!(
             shortcuts.pane_binding(27).unwrap().action,

@@ -149,7 +149,9 @@ second shortcut byte; completing most shortcuts returns it to `LOCKED`.
 With a configured NORMAL-to-PANE binding, the badge changes to lavender `PANE`.
 Its footer shows the configured break, split, focus, zoom, and close keys that
 fit; clicking one invokes the same binding. Focus remains in PANE mode, while
-structural actions followed by `switch-mode locked` return to LOCKED. A
+structural actions followed by `switch-mode locked` return to LOCKED. PANE
+also accepts configured `left/down/up/right` aliases from ordinary CSI or
+application-cursor (SS3) sequences; modified arrows do not match. A
 configured Esc exit is consumed locally, including when received as a lone
 Escape byte. Attached
 session clients forward Ctrl-B immediately, so the server displays the same mode

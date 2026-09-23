@@ -658,7 +658,8 @@ impl WindowInput {
                     || self.alternate_scroll
                     || self.bar_enabled
                     || self.footer_row.is_some()
-                    || self.pane_hitboxes.len() > 1)
+                    || self.pane_hitboxes.len() > 1
+                    || self.mode == InputMode::Pane)
                     || byte != 27))
         {
             self.plain(byte, output);
@@ -668,7 +669,7 @@ impl WindowInput {
         self.mouse.push(byte);
         let len = self.mouse.len();
         let pending = match self.mouse.as_slice() {
-            [27] | [27, b'['] => true,
+            [27] | [27, b'['] | [27, b'O'] => true,
             [27, b'[', b'M', ..] => len < 6,
             [27, b'[', b'<', rest @ ..] => {
                 rest.last().is_none_or(|b| !matches!(b, b'M' | b'm' | b'u'))
@@ -736,6 +737,24 @@ impl WindowInput {
                 }
                 return;
             }
+        }
+        if self.mode == InputMode::Pane && coordinates.is_none() && bytes.starts_with(b"\x1b") {
+            if bytes == b"\x1b[200~" {
+                // A paste belongs to the child, not to this modal keymap.
+                self.mode = InputMode::Locked;
+                self.paste = true;
+                self.tail.clear();
+                output.extend(bytes.into_iter().map(WindowKey::Byte));
+                return;
+            }
+            if let Some((direction, event_type)) = arrow_key_event(&bytes)
+                && event_type != 3
+            {
+                self.pane_arrow_shortcut(direction, output);
+            }
+            // Unknown escape sequences stay local to PANE mode. In particular,
+            // never pass an unbound arrow's trailing bytes to the child.
+            return;
         }
         if let Some((column, row)) = coordinates {
             let release = (bytes.starts_with(b"\x1b[<") && bytes.last() == Some(&b'm'))
@@ -960,16 +979,32 @@ impl WindowInput {
     }
 
     fn pane_shortcut(&mut self, byte: u8, output: &mut Vec<WindowKey>) {
-        use crate::config::PaneAction;
         let Some(binding) = self.shortcuts.pane_binding(byte) else {
             return;
         };
-        self.mode = if binding.stay {
+        self.pane_binding_action(binding.action, binding.stay, output);
+    }
+
+    fn pane_arrow_shortcut(&mut self, direction: Direction, output: &mut Vec<WindowKey>) {
+        let Some(binding) = self.shortcuts.pane_arrow_binding(direction) else {
+            return;
+        };
+        self.pane_binding_action(binding.action, binding.stay, output);
+    }
+
+    fn pane_binding_action(
+        &mut self,
+        action: crate::config::PaneAction,
+        stay: bool,
+        output: &mut Vec<WindowKey>,
+    ) {
+        use crate::config::PaneAction;
+        self.mode = if stay {
             InputMode::Pane
         } else {
             InputMode::Locked
         };
-        match binding.action {
+        match action {
             PaneAction::Break => output.push(WindowKey::BreakPane),
             PaneAction::SplitRight => output.push(WindowKey::Split(SplitAxis::Columns)),
             PaneAction::SplitDown => output.push(WindowKey::Split(SplitAxis::Rows)),
@@ -1068,6 +1103,33 @@ fn kitty_key_event(sequence: &[u8]) -> Option<KittyKeyEvent> {
         modifiers,
         event_type,
     })
+}
+
+fn arrow_key_event(sequence: &[u8]) -> Option<(Direction, u8)> {
+    let (parameters, key) = if let Some(rest) = sequence.strip_prefix(b"\x1b[") {
+        let (&key, parameters) = rest.split_last()?;
+        (parameters, key)
+    } else {
+        let key = *sequence.strip_prefix(b"\x1bO")?.first()?;
+        if sequence.len() != 3 {
+            return None;
+        }
+        (&[][..], key)
+    };
+    let direction = match key {
+        b'A' => Direction::Up,
+        b'B' => Direction::Down,
+        b'C' => Direction::Right,
+        b'D' => Direction::Left,
+        _ => return None,
+    };
+    let event_type = match parameters {
+        b"" | b"1" | b"1;1" | b"1;1:1" => 1,
+        b"1;1:2" => 2,
+        b"1;1:3" => 3,
+        _ => return None,
+    };
+    Some((direction, event_type))
 }
 
 fn shortcut_action(byte: u8) -> Option<WindowKey> {
@@ -3089,7 +3151,73 @@ esc = { actions = [{ action = "switch-mode", mode = "locked" }] }
         }
         assert_eq!(keys.mode, InputMode::Pane);
         keys.feed(27, &mut actions);
+        assert_eq!(keys.mode, InputMode::Pane);
+        assert_eq!(keys.mouse, [27]); // Escape waits briefly for a possible arrow report.
+    }
+
+    #[test]
+    fn pane_arrow_aliases_accept_legacy_and_kitty_sequences_without_leaking() {
+        let shortcuts = crate::config::Shortcuts::test_from_config(
+            r#"
+[keybinds.normal]
+"Ctrl p" = { actions = [{ action = "switch-mode", mode = "pane" }] }
+[keybinds.pane]
+left = { actions = ["focus-left"] }
+down = { actions = ["focus-down"] }
+up = { actions = ["focus-up"] }
+right = { actions = ["focus-right"] }
+esc = { actions = [{ action = "switch-mode", mode = "locked" }] }
+"#,
+        );
+        let mut keys = WindowInput {
+            mode: InputMode::Pane,
+            shortcuts,
+            ..WindowInput::default()
+        };
+        let mut actions = Vec::new();
+        for sequence in [
+            &b"\x1b[D"[..],
+            &b"\x1bOB"[..],
+            &b"\x1b[1A"[..],
+            &b"\x1b[1;1C"[..],
+            &b"\x1b[1;1:2D"[..],
+        ] {
+            for &byte in sequence {
+                keys.feed(byte, &mut actions);
+            }
+        }
+        assert_eq!(
+            actions,
+            [
+                WindowKey::FocusPane(Direction::Left),
+                WindowKey::FocusPane(Direction::Down),
+                WindowKey::FocusPane(Direction::Up),
+                WindowKey::FocusPane(Direction::Right),
+                WindowKey::FocusPane(Direction::Left),
+            ]
+        );
+        assert_eq!(keys.mode, InputMode::Pane);
+        for sequence in [&b"\x1b[1;2D"[..], &b"\x1b[1;1:3A"[..], &b"\x1b[9~"[..]] {
+            for &byte in sequence {
+                keys.feed(byte, &mut actions);
+            }
+        }
+        assert_eq!(actions.len(), 5);
+        assert_eq!(keys.mode, InputMode::Pane);
+        for &byte in b"\x1b[200~text\x1b[201~" {
+            keys.feed(byte, &mut actions);
+        }
         assert_eq!(keys.mode, InputMode::Locked);
+        assert_eq!(
+            actions[5..]
+                .iter()
+                .filter_map(|action| match action {
+                    WindowKey::Byte(byte) => Some(*byte),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            b"\x1b[200~text\x1b[201~"
+        );
     }
 
     #[test]
