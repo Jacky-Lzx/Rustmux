@@ -514,14 +514,22 @@ fn hint_key(hint: ShortcutHint, shortcuts: crate::config::Shortcuts) -> String {
             .session_entry_key()
             .map(displayed_key)
             .unwrap_or_default()
+    } else if hint.key == SESSION_SHORTCUT.key {
+        displayed_key(shortcuts.key_for(23))
+    } else if hint.key == "h/j/k/l" {
+        (*b"hjkl")
+            .into_iter()
+            .map(|action| displayed_key(shortcuts.key_for(action)))
+            .collect::<Vec<_>>()
+            .join("/")
     } else if hint.key == "n/p" {
         format!(
             "{}/{}",
             char::from(shortcuts.key_for(b'n')),
             char::from(shortcuts.key_for(b'p'))
         )
-    } else if hint.actions.len() == 1 && matches!(hint.actions[0].1, b'c' | b'%' | b'"') {
-        char::from(shortcuts.key_for(hint.actions[0].1)).to_string()
+    } else if hint.actions.len() == 1 && matches!(hint.actions[0].1, b'c' | b'%' | b'"' | b'?') {
+        displayed_key(shortcuts.key_for(hint.actions[0].1))
     } else {
         hint.key.to_owned()
     }
@@ -557,40 +565,44 @@ fn visible_shortcuts(
             .split_last()
             .expect("normal shortcuts include help");
         let help_width = shortcut_width(*help, mode, bindings);
-        if help_width <= remaining {
+        let show_help = bindings.action_is_active(b'?') && help_width <= remaining;
+        if show_help {
             remaining -= help_width;
-            let session_hint = session
-                .then_some(SESSION_SHORTCUT)
-                .filter(|hint| shortcut_width(*hint, mode, bindings) <= remaining);
-            if let Some(hint) = session_hint {
-                remaining -= shortcut_width(hint, mode, bindings);
-            }
-            for hint in primary {
-                if !hint.actions.iter().all(|(_, action)| {
-                    if *action == 20 {
-                        bindings.tab_entry_key().is_some()
-                    } else if *action == 15 {
-                        session && bindings.session_entry_key().is_some()
-                    } else {
-                        bindings.action_is_active(*action)
-                    }
-                }) {
-                    continue;
-                }
-                let width = shortcut_width(*hint, mode, bindings);
-                if width > remaining {
-                    break;
-                }
-                visible.push(*hint);
-                remaining -= width;
-            }
-            visible.extend(session_hint);
-            visible.push(*help);
-            return visible;
         }
+        let session_hint = (session && bindings.action_is_active(23))
+            .then_some(SESSION_SHORTCUT)
+            .filter(|hint| shortcut_width(*hint, mode, bindings) <= remaining);
+        if let Some(hint) = session_hint {
+            remaining -= shortcut_width(hint, mode, bindings);
+        }
+        for hint in primary {
+            if !hint.actions.iter().all(|(_, action)| {
+                if *action == 20 {
+                    bindings.tab_entry_key().is_some()
+                } else if *action == 15 {
+                    session && bindings.session_entry_key().is_some()
+                } else {
+                    bindings.action_is_active(*action)
+                }
+            }) {
+                continue;
+            }
+            let width = shortcut_width(*hint, mode, bindings);
+            if width > remaining {
+                break;
+            }
+            visible.push(*hint);
+            remaining -= width;
+        }
+        visible.extend(session_hint);
+        if show_help {
+            visible.push(*help);
+        }
+        return visible;
     }
     for hint in shortcuts {
         if !hint.actions.iter().all(|(_, action)| match mode {
+            FooterMode::Locked => true,
             FooterMode::Pane
             | FooterMode::Resize
             | FooterMode::Move
@@ -1499,6 +1511,47 @@ esc = { actions = [{ action = "switch-mode", mode = "locked" }] }
             .collect::<String>();
         assert!(footer.contains("Ctrl-A"));
         assert!(!footer.contains("Ctrl-B"));
+    }
+
+    #[test]
+    fn cleared_defaults_footer_hides_unbound_hints() {
+        let shortcuts = crate::config::Shortcuts::test_from_config(
+            r#"
+clear_defaults = true
+[keybinds.locked]
+"Ctrl a" = { actions = [{ action = "switch-mode", mode = "normal" }] }
+[keybinds.normal]
+c = { actions = ["new-window", { action = "switch-mode", mode = "locked" }] }
+"#,
+        );
+        let child = Screen::new(1, 120).unwrap();
+        let row = |mode| {
+            let view = compose_with_mode(
+                &child,
+                3,
+                Some("work"),
+                &["shell".into()],
+                0,
+                mode,
+                shortcuts,
+            )
+            .unwrap();
+            view.row(2)
+                .unwrap()
+                .iter()
+                .filter(|cell| cell.width != 0)
+                .map(|cell| cell.character)
+                .collect::<String>()
+        };
+        assert!(row(FooterMode::Locked).contains("Ctrl-A"));
+        let normal = row(FooterMode::Normal);
+        assert!(normal.contains("New"), "{normal:?}");
+        for absent in ["Split", "Sessions", "Help", "Focus", "Window"] {
+            assert!(
+                !normal.contains(absent),
+                "unexpected {absent} in {normal:?}"
+            );
+        }
     }
 
     #[test]

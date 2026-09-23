@@ -119,7 +119,17 @@ named session before testing this change because its server retains the code
 and configuration from when it started.
 
 Other mode tables and unsupported actions from main's larger configuration are
-still ignored. `clear_defaults` is not implemented yet. A single
+still ignored. `clear_defaults = true` disables implicit NORMAL shortcuts,
+including the named-session client's legacy prefix-`d` and prefix-Ctrl-W
+fallbacks. Only supported actions explicitly bound in `[keybinds.normal]`
+or `[shortcuts]` remain active. An explicit `[keybinds.locked]` entry is
+required so LOCKED mode remains escapable; missing or non-Boolean
+`clear_defaults` values are rejected. Pressing the configured LOCKED entry
+key twice still sends one literal prefix byte. With the option omitted or false,
+the previous defaults remain. Unsupported actions in the larger main config
+still do not acquire bindings.
+
+A single
 `[keybinds.locked]` binding with a non-conflicting Ctrl-A through Ctrl-Z key and a standalone
 `switch-mode normal` action selects the LOCKED-to-NORMAL prefix; Ctrl-B remains
 the default. Pressing the configured key twice sends one literal prefix byte to
@@ -136,7 +146,9 @@ bindings in one mode; Esc remains an unambiguous LOCKED exit.
 
 NORMAL mode also recognizes main-style `close-window`, `next-window`,
 `previous-window` (including `tab`), `move-window-left`, and `move-window-right`
-bindings followed by `switch-mode` to `locked`, plus `rename-window` with no
+bindings followed by `switch-mode` to `locked`. The same sequence is supported for
+`show-help`, `switch-session`, `focus-left/down/up/right`, and `go-to-window`
+with index 1–10; `rename-window` has no
 following action. They replace any older command on the same key:
 for example, `x = { actions = ["close-window", { action = "switch-mode", mode =
 "locked" }] }` makes Ctrl-B `x` close a window instead of a pane. Displaced

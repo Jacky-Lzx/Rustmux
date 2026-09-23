@@ -54,7 +54,8 @@ fn bridge(
     let mut pending_resize = signals.resize.swap(false, Ordering::Relaxed);
     let mut exit = None;
     let mut server_control = None;
-    let mut input = ClientInput::with_prefix(peer.locked_entry_key());
+    let mut input =
+        ClientInput::with_keybinds(peer.locked_entry_key(), peer.legacy_client_shortcuts());
     let mut client_exit = None;
 
     apply_server_messages(
@@ -334,6 +335,7 @@ impl Outbound {
 #[derive(Debug)]
 struct ClientInput {
     locked_enter: u8,
+    legacy_shortcuts: bool,
     prefix: bool,
     paste: bool,
     tail: VecDeque<u8>,
@@ -341,14 +343,20 @@ struct ClientInput {
 
 impl Default for ClientInput {
     fn default() -> Self {
-        Self::with_prefix(2)
+        Self::with_keybinds(2, true)
     }
 }
 
 impl ClientInput {
+    #[cfg(test)]
     fn with_prefix(locked_enter: u8) -> Self {
+        Self::with_keybinds(locked_enter, true)
+    }
+
+    fn with_keybinds(locked_enter: u8, legacy_shortcuts: bool) -> Self {
         Self {
             locked_enter,
+            legacy_shortcuts,
             prefix: false,
             paste: false,
             tail: VecDeque::new(),
@@ -372,10 +380,10 @@ impl ClientInput {
                 forwarded.push(byte);
             } else if self.prefix {
                 self.prefix = false;
-                if byte == b'd' {
+                if self.legacy_shortcuts && byte == b'd' {
                     return Some(ClientExit::Detached);
                 }
-                if byte == 23 {
+                if self.legacy_shortcuts && byte == 23 {
                     return Some(ClientExit::SessionManager);
                 }
                 forwarded.push(byte);
@@ -735,5 +743,13 @@ mod tests {
             Some(ClientExit::Detached)
         );
         assert_eq!(forwarded, b"\x01");
+    }
+
+    #[test]
+    fn cleared_defaults_forward_legacy_client_shortcuts_to_the_server() {
+        let mut input = ClientInput::with_keybinds(1, false);
+        let mut forwarded = Vec::new();
+        assert_eq!(input.feed(b"\x01d\x01\x17", &mut forwarded), None);
+        assert_eq!(forwarded, b"\x01d\x01\x17");
     }
 }

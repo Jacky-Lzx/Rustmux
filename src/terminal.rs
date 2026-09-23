@@ -125,7 +125,11 @@ pub fn serve_session(
             match session.wait_for_client(endpoint, &signals)? {
                 DetachedEvent::Process(code) => return Ok(code),
                 DetachedEvent::Client(stream) => {
-                    match handshake::server_with_prefix(stream, shortcuts.locked_entry_key()) {
+                    match handshake::server_with_keybinds(
+                        stream,
+                        shortcuts.locked_entry_key(),
+                        !shortcuts.clear_defaults(),
+                    ) {
                         Ok(next) => {
                             peer = next;
                             break;
@@ -1037,12 +1041,12 @@ impl WindowInput {
     }
 
     fn shortcut(&mut self, byte: u8, output: &mut Vec<WindowKey>) {
-        if self.session_available && byte == b'd' {
+        if self.session_available && !self.shortcuts.clear_defaults() && byte == b'd' {
             self.mode = InputMode::Locked;
             output.push(WindowKey::Detach);
             return;
         }
-        if self.session_available && byte == 23 {
+        if self.session_available && self.shortcuts.resolve(byte) == Some(23) {
             self.mode = InputMode::Locked;
             output.push(WindowKey::SessionManager);
             return;
@@ -4208,6 +4212,42 @@ w = { actions = ["switch-session", { action = "switch-mode", mode = "locked" }] 
             kitty_named.feed(byte, &mut output);
         }
         assert_eq!(output, [WindowKey::Detach]);
+    }
+
+    #[test]
+    fn cleared_defaults_do_not_dispatch_unbound_normal_shortcuts() {
+        let shortcuts = crate::config::Shortcuts::test_from_config(
+            r#"
+clear_defaults = true
+[keybinds.locked]
+"Ctrl a" = { actions = [{ action = "switch-mode", mode = "normal" }] }
+[keybinds.normal]
+c = { actions = ["new-window", { action = "switch-mode", mode = "locked" }] }
+"Ctrl w" = { actions = ["switch-session", { action = "switch-mode", mode = "locked" }] }
+"?" = { actions = ["show-help", { action = "switch-mode", mode = "locked" }] }
+"#,
+        );
+        let mut keys = WindowInput {
+            shortcuts,
+            session_available: true,
+            ..WindowInput::default()
+        };
+        let mut output = Vec::new();
+        for &byte in b"\x01n\x01d\x01c\x01\x17\x01?" {
+            keys.feed(byte, &mut output);
+        }
+        assert_eq!(
+            output,
+            [
+                WindowKey::Byte(1),
+                WindowKey::Byte(b'n'),
+                WindowKey::Byte(1),
+                WindowKey::Byte(b'd'),
+                WindowKey::Create,
+                WindowKey::SessionManager,
+                WindowKey::Help,
+            ]
+        );
     }
 
     #[test]

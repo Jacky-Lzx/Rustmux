@@ -18,14 +18,17 @@ The client-to-server messages are:
 
 The server-to-client messages are:
 
-- `Attached`: the accepted protocol version and the server's effective LOCKED-to-NORMAL prefix byte.
+- `Attached`: the accepted protocol version, effective LOCKED-to-NORMAL prefix byte, and whether legacy client-side session shortcuts remain enabled.
 - `Output`: arbitrary bytes for the outer terminal.
 - `Exit`: the server's signed process status.
 - `OpenSessionManager`: a zero-payload terminal control request.
 - `Detach`: a zero-payload request for the client to restore its terminal and leave the session running.
 - `Rejected`: a UTF-8 reason limited to 1 KiB.
 
-Protocol version 4 adds the prefix byte to `Attached`; version 3 added
+Protocol version 5 adds the legacy-shortcut flag to `Attached`. A server
+with `clear_defaults = true` clears it so the attached client forwards
+otherwise unbound prefix-`d` and prefix-Ctrl-W for the server to decide.
+Version 4 added the prefix byte; version 3 added
 server-requested `Detach` after version 2's `OpenSessionManager`. The version is
 carried explicitly so the handshake can reject an
 incompatible peer before forwarding terminal bytes. Encoding validates sizes

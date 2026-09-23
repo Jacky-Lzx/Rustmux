@@ -145,8 +145,11 @@ changed under `[shortcuts]` in `config.toml`; see the quick start. A single
 from its Ctrl-B default. The running named session sends that key to each
 attached client in the handshake, so a newer client config cannot silently
 remap the server's prefix.
-Main-style `[keybinds.normal]` can also override the five supported window
-operations listed in the quick start. Binding `x` to `close-window` replaces
+Main-style `[keybinds.normal]` can override the supported operations listed
+in the quick start. `clear_defaults = true` removes implicit NORMAL commands
+and the attached client's legacy prefix-`d`/prefix-Ctrl-W shortcuts; a
+supported explicit LOCKED entry is required. Footer and help show only
+available commands. Binding `x` to `close-window` replaces
 the prior `x` close-pane behavior for that key.
 
 The left side of the bottom bar shows `LOCKED` in red during ordinary child

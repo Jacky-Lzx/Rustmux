@@ -474,14 +474,14 @@ impl ShortcutHelp {
                 command
                     .actions
                     .iter()
-                    .all(|(_, action)| self.shortcuts.action_is_active(*action))
+                    .all(|(_, action)| *action == 2 || self.shortcuts.action_is_active(*action))
             })
             .collect();
-        if self.session {
+        if self.session && self.shortcuts.action_is_active(23) {
             commands.push(SESSION_COMMAND);
-            if self.shortcuts.session_entry_key().is_some() {
-                commands.push(SESSION_MODE_COMMAND);
-            }
+        }
+        if self.session && self.shortcuts.session_entry_key().is_some() {
+            commands.push(SESSION_MODE_COMMAND);
         }
         commands
     }
@@ -638,6 +638,12 @@ impl ShortcutHelp {
             && matches!(command.actions[0].1, b'c' | b'%' | b'"' | b'&' | b',')
         {
             char::from(self.shortcuts.key_for(command.actions[0].1)).to_string()
+        } else if command.actions.first().is_some_and(|(_, key)| *key == 23) {
+            let key = self.shortcuts.key_for(23);
+            match key {
+                1..=26 => format!("Ctrl-{}", char::from(b'A' + key - 1)),
+                _ => char::from(key).to_string(),
+            }
         } else if command.actions.first().is_some_and(|(_, key)| *key == 15) {
             self.shortcuts.session_entry_key().map_or_else(
                 || command.key.to_owned(),
@@ -877,6 +883,32 @@ mod tests {
         assert!(!body.contains("Literal Ctrl-B"));
         assert_eq!(help.feed(2, Instant::now()), HelpEvent::Continue);
         assert_eq!(help.feed(1, Instant::now()), HelpEvent::Action(2));
+    }
+
+    #[test]
+    fn cleared_defaults_help_lists_only_live_commands() {
+        let shortcuts = crate::config::Shortcuts::test_from_config(
+            r#"
+clear_defaults = true
+[keybinds.locked]
+"Ctrl a" = { actions = [{ action = "switch-mode", mode = "normal" }] }
+[keybinds.normal]
+c = { actions = ["new-window", { action = "switch-mode", mode = "locked" }] }
+"?" = { actions = ["show-help", { action = "switch-mode", mode = "locked" }] }
+"#,
+        );
+        let mut help = ShortcutHelp::with_shortcuts(true, shortcuts);
+        let body = text(&help.overlay(&Screen::new(24, 80).unwrap()));
+        assert!(body.contains("New window"));
+        assert!(body.contains("Literal Ctrl-A"));
+        for absent in [
+            "Close window",
+            "Switch window",
+            "Session Manager",
+            "Split right",
+        ] {
+            assert!(!body.contains(absent), "unexpected {absent} in {body:?}");
+        }
     }
 
     #[test]

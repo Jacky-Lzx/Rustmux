@@ -212,7 +212,11 @@ fn run_server(
 ) -> io::Result<u8> {
     detach_process(endpoint.listener().as_raw_fd())?;
     let _server = acquire_server(name)?;
-    let peer = accept_peer(&endpoint, shortcuts.locked_entry_key())?;
+    let peer = accept_peer(
+        &endpoint,
+        shortcuts.locked_entry_key(),
+        !shortcuts.clear_defaults(),
+    )?;
     crate::terminal::serve_session(
         shell,
         name,
@@ -264,13 +268,20 @@ fn close_inherited_descriptors(listener: i32) -> io::Result<()> {
     Ok(())
 }
 
-fn accept_peer(endpoint: &SessionEndpoint, locked_enter: u8) -> io::Result<handshake::ServerPeer> {
+fn accept_peer(
+    endpoint: &SessionEndpoint,
+    locked_enter: u8,
+    legacy_client_shortcuts: bool,
+) -> io::Result<handshake::ServerPeer> {
     loop {
         match endpoint.listener().accept() {
-            Ok((stream, _)) => match handshake::server_with_prefix(stream, locked_enter) {
-                Ok(peer) => return Ok(peer),
-                Err(_) => continue,
-            },
+            Ok((stream, _)) => {
+                match handshake::server_with_keybinds(stream, locked_enter, legacy_client_shortcuts)
+                {
+                    Ok(peer) => return Ok(peer),
+                    Err(_) => continue,
+                }
+            }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                 let mut poll_fd = [PollFd::new(endpoint.listener().as_fd(), PollFlags::POLLIN)];
                 match poll(&mut poll_fd, ACCEPT_POLL_MILLIS) {

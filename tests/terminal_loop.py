@@ -1944,6 +1944,69 @@ with tempfile.TemporaryDirectory(prefix="rustmux-server-prefix-") as server_conf
         s.close()
         subprocess.run([BINARY, "kill", prefix_name], capture_output=True, text=True, timeout=5)
 
+# With defaults cleared, unbound NORMAL keys and client-side legacy detach
+# must not run, while explicitly configured mode and session actions still work.
+with tempfile.TemporaryDirectory(prefix="rustmux-clear-defaults-") as directory:
+    os.mkdir(os.path.join(directory, "rustmux"))
+    with open(os.path.join(directory, "rustmux", "config.toml"), "w", encoding="utf-8") as config:
+        config.write(
+            "clear_defaults = true\n"
+            "[keybinds.locked]\n"
+            "'Ctrl a' = { actions = [{ action = 'switch-mode', mode = 'normal' }] }\n"
+            "[keybinds.normal]\n"
+            "c = { actions = ['new-window', { action = 'switch-mode', mode = 'locked' }] }\n"
+            "'?' = { actions = ['show-help', { action = 'switch-mode', mode = 'locked' }] }\n"
+            "'Ctrl w' = { actions = ['switch-session', { action = 'switch-mode', mode = 'locked' }] }\n"
+            "'Ctrl o' = { actions = [{ action = 'switch-mode', mode = 'session' }] }\n"
+            "[keybinds.session]\n"
+            "d = { actions = ['detach'] }\n"
+        )
+    clear_name = f"clear-{os.getpid()}"
+    s = Session(arguments=("new", clear_name), extra_env={"XDG_CONFIG_HOME": directory})
+    try:
+        s.expect(b"RUSTMUX_READY> ")
+        expect_footer(s, b"Ctrl-A")
+        s.send(b"\x01")
+        expect_footer(s, b"NORMAL")
+        expect_footer(s, b"Sessions")
+        assert b"Split" not in s.physical_rows[-1], s.physical_rows[-1]
+        s.send(b"c")
+        expect_bar(s, b"2 shell")
+        s.output.clear()
+        s.send(b"\x01?")
+        end = time.monotonic() + 8
+        while b"Shortcut Help" not in s.output or b"New window" not in s.output:
+            s.read()
+            assert time.monotonic() < end, bytes(s.output[-2000:])
+        assert b"Close window" not in s.output, bytes(s.output[-2000:])
+        s.output.clear()
+        s.frames.clear()
+        s.send(b"q")
+        s.expect(b"RUSTMUX_READY> ")
+        assert not any(b"Shortcut Help" in row for row in s.physical_rows)
+        expect_footer(s, b"LOCKED")
+        s.output.clear()
+        s.send(b"\x01\x17")
+        end = time.monotonic() + 8
+        while b"Session Manager" not in s.output:
+            s.read()
+            assert time.monotonic() < end, bytes(s.output[-2000:])
+        s.output.clear()
+        s.frames.clear()
+        s.send(b"q")
+        s.expect(b"RUSTMUX_READY> ")
+        expect_footer(s, b"LOCKED")
+        s.send(b"\x01d")
+        s.read(0.1)
+        assert s.child.poll() is None, "unbound detach left the session"
+        s.send(b"\x01\x0f")
+        expect_footer(s, b"SESSION")
+        s.send(b"d")
+        s.finish(0)
+    finally:
+        s.close()
+        subprocess.run([BINARY, "kill", clear_name], capture_output=True, text=True, timeout=5)
+
 s = Session()
 try:
     s.expect(b"RUSTMUX_READY> ")
@@ -3491,6 +3554,7 @@ assert not [path for path in detached_paths if os.path.exists(path)], detached_p
 background_name = f"background-{os.getpid()}"
 background_env = dict(
     os.environ, RUSTMUX_SHELL="/bin/sh", PS1="RUSTMUX_READY> ", ENV="", BASH_ENV="",
+    XDG_CONFIG_HOME=DEFAULT_CONFIG_DIR.name,
 )
 created = subprocess.run(
     [BINARY, "new", "--detached", background_name], capture_output=True, text=True,

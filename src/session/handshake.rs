@@ -18,11 +18,16 @@ pub struct ClientPeer {
     decoder: ServerDecoder,
     pending: VecDeque<ServerMessage>,
     locked_enter: u8,
+    legacy_client_shortcuts: bool,
 }
 
 impl ClientPeer {
     pub fn locked_entry_key(&self) -> u8 {
         self.locked_enter
+    }
+
+    pub fn legacy_client_shortcuts(&self) -> bool {
+        self.legacy_client_shortcuts
     }
 
     pub fn stream(&self) -> &UnixStream {
@@ -106,28 +111,32 @@ pub fn client(mut stream: UnixStream, rows: u16, columns: u16) -> io::Result<Cli
 
     let mut decoder = ServerDecoder::default();
     let mut messages = read_server_messages(&mut stream, &mut decoder)?;
-    let locked_enter = match messages.pop_front().expect("reader returns a message") {
-        ServerMessage::Attached {
-            version,
-            locked_enter,
-        } if version == PROTOCOL_VERSION && (1..=26).contains(&locked_enter) => locked_enter,
-        ServerMessage::Attached { version, .. } if version != PROTOCOL_VERSION => {
-            return Err(invalid_data(format!(
-                "server selected protocol version {version}; expected {PROTOCOL_VERSION}"
-            )));
-        }
-        ServerMessage::Attached { .. } => {
-            return Err(invalid_data("server selected an invalid LOCKED entry key"));
-        }
-        ServerMessage::Rejected(message) => {
-            return Err(io::Error::new(io::ErrorKind::ConnectionRefused, message));
-        }
-        _ => {
-            return Err(invalid_data(
-                "first server message must be Attached or Rejected",
-            ));
-        }
-    };
+    let (locked_enter, legacy_client_shortcuts) =
+        match messages.pop_front().expect("reader returns a message") {
+            ServerMessage::Attached {
+                version,
+                locked_enter,
+                legacy_client_shortcuts,
+            } if version == PROTOCOL_VERSION && (1..=26).contains(&locked_enter) => {
+                (locked_enter, legacy_client_shortcuts)
+            }
+            ServerMessage::Attached { version, .. } if version != PROTOCOL_VERSION => {
+                return Err(invalid_data(format!(
+                    "server selected protocol version {version}; expected {PROTOCOL_VERSION}"
+                )));
+            }
+            ServerMessage::Attached { .. } => {
+                return Err(invalid_data("server selected an invalid LOCKED entry key"));
+            }
+            ServerMessage::Rejected(message) => {
+                return Err(io::Error::new(io::ErrorKind::ConnectionRefused, message));
+            }
+            _ => {
+                return Err(invalid_data(
+                    "first server message must be Attached or Rejected",
+                ));
+            }
+        };
     reject_server_handshakes(&messages)?;
     finish_handshake(&stream)?;
     Ok(ClientPeer {
@@ -135,15 +144,20 @@ pub fn client(mut stream: UnixStream, rows: u16, columns: u16) -> io::Result<Cli
         decoder,
         pending: messages,
         locked_enter,
+        legacy_client_shortcuts,
     })
 }
 
 /// Verify the first client message, reply and leave the accepted stream nonblocking.
 pub fn server(stream: UnixStream) -> io::Result<ServerPeer> {
-    server_with_prefix(stream, 2)
+    server_with_keybinds(stream, 2, true)
 }
 
-pub fn server_with_prefix(mut stream: UnixStream, locked_enter: u8) -> io::Result<ServerPeer> {
+pub fn server_with_keybinds(
+    mut stream: UnixStream,
+    locked_enter: u8,
+    legacy_client_shortcuts: bool,
+) -> io::Result<ServerPeer> {
     if !(1..=26).contains(&locked_enter) {
         return Err(invalid_data("invalid LOCKED entry key"));
     }
@@ -169,6 +183,7 @@ pub fn server_with_prefix(mut stream: UnixStream, locked_enter: u8) -> io::Resul
         &ServerMessage::Attached {
             version: PROTOCOL_VERSION,
             locked_enter,
+            legacy_client_shortcuts,
         }
         .encode()
         .map_err(invalid_protocol)?,
@@ -305,6 +320,7 @@ mod tests {
             [ServerMessage::Attached {
                 version: PROTOCOL_VERSION,
                 locked_enter: 2,
+                legacy_client_shortcuts: true,
             }]
         );
 
@@ -325,6 +341,7 @@ mod tests {
         let server = server.join().unwrap();
         assert_eq!(server.size(), (24, 80));
         assert_eq!(client.locked_entry_key(), 2);
+        assert!(client.legacy_client_shortcuts());
         assert!(client.decode(&[]).unwrap().is_empty());
         assert!(client.stream_mut().write(&[]).is_ok());
     }
@@ -332,9 +349,10 @@ mod tests {
     #[test]
     fn client_uses_the_server_selected_locked_entry_key() {
         let (client_stream, server_stream) = UnixStream::pair().unwrap();
-        let server = thread::spawn(move || server_with_prefix(server_stream, 1).unwrap());
+        let server = thread::spawn(move || server_with_keybinds(server_stream, 1, false).unwrap());
         let client = client(client_stream, 24, 80).unwrap();
         assert_eq!(client.locked_entry_key(), 1);
+        assert!(!client.legacy_client_shortcuts());
         server.join().unwrap();
     }
 
@@ -377,6 +395,7 @@ mod tests {
                     &ServerMessage::Attached {
                         version: PROTOCOL_VERSION + 1,
                         locked_enter: 2,
+                        legacy_client_shortcuts: true,
                     }
                     .encode()
                     .unwrap(),
@@ -400,6 +419,7 @@ mod tests {
                     &ServerMessage::Attached {
                         version: PROTOCOL_VERSION,
                         locked_enter: 0,
+                        legacy_client_shortcuts: true,
                     }
                     .encode()
                     .unwrap(),

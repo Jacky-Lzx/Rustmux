@@ -21,12 +21,15 @@ that closes without `Exit` is reported as an incomplete session rather than a
 successful command.
 
 The bridge uses the server-selected prefix from the `Attached` handshake,
-not the attaching process's current config. It forwards that key to the
-server-side window parser except for prefix-`d` and prefix-Ctrl-W. Both queue
-`Detach` after any earlier bytes and return once the frame is written. The
+not the attaching process's current config. When the server retains default
+bindings, it forwards that key to the server-side window parser except for
+prefix-`d` and prefix-Ctrl-W. Both queue `Detach` after any earlier bytes
+and return once the frame is written. The
 first exits to the outer terminal; the second restores the terminal before the
 supervisor opens the Session Manager. Bracketed paste contents never trigger
-either shortcut.
+either shortcut. With `clear_defaults = true`, the handshake disables both
+client-side shortcuts; the server alone decides whether a configured binding
+handles those bytes.
 
 A named-session server can request the same manager transition when its footer
 hint or configured SESSION-mode key is used. SESSION-mode `detach` uses a separate

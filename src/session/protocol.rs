@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-pub const PROTOCOL_VERSION: u16 = 4;
+pub const PROTOCOL_VERSION: u16 = 5;
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
 pub const MAX_ERROR_BYTES: usize = 1024;
 
@@ -63,9 +63,15 @@ impl ClientMessage {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ServerMessage {
-    Attached { version: u16, locked_enter: u8 },
+    Attached {
+        version: u16,
+        locked_enter: u8,
+        legacy_client_shortcuts: bool,
+    },
     Output(Vec<u8>),
-    Exit { status: i32 },
+    Exit {
+        status: i32,
+    },
     Rejected(String),
     OpenSessionManager,
     Detach,
@@ -77,10 +83,12 @@ impl ServerMessage {
             Self::Attached {
                 version,
                 locked_enter,
+                legacy_client_shortcuts,
             } => {
-                let mut payload = Vec::with_capacity(3);
+                let mut payload = Vec::with_capacity(4);
                 payload.extend_from_slice(&version.to_be_bytes());
                 payload.push(*locked_enter);
+                payload.push(u8::from(*legacy_client_shortcuts));
                 encode_frame(SERVER_ATTACHED, &payload)
             }
             Self::Output(bytes) => encode_frame(SERVER_OUTPUT, bytes),
@@ -134,6 +142,7 @@ pub enum ProtocolError {
         actual: usize,
     },
     InvalidTerminalSize,
+    InvalidHandshakeFlags(u8),
     InvalidUtf8,
     TruncatedFrame(usize),
 }
@@ -164,6 +173,9 @@ impl fmt::Display for ProtocolError {
             ),
             Self::InvalidTerminalSize => {
                 formatter.write_str("terminal rows and columns must be nonzero")
+            }
+            Self::InvalidHandshakeFlags(flags) => {
+                write!(formatter, "invalid session handshake flags {flags}")
             }
             Self::InvalidUtf8 => formatter.write_str("session error message is not UTF-8"),
             Self::TruncatedFrame(length) => {
@@ -283,12 +295,18 @@ fn decode_client(frame: Frame) -> Result<ClientMessage, ProtocolError> {
 fn decode_server(frame: Frame) -> Result<ServerMessage, ProtocolError> {
     match frame.message {
         SERVER_ATTACHED => {
-            require_length(&frame, 3)?;
+            require_length(&frame, 4)?;
             let version = u16::from_be_bytes(frame.payload[0..2].try_into().unwrap());
             let locked_enter = frame.payload[2];
+            let legacy_client_shortcuts = match frame.payload[3] {
+                0 => false,
+                1 => true,
+                flags => return Err(ProtocolError::InvalidHandshakeFlags(flags)),
+            };
             Ok(ServerMessage::Attached {
                 version,
                 locked_enter,
+                legacy_client_shortcuts,
             })
         }
         SERVER_OUTPUT => Ok(ServerMessage::Output(frame.payload)),
@@ -375,6 +393,7 @@ mod tests {
             ServerMessage::Attached {
                 version: PROTOCOL_VERSION,
                 locked_enter: 2,
+                legacy_client_shortcuts: true,
             },
             ServerMessage::Output(vec![b'\x1b', b'[', b'2', b'J', 0]),
             ServerMessage::Rejected("already attached".to_owned()),
@@ -442,9 +461,15 @@ mod tests {
             ServerDecoder::default().push(&malformed_attached),
             Err(ProtocolError::InvalidLength {
                 message: SERVER_ATTACHED,
-                expected: 3,
+                expected: 4,
                 actual: 2,
             })
+        );
+
+        let invalid_flags = encode_frame(SERVER_ATTACHED, &[0, 5, 2, 2]).unwrap();
+        assert_eq!(
+            ServerDecoder::default().push(&invalid_flags),
+            Err(ProtocolError::InvalidHandshakeFlags(2))
         );
 
         let malformed_detach = encode_frame(SERVER_DETACH, &[0]).unwrap();
