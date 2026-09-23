@@ -54,7 +54,7 @@ fn bridge(
     let mut pending_resize = signals.resize.swap(false, Ordering::Relaxed);
     let mut exit = None;
     let mut server_control = None;
-    let mut input = ClientInput::default();
+    let mut input = ClientInput::with_prefix(peer.locked_entry_key());
     let mut client_exit = None;
 
     apply_server_messages(
@@ -331,14 +331,30 @@ impl Outbound {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct ClientInput {
+    locked_enter: u8,
     prefix: bool,
     paste: bool,
     tail: VecDeque<u8>,
 }
 
+impl Default for ClientInput {
+    fn default() -> Self {
+        Self::with_prefix(2)
+    }
+}
+
 impl ClientInput {
+    fn with_prefix(locked_enter: u8) -> Self {
+        Self {
+            locked_enter,
+            prefix: false,
+            paste: false,
+            tail: VecDeque::new(),
+        }
+    }
+
     fn feed(&mut self, bytes: &[u8], forwarded: &mut Vec<u8>) -> Option<ClientExit> {
         for &byte in bytes {
             self.tail.push_back(byte);
@@ -363,7 +379,7 @@ impl ClientInput {
                     return Some(ClientExit::SessionManager);
                 }
                 forwarded.push(byte);
-            } else if byte == 2 {
+            } else if byte == self.locked_enter {
                 self.prefix = true;
                 // Forward the prefix immediately so the session server can show
                 // NORMAL mode while this client waits for the command byte.
@@ -697,5 +713,27 @@ mod tests {
         assert_eq!(forwarded, b"\x02");
         assert_eq!(input.feed(b"c\x02\x02", &mut forwarded), None);
         assert_eq!(forwarded, b"\x02c\x02\x02");
+    }
+
+    #[test]
+    fn remapped_prefix_controls_client_shortcuts_and_preserves_paste() {
+        let mut input = ClientInput::with_prefix(1);
+        let mut forwarded = Vec::new();
+        assert_eq!(input.feed(b"\x02d", &mut forwarded), None);
+        assert_eq!(forwarded, b"\x02d");
+        assert_eq!(input.feed(b"\x1b[200~\x01d\x1b[201~", &mut forwarded), None);
+        assert_eq!(
+            input.feed(b"\x01\x17", &mut forwarded),
+            Some(ClientExit::SessionManager)
+        );
+        assert!(forwarded.ends_with(b"\x1b[200~\x01d\x1b[201~\x01"));
+
+        let mut input = ClientInput::with_prefix(1);
+        let mut forwarded = Vec::new();
+        assert_eq!(
+            input.feed(b"\x01d", &mut forwarded),
+            Some(ClientExit::Detached)
+        );
+        assert_eq!(forwarded, b"\x01");
     }
 }

@@ -124,15 +124,17 @@ pub fn serve_session(
         loop {
             match session.wait_for_client(endpoint, &signals)? {
                 DetachedEvent::Process(code) => return Ok(code),
-                DetachedEvent::Client(stream) => match handshake::server(stream) {
-                    Ok(next) => {
-                        peer = next;
-                        break;
+                DetachedEvent::Client(stream) => {
+                    match handshake::server_with_prefix(stream, shortcuts.locked_entry_key()) {
+                        Ok(next) => {
+                            peer = next;
+                            break;
+                        }
+                        // A malformed or abandoned connection belongs to that client;
+                        // it must not terminate the existing panes.
+                        Err(_) => continue,
                     }
-                    // A malformed or abandoned connection belongs to that client;
-                    // it must not terminate the existing panes.
-                    Err(_) => continue,
-                },
+                }
             }
         }
     }
@@ -738,9 +740,9 @@ impl WindowInput {
         };
         let mut bytes = self.take_mouse();
         if let Some(key) = kitty_key_event(&bytes) {
-            if key.is_ctrl_b() {
+            if key.shortcut_byte() == Some(self.shortcuts.locked_entry_key()) {
                 if key.event_type != 3 {
-                    self.plain(2, output);
+                    self.plain(self.shortcuts.locked_entry_key(), output);
                 }
                 return;
             }
@@ -761,7 +763,7 @@ impl WindowInput {
                 } else {
                     if self.mode == InputMode::Normal {
                         self.mode = InputMode::Locked;
-                        output.push(WindowKey::Byte(2));
+                        output.push(WindowKey::Byte(self.shortcuts.locked_entry_key()));
                         output.extend(bytes.into_iter().map(WindowKey::Byte));
                     }
                 }
@@ -1026,13 +1028,20 @@ impl WindowInput {
                 InputMode::Move => self.move_shortcut(byte, output),
                 InputMode::Tab => self.tab_shortcut(byte, output),
                 InputMode::Session => self.session_shortcut(byte, output),
-                InputMode::Locked if byte == 2 => self.mode = InputMode::Normal,
+                InputMode::Locked if byte == self.shortcuts.locked_entry_key() => {
+                    self.mode = InputMode::Normal;
+                }
                 InputMode::Locked => output.push(WindowKey::Byte(byte)),
             }
         }
     }
 
     fn shortcut(&mut self, byte: u8, output: &mut Vec<WindowKey>) {
+        if self.session_available && byte == b'd' {
+            self.mode = InputMode::Locked;
+            output.push(WindowKey::Detach);
+            return;
+        }
         if self.session_available && byte == 23 {
             self.mode = InputMode::Locked;
             output.push(WindowKey::SessionManager);
@@ -1062,10 +1071,19 @@ impl WindowInput {
         if self.shortcuts.exits_normal(byte) {
             return;
         }
+        if byte == self.shortcuts.locked_entry_key() {
+            output.push(WindowKey::Byte(byte));
+            return;
+        }
+        if byte == 2 {
+            output.push(WindowKey::Byte(self.shortcuts.locked_entry_key()));
+            output.push(WindowKey::Byte(byte));
+            return;
+        }
         if let Some(action) = self.shortcuts.resolve(byte).and_then(shortcut_action) {
             output.push(action);
         } else {
-            output.push(WindowKey::Byte(2));
+            output.push(WindowKey::Byte(self.shortcuts.locked_entry_key()));
             output.push(WindowKey::Byte(byte));
         }
     }
@@ -1256,14 +1274,6 @@ struct KittyKeyEvent {
 }
 
 impl KittyKeyEvent {
-    fn is_ctrl_b(self) -> bool {
-        self.modifiers & 4 != 0
-            && [Some(self.codepoint), self.shifted, self.base_layout]
-                .into_iter()
-                .flatten()
-                .any(|codepoint| matches!(char::from_u32(codepoint), Some('b' | 'B')))
-    }
-
     fn shortcut_byte(self) -> Option<u8> {
         if self.modifiers & !(1 | 4) != 0 {
             return None;
@@ -2280,6 +2290,9 @@ fn forward(
                         renderer.invalidate();
                         force_redraw = true;
                         continue;
+                    }
+                    crate::shortcut_help::HelpEvent::Action(2) => {
+                        Some(WindowKey::Byte(shortcuts.locked_entry_key()))
                     }
                     crate::shortcut_help::HelpEvent::Action(byte) => shortcut_action(byte),
                 }
@@ -4143,6 +4156,58 @@ w = { actions = ["switch-session", { action = "switch-mode", mode = "locked" }] 
                 .map(WindowKey::Byte)
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn configured_locked_prefix_replaces_ctrl_b_for_raw_and_kitty_input() {
+        let shortcuts = crate::config::Shortcuts::test_from_config(
+            "[keybinds.locked]\n'Ctrl a' = { actions = [{ action = 'switch-mode', mode = 'normal' }] }",
+        );
+        let mut keys = WindowInput {
+            shortcuts,
+            ..WindowInput::default()
+        };
+        let mut output = Vec::new();
+        for &byte in b"\x02\x01c\x01\x02\x01\x01\x01q" {
+            keys.feed(byte, &mut output);
+        }
+        assert_eq!(
+            output,
+            [
+                WindowKey::Byte(2),
+                WindowKey::Create,
+                WindowKey::Byte(1),
+                WindowKey::Byte(2),
+                WindowKey::Byte(1),
+                WindowKey::Byte(1),
+                WindowKey::Byte(b'q'),
+            ]
+        );
+        assert_eq!(keys.mode, InputMode::Locked);
+
+        let mut kitty = WindowInput {
+            shortcuts,
+            kitty_keyboard_flags: 1,
+            ..WindowInput::default()
+        };
+        let mut output = Vec::new();
+        for &byte in b"\x1b[97;5u\x1b[99;1u" {
+            kitty.feed(byte, &mut output);
+        }
+        assert_eq!(output, [WindowKey::Create]);
+        assert_eq!(kitty.mode, InputMode::Locked);
+
+        let mut kitty_named = WindowInput {
+            shortcuts,
+            session_available: true,
+            kitty_keyboard_flags: 1,
+            ..WindowInput::default()
+        };
+        let mut output = Vec::new();
+        for &byte in b"\x1b[97;5u\x1b[100;1u" {
+            kitty_named.feed(byte, &mut output);
+        }
+        assert_eq!(output, [WindowKey::Detach]);
     }
 
     #[test]

@@ -119,8 +119,13 @@ named session before testing this change because its server retains the code
 and configuration from when it started.
 
 Other mode tables and unsupported actions from main's larger configuration are
-still ignored. `clear_defaults` is not implemented yet. Ctrl-B remains the only
-supported LOCKED-to-NORMAL key. PANE's floating action is not yet supported.
+still ignored. `clear_defaults` is not implemented yet. A single
+`[keybinds.locked]` binding with a non-conflicting Ctrl-A through Ctrl-Z key and a standalone
+`switch-mode normal` action selects the LOCKED-to-NORMAL prefix; Ctrl-B remains
+the default. Pressing the configured key twice sends one literal prefix byte to
+the child. The attached client receives the running server's effective prefix
+at connection time, so changing the local config does not change an existing
+named session. PANE's floating action is not yet supported.
 
 Standalone `switch-mode` bindings can now jump directly among the supported
 PANE, RESIZE, MOVE, TAB, and (for named sessions) SESSION modes. Main's

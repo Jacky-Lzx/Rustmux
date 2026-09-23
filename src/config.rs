@@ -135,6 +135,7 @@ pub struct SessionBinding {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Shortcuts {
+    locked_enter: u8,
     keys: [u8; 3],
     normal_actions: [Option<(u8, u8)>; 16],
     normal_action_len: usize,
@@ -164,6 +165,7 @@ pub struct Shortcuts {
 impl Default for Shortcuts {
     fn default() -> Self {
         Self {
+            locked_enter: 2,
             keys: DEFAULT_SHORTCUT_KEYS,
             normal_actions: [None; 16],
             normal_action_len: 0,
@@ -193,6 +195,10 @@ impl Default for Shortcuts {
 }
 
 impl Shortcuts {
+    pub fn locked_entry_key(self) -> u8 {
+        self.locked_enter
+    }
+
     #[cfg(test)]
     pub(crate) fn test_from_config(source: &str) -> Self {
         parse_config(source).unwrap().shortcuts
@@ -587,26 +593,42 @@ fn parse_keybinds(
     let keybinds = value.as_table().ok_or("keybinds must be a table")?;
     if let Some(locked) = keybinds.get("locked") {
         let locked = locked.as_table().ok_or("keybinds.locked must be a table")?;
+        let mut configured = false;
         for (key, binding) in locked {
             let enters_normal = binding
                 .as_table()
                 .and_then(|table| table.get("actions"))
                 .and_then(toml::Value::as_array)
                 .is_some_and(|actions| {
-                    actions.iter().any(|action| {
-                        action.as_table().is_some_and(|table| {
-                            table.get("action").and_then(toml::Value::as_str) == Some("switch-mode")
-                                && table.get("mode").and_then(toml::Value::as_str) == Some("normal")
+                    actions.len() == 1
+                        && actions.iter().any(|action| {
+                            action.as_table().is_some_and(|table| {
+                                table.get("action").and_then(toml::Value::as_str)
+                                    == Some("switch-mode")
+                                    && table.get("mode").and_then(toml::Value::as_str)
+                                        == Some("normal")
+                            })
                         })
-                    })
                 });
-            if enters_normal && key != "Ctrl b" {
-                return Err(
-                    "keybinds.locked currently supports only Ctrl b to enter normal mode"
-                        .to_owned(),
-                );
+            if enters_normal {
+                let byte = parse_mode_key(key)
+                    .filter(|byte| (1..=26).contains(byte))
+                    .ok_or_else(|| {
+                        format!("keybinds.locked.{key} must be Ctrl A through Ctrl Z")
+                    })?;
+                if configured {
+                    return Err(
+                        "multiple keybinds.locked normal-mode entry keys are not supported yet"
+                            .to_owned(),
+                    );
+                }
+                shortcuts.locked_enter = byte;
+                configured = true;
             }
         }
+    }
+    if shortcuts.locked_enter != 2 && matches!(shortcuts.locked_enter, 8 | 9 | 10 | 11 | 12 | 23) {
+        return Err("keybinds.locked entry key conflicts with a NORMAL-mode shortcut".to_owned());
     }
     let Some(normal) = keybinds.get("normal") else {
         return Ok(shortcuts);
@@ -809,6 +831,19 @@ fn parse_keybinds(
     parse_move_bindings(keybinds.get("move"), &mut shortcuts)?;
     parse_tab_bindings(keybinds.get("tab"), &mut shortcuts)?;
     parse_session_bindings(keybinds.get("session"), &mut shortcuts)?;
+    let locked_enter = shortcuts.locked_entry_key();
+    if shortcuts.exits_normal(locked_enter)
+        || [
+            shortcuts.pane_enter,
+            shortcuts.resize_enter,
+            shortcuts.move_enter,
+            shortcuts.tab_enter,
+            shortcuts.session_enter,
+        ]
+        .contains(&Some(locked_enter))
+    {
+        return Err("keybinds.locked entry key conflicts with a NORMAL-mode shortcut".to_owned());
+    }
     for (key, _) in shortcuts.normal_actions[..shortcuts.normal_action_len]
         .iter()
         .flatten()
@@ -1381,10 +1416,23 @@ esc = { actions = [{ action = "switch-mode", mode = "locked" }], display = "help
         )
         .unwrap();
         assert_eq!(parsed.shortcuts.key_for(b'c'), b'N');
+        assert_eq!(parsed.shortcuts.locked_entry_key(), 2);
         assert!(parsed.shortcuts.exits_normal(27));
         assert!(parsed.shortcuts.exits_normal(7));
         assert!(!parsed.shortcuts.exits_normal(b'p'));
-        assert!(parse_config("[keybinds.locked]\n'Ctrl a' = { actions = [{ action = 'switch-mode', mode = 'normal' }] }").is_err());
+        let remapped = parse_config(
+            "[keybinds.locked]\n'Ctrl a' = { actions = [{ action = 'switch-mode', mode = 'normal' }] }",
+        )
+        .unwrap();
+        assert_eq!(remapped.shortcuts.locked_entry_key(), 1);
+        for source in [
+            "[keybinds.locked]\na = { actions = [{ action = 'switch-mode', mode = 'normal' }] }",
+            "[keybinds.locked]\n'Ctrl a' = { actions = [{ action = 'switch-mode', mode = 'normal' }] }\n'Ctrl b' = { actions = [{ action = 'switch-mode', mode = 'normal' }] }",
+            "[keybinds.locked]\n'Ctrl w' = { actions = [{ action = 'switch-mode', mode = 'normal' }] }",
+            "[keybinds.locked]\n'Ctrl a' = { actions = [{ action = 'switch-mode', mode = 'normal' }] }\n[keybinds.normal]\n'Ctrl a' = { actions = [{ action = 'switch-mode', mode = 'pane' }] }",
+        ] {
+            assert!(parse_config(source).is_err(), "accepted {source:?}");
+        }
         let unsupported =
             parse_config("[keybinds.normal]\nN = { actions = ['new-window', 'future-action'] }")
                 .unwrap();

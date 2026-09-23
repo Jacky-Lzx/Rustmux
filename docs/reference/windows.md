@@ -101,6 +101,9 @@ paths. These states now drive multi-window polling.
 
 ## Interactive controls
 
+The table uses the default Ctrl-B prefix; a configured LOCKED binding can
+replace it.
+
 | Input | Action |
 | --- | --- |
 | Ctrl-B, then c | Create a shell window and select it |
@@ -134,17 +137,20 @@ An unrecognized prefix combination forwards both bytes unchanged. A prefix can
 span separate reads and waits for the following byte without a timeout. Ordinary UTF-8 bytes are forwarded immediately. When mouse reporting is enabled,
 Escape may be held briefly to recognize a mouse report; see the window-bar rules
 below. Bracketed paste markers and
-payload are forwarded unchanged, including Ctrl-B combinations inside the paste.
+payload are forwarded unchanged, including prefix combinations inside the paste.
 Unbracketed pasted text is indistinguishable from typing and follows the same
 shortcut rules. The `new_window`, `split_right`, and `split_down` keys can be
-changed under `[shortcuts]` in `config.toml`; see the quick start. Other bindings,
-including the Ctrl-B prefix, remain fixed.
+changed under `[shortcuts]` in `config.toml`; see the quick start. A single
+`[keybinds.locked]` Ctrl-letter `switch-mode normal` binding changes the prefix
+from its Ctrl-B default. The running named session sends that key to each
+attached client in the handshake, so a newer client config cannot silently
+remap the server's prefix.
 Main-style `[keybinds.normal]` can also override the five supported window
 operations listed in the quick start. Binding `x` to `close-window` replaces
 the prior `x` close-pane behavior for that key.
 
 The left side of the bottom bar shows `LOCKED` in red during ordinary child
-input. Pressing Ctrl-B changes it to green `NORMAL` while Rustmux waits for the
+input. Pressing the configured prefix changes it to green `NORMAL` while Rustmux waits for the
 second shortcut byte; completing most shortcuts returns it to `LOCKED`.
 With a configured NORMAL-to-PANE binding, the badge changes to lavender `PANE`.
 Its footer shows the configured break, split, focus, zoom, and close keys that
@@ -158,7 +164,7 @@ Escape byte. Moving a pane to the previous or next window wraps in bar order,
 splits the destination's first pane to the right, and preserves the running
 process. Failed destination splits leave both layouts and focus unchanged and
 ring the bell. Attached
-session clients forward Ctrl-B immediately, so the server displays the same mode
+session clients forward the server-selected prefix immediately, so the server displays the same mode
 transition as a foreground-only run. The top bar uses all of its available width
 for the session name and window labels.
 

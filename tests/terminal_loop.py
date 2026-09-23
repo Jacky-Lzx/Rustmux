@@ -1880,6 +1880,63 @@ def expect_footer(session, marker):
         session.read()
         assert time.monotonic() < end, session.physical_rows
 
+# The named server owns its LOCKED prefix. Reattaching from a different local
+# config must use the key announced in the handshake, including the client's
+# detach shortcut, rather than the new client's own config.
+with tempfile.TemporaryDirectory(prefix="rustmux-server-prefix-") as server_config, \
+     tempfile.TemporaryDirectory(prefix="rustmux-client-prefix-") as client_config:
+    for directory, key in ((server_config, "a"), (client_config, "b")):
+        os.mkdir(os.path.join(directory, "rustmux"))
+        with open(os.path.join(directory, "rustmux", "config.toml"), "w", encoding="utf-8") as config:
+            config.write(
+                "[keybinds.locked]\n"
+                f"'Ctrl {key}' = {{ actions = [{{ action = 'switch-mode', mode = 'normal' }}] }}\n"
+            )
+    prefix_name = f"prefix-{os.getpid()}"
+    s = Session(arguments=("new", prefix_name), extra_env={"XDG_CONFIG_HOME": server_config})
+    try:
+        s.expect(b"RUSTMUX_READY> ")
+        expect_footer(s, b"Ctrl-A")
+        s.send(b"\x02")
+        s.read(0.1)
+        assert b"LOCKED" in s.physical_rows[-1], s.physical_rows[-1]
+        s.send(b"\x01")
+        expect_footer(s, b"NORMAL")
+        s.send(b"\x01")
+        expect_footer(s, b"LOCKED")
+        s.send(b"\x01d")
+        s.finish(0)
+    except BaseException:
+        subprocess.run([BINARY, "kill", prefix_name], capture_output=True, text=True, timeout=5)
+        raise
+    finally:
+        s.close()
+    s = Session(arguments=("attach", prefix_name), extra_env={"XDG_CONFIG_HOME": client_config})
+    try:
+        s.expect(b"RUSTMUX_READY> ")
+        expect_footer(s, b"Ctrl-A")
+        s.output.clear()
+        s.frames.clear()
+        s.send(b"printf '\\033[=1u'\n")
+        end = time.monotonic() + 8
+        while b"\x1b[=1u" not in s.output:
+            s.read()
+            assert time.monotonic() < end, bytes(s.output[-2000:])
+        s.send(b"\x1b[97;5u\x1b[99;1u")
+        expect_bar(s, b"2 shell")
+        s.output.clear()
+        s.frames.clear()
+        s.send(b"printf '\\033[=1u'\n")
+        end = time.monotonic() + 8
+        while b"\x1b[=1u" not in s.output:
+            s.read()
+            assert time.monotonic() < end, bytes(s.output[-2000:])
+        s.send(b"\x1b[97;5u\x1b[100;1u")
+        s.finish(0)
+    finally:
+        s.close()
+        subprocess.run([BINARY, "kill", prefix_name], capture_output=True, text=True, timeout=5)
+
 s = Session()
 try:
     s.expect(b"RUSTMUX_READY> ")

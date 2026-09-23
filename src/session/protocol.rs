@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-pub const PROTOCOL_VERSION: u16 = 3;
+pub const PROTOCOL_VERSION: u16 = 4;
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
 pub const MAX_ERROR_BYTES: usize = 1024;
 
@@ -63,7 +63,7 @@ impl ClientMessage {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ServerMessage {
-    Attached { version: u16 },
+    Attached { version: u16, locked_enter: u8 },
     Output(Vec<u8>),
     Exit { status: i32 },
     Rejected(String),
@@ -74,7 +74,15 @@ pub enum ServerMessage {
 impl ServerMessage {
     pub fn encode(&self) -> Result<Vec<u8>, ProtocolError> {
         match self {
-            Self::Attached { version } => encode_frame(SERVER_ATTACHED, &version.to_be_bytes()),
+            Self::Attached {
+                version,
+                locked_enter,
+            } => {
+                let mut payload = Vec::with_capacity(3);
+                payload.extend_from_slice(&version.to_be_bytes());
+                payload.push(*locked_enter);
+                encode_frame(SERVER_ATTACHED, &payload)
+            }
             Self::Output(bytes) => encode_frame(SERVER_OUTPUT, bytes),
             Self::Exit { status } => encode_frame(SERVER_EXIT, &status.to_be_bytes()),
             Self::Rejected(message) => {
@@ -275,9 +283,13 @@ fn decode_client(frame: Frame) -> Result<ClientMessage, ProtocolError> {
 fn decode_server(frame: Frame) -> Result<ServerMessage, ProtocolError> {
     match frame.message {
         SERVER_ATTACHED => {
-            require_length(&frame, 2)?;
+            require_length(&frame, 3)?;
             let version = u16::from_be_bytes(frame.payload[0..2].try_into().unwrap());
-            Ok(ServerMessage::Attached { version })
+            let locked_enter = frame.payload[2];
+            Ok(ServerMessage::Attached {
+                version,
+                locked_enter,
+            })
         }
         SERVER_OUTPUT => Ok(ServerMessage::Output(frame.payload)),
         SERVER_EXIT => {
@@ -362,6 +374,7 @@ mod tests {
         let expected = vec![
             ServerMessage::Attached {
                 version: PROTOCOL_VERSION,
+                locked_enter: 2,
             },
             ServerMessage::Output(vec![b'\x1b', b'[', b'2', b'J', 0]),
             ServerMessage::Rejected("already attached".to_owned()),
@@ -419,6 +432,17 @@ mod tests {
             Err(ProtocolError::InvalidLength {
                 message: CLIENT_RESIZE,
                 expected: 4,
+                actual: 2,
+            })
+        );
+
+        let malformed_attached =
+            encode_frame(SERVER_ATTACHED, &PROTOCOL_VERSION.to_be_bytes()).unwrap();
+        assert_eq!(
+            ServerDecoder::default().push(&malformed_attached),
+            Err(ProtocolError::InvalidLength {
+                message: SERVER_ATTACHED,
+                expected: 3,
                 actual: 2,
             })
         );

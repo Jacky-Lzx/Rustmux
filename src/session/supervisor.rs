@@ -212,7 +212,7 @@ fn run_server(
 ) -> io::Result<u8> {
     detach_process(endpoint.listener().as_raw_fd())?;
     let _server = acquire_server(name)?;
-    let peer = accept_peer(&endpoint)?;
+    let peer = accept_peer(&endpoint, shortcuts.locked_entry_key())?;
     crate::terminal::serve_session(
         shell,
         name,
@@ -264,10 +264,10 @@ fn close_inherited_descriptors(listener: i32) -> io::Result<()> {
     Ok(())
 }
 
-fn accept_peer(endpoint: &SessionEndpoint) -> io::Result<handshake::ServerPeer> {
+fn accept_peer(endpoint: &SessionEndpoint, locked_enter: u8) -> io::Result<handshake::ServerPeer> {
     loop {
         match endpoint.listener().accept() {
-            Ok((stream, _)) => match handshake::server(stream) {
+            Ok((stream, _)) => match handshake::server_with_prefix(stream, locked_enter) {
                 Ok(peer) => return Ok(peer),
                 Err(_) => continue,
             },

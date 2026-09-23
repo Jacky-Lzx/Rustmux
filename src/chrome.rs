@@ -502,7 +502,9 @@ fn hint_key_for_mode(
 }
 
 fn hint_key(hint: ShortcutHint, shortcuts: crate::config::Shortcuts) -> String {
-    if hint.key == TAB_MODE_SHORTCUT.key {
+    if hint.key == LOCKED_SHORTCUTS[0].key {
+        displayed_key(shortcuts.locked_entry_key())
+    } else if hint.key == TAB_MODE_SHORTCUT.key {
         shortcuts
             .tab_entry_key()
             .map(displayed_key)
@@ -1470,6 +1472,33 @@ esc = { actions = [{ action = "switch-mode", mode = "locked" }] }
         for key in [b'd', b'w', b'o', 27] {
             assert!(hitboxes.iter().any(|(_, _, action)| *action == key));
         }
+    }
+
+    #[test]
+    fn locked_footer_shows_configured_entry_key() {
+        let shortcuts = crate::config::Shortcuts::test_from_config(
+            "[keybinds.locked]\n'Ctrl a' = { actions = [{ action = 'switch-mode', mode = 'normal' }] }",
+        );
+        let child = Screen::new(1, 80).unwrap();
+        let view = compose_with_mode(
+            &child,
+            3,
+            None,
+            &["shell".into()],
+            0,
+            FooterMode::Locked,
+            shortcuts,
+        )
+        .unwrap();
+        let footer = view
+            .row(2)
+            .unwrap()
+            .iter()
+            .filter(|cell| cell.width != 0)
+            .map(|cell| cell.character)
+            .collect::<String>();
+        assert!(footer.contains("Ctrl-A"));
+        assert!(!footer.contains("Ctrl-B"));
     }
 
     #[test]

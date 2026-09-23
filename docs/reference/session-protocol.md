@@ -18,16 +18,16 @@ The client-to-server messages are:
 
 The server-to-client messages are:
 
-- `Attached`: the accepted protocol version.
+- `Attached`: the accepted protocol version and the server's effective LOCKED-to-NORMAL prefix byte.
 - `Output`: arbitrary bytes for the outer terminal.
 - `Exit`: the server's signed process status.
 - `OpenSessionManager`: a zero-payload terminal control request.
 - `Detach`: a zero-payload request for the client to restore its terminal and leave the session running.
 - `Rejected`: a UTF-8 reason limited to 1 KiB.
 
-Protocol version 3 adds server-requested `Detach` after version 2's
-`OpenSessionManager`. The version is carried explicitly
-so the handshake can reject an
+Protocol version 4 adds the prefix byte to `Attached`; version 3 added
+server-requested `Detach` after version 2's `OpenSessionManager`. The version is
+carried explicitly so the handshake can reject an
 incompatible peer before forwarding terminal bytes. Encoding validates sizes
 and limits just like decoding. Unit tests exercise every-byte fragmentation,
 multiple frames in one read, binary payloads, maximum-size frames, malformed

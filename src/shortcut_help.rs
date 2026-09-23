@@ -318,13 +318,16 @@ impl ShortcutHelp {
         if matches!(byte, b'q' | b'?') {
             return HelpEvent::Close;
         }
+        if byte == self.shortcuts.locked_entry_key() {
+            return HelpEvent::Action(2);
+        }
         if self.session && self.shortcuts.enters_session(byte) {
             return HelpEvent::Action(15);
         }
         if let Some(action) = self
             .shortcuts
             .resolve(byte)
-            .filter(|&action| action != 15 && self.has_action(action))
+            .filter(|&action| !matches!(action, 2 | 15) && self.has_action(action))
         {
             HelpEvent::Action(action)
         } else {
@@ -612,7 +615,14 @@ impl ShortcutHelp {
         panel: Style,
     ) {
         let key_width = KEY_WIDTH.min(width);
-        let display_key = if command.actions.first().is_some_and(|(_, key)| *key == b'%') {
+        let literal_prefix = command.actions == [(2, 2)];
+        let prefix_label = format!(
+            "Ctrl-{}",
+            char::from(b'A' + self.shortcuts.locked_entry_key() - 1)
+        );
+        let display_key = if literal_prefix {
+            prefix_label.clone()
+        } else if command.actions.first().is_some_and(|(_, key)| *key == b'%') {
             format!(
                 "{}/{}",
                 char::from(self.shortcuts.key_for(b'%')),
@@ -647,6 +657,11 @@ impl ShortcutHelp {
             bold: true,
             ..panel
         };
+        let label = if literal_prefix {
+            format!("Literal {prefix_label}")
+        } else {
+            command.label.to_owned()
+        };
         let label_style = Style {
             foreground: LAVENDER,
             ..panel
@@ -657,7 +672,7 @@ impl ShortcutHelp {
                 screen,
                 row,
                 column + key_width,
-                command.label,
+                &label,
                 label_style,
                 width - key_width,
             );
@@ -849,6 +864,19 @@ mod tests {
         let mut local = ShortcutHelp::with_shortcuts(false, shortcuts);
         assert!(!text(&local.overlay(&Screen::new(24, 80).unwrap())).contains("Session mode"));
         assert_eq!(local.feed(21, Instant::now()), HelpEvent::Continue);
+    }
+
+    #[test]
+    fn help_uses_configured_prefix_for_literal_key() {
+        let shortcuts = crate::config::Shortcuts::test_from_config(
+            "[keybinds.locked]\n'Ctrl a' = { actions = [{ action = 'switch-mode', mode = 'normal' }] }",
+        );
+        let mut help = ShortcutHelp::with_shortcuts(false, shortcuts);
+        let body = text(&help.overlay(&Screen::new(24, 80).unwrap()));
+        assert!(body.contains("Literal Ctrl-A"));
+        assert!(!body.contains("Literal Ctrl-B"));
+        assert_eq!(help.feed(2, Instant::now()), HelpEvent::Continue);
+        assert_eq!(help.feed(1, Instant::now()), HelpEvent::Action(2));
     }
 
     #[test]

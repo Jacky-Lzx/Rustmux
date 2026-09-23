@@ -17,9 +17,14 @@ pub struct ClientPeer {
     stream: UnixStream,
     decoder: ServerDecoder,
     pending: VecDeque<ServerMessage>,
+    locked_enter: u8,
 }
 
 impl ClientPeer {
+    pub fn locked_entry_key(&self) -> u8 {
+        self.locked_enter
+    }
+
     pub fn stream(&self) -> &UnixStream {
         &self.stream
     }
@@ -101,12 +106,18 @@ pub fn client(mut stream: UnixStream, rows: u16, columns: u16) -> io::Result<Cli
 
     let mut decoder = ServerDecoder::default();
     let mut messages = read_server_messages(&mut stream, &mut decoder)?;
-    match messages.pop_front().expect("reader returns a message") {
-        ServerMessage::Attached { version } if version == PROTOCOL_VERSION => {}
-        ServerMessage::Attached { version } => {
+    let locked_enter = match messages.pop_front().expect("reader returns a message") {
+        ServerMessage::Attached {
+            version,
+            locked_enter,
+        } if version == PROTOCOL_VERSION && (1..=26).contains(&locked_enter) => locked_enter,
+        ServerMessage::Attached { version, .. } if version != PROTOCOL_VERSION => {
             return Err(invalid_data(format!(
                 "server selected protocol version {version}; expected {PROTOCOL_VERSION}"
             )));
+        }
+        ServerMessage::Attached { .. } => {
+            return Err(invalid_data("server selected an invalid LOCKED entry key"));
         }
         ServerMessage::Rejected(message) => {
             return Err(io::Error::new(io::ErrorKind::ConnectionRefused, message));
@@ -116,18 +127,26 @@ pub fn client(mut stream: UnixStream, rows: u16, columns: u16) -> io::Result<Cli
                 "first server message must be Attached or Rejected",
             ));
         }
-    }
+    };
     reject_server_handshakes(&messages)?;
     finish_handshake(&stream)?;
     Ok(ClientPeer {
         stream,
         decoder,
         pending: messages,
+        locked_enter,
     })
 }
 
 /// Verify the first client message, reply and leave the accepted stream nonblocking.
-pub fn server(mut stream: UnixStream) -> io::Result<ServerPeer> {
+pub fn server(stream: UnixStream) -> io::Result<ServerPeer> {
+    server_with_prefix(stream, 2)
+}
+
+pub fn server_with_prefix(mut stream: UnixStream, locked_enter: u8) -> io::Result<ServerPeer> {
+    if !(1..=26).contains(&locked_enter) {
+        return Err(invalid_data("invalid LOCKED entry key"));
+    }
     begin(&stream)?;
     let mut decoder = ClientDecoder::default();
     let mut messages = read_client_messages(&mut stream, &mut decoder)?;
@@ -149,6 +168,7 @@ pub fn server(mut stream: UnixStream) -> io::Result<ServerPeer> {
     stream.write_all(
         &ServerMessage::Attached {
             version: PROTOCOL_VERSION,
+            locked_enter,
         }
         .encode()
         .map_err(invalid_protocol)?,
@@ -283,7 +303,8 @@ mod tests {
         assert_eq!(
             reply,
             [ServerMessage::Attached {
-                version: PROTOCOL_VERSION
+                version: PROTOCOL_VERSION,
+                locked_enter: 2,
             }]
         );
 
@@ -303,8 +324,18 @@ mod tests {
         let mut client = client(client_stream, 24, 80).unwrap();
         let server = server.join().unwrap();
         assert_eq!(server.size(), (24, 80));
+        assert_eq!(client.locked_entry_key(), 2);
         assert!(client.decode(&[]).unwrap().is_empty());
         assert!(client.stream_mut().write(&[]).is_ok());
+    }
+
+    #[test]
+    fn client_uses_the_server_selected_locked_entry_key() {
+        let (client_stream, server_stream) = UnixStream::pair().unwrap();
+        let server = thread::spawn(move || server_with_prefix(server_stream, 1).unwrap());
+        let client = client(client_stream, 24, 80).unwrap();
+        assert_eq!(client.locked_entry_key(), 1);
+        server.join().unwrap();
     }
 
     #[test]
@@ -345,6 +376,7 @@ mod tests {
                 .write_all(
                     &ServerMessage::Attached {
                         version: PROTOCOL_VERSION + 1,
+                        locked_enter: 2,
                     }
                     .encode()
                     .unwrap(),
@@ -354,6 +386,29 @@ mod tests {
         let error = client(client_stream, 24, 80).unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         assert!(error.to_string().contains("server selected protocol"));
+        server_thread.join().unwrap();
+    }
+
+    #[test]
+    fn client_rejects_an_invalid_server_prefix() {
+        let (client_stream, mut server_stream) = UnixStream::pair().unwrap();
+        let server_thread = thread::spawn(move || {
+            let mut decoder = ClientDecoder::default();
+            read_client_messages(&mut server_stream, &mut decoder).unwrap();
+            server_stream
+                .write_all(
+                    &ServerMessage::Attached {
+                        version: PROTOCOL_VERSION,
+                        locked_enter: 0,
+                    }
+                    .encode()
+                    .unwrap(),
+                )
+                .unwrap();
+        });
+        let error = client(client_stream, 24, 80).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("invalid LOCKED entry key"));
         server_thread.join().unwrap();
     }
 
