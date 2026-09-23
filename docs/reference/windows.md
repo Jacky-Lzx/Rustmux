@@ -169,6 +169,14 @@ keys, which are clickable. At a minimum-size boundary, or while zoomed, the
 resize is a no-op. Configured transitions can return to NORMAL or PANE; Esc
 returns to LOCKED locally without reaching the child.
 
+A configured NORMAL-to-MOVE binding enters a peach `MOVE` badge. The configured
+`h/j/k/l` or unmodified direction arrows exchange the active pane with the
+nearest pane in that direction. The pane identity, running child, and focus move
+together; split slots and ratios stay fixed. An edge move or zoom is a no-op.
+Actions can repeat without leaving MOVE mode; its footer exposes the configured
+move and exit keys, including clickable hints. Configured transitions can return
+to NORMAL, PANE, or RESIZE; Esc returns to LOCKED without reaching the child.
+
 Ctrl-B, then `E` writes a plain-text snapshot of the active pane's retained
 primary-screen history and meaningful visible rows to a private temporary file.
 Soft-wrapped rows are joined and hard row boundaries remain newlines. Rustmux

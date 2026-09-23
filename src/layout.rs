@@ -482,6 +482,37 @@ impl Layout {
         Some(target)
     }
 
+    /// Exchange the active pane identity with its nearest geometric neighbor.
+    /// Focus follows the active identity; zoomed or edge moves leave the layout alone.
+    pub fn move_active(&mut self, direction: Direction) -> bool {
+        if self.zoomed {
+            return false;
+        }
+        let panes = self.tiled_geometry().panes;
+        let source = panes
+            .iter()
+            .find(|(id, _)| *id == self.active)
+            .expect("active pane exists")
+            .1;
+        let target = panes
+            .iter()
+            .enumerate()
+            .filter(|(_, (id, _))| *id != self.active)
+            .filter_map(|(index, (id, rect))| {
+                source
+                    .focus_score(*rect, direction)
+                    .map(|score| ((score, index), *id))
+            })
+            .min_by_key(|(score, _)| *score)
+            .map(|(_, id)| id);
+        if let Some(target) = target {
+            self.root.exchange(self.active, target);
+            true
+        } else {
+            false
+        }
+    }
+
     /// Exchange the active pane with its traversal successor, wrapping at the end.
     /// Focus follows the same pane identity. Single-pane and zoomed layouts are no-ops.
     pub fn swap_active_next(&mut self) -> bool {

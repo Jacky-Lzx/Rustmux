@@ -88,6 +88,11 @@ impl<T> PaneSet<T> {
         self.layout.swap_active_previous()
     }
 
+    /// Swap the active pane with its nearest neighbor in the requested direction.
+    pub fn move_active(&mut self, direction: Direction) -> bool {
+        self.layout.move_active(direction)
+    }
+
     pub fn toggle_zoom(&mut self) -> bool {
         self.layout.toggle_zoom()
     }

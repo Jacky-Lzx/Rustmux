@@ -1126,6 +1126,59 @@ with tempfile.TemporaryDirectory(prefix="rustmux-resize-mode-") as directory:
     finally:
         s.close()
 
+with tempfile.TemporaryDirectory(prefix="rustmux-move-mode-") as directory:
+    os.mkdir(os.path.join(directory, "rustmux"))
+    with open(os.path.join(directory, "rustmux", "config.toml"), "w", encoding="utf-8") as config:
+        config.write(
+            "[keybinds.normal]\n"
+            "'Ctrl m' = { actions = [{ action = 'switch-mode', mode = 'move' }] }\n"
+            "[keybinds.move]\n"
+            "h = { actions = ['move-pane-left'], display = 'always' }\n"
+            "j = { actions = ['move-pane-down'], display = 'always' }\n"
+            "k = { actions = ['move-pane-up'], display = 'always' }\n"
+            "l = { actions = ['move-pane-right'], display = 'always' }\n"
+            "left = { actions = ['move-pane-left'] }\n"
+            "m = { actions = [{ action = 'switch-mode', mode = 'normal' }] }\n"
+            "esc = { actions = [{ action = 'switch-mode', mode = 'locked' }] }\n"
+        )
+    s = Session(extra_env={"XDG_CONFIG_HOME": directory})
+    try:
+        s.expect(b"RUSTMUX_READY> ")
+        s.send(b"printf 'LEFT_PANE_MARK\\n'\n")
+        s.expect(b"LEFT_PANE_MARK")
+        s.send(b"\x02%")
+        deadline = time.monotonic() + 3
+        while s.physical_rows[1].count("┌".encode()) != 2:
+            s.read()
+            assert time.monotonic() < deadline, s.physical_rows
+        s.send(b"printf 'RIGHT_PANE_MARK\\n'\n")
+        s.expect(b"RIGHT_PANE_MARK")
+        s.send(b"\x02\x0d")
+        deadline = time.monotonic() + 3
+        while b"MOVE" not in s.physical_rows[-1]:
+            s.read()
+            assert time.monotonic() < deadline, s.physical_rows[-1]
+        assert b"Move" in s.physical_rows[-1], s.physical_rows[-1]
+        s.send(b"h")
+        deadline = time.monotonic() + 3
+        while not any(b"RIGHT_PANE_MARK" in row[:40] for row in s.physical_rows):
+            s.read()
+            assert time.monotonic() < deadline, s.physical_rows
+        assert any(b"LEFT_PANE_MARK" in row[40:] for row in s.physical_rows), s.physical_rows
+        assert b"MOVE" in s.physical_rows[-1], s.physical_rows[-1]
+        s.send(b"\x1b")
+        deadline = time.monotonic() + 3
+        while b"LOCKED" not in s.physical_rows[-1]:
+            s.read()
+            assert time.monotonic() < deadline, s.physical_rows[-1]
+        s.send(b"printf 'MOVED_ACTIVE_PANE\\n'\n")
+        s.expect(b"MOVED_ACTIVE_PANE")
+        assert any(b"MOVED_ACTIVE_PANE" in row[:40] for row in s.physical_rows), s.physical_rows
+        os.kill(s.app_pid, signal.SIGTERM)
+        s.finish(128 + signal.SIGTERM)
+    finally:
+        s.close()
+
 with tempfile.TemporaryDirectory(prefix="rustmux-normal-window-") as directory:
     os.mkdir(os.path.join(directory, "rustmux"))
     with open(os.path.join(directory, "rustmux", "config.toml"), "w", encoding="utf-8") as config:

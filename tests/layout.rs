@@ -644,6 +644,39 @@ fn swapping_moves_identities_without_changing_slots_ratios_or_focus() {
 }
 
 #[test]
+fn directional_move_swaps_nearest_neighbor_and_keeps_active_identity() {
+    let mut layout = Layout::new(11, 21).unwrap();
+    let left = layout.active();
+    let top_right = layout.split_active(SplitAxis::Columns).unwrap();
+    let bottom_right = layout.split_active(SplitAxis::Rows).unwrap();
+    layout.select(left).unwrap();
+    let slots = layout.geometry();
+    assert!(layout.move_active(Direction::Right));
+    assert_eq!(layout.active(), left);
+    assert_eq!(layout.geometry().panes[1].0, left);
+    assert_eq!(layout.geometry().panes[0].0, top_right);
+    assert_eq!(layout.geometry().panes[2].0, bottom_right);
+    assert_eq!(layout.geometry().separators, slots.separators);
+    assert_eq!(
+        layout
+            .geometry()
+            .panes
+            .iter()
+            .map(|(_, rect)| rect)
+            .collect::<Vec<_>>(),
+        slots.panes.iter().map(|(_, rect)| rect).collect::<Vec<_>>()
+    );
+    assert!(layout.move_active(Direction::Left));
+    assert_eq!(layout.geometry(), slots);
+    assert!(!layout.move_active(Direction::Left));
+    layout.toggle_zoom();
+    let zoomed = layout.clone();
+    assert!(!layout.move_active(Direction::Right));
+    assert_eq!(layout, zoomed);
+    assert_partition(&layout);
+}
+
+#[test]
 fn swap_boundaries_zoom_and_later_close_preserve_valid_identity() {
     let mut layout = Layout::new(5, 9).unwrap();
     let before = layout.clone();

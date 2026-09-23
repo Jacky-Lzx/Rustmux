@@ -87,6 +87,15 @@ layout unchanged. A standalone `switch-mode` binding can return to NORMAL,
 PANE, or LOCKED; Esc exits without passing a byte to the shell. The footer
 shows RESIZE and the configured directional shortcuts.
 
+Main-style MOVE mode is supported too: bind `switch-mode` to `move` in
+`[keybinds.normal]` (main's `Ctrl m` works), then bind `move-pane-left/down/up/right`
+under `[keybinds.move]`. `h/j/k/l` and unmodified arrow aliases exchange the
+active pane with its nearest neighbor in that direction without restarting
+either process; focus follows the active pane. Repeated moves stay in MOVE mode.
+No neighbor or zoom leaves the layout unchanged. Configured transitions can
+return to NORMAL, PANE, RESIZE, or LOCKED; Esc exits locally. The footer shows
+the configured move keys and exits.
+
 Other mode tables and unsupported actions from main's larger configuration are
 still ignored. `clear_defaults` is not implemented yet. Ctrl-B remains the only
 supported LOCKED-to-NORMAL key. PANE's floating action is not yet supported.
