@@ -21,7 +21,7 @@ use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGWINCH};
 
 use crate::pane::{INPUT_LIMIT as LIMIT, MAX_CELLS, Pane};
 use crate::{
-    chrome::{compose, footer_enabled, pane_rows},
+    chrome::{compose_with_shortcuts, footer_enabled, pane_rows},
     layout::{Direction, PaneId, Rect, SplitAxis},
     pane_set::PaneSet,
     pane_view,
@@ -53,6 +53,7 @@ pub fn run(
     shell_path: &OsStr,
     notifications: crate::config::Notifications,
     scrollback_lines: usize,
+    shortcuts: crate::config::Shortcuts,
 ) -> io::Result<u8> {
     let file = TerminalDevice::open_controlling()?;
     let size = window_size(&file)?;
@@ -65,6 +66,7 @@ pub fn run(
         None,
         notifications,
         scrollback_lines,
+        shortcuts,
     )?;
     let signals = Signals::install()?;
     let mut terminal = LocalFrontend::enter(file, signals.resize.clone())?;
@@ -93,6 +95,7 @@ pub fn serve_session(
     mut peer: ServerPeer,
     notifications: crate::config::Notifications,
     scrollback_lines: usize,
+    shortcuts: crate::config::Shortcuts,
 ) -> io::Result<u8> {
     let (rows, columns) = peer.size();
     let mut session = TerminalSession::new(
@@ -102,6 +105,7 @@ pub fn serve_session(
         Some(name.as_str()),
         notifications,
         scrollback_lines,
+        shortcuts,
     )?;
     let signals = Signals::install()?;
     loop {
@@ -142,6 +146,7 @@ struct TerminalSession {
     outer_rows: u16,
     notifications: crate::config::Notifications,
     scrollback_lines: usize,
+    shortcuts: crate::config::Shortcuts,
     closed: Option<crate::closed_pane::ClosedPane>,
 }
 
@@ -151,6 +156,7 @@ struct SessionContext<'a> {
     session_name: Option<&'a str>,
     notifications: crate::config::Notifications,
     scrollback_lines: usize,
+    shortcuts: crate::config::Shortcuts,
 }
 
 impl TerminalSession {
@@ -161,6 +167,7 @@ impl TerminalSession {
         session_name: Option<&str>,
         notifications: crate::config::Notifications,
         scrollback_lines: usize,
+        shortcuts: crate::config::Shortcuts,
     ) -> io::Result<Self> {
         check_size(rows, columns)?;
         let mut windows = Windows::default();
@@ -182,6 +189,7 @@ impl TerminalSession {
             outer_rows: rows,
             notifications,
             scrollback_lines,
+            shortcuts,
             closed: None,
         })
     }
@@ -200,6 +208,7 @@ impl TerminalSession {
                 session_name: self.session_name.as_deref(),
                 notifications: self.notifications,
                 scrollback_lines: self.scrollback_lines,
+                shortcuts: self.shortcuts,
             },
             &mut self.outer_rows,
             &mut self.closed,
@@ -604,6 +613,7 @@ enum InputMode {
 #[derive(Default)]
 struct WindowInput {
     mode: InputMode,
+    shortcuts: crate::config::Shortcuts,
     paste: bool,
     tail: VecDeque<u8>,
     mouse: Vec<u8>,
@@ -919,7 +929,7 @@ impl WindowInput {
 
     fn shortcut(&mut self, byte: u8, output: &mut Vec<WindowKey>) {
         self.mode = InputMode::Locked;
-        if let Some(action) = shortcut_action(byte) {
+        if let Some(action) = self.shortcuts.resolve(byte).and_then(shortcut_action) {
             output.push(action);
         } else {
             output.push(WindowKey::Byte(2));
@@ -1298,11 +1308,15 @@ fn forward(
         session_name,
         notifications,
         scrollback_lines,
+        shortcuts,
     } = context;
     let mut renderer = Renderer::default();
     let mut to_terminal = VecDeque::new();
     let mut input = VecDeque::new();
-    let mut keys = WindowInput::default();
+    let mut keys = WindowInput {
+        shortcuts,
+        ..WindowInput::default()
+    };
     let mut actions = Vec::new();
     let mut next_frame = Instant::now();
     let mut force_redraw = true;
@@ -1597,13 +1611,14 @@ fn forward(
                         &titles,
                         &bells,
                     )?;
-                    let mut view = compose(
+                    let mut view = compose_with_shortcuts(
                         &content,
                         *outer_rows,
                         session_name,
                         &names,
                         active_index,
                         keys.mode == InputMode::Normal,
+                        shortcuts,
                     )?;
                     if keys.mode == InputMode::Normal
                         || prompt.is_some()
@@ -1839,8 +1854,8 @@ fn forward(
                 force_redraw = true;
                 continue;
             }
-            let help_action = if let Some(shortcuts) = &mut help {
-                match shortcuts.feed(input.pop_front().unwrap(), Instant::now()) {
+            let help_action = if let Some(help_view) = &mut help {
+                match help_view.feed(input.pop_front().unwrap(), Instant::now()) {
                     crate::shortcut_help::HelpEvent::Continue => {
                         force_redraw = true;
                         continue;
@@ -1873,6 +1888,7 @@ fn forward(
             if !pane.io().accepts_input() || pane.io().to_shell.len() > LIMIT - 64 {
                 break;
             }
+            keys.shortcuts = shortcuts;
             keys.pane_height = pane.screen().dimensions().0;
             let set = windows.active().unwrap().content();
             let rect = set
@@ -1907,10 +1923,11 @@ fn forward(
                     &names,
                     active_index,
                 );
-                keys.footer_hitboxes = crate::chrome::footer_hitboxes(
+                keys.footer_hitboxes = crate::chrome::footer_hitboxes_with_shortcuts(
                     usize::from(columns),
                     keys.mode == InputMode::Normal,
                     session_name.is_some(),
+                    shortcuts,
                 );
                 keys.active_pane = Some(set.layout().active());
                 keys.pane_hitboxes = pane_view::hitboxes(set.layout());
@@ -1943,8 +1960,9 @@ fn forward(
                         session_manager_requested = true;
                     }
                     WindowKey::Help => {
-                        help = Some(crate::shortcut_help::ShortcutHelp::new(
+                        help = Some(crate::shortcut_help::ShortcutHelp::with_shortcuts(
                             session_name.is_some(),
+                            shortcuts,
                         ));
                         keys = WindowInput::default();
                         renderer.invalidate();
@@ -2598,6 +2616,7 @@ mod tests {
             None,
             crate::config::Notifications::default(),
             crate::config::DEFAULT_SCROLLBACK_LINES,
+            crate::config::Shortcuts::default(),
         )
         .unwrap();
         let signals = test_signals();
@@ -2646,6 +2665,7 @@ mod tests {
             None,
             crate::config::Notifications::default(),
             crate::config::DEFAULT_SCROLLBACK_LINES,
+            crate::config::Shortcuts::default(),
         )
         .unwrap();
         let signals = test_signals();
@@ -2717,6 +2737,7 @@ mod tests {
                 server,
                 crate::config::Notifications::default(),
                 crate::config::DEFAULT_SCROLLBACK_LINES,
+                crate::config::Shortcuts::default(),
             )
             .unwrap(),
             7
@@ -2955,6 +2976,28 @@ mod window_input_tests {
         decoder.feed(b'n', &mut actions);
         assert_eq!(actions, [WindowKey::Next]);
         assert_eq!(decoder.mode, InputMode::Locked);
+    }
+
+    #[test]
+    fn configured_shortcuts_replace_old_keys() {
+        let mut decoder = WindowInput {
+            shortcuts: crate::config::Shortcuts::test_keys(*b"NRD"),
+            ..WindowInput::default()
+        };
+        let mut actions = Vec::new();
+        for &byte in b"\x02N\x02R\x02D\x02c" {
+            decoder.feed(byte, &mut actions);
+        }
+        assert_eq!(
+            actions,
+            [
+                WindowKey::Create,
+                WindowKey::Split(SplitAxis::Columns),
+                WindowKey::Split(SplitAxis::Rows),
+                WindowKey::Byte(2),
+                WindowKey::Byte(b'c'),
+            ]
+        );
     }
 
     #[test]

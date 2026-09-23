@@ -8,6 +8,46 @@ use std::time::Duration;
 
 const DEFAULT_COMMAND_DURATION_SECONDS: u64 = 5;
 pub const DEFAULT_SCROLLBACK_LINES: usize = crate::screen::SCROLLBACK_MAX_LINES;
+const SHORTCUT_NAMES: [&str; 3] = ["new_window", "split_right", "split_down"];
+const DEFAULT_SHORTCUT_KEYS: [u8; 3] = *b"c%\"";
+const FIXED_SHORTCUT_KEYS: &[u8] = b"np\t&x<> {}!moZz[Ee?hjkl,1234567890dq";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Shortcuts {
+    keys: [u8; 3],
+}
+
+impl Default for Shortcuts {
+    fn default() -> Self {
+        Self {
+            keys: DEFAULT_SHORTCUT_KEYS,
+        }
+    }
+}
+
+impl Shortcuts {
+    #[cfg(test)]
+    pub(crate) fn test_keys(keys: [u8; 3]) -> Self {
+        Self { keys }
+    }
+
+    pub fn key_for(self, action: u8) -> u8 {
+        DEFAULT_SHORTCUT_KEYS
+            .iter()
+            .position(|&key| key == action)
+            .map_or(action, |index| self.keys[index])
+    }
+
+    pub fn resolve(self, key: u8) -> Option<u8> {
+        if let Some(index) = self.keys.iter().position(|&configured| configured == key) {
+            Some(DEFAULT_SHORTCUT_KEYS[index])
+        } else if DEFAULT_SHORTCUT_KEYS.contains(&key) {
+            None
+        } else {
+            Some(key)
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Notifications {
@@ -35,6 +75,7 @@ pub struct Config {
     shell: OsString,
     notifications: Notifications,
     scrollback_lines: usize,
+    shortcuts: Shortcuts,
 }
 
 impl Config {
@@ -49,6 +90,10 @@ impl Config {
     pub fn scrollback_lines(&self) -> usize {
         self.scrollback_lines
     }
+
+    pub fn shortcuts(&self) -> Shortcuts {
+        self.shortcuts
+    }
 }
 
 #[derive(Debug, Default, Eq, PartialEq)]
@@ -56,6 +101,7 @@ struct ParsedConfig {
     shell: Option<String>,
     notifications: Notifications,
     scrollback_lines: Option<usize>,
+    shortcuts: Shortcuts,
 }
 
 /// Load and validate the complete configuration used by a new session.
@@ -71,6 +117,7 @@ pub fn load() -> Result<Config, String> {
         scrollback_lines: configured
             .scrollback_lines
             .unwrap_or(DEFAULT_SCROLLBACK_LINES),
+        shortcuts: configured.shortcuts,
     })
 }
 
@@ -122,6 +169,7 @@ fn parse_config(source: &str) -> Result<ParsedConfig, String> {
         }
     };
     let notifications = parse_notifications(document.get("notifications"))?;
+    let shortcuts = parse_shortcuts(document.get("shortcuts"))?;
     let scrollback_lines = document
         .get("scrollback_lines")
         .map(|value| {
@@ -135,7 +183,37 @@ fn parse_config(source: &str) -> Result<ParsedConfig, String> {
         shell,
         notifications,
         scrollback_lines,
+        shortcuts,
     })
+}
+
+fn parse_shortcuts(value: Option<&toml::Value>) -> Result<Shortcuts, String> {
+    let Some(value) = value else {
+        return Ok(Shortcuts::default());
+    };
+    let table = value.as_table().ok_or("shortcuts must be a table")?;
+    let mut shortcuts = Shortcuts::default();
+    for (name, value) in table {
+        let index = SHORTCUT_NAMES
+            .iter()
+            .position(|known| known == name)
+            .ok_or_else(|| format!("unknown shortcuts action: {name}"))?;
+        let key = value
+            .as_str()
+            .filter(|text| text.len() == 1 && text.as_bytes()[0].is_ascii_graphic())
+            .map(|text| text.as_bytes()[0])
+            .ok_or_else(|| format!("shortcuts.{name} must be one printable ASCII key"))?;
+        shortcuts.keys[index] = key;
+    }
+    for (index, key) in shortcuts.keys.iter().enumerate() {
+        if shortcuts.keys[..index].contains(key) || FIXED_SHORTCUT_KEYS.contains(key) {
+            return Err(format!(
+                "shortcuts.{} conflicts with another shortcut",
+                SHORTCUT_NAMES[index]
+            ));
+        }
+    }
+    Ok(shortcuts)
 }
 
 fn parse_notifications(value: Option<&toml::Value>) -> Result<Notifications, String> {
@@ -223,6 +301,7 @@ preset = "mocha"
                 shell: Some("/opt/homebrew/bin/fish".to_owned()),
                 notifications: Notifications::default(),
                 scrollback_lines: Some(5000),
+                shortcuts: Shortcuts::default(),
             }
         );
         assert_eq!(
@@ -253,6 +332,29 @@ preset = "mocha"
             "scrollback_lines = 1.5",
             "scrollback_lines = true",
             "scrollback_lines = \"1000\"",
+        ] {
+            assert!(parse_config(source).is_err(), "accepted {source:?}");
+        }
+    }
+
+    #[test]
+    fn parser_reads_shortcut_keys_and_rejects_collisions() {
+        let shortcuts =
+            parse_config("[shortcuts]\nnew_window = 'N'\nsplit_right = 'R'\nsplit_down = 'D'")
+                .unwrap()
+                .shortcuts;
+        assert_eq!(shortcuts.resolve(b'N'), Some(b'c'));
+        assert_eq!(shortcuts.resolve(b'c'), None);
+        assert_eq!(shortcuts.key_for(b'%'), b'R');
+        for source in [
+            "shortcuts = true",
+            "[shortcuts]\nnew_window = 'ab'",
+            "[shortcuts]\nnew_window = 'é'",
+            "[shortcuts]\nnew_window = 'n'",
+            "[shortcuts]\nnew_window = 'd'",
+            "[shortcuts]\nnew_window = '%'",
+            "[shortcuts]\nnew_window = 'N'\nsplit_right = 'N'",
+            "[shortcuts]\nnew_widow = 'N'",
         ] {
             assert!(parse_config(source).is_err(), "accepted {source:?}");
         }

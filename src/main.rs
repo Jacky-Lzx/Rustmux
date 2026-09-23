@@ -26,6 +26,7 @@ fn execute(command: Option<rustmux::cli::Command>) -> Result<u8, String> {
                 config.shell(),
                 config.notifications(),
                 config.scrollback_lines(),
+                config.shortcuts(),
             )
             .map_err(|error| error.to_string())
         }
@@ -36,6 +37,7 @@ fn execute(command: Option<rustmux::cli::Command>) -> Result<u8, String> {
                 config.shell(),
                 config.notifications(),
                 config.scrollback_lines(),
+                config.shortcuts(),
                 detached,
             )
             .map_err(|error| error.to_string())

@@ -31,6 +31,7 @@ pub fn create(
     shell: &OsStr,
     notifications: crate::config::Notifications,
     scrollback_lines: usize,
+    shortcuts: crate::config::Shortcuts,
     detached: bool,
 ) -> io::Result<u8> {
     let endpoint = SessionEndpoint::bind(name)?;
@@ -46,8 +47,15 @@ pub fn create(
             }
         }
         ForkResult::Child => {
-            let status =
-                run_server(endpoint, name, shell, notifications, scrollback_lines).unwrap_or(1);
+            let status = run_server(
+                endpoint,
+                name,
+                shell,
+                notifications,
+                scrollback_lines,
+                shortcuts,
+            )
+            .unwrap_or(1);
             std::process::exit(i32::from(status));
         }
     }
@@ -154,6 +162,7 @@ fn manage_sessions(
                     config.shell(),
                     config.notifications(),
                     config.scrollback_lines(),
+                    config.shortcuts(),
                     true,
                 )?;
                 return Ok(Some(name));
@@ -199,6 +208,7 @@ fn run_server(
     shell: &OsStr,
     notifications: crate::config::Notifications,
     scrollback_lines: usize,
+    shortcuts: crate::config::Shortcuts,
 ) -> io::Result<u8> {
     detach_process(endpoint.listener().as_raw_fd())?;
     let _server = acquire_server(name)?;
@@ -210,6 +220,7 @@ fn run_server(
         peer,
         notifications,
         scrollback_lines,
+        shortcuts,
     )
 }
 

@@ -136,7 +136,9 @@ Escape may be held briefly to recognize a mouse report; see the window-bar rules
 below. Bracketed paste markers and
 payload are forwarded unchanged, including Ctrl-B combinations inside the paste.
 Unbracketed pasted text is indistinguishable from typing and follows the same
-shortcut rules. Key bindings are fixed for this initial integration.
+shortcut rules. The `new_window`, `split_right`, and `split_down` keys can be
+changed under `[shortcuts]` in `config.toml`; see the quick start. Other bindings,
+including the Ctrl-B prefix, remain fixed.
 
 The left side of the bottom bar shows `LOCKED` in red during ordinary child
 input. Pressing Ctrl-B changes it to green `NORMAL` while Rustmux waits for the

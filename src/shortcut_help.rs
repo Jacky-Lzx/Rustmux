@@ -227,6 +227,7 @@ struct Hitbox {
 
 pub(crate) struct ShortcutHelp {
     session: bool,
+    shortcuts: crate::config::Shortcuts,
     page: usize,
     pages: usize,
     escape: Vec<u8>,
@@ -237,9 +238,15 @@ pub(crate) struct ShortcutHelp {
 }
 
 impl ShortcutHelp {
+    #[cfg(test)]
     pub fn new(session: bool) -> Self {
+        Self::with_shortcuts(session, crate::config::Shortcuts::default())
+    }
+
+    pub fn with_shortcuts(session: bool, shortcuts: crate::config::Shortcuts) -> Self {
         Self {
             session,
+            shortcuts,
             page: 0,
             pages: 1,
             escape: Vec::new(),
@@ -304,8 +311,12 @@ impl ShortcutHelp {
         if matches!(byte, b'q' | b'?') {
             return HelpEvent::Close;
         }
-        if self.has_action(byte) {
-            HelpEvent::Action(byte)
+        if let Some(action) = self
+            .shortcuts
+            .resolve(byte)
+            .filter(|&action| self.has_action(action))
+        {
+            HelpEvent::Action(action)
         } else {
             HelpEvent::Continue
         }
@@ -579,7 +590,18 @@ impl ShortcutHelp {
         panel: Style,
     ) {
         let key_width = KEY_WIDTH.min(width);
-        let key = clipped(command.key, key_width);
+        let display_key = if command.actions.first().is_some_and(|(_, key)| *key == b'%') {
+            format!(
+                "{}/{}",
+                char::from(self.shortcuts.key_for(b'%')),
+                char::from(self.shortcuts.key_for(b'"'))
+            )
+        } else if command.actions.len() == 1 && matches!(command.actions[0].1, b'c' | b'%' | b'"') {
+            char::from(self.shortcuts.key_for(command.actions[0].1)).to_string()
+        } else {
+            command.key.to_owned()
+        };
+        let key = clipped(&display_key, key_width);
         let key_text = format!("{key:<key_width$}");
         let key_style = Style {
             foreground: PINK,
@@ -759,6 +781,18 @@ mod tests {
                 ShortcutHelp::new(false).overlay(&Screen::new(rows, columns).unwrap());
             }
         }
+    }
+
+    #[test]
+    fn configured_shortcuts_are_shown_and_accepted_in_help() {
+        let bindings = crate::config::Shortcuts::test_keys(*b"NRD");
+        let mut help = ShortcutHelp::with_shortcuts(false, bindings);
+        let view = help.overlay(&Screen::new(24, 80).unwrap());
+        let body = text(&view);
+        assert!(body.contains("N"));
+        assert!(body.contains("R/D"));
+        assert_eq!(help.feed(b'N', Instant::now()), HelpEvent::Action(b'c'));
+        assert_eq!(help.feed(b'c', Instant::now()), HelpEvent::Continue);
     }
 
     #[test]

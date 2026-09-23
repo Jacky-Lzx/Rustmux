@@ -21,6 +21,11 @@ scrollback_lines = 1000
 [notifications]
 long_command_bell = true
 command_duration_seconds = 5
+
+[shortcuts]
+new_window = "N"
+split_right = "R"
+split_down = "D"
 ```
 
 `long_command_bell` controls whether an OSC 133-integrated command rings when it
@@ -32,6 +37,14 @@ disable retained history. The separate 65,536-cell cap remains fixed, so a large
 line limit cannot make history unbounded. New windows, splits and temporary editor
 windows inherit the session value. An existing named session keeps its original
 configuration until it is recreated.
+
+The optional `[shortcuts]` entries replace the keys pressed after Ctrl-B for
+creating a window and splitting the active pane. Each value must be one printable
+ASCII character. Unset entries keep their defaults (`c`, `%`, and `"`). Duplicate
+keys, keys reserved by another command, and `d` (named-session detach) are
+rejected. The old key stops invoking an action when it is replaced. The footer
+and shortcut-help panel show the configured keys. Ctrl-B itself and other
+commands are not configurable yet.
 
 `RUSTMUX_SHELL=/bin/sh ./target/debug/rustmux` remains available as a temporary
 override. Changes take effect the next time a local session or named-session
