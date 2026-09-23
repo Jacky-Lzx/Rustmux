@@ -20,6 +20,8 @@ or a larger VT420/VT520 feature set. It is not a claim of complete VT101 emulati
 Applications may still need behavior outside the currently supported subset.
 Consistently with omitting the printer option, the private printer-status query
 reports not ready; Rustmux does not implement media-copy commands.
+Likewise, omitting the user-defined-key option is paired with a locked UDK status;
+Rustmux does not accept key-definition strings.
 The DA2 response likewise identifies the VT100 terminal type, firmware version
 zero and no ROM cartridge; it does not identify Rustmux as xterm or another
 outer terminal.

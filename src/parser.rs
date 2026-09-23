@@ -758,6 +758,7 @@ impl Parser {
                         reply(response.as_bytes());
                     }
                     Some(15) => reply(b"\x1b[?11n"),
+                    Some(25) => reply(b"\x1b[?21n"),
                     _ => {}
                 }
                 return;

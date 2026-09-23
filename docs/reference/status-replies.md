@@ -10,6 +10,7 @@ from its screen model.
 | CSI 6 n | CSI row ; column R (cursor position) |
 | CSI ? 6 n | CSI ? row ; column R (DECXCPR) |
 | CSI ? 15 n | CSI ? 11 n (printer not ready) |
+| CSI ? 25 n | CSI ? 21 n (UDK locked) |
 | CSI 18 t | CSI 8 ; rows ; columns t (pane text-area size) |
 | CSI 19 t | CSI 9 ; rows ; columns t (pane terminal-screen size) |
 | CSI " v | CSI rows ; columns ; 1 ; 1 ; 1 " w (displayed extent) |
@@ -43,7 +44,9 @@ therefore the final three response fields are always `1;1;1`.
 
 Queries do not change cells, cursor, modes or style. Private DSR supports
 DECXCPR (`CSI ? 6 n`) and printer status (`CSI ? 15 n`). Rustmux does not expose
-printer or media-copy operations and conservatively reports not ready. Other values, omitted or extra parameters, colon groups
+printer or media-copy operations and conservatively reports not ready. The UDK
+status query (`CSI ? 25 n`) reports locked because Rustmux does not accept
+user-defined key definitions. Other values, omitted or extra parameters, colon groups
 and numeric overflow produce no reply. CSI-like bytes inside OSC/DCS payloads
 are not interpreted.
 

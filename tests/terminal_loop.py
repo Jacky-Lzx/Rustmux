@@ -432,8 +432,8 @@ def receive(expected):
         if select.select([0], [], [], 0.1)[0]:
             data.extend(os.read(0, len(expected) - len(data)))
     assert data == expected, repr(data[:80])
-os.write(1, b"\x1b[2;3H\x1b[5n\x1b[6n\x1b[?6n\x1b[?15n")
-receive(b"\x1b[0n\x1b[2;3R\x1b[?2;3R\x1b[?11n")
+os.write(1, b"\x1b[2;3H\x1b[5n\x1b[6n\x1b[?6n\x1b[?15n\x1b[?25n")
+receive(b"\x1b[0n\x1b[2;3R\x1b[?2;3R\x1b[?11n\x1b[?21n")
 os.write(1, b"\x1b]10;?;?;?\x07")
 receive(b"\x1b]10;rgb:cdcd/d6d6/f4f4\x07\x1b]11;rgb:1e1e/1e1e/2e2e\x07\x1b]12;rgb:f5f5/e0e0/dcdc\x07")
 os.write(1, b"\x1b]10;#010203;rgb:1111/2222/3333;#a0b0c0\x1b\\\x1b]10;?;?;?\x1b\\")
@@ -462,13 +462,13 @@ receive(b"\x1b[?2004;1$y\x1b[?2004;2$y")
 os.write(1, b"\x1bP$q q\x1b\\\x1b[6 q\x1bP$q q\x1b\\\x1b[1 q\x1bP$qr\x1b\\\x1b[1;38;5;123m\x1bP$qm\x1b\\\x1b[0m")
 receive(b"\x1bP1$r1 q\x1b\\\x1bP1$r6 q\x1b\\\x1bP1$r3;10r\x1b\\\x1bP1$r0;1;38;5;123m\x1b\\")
 def mode_flood():
-    data = b"\x1b[?7$p\x1b[5n\x1b[?15n" * 10000
+    data = b"\x1b[?7$p\x1b[5n\x1b[?15n\x1b[?25n" * 10000
     while data:
         data = data[os.write(1, data):]
 writer = threading.Thread(target=mode_flood)
 writer.start()
 time.sleep(0.1)
-receive(b"\x1b[?7;1$y\x1b[0n\x1b[?11n" * 10000)
+receive(b"\x1b[?7;1$y\x1b[0n\x1b[?11n\x1b[?21n" * 10000)
 writer.join(timeout=2)
 assert not writer.is_alive()
 os.write(1, b"\x1b[c\x1b[0c\x1bZ\x1b[>c\x1b[>0c\x1b[=c\x1b[=0c\x1b[>q\x1b[>0q\x1b[18t\x1b[19t\x1b[\"v")
