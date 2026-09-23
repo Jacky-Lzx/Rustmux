@@ -37,13 +37,15 @@ if sys.argv[1] == "--supervisor":
     sys.exit(code)
 
 BINARY = sys.argv[1]
+DEFAULT_CONFIG_DIR = tempfile.TemporaryDirectory(prefix="rustmux-test-default-config-")
 
 class Session:
     def __init__(self, shell="/bin/sh", extra_env=None, arguments=()):
         self.master, self.slave = os.openpty()
         fcntl.ioctl(self.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
         self.original = termios.tcgetattr(self.slave)
-        env = dict(os.environ, RUSTMUX_SHELL=shell, PS1="RUSTMUX_READY> ", ENV="", BASH_ENV="")
+        env = dict(os.environ, RUSTMUX_SHELL=shell, PS1="RUSTMUX_READY> ", ENV="", BASH_ENV="",
+                   XDG_CONFIG_HOME=DEFAULT_CONFIG_DIR.name)
         if extra_env:
             env.update(extra_env)
         def child_setup():
@@ -925,6 +927,28 @@ with tempfile.TemporaryDirectory(prefix="rustmux-mode-keybinds-") as directory:
         while b"2 shell" not in s.physical_rows[0]:
             s.read()
             assert time.monotonic() < deadline, s.physical_rows[0]
+        os.kill(s.app_pid, signal.SIGTERM)
+        s.finish(128 + signal.SIGTERM)
+    finally:
+        s.close()
+
+with tempfile.TemporaryDirectory(prefix="rustmux-normal-window-") as directory:
+    os.mkdir(os.path.join(directory, "rustmux"))
+    with open(os.path.join(directory, "rustmux", "config.toml"), "w", encoding="utf-8") as config:
+        config.write(
+            "[keybinds.normal]\n"
+            "x = { actions = ['close-window', { action = 'switch-mode', mode = 'locked' }] }\n"
+        )
+    s = Session(extra_env={"XDG_CONFIG_HOME": directory})
+    try:
+        s.expect(b"RUSTMUX_READY> ")
+        s.send(b"\x02c")
+        deadline = time.monotonic() + 3
+        while b"2 shell" not in s.physical_rows[0]:
+            s.read()
+            assert time.monotonic() < deadline, s.physical_rows[0]
+        s.send(b"\x02x")
+        s.expect(b"Close window? Type yes:")
         os.kill(s.app_pid, signal.SIGTERM)
         s.finish(128 + signal.SIGTERM)
     finally:

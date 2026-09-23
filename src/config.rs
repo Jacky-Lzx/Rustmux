@@ -15,6 +15,8 @@ const FIXED_SHORTCUT_KEYS: &[u8] = b"np\t&x<> {}!moZz[Ee?hjkl,1234567890dq";
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Shortcuts {
     keys: [u8; 3],
+    normal_actions: [Option<(u8, u8)>; 16],
+    normal_action_len: usize,
     normal_exit: [u8; 8],
     normal_exit_len: usize,
 }
@@ -23,6 +25,8 @@ impl Default for Shortcuts {
     fn default() -> Self {
         Self {
             keys: DEFAULT_SHORTCUT_KEYS,
+            normal_actions: [None; 16],
+            normal_action_len: 0,
             normal_exit: [0; 8],
             normal_exit_len: 0,
         }
@@ -45,7 +49,28 @@ impl Shortcuts {
         self
     }
 
+    #[cfg(test)]
+    pub(crate) fn test_normal_action(mut self, key: u8, action: u8) -> Self {
+        self.normal_actions[0] = Some((key, action));
+        self.normal_action_len = 1;
+        self
+    }
+
     pub fn key_for(self, action: u8) -> u8 {
+        if let Some((key, _)) = self.normal_actions[..self.normal_action_len]
+            .iter()
+            .flatten()
+            .find(|(key, mapped)| *key == action && *mapped == action)
+        {
+            return *key;
+        }
+        if let Some((key, _)) = self.normal_actions[..self.normal_action_len]
+            .iter()
+            .flatten()
+            .find(|(_, mapped)| *mapped == action)
+        {
+            return *key;
+        }
         DEFAULT_SHORTCUT_KEYS
             .iter()
             .position(|&key| key == action)
@@ -53,6 +78,20 @@ impl Shortcuts {
     }
 
     pub fn resolve(self, key: u8) -> Option<u8> {
+        if let Some((_, action)) = self.normal_actions[..self.normal_action_len]
+            .iter()
+            .flatten()
+            .find(|(configured, _)| *configured == key)
+        {
+            return Some(*action);
+        }
+        if self.normal_actions[..self.normal_action_len]
+            .iter()
+            .flatten()
+            .any(|(_, action)| *action == key)
+        {
+            return None;
+        }
         if let Some(index) = self.keys.iter().position(|&configured| configured == key) {
             Some(DEFAULT_SHORTCUT_KEYS[index])
         } else if DEFAULT_SHORTCUT_KEYS.contains(&key) {
@@ -60,6 +99,10 @@ impl Shortcuts {
         } else {
             Some(key)
         }
+    }
+
+    pub fn action_is_active(self, action: u8) -> bool {
+        self.resolve(self.key_for(action)) == Some(action)
     }
 
     pub fn exits_normal(self, key: u8) -> bool {
@@ -339,6 +382,36 @@ fn parse_keybinds(
                 format!("keybinds.normal.{key} must be one printable ASCII key for {action}")
             })?;
             shortcuts.keys[slot] = byte;
+        } else if let Some((action, canonical)) = names.iter().find_map(|name| {
+            let canonical = match *name {
+                "close-window" => b'&',
+                "rename-window" => b',',
+                "next-window" => b'n',
+                "previous-window" => b'p',
+                "move-window-left" => b'<',
+                "move-window-right" => b'>',
+                _ => return None,
+            };
+            Some((*name, canonical))
+        }) {
+            let ends_locked = actions.len() == 2
+                && actions[1].as_table().is_some_and(|table| {
+                    table.get("action").and_then(toml::Value::as_str) == Some("switch-mode")
+                        && table.get("mode").and_then(toml::Value::as_str) == Some("locked")
+                });
+            let complete = actions[0].as_str() == Some(action)
+                && (ends_locked || (action == "rename-window" && actions.len() == 1));
+            if !complete {
+                continue;
+            }
+            let byte = parse_normal_action_key(key).ok_or_else(|| {
+                format!("keybinds.normal.{key} must be one printable ASCII key or tab for {action}")
+            })?;
+            if shortcuts.normal_action_len == shortcuts.normal_actions.len() {
+                return Err("too many supported keybinds.normal actions".to_owned());
+            }
+            shortcuts.normal_actions[shortcuts.normal_action_len] = Some((byte, canonical));
+            shortcuts.normal_action_len += 1;
         } else if actions.len() == 1
             && names.len() == 1
             && names[0] == "switch-mode"
@@ -360,6 +433,16 @@ fn parse_keybinds(
         }
     }
     validate_shortcuts(shortcuts)?;
+    for (key, _) in shortcuts.normal_actions[..shortcuts.normal_action_len]
+        .iter()
+        .flatten()
+    {
+        if shortcuts.keys.contains(key) || shortcuts.exits_normal(*key) {
+            return Err(
+                "keybinds.normal action key conflicts with another configured shortcut".to_owned(),
+            );
+        }
+    }
     for key in &shortcuts.normal_exit[..shortcuts.normal_exit_len] {
         if shortcuts.keys.contains(key)
             || FIXED_SHORTCUT_KEYS.contains(key)
@@ -373,6 +456,12 @@ fn parse_keybinds(
 
 fn parse_printable_key(key: &str) -> Option<u8> {
     (key.len() == 1 && key.as_bytes()[0].is_ascii_graphic()).then(|| key.as_bytes()[0])
+}
+
+fn parse_normal_action_key(key: &str) -> Option<u8> {
+    (key == "tab")
+        .then_some(b'\t')
+        .or_else(|| parse_printable_key(key))
 }
 
 fn parse_mode_key(key: &str) -> Option<u8> {
@@ -553,6 +642,34 @@ esc = { actions = [{ action = "switch-mode", mode = "locked" }], display = "help
             parse_config("[keybinds.normal]\nN = { actions = ['new-window', 'future-action'] }")
                 .unwrap();
         assert_eq!(unsupported.shortcuts.key_for(b'c'), b'c');
+    }
+
+    #[test]
+    fn normal_window_action_overrides_displaced_default_key() {
+        let shortcuts = parse_config(
+            r#"
+[keybinds.normal]
+x = { actions = ["close-window", { action = "switch-mode", mode = "locked" }] }
+"#,
+        )
+        .unwrap()
+        .shortcuts;
+        assert_eq!(shortcuts.resolve(b'x'), Some(b'&'));
+        assert_eq!(shortcuts.resolve(b'&'), None);
+        assert_eq!(shortcuts.key_for(b'&'), b'x');
+        assert!(!shortcuts.action_is_active(b'x'));
+        let aliases = parse_config(
+            r#"
+[keybinds.normal]
+tab = { actions = ["previous-window", { action = "switch-mode", mode = "locked" }] }
+"," = { actions = ["rename-window"] }
+"#,
+        )
+        .unwrap()
+        .shortcuts;
+        assert_eq!(aliases.resolve(b'\t'), Some(b'p'));
+        assert!(!aliases.action_is_active(b'\t'));
+        assert_eq!(aliases.resolve(b','), Some(b','));
     }
 
     #[test]

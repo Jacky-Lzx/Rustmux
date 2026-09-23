@@ -191,7 +191,13 @@ const NORMAL_SHORTCUTS: &[ShortcutHint] = &[
 ];
 
 fn hint_key(hint: ShortcutHint, shortcuts: crate::config::Shortcuts) -> String {
-    if hint.actions.len() == 1 && matches!(hint.actions[0].1, b'c' | b'%' | b'"') {
+    if hint.key == "n/p" {
+        format!(
+            "{}/{}",
+            char::from(shortcuts.key_for(b'n')),
+            char::from(shortcuts.key_for(b'p'))
+        )
+    } else if hint.actions.len() == 1 && matches!(hint.actions[0].1, b'c' | b'%' | b'"') {
         char::from(shortcuts.key_for(hint.actions[0].1)).to_string()
     } else {
         hint.key.to_owned()
@@ -229,6 +235,13 @@ fn visible_shortcuts(
                 remaining -= shortcut_width(hint, bindings);
             }
             for hint in primary {
+                if !hint
+                    .actions
+                    .iter()
+                    .all(|(_, action)| bindings.action_is_active(*action))
+                {
+                    continue;
+                }
                 let width = shortcut_width(*hint, bindings);
                 if width > remaining {
                     break;
@@ -242,6 +255,13 @@ fn visible_shortcuts(
         }
     }
     for hint in shortcuts {
+        if !hint
+            .actions
+            .iter()
+            .all(|(_, action)| bindings.action_is_active(*action))
+        {
+            continue;
+        }
         let width = shortcut_width(*hint, bindings);
         if width > remaining {
             break;

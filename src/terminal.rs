@@ -783,7 +783,10 @@ impl WindowInput {
                             self.mode = InputMode::Locked;
                             output.push(WindowKey::SessionManager);
                         } else {
-                            self.shortcut(action, output);
+                            self.mode = InputMode::Locked;
+                            if let Some(command) = shortcut_action(action) {
+                                output.push(command);
+                            }
                         }
                     }
                 }
@@ -3025,6 +3028,22 @@ mod window_input_tests {
     }
 
     #[test]
+    fn normal_window_binding_replaces_a_pane_binding() {
+        let mut decoder = WindowInput {
+            shortcuts: crate::config::Shortcuts::default().test_normal_action(b'x', b'&'),
+            ..WindowInput::default()
+        };
+        let mut actions = Vec::new();
+        for &byte in b"\x02x\x02&" {
+            decoder.feed(byte, &mut actions);
+        }
+        assert_eq!(
+            actions,
+            [WindowKey::Close, WindowKey::Byte(2), WindowKey::Byte(b'&')]
+        );
+    }
+
+    #[test]
     fn kitty_encoded_prefix_and_commands_preserve_mux_shortcuts() {
         let decode = |bytes: &[u8]| {
             let mut decoder = WindowInput {
@@ -3561,6 +3580,25 @@ mod window_input_tests {
             assert_eq!(output, [expected]);
             assert_eq!(keys.mode, InputMode::Locked);
         }
+    }
+
+    #[test]
+    fn remapped_footer_click_dispatches_its_action_directly() {
+        let shortcuts = crate::config::Shortcuts::test_keys(*b"NRD");
+        let mut keys = WindowInput {
+            mode: InputMode::Normal,
+            shortcuts,
+            footer_row: Some(24),
+            footer_hitboxes: crate::chrome::footer_hitboxes_with_shortcuts(
+                120, true, false, shortcuts,
+            ),
+            ..WindowInput::default()
+        };
+        let mut output = Vec::new();
+        for &byte in b"\x1b[<0;11;24M\x1b[<0;11;24m" {
+            keys.feed(byte, &mut output);
+        }
+        assert_eq!(output, [WindowKey::Create]);
     }
 
     #[test]

@@ -67,6 +67,15 @@ actions from main's larger configuration are ignored. `display` and
 LOCKED-to-NORMAL key. An existing main configuration can still be loaded, but
 its other mode bindings do not take effect in this increment.
 
+NORMAL mode also recognizes main-style `close-window`, `next-window`,
+`previous-window` (including `tab`), `move-window-left`, and `move-window-right`
+bindings followed by `switch-mode` to `locked`, plus `rename-window` with no
+following action. They replace any older command on the same key:
+for example, `x = { actions = ["close-window", { action = "switch-mode", mode =
+"locked" }] }` makes Ctrl-B `x` close a window instead of a pane. Displaced
+commands disappear from shortcut help; unsupported action sequences remain
+ignored rather than being partly executed.
+
 `RUSTMUX_SHELL=/bin/sh ./target/debug/rustmux` remains available as a temporary
 override. Changes take effect the next time a local session or named-session
 server starts.

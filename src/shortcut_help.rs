@@ -454,7 +454,16 @@ impl ShortcutHelp {
     }
 
     fn commands(&self) -> Vec<Command> {
-        let mut commands = COMMANDS.to_vec();
+        let mut commands: Vec<_> = COMMANDS
+            .iter()
+            .copied()
+            .filter(|command| {
+                command
+                    .actions
+                    .iter()
+                    .all(|(_, action)| self.shortcuts.action_is_active(*action))
+            })
+            .collect();
         if self.session {
             commands.push(SESSION_COMMAND);
         }
@@ -596,7 +605,15 @@ impl ShortcutHelp {
                 char::from(self.shortcuts.key_for(b'%')),
                 char::from(self.shortcuts.key_for(b'"'))
             )
-        } else if command.actions.len() == 1 && matches!(command.actions[0].1, b'c' | b'%' | b'"') {
+        } else if command.key == "n/p" || command.key == "</>" {
+            format!(
+                "{}/{}",
+                char::from(self.shortcuts.key_for(command.actions[0].1)),
+                char::from(self.shortcuts.key_for(command.actions[1].1))
+            )
+        } else if command.actions.len() == 1
+            && matches!(command.actions[0].1, b'c' | b'%' | b'"' | b'&' | b',')
+        {
             char::from(self.shortcuts.key_for(command.actions[0].1)).to_string()
         } else {
             command.key.to_owned()
@@ -793,6 +810,18 @@ mod tests {
         assert!(body.contains("R/D"));
         assert_eq!(help.feed(b'N', Instant::now()), HelpEvent::Action(b'c'));
         assert_eq!(help.feed(b'c', Instant::now()), HelpEvent::Continue);
+    }
+
+    #[test]
+    fn help_hides_displaced_pane_key_and_shows_window_override() {
+        let shortcuts = crate::config::Shortcuts::default().test_normal_action(b'x', b'&');
+        let mut help = ShortcutHelp::with_shortcuts(false, shortcuts);
+        let view = help.overlay(&Screen::new(24, 80).unwrap());
+        let body = text(&view);
+        assert!(body.contains("Close window"));
+        assert!(!body.contains("Close pane"));
+        assert_eq!(help.feed(b'x', Instant::now()), HelpEvent::Action(b'&'));
+        assert_eq!(help.feed(b'&', Instant::now()), HelpEvent::Continue);
     }
 
     #[test]
