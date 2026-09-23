@@ -887,6 +887,49 @@ with tempfile.TemporaryDirectory(prefix="rustmux-shortcuts-") as directory:
     finally:
         s.close()
 
+with tempfile.TemporaryDirectory(prefix="rustmux-mode-keybinds-") as directory:
+    os.mkdir(os.path.join(directory, "rustmux"))
+    with open(os.path.join(directory, "rustmux", "config.toml"), "w", encoding="utf-8") as config:
+        config.write(
+            "[keybinds.locked]\n"
+            "'Ctrl b' = { actions = [{ action = 'switch-mode', mode = 'normal' }] }\n"
+            "[keybinds.normal]\n"
+            "N = { actions = ['new-window', { action = 'switch-mode', mode = 'locked' }] }\n"
+            "'Ctrl g' = { actions = [{ action = 'switch-mode', mode = 'locked' }] }\n"
+        )
+    s = Session(extra_env={"XDG_CONFIG_HOME": directory})
+    try:
+        s.expect(b"RUSTMUX_READY> ")
+        s.send(b"\x02")
+        deadline = time.monotonic() + 3
+        while b"NORMAL" not in s.physical_rows[-1]:
+            s.read()
+            assert time.monotonic() < deadline, s.physical_rows[-1]
+        s.send(b"\x07")
+        deadline = time.monotonic() + 3
+        while b"LOCKED" not in s.physical_rows[-1]:
+            s.read()
+            assert time.monotonic() < deadline, s.physical_rows[-1]
+        s.send(b"\x02")
+        deadline = time.monotonic() + 3
+        while b"NORMAL" not in s.physical_rows[-1]:
+            s.read()
+            assert time.monotonic() < deadline, s.physical_rows[-1]
+        s.send(b"\x1b")
+        deadline = time.monotonic() + 3
+        while b"LOCKED" not in s.physical_rows[-1]:
+            s.read()
+            assert time.monotonic() < deadline, s.physical_rows[-1]
+        s.send(b"\x02N")
+        deadline = time.monotonic() + 3
+        while b"2 shell" not in s.physical_rows[0]:
+            s.read()
+            assert time.monotonic() < deadline, s.physical_rows[0]
+        os.kill(s.app_pid, signal.SIGTERM)
+        s.finish(128 + signal.SIGTERM)
+    finally:
+        s.close()
+
 long_command_probe = r"""
 import os, time
 os.write(1, b"\x1b]133;C\x1b\\LONG_START")

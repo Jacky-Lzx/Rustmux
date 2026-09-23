@@ -46,6 +46,27 @@ rejected. The old key stops invoking an action when it is replaced. The footer
 and shortcut-help panel show the configured keys. Ctrl-B itself and other
 commands are not configurable yet.
 
+The first mode-based bindings are also accepted in main's `[keybinds.normal]`
+format. They take precedence over `[shortcuts]` for `new-window`,
+`new-pane-right`, and `new-pane-down` when followed by `switch-mode` to
+`locked`; a standalone `switch-mode` action to `locked` can cancel NORMAL mode.
+For example:
+
+```toml
+[keybinds.locked]
+"Ctrl b" = { actions = [{ action = "switch-mode", mode = "normal" }] }
+
+[keybinds.normal]
+N = { actions = ["new-window", { action = "switch-mode", mode = "locked" }] }
+"Ctrl g" = { actions = [{ action = "switch-mode", mode = "locked" }] }
+```
+
+For now, only these actions are applied; other mode tables and unsupported
+actions from main's larger configuration are ignored. `display` and
+`clear_defaults` are not implemented yet. Ctrl-B remains the only supported
+LOCKED-to-NORMAL key. An existing main configuration can still be loaded, but
+its other mode bindings do not take effect in this increment.
+
 `RUSTMUX_SHELL=/bin/sh ./target/debug/rustmux` remains available as a temporary
 override. Changes take effect the next time a local session or named-session
 server starts.

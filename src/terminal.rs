@@ -929,6 +929,9 @@ impl WindowInput {
 
     fn shortcut(&mut self, byte: u8, output: &mut Vec<WindowKey>) {
         self.mode = InputMode::Locked;
+        if self.shortcuts.exits_normal(byte) {
+            return;
+        }
         if let Some(action) = self.shortcuts.resolve(byte).and_then(shortcut_action) {
             output.push(action);
         } else {
@@ -1754,13 +1757,20 @@ fn forward(
             let pane = windows.active_mut().unwrap().content_mut().active_mut();
             let (_, _, _, state) = pane.parts_mut();
             if state.accepts_input() && state.to_shell.len() <= LIMIT - 64 {
+                let pending = keys.take_mouse();
+                let cancel_normal =
+                    keys.mode == InputMode::Normal && pending == [27] && shortcuts.exits_normal(27);
                 if keys.mode == InputMode::Normal {
                     keys.mode = InputMode::Locked;
-                    state.to_shell.push_back(2);
+                    if !cancel_normal {
+                        state.to_shell.push_back(2);
+                    }
                     bar_dirty = true;
                     force_redraw = true;
                 }
-                state.to_shell.extend(keys.take_mouse());
+                if !cancel_normal {
+                    state.to_shell.extend(pending);
+                }
             }
         }
         // Decode in input order. Bytes preceding a switch remain queued for the
@@ -2998,6 +3008,20 @@ mod window_input_tests {
                 WindowKey::Byte(b'c'),
             ]
         );
+    }
+
+    #[test]
+    fn configured_normal_exit_does_not_reach_the_child() {
+        let mut decoder = WindowInput {
+            shortcuts: crate::config::Shortcuts::default().test_normal_exit(7),
+            ..WindowInput::default()
+        };
+        let mut actions = Vec::new();
+        for &byte in b"\x02\x07" {
+            decoder.feed(byte, &mut actions);
+        }
+        assert!(actions.is_empty());
+        assert_eq!(decoder.mode, InputMode::Locked);
     }
 
     #[test]
