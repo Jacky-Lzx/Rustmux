@@ -197,6 +197,7 @@ pub(crate) enum FooterMode {
     Pane,
     Resize,
     Move,
+    Tab,
 }
 
 const PANE_SHORTCUTS: &[ShortcutHint] = &[
@@ -273,6 +274,39 @@ const MOVE_SHORTCUTS: &[ShortcutHint] = &[
     },
 ];
 
+const TAB_SHORTCUTS: &[ShortcutHint] = &[
+    ShortcutHint {
+        key: "h/l",
+        label: "Window",
+        actions: &[(0, b'h'), (2, b'l')],
+    },
+    ShortcutHint {
+        key: "Esc",
+        label: "Lock",
+        actions: &[(0, 27)],
+    },
+    ShortcutHint {
+        key: "</>",
+        label: "Reorder",
+        actions: &[(0, b'<'), (2, b'>')],
+    },
+    ShortcutHint {
+        key: "n",
+        label: "New",
+        actions: &[(0, b'n')],
+    },
+    ShortcutHint {
+        key: "r",
+        label: "Rename",
+        actions: &[(0, b'r')],
+    },
+    ShortcutHint {
+        key: "x",
+        label: "Close",
+        actions: &[(0, b'x')],
+    },
+];
+
 fn resize_action(key: u8) -> Option<crate::config::ResizeAction> {
     use crate::config::ResizeAction;
     use crate::layout::Direction;
@@ -301,11 +335,27 @@ fn move_action(key: u8) -> Option<crate::config::MoveAction> {
     })
 }
 
+fn tab_action(key: u8) -> Option<crate::config::TabAction> {
+    use crate::config::TabAction;
+    Some(match key {
+        b'h' => TabAction::Previous,
+        b'l' => TabAction::Next,
+        b'<' => TabAction::MoveLeft,
+        b'>' => TabAction::MoveRight,
+        b'n' => TabAction::New,
+        b'r' => TabAction::Rename,
+        b'x' => TabAction::Close,
+        27 => TabAction::Locked,
+        _ => return None,
+    })
+}
+
 fn hint_action_key(key: u8, mode: FooterMode, shortcuts: crate::config::Shortcuts) -> Option<u8> {
     match mode {
         FooterMode::Pane => shortcuts.pane_key(pane_action(key)?),
         FooterMode::Resize => shortcuts.resize_key(resize_action(key)?),
         FooterMode::Move => shortcuts.move_key(move_action(key)?),
+        FooterMode::Tab => shortcuts.tab_key(tab_action(key)?),
         _ => Some(key),
     }
 }
@@ -366,6 +416,14 @@ fn move_hint_key(hint: ShortcutHint, shortcuts: crate::config::Shortcuts) -> Str
         .join("/")
 }
 
+fn tab_hint_key(hint: ShortcutHint, shortcuts: crate::config::Shortcuts) -> String {
+    hint.actions
+        .iter()
+        .filter_map(|(_, key)| shortcuts.tab_key(tab_action(*key)?).map(displayed_key))
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 fn hint_key_for_mode(
     hint: ShortcutHint,
     mode: FooterMode,
@@ -375,6 +433,7 @@ fn hint_key_for_mode(
         FooterMode::Pane => pane_hint_key(hint, shortcuts),
         FooterMode::Resize => resize_hint_key(hint, shortcuts),
         FooterMode::Move => move_hint_key(hint, shortcuts),
+        FooterMode::Tab => tab_hint_key(hint, shortcuts),
         _ => hint_key(hint, shortcuts),
     }
 }
@@ -412,6 +471,7 @@ fn visible_shortcuts(
         FooterMode::Pane => PANE_SHORTCUTS,
         FooterMode::Resize => RESIZE_SHORTCUTS,
         FooterMode::Move => MOVE_SHORTCUTS,
+        FooterMode::Tab => TAB_SHORTCUTS,
         FooterMode::Locked => LOCKED_SHORTCUTS,
     };
     let mut visible = Vec::new();
@@ -451,7 +511,7 @@ fn visible_shortcuts(
     }
     for hint in shortcuts {
         if !hint.actions.iter().all(|(_, action)| match mode {
-            FooterMode::Pane | FooterMode::Resize | FooterMode::Move => {
+            FooterMode::Pane | FooterMode::Resize | FooterMode::Move | FooterMode::Tab => {
                 hint_action_key(*action, mode, bindings).is_some()
             }
             _ => bindings.action_is_active(*action),
@@ -549,7 +609,7 @@ pub(crate) fn footer_hitboxes_for_mode(
                 let width = display_width(&displayed_key(action));
                 let width = if matches!(
                     mode,
-                    FooterMode::Pane | FooterMode::Resize | FooterMode::Move
+                    FooterMode::Pane | FooterMode::Resize | FooterMode::Move | FooterMode::Tab
                 ) {
                     width
                 } else {
@@ -625,6 +685,7 @@ fn mode_label(mode: FooterMode) -> &'static str {
         FooterMode::Pane => " PANE ",
         FooterMode::Resize => " RESIZE ",
         FooterMode::Move => " MOVE ",
+        FooterMode::Tab => " TAB ",
         FooterMode::Locked => " LOCKED ",
     }
 }
@@ -670,6 +731,7 @@ fn draw_footer(
             FooterMode::Pane => LAVENDER,
             FooterMode::Resize => PEACH,
             FooterMode::Move => PEACH,
+            FooterMode::Tab => LAVENDER,
             FooterMode::Locked => RED,
         },
         bold: true,

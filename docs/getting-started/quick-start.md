@@ -96,6 +96,16 @@ No neighbor or zoom leaves the layout unchanged. Configured transitions can
 return to NORMAL, PANE, RESIZE, or LOCKED; Esc exits locally. The footer shows
 the configured move keys and exits.
 
+Main-style TAB mode manages Rustmux windows (called tabs in the main config).
+Bind `switch-mode` to `tab` in `[keybinds.normal]`—main's `Ctrl t` works—and
+use `[keybinds.tab]` for `next-window`, `previous-window`,
+`move-window-left/right`, `new-window`, `rename-window`, `close-window`, and
+`go-to-window` with a one-based `index` from 1 to 16. Navigation and reordering
+remain in TAB mode; a configured `switch-mode locked` after an action exits it.
+Renaming returns to TAB mode after save or cancel, while the close confirmation
+returns to LOCKED. Unmodified left/right arrows, Tab, and numbered keys are
+accepted when bound. The footer shows available TAB actions; Esc exits locally.
+
 Other mode tables and unsupported actions from main's larger configuration are
 still ignored. `clear_defaults` is not implemented yet. Ctrl-B remains the only
 supported LOCKED-to-NORMAL key. PANE's floating action is not yet supported.

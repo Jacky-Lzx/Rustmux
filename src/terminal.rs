@@ -614,6 +614,7 @@ enum InputMode {
     Pane,
     Resize,
     Move,
+    Tab,
 }
 
 #[derive(Default)]
@@ -666,7 +667,7 @@ impl WindowInput {
                     || self.pane_hitboxes.len() > 1
                     || matches!(
                         self.mode,
-                        InputMode::Pane | InputMode::Resize | InputMode::Move
+                        InputMode::Pane | InputMode::Resize | InputMode::Move | InputMode::Tab
                     ))
                     || byte != 27))
         {
@@ -736,6 +737,7 @@ impl WindowInput {
                         InputMode::Pane => self.pane_shortcut(byte, output),
                         InputMode::Resize => self.resize_shortcut(byte, output),
                         InputMode::Move => self.move_shortcut(byte, output),
+                        InputMode::Tab => self.tab_shortcut(byte, output),
                         InputMode::Locked => unreachable!(),
                     }
                 } else {
@@ -750,7 +752,7 @@ impl WindowInput {
         }
         if matches!(
             self.mode,
-            InputMode::Pane | InputMode::Resize | InputMode::Move
+            InputMode::Pane | InputMode::Resize | InputMode::Move | InputMode::Tab
         ) && coordinates.is_none()
             && bytes.starts_with(b"\x1b")
         {
@@ -769,6 +771,7 @@ impl WindowInput {
                     InputMode::Pane => self.pane_arrow_shortcut(direction, output),
                     InputMode::Resize => self.resize_arrow_shortcut(direction, output),
                     InputMode::Move => self.move_arrow_shortcut(direction, output),
+                    InputMode::Tab => self.tab_arrow_shortcut(direction, output),
                     _ => unreachable!(),
                 }
             }
@@ -826,13 +829,14 @@ impl WindowInput {
                     {
                         if matches!(
                             footer_mode,
-                            InputMode::Pane | InputMode::Resize | InputMode::Move
+                            InputMode::Pane | InputMode::Resize | InputMode::Move | InputMode::Tab
                         ) {
                             self.mode = footer_mode;
                             match footer_mode {
                                 InputMode::Pane => self.pane_shortcut(action, output),
                                 InputMode::Resize => self.resize_shortcut(action, output),
                                 InputMode::Move => self.move_shortcut(action, output),
+                                InputMode::Tab => self.tab_shortcut(action, output),
                                 _ => unreachable!(),
                             }
                         } else if action == 2 {
@@ -985,6 +989,7 @@ impl WindowInput {
                 InputMode::Pane => self.pane_shortcut(byte, output),
                 InputMode::Resize => self.resize_shortcut(byte, output),
                 InputMode::Move => self.move_shortcut(byte, output),
+                InputMode::Tab => self.tab_shortcut(byte, output),
                 InputMode::Locked if byte == 2 => self.mode = InputMode::Normal,
                 InputMode::Locked => output.push(WindowKey::Byte(byte)),
             }
@@ -1002,6 +1007,10 @@ impl WindowInput {
         }
         if self.shortcuts.enters_move(byte) {
             self.mode = InputMode::Move;
+            return;
+        }
+        if self.shortcuts.enters_tab(byte) {
+            self.mode = InputMode::Tab;
             return;
         }
         self.mode = InputMode::Locked;
@@ -1106,6 +1115,49 @@ impl WindowInput {
             MoveAction::Pane => self.mode = InputMode::Pane,
             MoveAction::Resize => self.mode = InputMode::Resize,
             MoveAction::Locked => self.mode = InputMode::Locked,
+        }
+    }
+
+    fn tab_shortcut(&mut self, byte: u8, output: &mut Vec<WindowKey>) {
+        let Some(binding) = self.shortcuts.tab_binding(byte) else {
+            return;
+        };
+        self.tab_binding_action(binding.action, binding.stay, output);
+    }
+
+    fn tab_arrow_shortcut(&mut self, direction: Direction, output: &mut Vec<WindowKey>) {
+        let Some(binding) = self.shortcuts.tab_arrow_binding(direction) else {
+            return;
+        };
+        self.tab_binding_action(binding.action, binding.stay, output);
+    }
+
+    fn tab_binding_action(
+        &mut self,
+        action: crate::config::TabAction,
+        stay: bool,
+        output: &mut Vec<WindowKey>,
+    ) {
+        use crate::config::TabAction;
+        self.mode = if stay {
+            InputMode::Tab
+        } else {
+            InputMode::Locked
+        };
+        match action {
+            TabAction::Next => output.push(WindowKey::Next),
+            TabAction::Previous => output.push(WindowKey::Previous),
+            TabAction::MoveLeft => output.push(WindowKey::MoveLeft),
+            TabAction::MoveRight => output.push(WindowKey::MoveRight),
+            TabAction::New => output.push(WindowKey::Create),
+            TabAction::Rename => output.push(WindowKey::Rename),
+            TabAction::Close => output.push(WindowKey::Close),
+            TabAction::Select(index) => output.push(WindowKey::Select(index - 1)),
+            TabAction::Help => output.push(WindowKey::Help),
+            TabAction::Normal => self.mode = InputMode::Normal,
+            TabAction::Pane => self.mode = InputMode::Pane,
+            TabAction::Move => self.mode = InputMode::Move,
+            TabAction::Locked => self.mode = InputMode::Locked,
         }
     }
 }
@@ -1821,6 +1873,7 @@ fn forward(
                             InputMode::Pane => FooterMode::Pane,
                             InputMode::Resize => FooterMode::Resize,
                             InputMode::Move => FooterMode::Move,
+                            InputMode::Tab => FooterMode::Tab,
                             InputMode::Locked => FooterMode::Locked,
                         },
                         shortcuts,
@@ -1969,7 +2022,7 @@ fn forward(
                         .is_some_and(|binding| binding.action == crate::config::PaneAction::Locked);
                 let was_local_mode = matches!(
                     keys.mode,
-                    InputMode::Pane | InputMode::Resize | InputMode::Move
+                    InputMode::Pane | InputMode::Resize | InputMode::Move | InputMode::Tab
                 );
                 if keys.mode == InputMode::Normal {
                     keys.mode = InputMode::Locked;
@@ -1981,7 +2034,7 @@ fn forward(
                 }
                 if matches!(
                     keys.mode,
-                    InputMode::Pane | InputMode::Resize | InputMode::Move
+                    InputMode::Pane | InputMode::Resize | InputMode::Move | InputMode::Tab
                 ) {
                     keys.mode = InputMode::Locked;
                     bar_dirty = true;
@@ -2014,6 +2067,8 @@ fn forward(
                 continue;
             }
             if let Some(editor) = &mut prompt {
+                let return_to_tab =
+                    editor.kind == PromptKind::Rename && keys.mode == InputMode::Tab;
                 let result = editor.feed(input.pop_front().unwrap(), Instant::now());
                 match result {
                     EditResult::Save => {
@@ -2070,12 +2125,28 @@ fn forward(
                             PromptKind::Close | PromptKind::ClosePane => {}
                         }
                         prompt = None;
-                        keys = WindowInput::default();
+                        keys = WindowInput {
+                            mode: if return_to_tab {
+                                InputMode::Tab
+                            } else {
+                                InputMode::Locked
+                            },
+                            shortcuts,
+                            ..WindowInput::default()
+                        };
                         renderer.invalidate();
                     }
                     EditResult::Cancel => {
                         prompt = None;
-                        keys = WindowInput::default();
+                        keys = WindowInput {
+                            mode: if return_to_tab {
+                                InputMode::Tab
+                            } else {
+                                InputMode::Locked
+                            },
+                            shortcuts,
+                            ..WindowInput::default()
+                        };
                         renderer.invalidate();
                     }
                     EditResult::Continue => {}
@@ -2159,6 +2230,7 @@ fn forward(
                         InputMode::Pane => FooterMode::Pane,
                         InputMode::Resize => FooterMode::Resize,
                         InputMode::Move => FooterMode::Move,
+                        InputMode::Tab => FooterMode::Tab,
                         InputMode::Locked => FooterMode::Locked,
                     },
                     session_name.is_some(),
@@ -3600,6 +3672,87 @@ esc = { actions = [{ action = "switch-mode", mode = "locked" }] }
         }
         assert_eq!(actions, [WindowKey::MovePane(Direction::Right)]);
         assert_eq!(keys.mode, InputMode::Move);
+    }
+
+    #[test]
+    fn tab_mode_dispatches_window_actions_and_keeps_navigation_modal() {
+        let shortcuts = crate::config::Shortcuts::test_from_config(
+            r#"
+[keybinds.normal]
+"Ctrl t" = { actions = [{ action = "switch-mode", mode = "tab" }] }
+[keybinds.tab]
+h = { actions = ["previous-window"] }
+l = { actions = ["next-window"] }
+left = { actions = ["previous-window"] }
+right = { actions = ["next-window"] }
+"<" = { actions = ["move-window-left"] }
+">" = { actions = ["move-window-right"] }
+3 = { actions = [{ action = "go-to-window", index = 3 }] }
+n = { actions = ["new-window", { action = "switch-mode", mode = "locked" }] }
+r = { actions = ["rename-window"] }
+esc = { actions = [{ action = "switch-mode", mode = "locked" }] }
+"#,
+        );
+        let mut keys = WindowInput {
+            shortcuts,
+            ..WindowInput::default()
+        };
+        let mut actions = Vec::new();
+        for &byte in b"\x02\x14hl\x1b[D\x1bOC\x1b[1;2D<>3r" {
+            keys.feed(byte, &mut actions);
+        }
+        assert_eq!(
+            actions,
+            [
+                WindowKey::Previous,
+                WindowKey::Next,
+                WindowKey::Previous,
+                WindowKey::Next,
+                WindowKey::MoveLeft,
+                WindowKey::MoveRight,
+                WindowKey::Select(2),
+                WindowKey::Rename,
+            ]
+        );
+        assert_eq!(keys.mode, InputMode::Tab);
+        keys.feed(b'n', &mut actions);
+        assert_eq!(keys.mode, InputMode::Locked);
+        assert_eq!(actions.last(), Some(&WindowKey::Create));
+    }
+
+    #[test]
+    fn tab_footer_click_dispatches_visible_window_key() {
+        let shortcuts = crate::config::Shortcuts::test_from_config(
+            r#"
+[keybinds.normal]
+"Ctrl t" = { actions = [{ action = "switch-mode", mode = "tab" }] }
+[keybinds.tab]
+h = { actions = ["previous-window"], display = "always" }
+l = { actions = ["next-window"], display = "always" }
+"<" = { actions = ["move-window-left"], display = "always" }
+">" = { actions = ["move-window-right"], display = "always" }
+n = { actions = ["new-window", { action = "switch-mode", mode = "locked" }] }
+"#,
+        );
+        let boxes = crate::chrome::footer_hitboxes_for_mode(120, FooterMode::Tab, false, shortcuts);
+        let column = boxes
+            .iter()
+            .find(|(_, _, action)| *action == b'l')
+            .unwrap()
+            .0;
+        let mut keys = WindowInput {
+            mode: InputMode::Tab,
+            shortcuts,
+            footer_row: Some(24),
+            footer_hitboxes: boxes,
+            ..WindowInput::default()
+        };
+        let mut actions = Vec::new();
+        for byte in format!("\x1b[<0;{column};24M\x1b[<0;{column};24m").bytes() {
+            keys.feed(byte, &mut actions);
+        }
+        assert_eq!(actions, [WindowKey::Next]);
+        assert_eq!(keys.mode, InputMode::Tab);
     }
 
     #[test]

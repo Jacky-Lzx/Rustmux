@@ -177,6 +177,15 @@ Actions can repeat without leaving MOVE mode; its footer exposes the configured
 move and exit keys, including clickable hints. Configured transitions can return
 to NORMAL, PANE, or RESIZE; Esc returns to LOCKED without reaching the child.
 
+A configured NORMAL-to-TAB binding enters a lavender `TAB` badge for window
+management. Main-style `[keybinds.tab]` supports previous/next window, moving a
+window left/right in the bar, creating, renaming and closing a window, and
+selecting a one-based window index from 1 to 16. Navigation and reordering
+can repeat in TAB mode; new and close actions honor a following `switch-mode
+locked`. Rename save/cancel returns to TAB, while close confirmation returns
+to LOCKED. Unmodified left/right arrow aliases are local to the mode, and the
+footer exposes clickable configured keys. Esc returns to LOCKED locally.
+
 Ctrl-B, then `E` writes a plain-text snapshot of the active pane's retained
 primary-screen history and meaningful visible rows to a private temporary file.
 Soft-wrapped rows are joined and hard row boundaries remain newlines. Rustmux

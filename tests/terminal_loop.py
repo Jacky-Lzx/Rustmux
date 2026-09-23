@@ -1126,6 +1126,66 @@ with tempfile.TemporaryDirectory(prefix="rustmux-resize-mode-") as directory:
     finally:
         s.close()
 
+with tempfile.TemporaryDirectory(prefix="rustmux-tab-mode-") as directory:
+    os.mkdir(os.path.join(directory, "rustmux"))
+    with open(os.path.join(directory, "rustmux", "config.toml"), "w", encoding="utf-8") as config:
+        config.write(
+            "[keybinds.normal]\n"
+            "'Ctrl t' = { actions = [{ action = 'switch-mode', mode = 'tab' }] }\n"
+            "[keybinds.tab]\n"
+            "h = { actions = ['previous-window'], display = 'always' }\n"
+            "l = { actions = ['next-window'], display = 'always' }\n"
+            "n = { actions = ['new-window', { action = 'switch-mode', mode = 'locked' }] }\n"
+            "r = { actions = ['rename-window'], display = 'always' }\n"
+            "esc = { actions = [{ action = 'switch-mode', mode = 'locked' }] }\n"
+        )
+    s = Session(extra_env={"XDG_CONFIG_HOME": directory})
+    try:
+        s.expect(b"RUSTMUX_READY> ")
+        s.send(b"printf 'FIRST_TAB_MARK\\n'\n")
+        s.expect(b"FIRST_TAB_MARK")
+        s.send(b"\x02\x14")
+        deadline = time.monotonic() + 3
+        while b"TAB" not in s.physical_rows[-1]:
+            s.read()
+            assert time.monotonic() < deadline, s.physical_rows[-1]
+        assert b"Window" in s.physical_rows[-1], s.physical_rows[-1]
+        s.send(b"n")
+        deadline = time.monotonic() + 3
+        while b"LOCKED" not in s.physical_rows[-1]:
+            s.read()
+            assert time.monotonic() < deadline, s.physical_rows[-1]
+        s.expect(b"RUSTMUX_READY> ")
+        s.send(b"printf 'SECOND_TAB_MARK\\n'\n")
+        s.expect(b"SECOND_TAB_MARK")
+        s.send(b"\x02\x14h")
+        deadline = time.monotonic() + 3
+        while not any(b"FIRST_TAB_MARK" in row for row in s.physical_rows):
+            s.read()
+            assert time.monotonic() < deadline, s.physical_rows
+        assert b"TAB" in s.physical_rows[-1], s.physical_rows[-1]
+        s.send(b"l")
+        deadline = time.monotonic() + 3
+        while not any(b"SECOND_TAB_MARK" in row for row in s.physical_rows):
+            s.read()
+            assert time.monotonic() < deadline, s.physical_rows
+        s.send(b"rRENAMED_TAB\n")
+        deadline = time.monotonic() + 3
+        while b"RENAMED_TAB" not in s.physical_rows[0] or b"TAB" not in s.physical_rows[-1]:
+            s.read()
+            assert time.monotonic() < deadline, s.physical_rows
+        s.send(b"\x1b")
+        deadline = time.monotonic() + 3
+        while b"LOCKED" not in s.physical_rows[-1]:
+            s.read()
+            assert time.monotonic() < deadline, s.physical_rows[-1]
+        s.send(b"printf 'TAB_MODE_DONE\\n'\n")
+        s.expect(b"TAB_MODE_DONE")
+        os.kill(s.app_pid, signal.SIGTERM)
+        s.finish(128 + signal.SIGTERM)
+    finally:
+        s.close()
+
 with tempfile.TemporaryDirectory(prefix="rustmux-move-mode-") as directory:
     os.mkdir(os.path.join(directory, "rustmux"))
     with open(os.path.join(directory, "rustmux", "config.toml"), "w", encoding="utf-8") as config:

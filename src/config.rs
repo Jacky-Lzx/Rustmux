@@ -78,6 +78,31 @@ pub struct MoveBinding {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TabAction {
+    Next,
+    Previous,
+    MoveLeft,
+    MoveRight,
+    New,
+    Rename,
+    Close,
+    Select(usize),
+    Help,
+    Normal,
+    Pane,
+    Move,
+    Locked,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TabBinding {
+    key: u8,
+    pub action: TabAction,
+    pub stay: bool,
+    preferred: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Shortcuts {
     keys: [u8; 3],
     normal_actions: [Option<(u8, u8)>; 16],
@@ -85,6 +110,7 @@ pub struct Shortcuts {
     pane_enter: Option<u8>,
     resize_enter: Option<u8>,
     move_enter: Option<u8>,
+    tab_enter: Option<u8>,
     pane_bindings: [Option<PaneBinding>; 32],
     pane_binding_len: usize,
     pane_arrows: [Option<PaneArrowBinding>; 4],
@@ -94,6 +120,9 @@ pub struct Shortcuts {
     move_bindings: [Option<MoveBinding>; 16],
     move_binding_len: usize,
     move_arrows: [Option<MoveAction>; 4],
+    tab_bindings: [Option<TabBinding>; 32],
+    tab_binding_len: usize,
+    tab_arrows: [Option<TabBinding>; 4],
     normal_exit: [u8; 8],
     normal_exit_len: usize,
 }
@@ -107,6 +136,7 @@ impl Default for Shortcuts {
             pane_enter: None,
             resize_enter: None,
             move_enter: None,
+            tab_enter: None,
             pane_bindings: [None; 32],
             pane_binding_len: 0,
             pane_arrows: [None; 4],
@@ -116,6 +146,9 @@ impl Default for Shortcuts {
             move_bindings: [None; 16],
             move_binding_len: 0,
             move_arrows: [None; 4],
+            tab_bindings: [None; 32],
+            tab_binding_len: 0,
+            tab_arrows: [None; 4],
             normal_exit: [0; 8],
             normal_exit_len: 0,
         }
@@ -214,6 +247,10 @@ impl Shortcuts {
         self.move_enter == Some(key)
     }
 
+    pub fn enters_tab(self, key: u8) -> bool {
+        self.tab_enter == Some(key)
+    }
+
     pub fn pane_binding(self, key: u8) -> Option<PaneBinding> {
         self.pane_bindings[..self.pane_binding_len]
             .iter()
@@ -270,6 +307,27 @@ impl Shortcuts {
 
     pub fn move_key(self, action: MoveAction) -> Option<u8> {
         self.move_bindings[..self.move_binding_len]
+            .iter()
+            .flatten()
+            .filter(|binding| binding.action == action)
+            .max_by_key(|binding| binding.preferred)
+            .map(|binding| binding.key)
+    }
+
+    pub fn tab_binding(self, key: u8) -> Option<TabBinding> {
+        self.tab_bindings[..self.tab_binding_len]
+            .iter()
+            .flatten()
+            .find(|binding| binding.key == key)
+            .copied()
+    }
+
+    pub fn tab_arrow_binding(self, direction: Direction) -> Option<TabBinding> {
+        self.tab_arrows[arrow_index(direction)]
+    }
+
+    pub fn tab_key(self, action: TabAction) -> Option<u8> {
+        self.tab_bindings[..self.tab_binding_len]
             .iter()
             .flatten()
             .filter(|binding| binding.action == action)
@@ -635,6 +693,21 @@ fn parse_keybinds(
                 .as_table()
                 .and_then(|table| table.get("mode"))
                 .and_then(toml::Value::as_str)
+                == Some("tab")
+            && let Some(byte) = parse_mode_key(key)
+        {
+            if shortcuts.tab_enter.replace(byte).is_some() {
+                return Err(
+                    "multiple keybinds.normal tab-mode entry keys are not supported yet".to_owned(),
+                );
+            }
+        } else if actions.len() == 1
+            && names.len() == 1
+            && names[0] == "switch-mode"
+            && actions[0]
+                .as_table()
+                .and_then(|table| table.get("mode"))
+                .and_then(toml::Value::as_str)
                 == Some("locked")
             && let Some(byte) = parse_mode_key(key)
         {
@@ -652,6 +725,7 @@ fn parse_keybinds(
     parse_pane_bindings(keybinds.get("pane"), &mut shortcuts)?;
     parse_resize_bindings(keybinds.get("resize"), &mut shortcuts)?;
     parse_move_bindings(keybinds.get("move"), &mut shortcuts)?;
+    parse_tab_bindings(keybinds.get("tab"), &mut shortcuts)?;
     for (key, _) in shortcuts.normal_actions[..shortcuts.normal_action_len]
         .iter()
         .flatten()
@@ -878,6 +952,88 @@ fn parse_move_bindings(
             preferred: table.get("display").and_then(toml::Value::as_str) == Some("always"),
         });
         shortcuts.move_binding_len += 1;
+    }
+    Ok(())
+}
+
+fn parse_tab_bindings(
+    value: Option<&toml::Value>,
+    shortcuts: &mut Shortcuts,
+) -> Result<(), String> {
+    let Some(value) = value else {
+        return Ok(());
+    };
+    let tab = value.as_table().ok_or("keybinds.tab must be a table")?;
+    for (key, binding) in tab {
+        let Some(table) = binding.as_table() else {
+            continue;
+        };
+        let Some(actions) = table.get("actions").and_then(toml::Value::as_array) else {
+            continue;
+        };
+        let (first, stay) = match actions.as_slice() {
+            [first] => (first, true),
+            [first, second]
+                if second.as_table().is_some_and(|table| {
+                    table.get("action").and_then(toml::Value::as_str) == Some("switch-mode")
+                        && table.get("mode").and_then(toml::Value::as_str) == Some("locked")
+                }) =>
+            {
+                (first, false)
+            }
+            _ => continue,
+        };
+        let action = match first.as_str() {
+            Some("next-window") => Some(TabAction::Next),
+            Some("previous-window") => Some(TabAction::Previous),
+            Some("move-window-left") => Some(TabAction::MoveLeft),
+            Some("move-window-right") => Some(TabAction::MoveRight),
+            Some("new-window") => Some(TabAction::New),
+            Some("rename-window") => Some(TabAction::Rename),
+            Some("close-window") => Some(TabAction::Close),
+            Some("show-help") => Some(TabAction::Help),
+            _ => first.as_table().and_then(|value| {
+                match value.get("action").and_then(toml::Value::as_str) {
+                    Some("go-to-window") => value
+                        .get("index")
+                        .and_then(toml::Value::as_integer)
+                        .and_then(|index| usize::try_from(index).ok())
+                        .filter(|index| (1..=16).contains(index))
+                        .map(TabAction::Select),
+                    Some("switch-mode") if stay => {
+                        match value.get("mode").and_then(toml::Value::as_str) {
+                            Some("normal") => Some(TabAction::Normal),
+                            Some("pane") => Some(TabAction::Pane),
+                            Some("move") => Some(TabAction::Move),
+                            Some("locked") => Some(TabAction::Locked),
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                }
+            }),
+        };
+        let Some(action) = action else {
+            continue;
+        };
+        let binding = TabBinding {
+            key: 0,
+            action,
+            stay,
+            preferred: table.get("display").and_then(toml::Value::as_str) == Some("always"),
+        };
+        if let Some(direction) = parse_arrow_key(key) {
+            shortcuts.tab_arrows[arrow_index(direction)] = Some(binding);
+            continue;
+        }
+        let Some(key) = parse_mode_key(key) else {
+            continue;
+        };
+        if shortcuts.tab_binding_len == shortcuts.tab_bindings.len() {
+            return Err("too many supported keybinds.tab bindings".to_owned());
+        }
+        shortcuts.tab_bindings[shortcuts.tab_binding_len] = Some(TabBinding { key, ..binding });
+        shortcuts.tab_binding_len += 1;
     }
     Ok(())
 }
@@ -1254,6 +1410,74 @@ esc = { actions = [{ action = "switch-mode", mode = "locked" }] }
             shortcuts.move_binding(27).unwrap().action,
             MoveAction::Locked
         );
+    }
+
+    #[test]
+    fn tab_mode_reads_main_style_window_bindings_and_transitions() {
+        let shortcuts = Shortcuts::test_from_config(
+            r#"
+[keybinds.normal]
+"Ctrl t" = { actions = [{ action = "switch-mode", mode = "tab" }] }
+[keybinds.tab]
+left = { actions = ["previous-window"] }
+right = { actions = ["next-window"] }
+h = { actions = ["previous-window"], display = "always" }
+l = { actions = ["next-window"], display = "always" }
+tab = { actions = ["previous-window"] }
+"<" = { actions = ["move-window-left"] }
+">" = { actions = ["move-window-right"] }
+n = { actions = ["new-window", { action = "switch-mode", mode = "locked" }] }
+r = { actions = ["rename-window"] }
+x = { actions = ["close-window", { action = "switch-mode", mode = "locked" }] }
+3 = { actions = [{ action = "go-to-window", index = 3 }], display = "hidden" }
+p = { actions = [{ action = "switch-mode", mode = "normal" }] }
+"Ctrl m" = { actions = [{ action = "switch-mode", mode = "move" }] }
+esc = { actions = [{ action = "switch-mode", mode = "locked" }] }
+"#,
+        );
+        assert!(shortcuts.enters_tab(20));
+        assert_eq!(shortcuts.tab_key(TabAction::Previous), Some(b'h'));
+        assert_eq!(shortcuts.tab_key(TabAction::Next), Some(b'l'));
+        assert_eq!(
+            shortcuts.tab_arrow_binding(Direction::Left).unwrap().action,
+            TabAction::Previous
+        );
+        assert_eq!(
+            shortcuts
+                .tab_arrow_binding(Direction::Right)
+                .unwrap()
+                .action,
+            TabAction::Next
+        );
+        assert_eq!(
+            shortcuts.tab_binding(9).unwrap().action,
+            TabAction::Previous
+        );
+        assert_eq!(
+            shortcuts.tab_binding(b'3').unwrap().action,
+            TabAction::Select(3)
+        );
+        assert!(!shortcuts.tab_binding(b'n').unwrap().stay);
+        assert!(!shortcuts.tab_binding(b'x').unwrap().stay);
+        assert_eq!(
+            shortcuts.tab_binding(b'x').unwrap().action,
+            TabAction::Close
+        );
+        assert!(shortcuts.tab_binding(b'r').unwrap().stay);
+        assert_eq!(
+            shortcuts.tab_binding(b'<').unwrap().action,
+            TabAction::MoveLeft
+        );
+        assert_eq!(
+            shortcuts.tab_binding(b'>').unwrap().action,
+            TabAction::MoveRight
+        );
+        assert_eq!(
+            shortcuts.tab_binding(b'p').unwrap().action,
+            TabAction::Normal
+        );
+        assert_eq!(shortcuts.tab_binding(13).unwrap().action, TabAction::Move);
+        assert_eq!(shortcuts.tab_binding(27).unwrap().action, TabAction::Locked);
     }
 
     #[test]
