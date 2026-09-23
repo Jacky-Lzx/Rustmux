@@ -589,6 +589,8 @@ enum WindowKey {
     Split(SplitAxis),
     NextPane,
     BreakPane,
+    MovePanePreviousWindow,
+    MovePaneNextWindow,
     JoinPane,
     ToggleZoom,
     UndoClose,
@@ -1006,6 +1008,8 @@ impl WindowInput {
         };
         match action {
             PaneAction::Break => output.push(WindowKey::BreakPane),
+            PaneAction::MovePreviousWindow => output.push(WindowKey::MovePanePreviousWindow),
+            PaneAction::MoveNextWindow => output.push(WindowKey::MovePaneNextWindow),
             PaneAction::SplitRight => output.push(WindowKey::Split(SplitAxis::Columns)),
             PaneAction::SplitDown => output.push(WindowKey::Split(SplitAxis::Rows)),
             PaneAction::FocusLeft => output.push(WindowKey::FocusPane(Direction::Left)),
@@ -2271,6 +2275,34 @@ fn forward(
                             }
                         }
                     }
+                    WindowKey::MovePanePreviousWindow | WindowKey::MovePaneNextWindow => {
+                        let source = windows.active().unwrap().id();
+                        let offset = if action == WindowKey::MovePaneNextWindow {
+                            1
+                        } else {
+                            -1
+                        };
+                        match windows.move_active_pane_relative(offset) {
+                            Ok(true) => {
+                                if let Some(source) = windows.get_mut(source) {
+                                    source.content_mut().synchronize_sizes()?;
+                                }
+                                windows
+                                    .active_mut()
+                                    .unwrap()
+                                    .content_mut()
+                                    .synchronize_sizes()?;
+                                bar_dirty = true;
+                                renderer.invalidate();
+                                force_redraw = true;
+                            }
+                            Ok(false) | Err(_) => {
+                                if to_terminal.is_empty() {
+                                    to_terminal.push_back(7);
+                                }
+                            }
+                        }
+                    }
                     WindowKey::NextPane => {
                         let panes = windows.active_mut().unwrap().content_mut();
                         let ids: Vec<_> = panes
@@ -3266,6 +3298,44 @@ r = { actions = ["new-pane-right", { action = "switch-mode", mode = "locked" }] 
         }
         assert_eq!(actions.last(), Some(&WindowKey::Split(SplitAxis::Columns)));
         assert_eq!(keys.mode, InputMode::Locked);
+    }
+
+    #[test]
+    fn pane_window_move_footer_hint_dispatches_the_clicked_direction() {
+        let shortcuts = crate::config::Shortcuts::test_from_config(
+            r#"
+[keybinds.normal]
+"Ctrl p" = { actions = [{ action = "switch-mode", mode = "pane" }] }
+[keybinds.pane]
+"[" = { actions = ["move-pane-previous-window", { action = "switch-mode", mode = "locked" }] }
+"]" = { actions = ["move-pane-next-window", { action = "switch-mode", mode = "locked" }] }
+"#,
+        );
+        let hitboxes =
+            crate::chrome::footer_hitboxes_for_mode(200, FooterMode::Pane, false, shortcuts);
+        for (key, expected) in [
+            (b'[', WindowKey::MovePanePreviousWindow),
+            (b']', WindowKey::MovePaneNextWindow),
+        ] {
+            let column = hitboxes
+                .iter()
+                .find(|(_, _, action)| *action == key)
+                .unwrap()
+                .0;
+            let mut keys = WindowInput {
+                mode: InputMode::Pane,
+                shortcuts,
+                footer_row: Some(24),
+                footer_hitboxes: hitboxes.clone(),
+                ..WindowInput::default()
+            };
+            let mut actions = Vec::new();
+            for byte in format!("\x1b[<0;{column};24M\x1b[<0;{column};24m").bytes() {
+                keys.feed(byte, &mut actions);
+            }
+            assert_eq!(actions, [expected]);
+            assert_eq!(keys.mode, InputMode::Locked);
+        }
     }
 
     #[test]

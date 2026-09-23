@@ -72,12 +72,15 @@ For example, with main's configuration, Ctrl-B then Ctrl-P opens PANE mode;
 `h/j/k/l` or unmodified arrow keys change focus without leaving it, while `r`
 splits right and exits. Both CSI and application-cursor (SS3) arrow reports
 work; modified arrows are not treated as unmodified bindings.
+With another window present, `[` and `]` move the running pane to the previous
+or next window (wrapping around), splitting that window's first pane to the
+right. The destination becomes active; if the source window empties, it closes.
+An invalid destination split leaves both windows unchanged and rings the bell.
 Esc exits without reaching the shell.
 
 Other mode tables and unsupported actions from main's larger configuration are
 still ignored. `clear_defaults` is not implemented yet. Ctrl-B remains the only
-supported LOCKED-to-NORMAL key. PANE's cross-window pane move and floating
-actions are not yet supported.
+supported LOCKED-to-NORMAL key. PANE's floating action is not yet supported.
 
 NORMAL mode also recognizes main-style `close-window`, `next-window`,
 `previous-window` (including `tab`), `move-window-left`, and `move-window-right`

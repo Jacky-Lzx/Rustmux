@@ -148,12 +148,16 @@ input. Pressing Ctrl-B changes it to green `NORMAL` while Rustmux waits for the
 second shortcut byte; completing most shortcuts returns it to `LOCKED`.
 With a configured NORMAL-to-PANE binding, the badge changes to lavender `PANE`.
 Its footer shows the configured break, split, focus, zoom, and close keys that
-fit; clicking one invokes the same binding. Focus remains in PANE mode, while
+fit, plus adjacent-window move keys when there is room; clicking one invokes
+the same binding. Focus remains in PANE mode, while
 structural actions followed by `switch-mode locked` return to LOCKED. PANE
 also accepts configured `left/down/up/right` aliases from ordinary CSI or
 application-cursor (SS3) sequences; modified arrows do not match. A
 configured Esc exit is consumed locally, including when received as a lone
-Escape byte. Attached
+Escape byte. Moving a pane to the previous or next window wraps in bar order,
+splits the destination's first pane to the right, and preserves the running
+process. Failed destination splits leave both layouts and focus unchanged and
+ring the bell. Attached
 session clients forward Ctrl-B immediately, so the server displays the same mode
 transition as a foreground-only run. The top bar uses all of its available width
 for the session name and window labels.

@@ -1003,6 +1003,71 @@ with tempfile.TemporaryDirectory(prefix="rustmux-pane-mode-") as directory:
     finally:
         s.close()
 
+with tempfile.TemporaryDirectory(prefix="rustmux-pane-window-move-") as directory:
+    os.mkdir(os.path.join(directory, "rustmux"))
+    with open(os.path.join(directory, "rustmux", "config.toml"), "w", encoding="utf-8") as config:
+        config.write(
+            "[keybinds.normal]\n"
+            "'Ctrl p' = { actions = [{ action = 'switch-mode', mode = 'pane' }] }\n"
+            "[keybinds.pane]\n"
+            "'[' = { actions = ['move-pane-previous-window', { action = 'switch-mode', mode = 'locked' }] }\n"
+            "']' = { actions = ['move-pane-next-window', { action = 'switch-mode', mode = 'locked' }] }\n"
+        )
+    s = Session(extra_env={"XDG_CONFIG_HOME": directory})
+    try:
+        s.expect(b"RUSTMUX_READY> ")
+        s.send(b"\x02%")
+        deadline = time.monotonic() + 3
+        while s.physical_rows[1].count("┌".encode()) != 2:
+            s.read()
+            assert time.monotonic() < deadline, s.physical_rows
+        s.send(b"RUSTMUX_RELOCATE=alive\n")
+        s.send(b"printf 'BEFORE_%s\\n' \"$RUSTMUX_RELOCATE\"\n")
+        s.expect(b"BEFORE_alive")
+        s.send(b"\x02c")
+        deadline = time.monotonic() + 3
+        while b"2 shell" not in s.physical_rows[0]:
+            s.read()
+            assert time.monotonic() < deadline, s.physical_rows[0]
+        s.send(b"\x021\x02\x10")
+        deadline = time.monotonic() + 3
+        while b"PANE" not in s.physical_rows[-1]:
+            s.read()
+            assert time.monotonic() < deadline, s.physical_rows[-1]
+        assert b"Move" in s.physical_rows[-1], s.physical_rows[-1]
+        s.send(b"]")
+        s.read(0.2)
+        s.send(b"\x021")
+        deadline = time.monotonic() + 3
+        while s.physical_rows[1].count("┌".encode()) != 1:
+            s.read()
+            assert time.monotonic() < deadline, s.physical_rows
+        s.send(b"\x022")
+        deadline = time.monotonic() + 3
+        while s.physical_rows[1].count("┌".encode()) != 2:
+            s.read()
+            assert time.monotonic() < deadline, s.physical_rows
+        s.send(b"printf 'AFTER_%s\\n' \"$RUSTMUX_RELOCATE\"\n")
+        s.expect(b"AFTER_alive")
+        s.send(b"\x02\x10[")
+        s.read(0.2)
+        s.send(b"\x022")
+        deadline = time.monotonic() + 3
+        while s.physical_rows[1].count("┌".encode()) != 1:
+            s.read()
+            assert time.monotonic() < deadline, s.physical_rows
+        s.send(b"\x021")
+        deadline = time.monotonic() + 3
+        while s.physical_rows[1].count("┌".encode()) != 2:
+            s.read()
+            assert time.monotonic() < deadline, s.physical_rows
+        s.send(b"printf 'RETURNED_%s\\n' \"$RUSTMUX_RELOCATE\"\n")
+        s.expect(b"RETURNED_alive")
+        os.kill(s.app_pid, signal.SIGTERM)
+        s.finish(128 + signal.SIGTERM)
+    finally:
+        s.close()
+
 with tempfile.TemporaryDirectory(prefix="rustmux-normal-window-") as directory:
     os.mkdir(os.path.join(directory, "rustmux"))
     with open(os.path.join(directory, "rustmux", "config.toml"), "w", encoding="utf-8") as config:

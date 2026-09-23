@@ -204,6 +204,11 @@ const PANE_SHORTCUTS: &[ShortcutHint] = &[
         actions: &[(0, b'b')],
     },
     ShortcutHint {
+        key: "[/]",
+        label: "Move",
+        actions: &[(0, b'['), (2, b']')],
+    },
+    ShortcutHint {
         key: "r",
         label: "Split →",
         actions: &[(0, b'r')],
@@ -242,6 +247,8 @@ fn pane_action(key: u8) -> Option<crate::config::PaneAction> {
         b'l' => PaneAction::FocusRight,
         b'f' => PaneAction::Zoom,
         b'x' => PaneAction::Close,
+        b'[' => PaneAction::MovePreviousWindow,
+        b']' => PaneAction::MoveNextWindow,
         _ => return None,
     })
 }

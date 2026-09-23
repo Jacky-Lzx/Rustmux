@@ -220,6 +220,33 @@ impl<T> Windows<T> {
 }
 
 impl<T> Windows<crate::pane_set::PaneSet<T>> {
+    /// Move the active pane into the first pane of the adjacent existing window.
+    /// Window order wraps; a lone window is a no-op. Destination focus is
+    /// restored if the split cannot be committed.
+    pub fn move_active_pane_relative(&mut self, offset: isize) -> io::Result<bool> {
+        if self.entries.len() < 2 {
+            return Ok(false);
+        }
+        let target_index =
+            (self.active as isize + offset).rem_euclid(self.entries.len() as isize) as usize;
+        let target = self.entries[target_index].id;
+        let previous = self.entries[target_index].content.layout().active();
+        let first = self.entries[target_index]
+            .content
+            .layout()
+            .tiled_geometry()
+            .panes[0]
+            .0;
+        self.entries[target_index].content.select(first)?;
+        let result = self.join_active_pane(target, crate::layout::SplitAxis::Columns);
+        if result.is_err() {
+            // The attempted split cloned the destination layout before taking
+            // ownership, so only the temporary focus change needs reverting.
+            self.get_mut(target).unwrap().content.select(previous)?;
+        }
+        result
+    }
+
     /// Transfer the active pane into a split of the target's active pane.
     /// Keep processes/content intact. Destination validation failures change neither
     /// window. Remove an emptied source; otherwise remember it for last-window focus.

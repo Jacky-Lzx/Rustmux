@@ -17,6 +17,8 @@ const FIXED_SHORTCUT_KEYS: &[u8] = b"np\t&x<> {}!moZz[Ee?hjkl,1234567890dq";
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PaneAction {
     Break,
+    MovePreviousWindow,
+    MoveNextWindow,
     SplitRight,
     SplitDown,
     FocusLeft,
@@ -596,6 +598,10 @@ fn parse_pane_bindings(
             {
                 match first.as_str() {
                     Some("break-pane") => Some((PaneAction::Break, false)),
+                    Some("move-pane-previous-window") => {
+                        Some((PaneAction::MovePreviousWindow, false))
+                    }
+                    Some("move-pane-next-window") => Some((PaneAction::MoveNextWindow, false)),
                     Some("new-pane-right") => Some((PaneAction::SplitRight, false)),
                     Some("new-pane-down") => Some((PaneAction::SplitDown, false)),
                     Some("toggle-pane-zoom") => Some((PaneAction::Zoom, false)),
@@ -867,6 +873,7 @@ x = { actions = ["close-pane", { action = "switch-mode", mode = "locked" }] }
 p = { actions = [{ action = "switch-mode", mode = "normal" }] }
 esc = { actions = [{ action = "switch-mode", mode = "locked" }] }
 "[" = { actions = ["move-pane-previous-window", { action = "switch-mode", mode = "locked" }] }
+"]" = { actions = ["move-pane-next-window", { action = "switch-mode", mode = "locked" }] }
 "#,
         );
         assert!(shortcuts.enters_pane(16));
@@ -891,7 +898,14 @@ esc = { actions = [{ action = "switch-mode", mode = "locked" }] }
             shortcuts.pane_binding(27).unwrap().action,
             PaneAction::Locked
         );
-        assert!(shortcuts.pane_binding(b'[').is_none());
+        assert_eq!(
+            shortcuts.pane_binding(b'[').unwrap().action,
+            PaneAction::MovePreviousWindow
+        );
+        assert_eq!(
+            shortcuts.pane_binding(b']').unwrap().action,
+            PaneAction::MoveNextWindow
+        );
     }
 
     #[test]

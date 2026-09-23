@@ -359,3 +359,87 @@ fn join_rejects_bad_targets_atomically_and_removes_only_an_empty_source() {
     assert_eq!(windows.iter().len(), 1);
     assert_membership(windows.active().unwrap().content());
 }
+
+#[test]
+fn relative_pane_move_wraps_and_splits_the_destinations_first_pane() {
+    use rustmux::window::Windows;
+    let mut windows = Windows::default();
+    let source = windows
+        .create("source".into(), PaneSet::new(7, 30, "moved").unwrap())
+        .unwrap();
+    let mut target_panes = PaneSet::new(7, 30, "first").unwrap();
+    target_panes
+        .split_with(SplitAxis::Columns, |_, _| Ok("second"))
+        .unwrap();
+    let target = windows.create("target".into(), target_panes).unwrap();
+    windows.select(source).unwrap();
+    assert!(windows.move_active_pane_relative(-1).unwrap());
+    assert!(windows.get(source).is_none());
+    assert_eq!(windows.active().unwrap().id(), target);
+    let target_panes = windows.active().unwrap().content();
+    let order: Vec<_> = target_panes
+        .layout()
+        .tiled_geometry()
+        .panes
+        .into_iter()
+        .map(|(id, _)| *target_panes.get(id).unwrap())
+        .collect();
+    assert_eq!(order, ["first", "moved", "second"]);
+    assert_eq!(*target_panes.active(), "moved");
+    assert_membership(target_panes);
+}
+
+#[test]
+fn relative_pane_move_failure_preserves_both_windows_and_focus() {
+    use rustmux::window::Windows;
+    let mut windows = Windows::default();
+    let source = windows
+        .create("source".into(), PaneSet::new(5, 7, "source").unwrap())
+        .unwrap();
+    let mut target_panes = PaneSet::new(5, 7, "first").unwrap();
+    target_panes
+        .split_with(SplitAxis::Columns, |_, _| Ok("second"))
+        .unwrap();
+    let target = windows.create("target".into(), target_panes).unwrap();
+    windows.select(source).unwrap();
+    let before_source = windows.get(source).unwrap().content().layout().clone();
+    let before_target = windows.get(target).unwrap().content().layout().clone();
+    assert!(windows.move_active_pane_relative(1).is_err());
+    assert_eq!(windows.active().unwrap().id(), source);
+    assert_eq!(
+        windows.get(source).unwrap().content().layout(),
+        &before_source
+    );
+    assert_eq!(
+        windows.get(target).unwrap().content().layout(),
+        &before_target
+    );
+    assert_eq!(windows.iter().len(), 2);
+    let mut lone = Windows::default();
+    lone.create("only".into(), PaneSet::new(5, 7, "only").unwrap())
+        .unwrap();
+    assert!(!lone.move_active_pane_relative(-1).unwrap());
+}
+
+#[test]
+fn relative_pane_move_targets_neighbors_in_window_order() {
+    use rustmux::window::Windows;
+    for (offset, expected_index) in [(1, 1), (-1, 2)] {
+        let mut windows = Windows::default();
+        let source = windows
+            .create("one".into(), PaneSet::new(7, 20, "moving").unwrap())
+            .unwrap();
+        let next = windows
+            .create("two".into(), PaneSet::new(7, 20, "next").unwrap())
+            .unwrap();
+        let previous = windows
+            .create("three".into(), PaneSet::new(7, 20, "previous").unwrap())
+            .unwrap();
+        windows.select(source).unwrap();
+        assert!(windows.move_active_pane_relative(offset).unwrap());
+        let expected = [source, next, previous][expected_index];
+        assert_eq!(windows.active().unwrap().id(), expected);
+        assert_eq!(*windows.active().unwrap().content().active(), "moving");
+        assert!(windows.get(source).is_none());
+    }
+}
