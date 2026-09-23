@@ -102,6 +102,8 @@ use `[keybinds.tab]` for `next-window`, `previous-window`,
 `move-window-left/right`, `new-window`, `rename-window`, `close-window`, and
 `go-to-window` with a one-based `index` from 1 to 16. Navigation and reordering
 remain in TAB mode; a configured `switch-mode locked` after an action exits it.
+When a TAB entry key is configured, NORMAL's footer shows that key as a clickable
+`Tab` hint (subject to available width).
 Renaming returns to TAB mode after save or cancel, while the close confirmation
 returns to LOCKED. Unmodified left/right arrows, Tab, and numbered keys are
 accepted when bound. The footer shows available TAB actions; Esc exits locally.

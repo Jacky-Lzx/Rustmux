@@ -1144,7 +1144,12 @@ with tempfile.TemporaryDirectory(prefix="rustmux-tab-mode-") as directory:
         s.expect(b"RUSTMUX_READY> ")
         s.send(b"printf 'FIRST_TAB_MARK\\n'\n")
         s.expect(b"FIRST_TAB_MARK")
-        s.send(b"\x02\x14")
+        s.send(b"\x02")
+        deadline = time.monotonic() + 3
+        while b"NORMAL" not in s.physical_rows[-1] or b"Ctrl-T" not in s.physical_rows[-1]:
+            s.read()
+            assert time.monotonic() < deadline, s.physical_rows[-1]
+        s.send(b"\x14")
         deadline = time.monotonic() + 3
         while b"TAB" not in s.physical_rows[-1]:
             s.read()

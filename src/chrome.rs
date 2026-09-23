@@ -152,12 +152,19 @@ const SESSION_SHORTCUT: ShortcutHint = ShortcutHint {
     actions: &[(0, 23)],
 };
 
+const TAB_MODE_SHORTCUT: ShortcutHint = ShortcutHint {
+    key: "Ctrl-T",
+    label: "Tab",
+    actions: &[(0, 20)],
+};
+
 const NORMAL_SHORTCUTS: &[ShortcutHint] = &[
     ShortcutHint {
         key: "c",
         label: "New",
         actions: &[(0, b'c')],
     },
+    TAB_MODE_SHORTCUT,
     ShortcutHint {
         key: "%",
         label: "Split →",
@@ -439,7 +446,12 @@ fn hint_key_for_mode(
 }
 
 fn hint_key(hint: ShortcutHint, shortcuts: crate::config::Shortcuts) -> String {
-    if hint.key == "n/p" {
+    if hint.key == TAB_MODE_SHORTCUT.key {
+        shortcuts
+            .tab_entry_key()
+            .map(displayed_key)
+            .unwrap_or_default()
+    } else if hint.key == "n/p" {
         format!(
             "{}/{}",
             char::from(shortcuts.key_for(b'n')),
@@ -490,11 +502,13 @@ fn visible_shortcuts(
                 remaining -= shortcut_width(hint, mode, bindings);
             }
             for hint in primary {
-                if !hint
-                    .actions
-                    .iter()
-                    .all(|(_, action)| bindings.action_is_active(*action))
-                {
+                if !hint.actions.iter().all(|(_, action)| {
+                    if *action == 20 {
+                        bindings.tab_entry_key().is_some()
+                    } else {
+                        bindings.action_is_active(*action)
+                    }
+                }) {
                     continue;
                 }
                 let width = shortcut_width(*hint, mode, bindings);
@@ -514,6 +528,7 @@ fn visible_shortcuts(
             FooterMode::Pane | FooterMode::Resize | FooterMode::Move | FooterMode::Tab => {
                 hint_action_key(*action, mode, bindings).is_some()
             }
+            FooterMode::Normal if *action == 20 => bindings.tab_entry_key().is_some(),
             _ => bindings.action_is_active(*action),
         }) {
             continue;
@@ -1436,6 +1451,71 @@ mod tests {
             footer_hitboxes_with_shortcuts(100, true, false, bindings)
                 .iter()
                 .any(|&(_, _, action)| action == b'c')
+        );
+    }
+
+    #[test]
+    fn normal_footer_shows_configured_tab_entry_and_click_enters_mode() {
+        let child = Screen::new(1, 80).unwrap();
+        let configured = crate::config::Shortcuts::test_from_config(
+            r#"
+[keybinds.normal]
+"Ctrl t" = { actions = [{ action = "switch-mode", mode = "tab" }], display = "help" }
+"#,
+        );
+        for session in [None, Some("work")] {
+            let view =
+                compose_with_shortcuts(&child, 3, session, &["shell".into()], 0, true, configured)
+                    .unwrap();
+            let footer: String = view
+                .row(2)
+                .unwrap()
+                .iter()
+                .filter(|cell| cell.width != 0)
+                .map(|cell| cell.character)
+                .collect();
+            assert!(footer.contains("Ctrl-T"), "footer was {footer:?}");
+            assert!(footer.contains("Tab"), "footer was {footer:?}");
+            let hitboxes = footer_hitboxes_with_shortcuts(80, true, session.is_some(), configured);
+            assert!(hitboxes.iter().any(|&(_, _, key)| key == 20));
+        }
+
+        let remapped = crate::config::Shortcuts::test_from_config(
+            r#"
+[keybinds.normal]
+t = { actions = [{ action = "switch-mode", mode = "tab" }] }
+"#,
+        );
+        let view =
+            compose_with_shortcuts(&child, 3, None, &["shell".into()], 0, true, remapped).unwrap();
+        let footer: String = view
+            .row(2)
+            .unwrap()
+            .iter()
+            .filter(|cell| cell.width != 0)
+            .map(|cell| cell.character)
+            .collect();
+        assert!(footer.contains(" t "));
+        assert!(!footer.contains("Ctrl-T"));
+        assert!(
+            footer_hitboxes_with_shortcuts(80, true, false, remapped)
+                .iter()
+                .any(|&(_, _, action)| action == 20)
+        );
+        assert!(
+            !footer_hitboxes(80, true, false)
+                .iter()
+                .any(|&(_, _, key)| key == 20)
+        );
+        assert!(
+            visible_shortcuts(
+                10,
+                FooterMode::Normal,
+                false,
+                crate::config::Shortcuts::default(),
+            )
+            .iter()
+            .all(|hint| hint.key != TAB_MODE_SHORTCUT.key)
         );
     }
 }

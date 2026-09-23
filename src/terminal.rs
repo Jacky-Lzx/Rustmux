@@ -841,6 +841,8 @@ impl WindowInput {
                             }
                         } else if action == 2 {
                             self.mode = InputMode::Normal;
+                        } else if action == 20 && self.shortcuts.tab_entry_key().is_some() {
+                            self.mode = InputMode::Tab;
                         } else if action == 23 {
                             self.mode = InputMode::Locked;
                             output.push(WindowKey::SessionManager);
@@ -3753,6 +3755,32 @@ n = { actions = ["new-window", { action = "switch-mode", mode = "locked" }] }
         }
         assert_eq!(actions, [WindowKey::Next]);
         assert_eq!(keys.mode, InputMode::Tab);
+    }
+
+    #[test]
+    fn normal_footer_tab_hint_enters_mode_when_clicked() {
+        let shortcuts = crate::config::Shortcuts::test_from_config(
+            r#"
+[keybinds.normal]
+"Ctrl t" = { actions = [{ action = "switch-mode", mode = "tab" }] }
+"#,
+        );
+        let boxes =
+            crate::chrome::footer_hitboxes_for_mode(80, FooterMode::Normal, false, shortcuts);
+        let column = boxes.iter().find(|(_, _, action)| *action == 20).unwrap().0;
+        let mut keys = WindowInput {
+            mode: InputMode::Normal,
+            shortcuts,
+            footer_row: Some(24),
+            footer_hitboxes: boxes,
+            ..WindowInput::default()
+        };
+        let mut actions = Vec::new();
+        for byte in format!("\x1b[<0;{column};24M\x1b[<0;{column};24m").bytes() {
+            keys.feed(byte, &mut actions);
+        }
+        assert_eq!(keys.mode, InputMode::Tab);
+        assert!(actions.is_empty());
     }
 
     #[test]

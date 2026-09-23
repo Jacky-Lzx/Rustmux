@@ -251,6 +251,10 @@ impl Shortcuts {
         self.tab_enter == Some(key)
     }
 
+    pub fn tab_entry_key(self) -> Option<u8> {
+        self.tab_enter
+    }
+
     pub fn pane_binding(self, key: u8) -> Option<PaneBinding> {
         self.pane_bindings[..self.pane_binding_len]
             .iter()

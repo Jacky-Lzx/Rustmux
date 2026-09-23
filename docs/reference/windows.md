@@ -185,6 +185,8 @@ can repeat in TAB mode; new and close actions honor a following `switch-mode
 locked`. Rename save/cancel returns to TAB, while close confirmation returns
 to LOCKED. Unmodified left/right arrow aliases are local to the mode, and the
 footer exposes clickable configured keys. Esc returns to LOCKED locally.
+NORMAL's footer also shows the configured TAB entry key as a clickable `Tab`
+hint when it fits; an unconfigured TAB mode adds no hint.
 
 Ctrl-B, then `E` writes a plain-text snapshot of the active pane's retained
 primary-screen history and meaningful visible rows to a private temporary file.
