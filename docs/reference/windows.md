@@ -162,6 +162,13 @@ session clients forward Ctrl-B immediately, so the server displays the same mode
 transition as a foreground-only run. The top bar uses all of its available width
 for the session name and window labels.
 
+A configured NORMAL-to-RESIZE binding enters a peach `RESIZE` badge. Its
+configured `h/j/k/l` or unmodified direction arrows resize the active pane
+repeatedly without leaving the mode. The footer shows available resize and exit
+keys, which are clickable. At a minimum-size boundary, or while zoomed, the
+resize is a no-op. Configured transitions can return to NORMAL or PANE; Esc
+returns to LOCKED locally without reaching the child.
+
 Ctrl-B, then `E` writes a plain-text snapshot of the active pane's retained
 primary-screen history and meaningful visible rows to a private temporary file.
 Soft-wrapped rows are joined and hard row boundaries remain newlines. Rustmux

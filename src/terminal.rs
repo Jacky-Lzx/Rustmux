@@ -611,6 +611,7 @@ enum InputMode {
     Locked,
     Normal,
     Pane,
+    Resize,
 }
 
 #[derive(Default)]
@@ -661,7 +662,7 @@ impl WindowInput {
                     || self.bar_enabled
                     || self.footer_row.is_some()
                     || self.pane_hitboxes.len() > 1
-                    || self.mode == InputMode::Pane)
+                    || matches!(self.mode, InputMode::Pane | InputMode::Resize))
                     || byte != 27))
         {
             self.plain(byte, output);
@@ -728,6 +729,7 @@ impl WindowInput {
                     match self.mode {
                         InputMode::Normal => self.shortcut(byte, output),
                         InputMode::Pane => self.pane_shortcut(byte, output),
+                        InputMode::Resize => self.resize_shortcut(byte, output),
                         InputMode::Locked => unreachable!(),
                     }
                 } else {
@@ -740,7 +742,10 @@ impl WindowInput {
                 return;
             }
         }
-        if self.mode == InputMode::Pane && coordinates.is_none() && bytes.starts_with(b"\x1b") {
+        if matches!(self.mode, InputMode::Pane | InputMode::Resize)
+            && coordinates.is_none()
+            && bytes.starts_with(b"\x1b")
+        {
             if bytes == b"\x1b[200~" {
                 // A paste belongs to the child, not to this modal keymap.
                 self.mode = InputMode::Locked;
@@ -752,9 +757,13 @@ impl WindowInput {
             if let Some((direction, event_type)) = arrow_key_event(&bytes)
                 && event_type != 3
             {
-                self.pane_arrow_shortcut(direction, output);
+                match self.mode {
+                    InputMode::Pane => self.pane_arrow_shortcut(direction, output),
+                    InputMode::Resize => self.resize_arrow_shortcut(direction, output),
+                    _ => unreachable!(),
+                }
             }
-            // Unknown escape sequences stay local to PANE mode. In particular,
+            // Unknown escape sequences stay local to the active mode. In particular,
             // never pass an unbound arrow's trailing bytes to the child.
             return;
         }
@@ -806,9 +815,13 @@ impl WindowInput {
                         .find(|(start, end, _)| column >= *start && column < *end)
                         .copied()
                     {
-                        if footer_mode == InputMode::Pane {
-                            self.mode = InputMode::Pane;
-                            self.pane_shortcut(action, output);
+                        if matches!(footer_mode, InputMode::Pane | InputMode::Resize) {
+                            self.mode = footer_mode;
+                            match footer_mode {
+                                InputMode::Pane => self.pane_shortcut(action, output),
+                                InputMode::Resize => self.resize_shortcut(action, output),
+                                _ => unreachable!(),
+                            }
                         } else if action == 2 {
                             self.mode = InputMode::Normal;
                         } else if action == 23 {
@@ -957,6 +970,7 @@ impl WindowInput {
             match self.mode {
                 InputMode::Normal => self.shortcut(byte, output),
                 InputMode::Pane => self.pane_shortcut(byte, output),
+                InputMode::Resize => self.resize_shortcut(byte, output),
                 InputMode::Locked if byte == 2 => self.mode = InputMode::Normal,
                 InputMode::Locked => output.push(WindowKey::Byte(byte)),
             }
@@ -966,6 +980,10 @@ impl WindowInput {
     fn shortcut(&mut self, byte: u8, output: &mut Vec<WindowKey>) {
         if self.shortcuts.enters_pane(byte) {
             self.mode = InputMode::Pane;
+            return;
+        }
+        if self.shortcuts.enters_resize(byte) {
+            self.mode = InputMode::Resize;
             return;
         }
         self.mode = InputMode::Locked;
@@ -1021,6 +1039,30 @@ impl WindowInput {
             PaneAction::Close => output.push(WindowKey::ClosePane),
             PaneAction::Normal => self.mode = InputMode::Normal,
             PaneAction::Locked => self.mode = InputMode::Locked,
+        }
+    }
+
+    fn resize_shortcut(&mut self, byte: u8, output: &mut Vec<WindowKey>) {
+        let Some(binding) = self.shortcuts.resize_binding(byte) else {
+            return;
+        };
+        self.resize_action(binding.action, output);
+    }
+
+    fn resize_arrow_shortcut(&mut self, direction: Direction, output: &mut Vec<WindowKey>) {
+        let Some(action) = self.shortcuts.resize_arrow_action(direction) else {
+            return;
+        };
+        self.resize_action(action, output);
+    }
+
+    fn resize_action(&mut self, action: crate::config::ResizeAction, output: &mut Vec<WindowKey>) {
+        use crate::config::ResizeAction;
+        match action {
+            ResizeAction::Resize(direction) => output.push(WindowKey::ResizePane(direction)),
+            ResizeAction::Normal => self.mode = InputMode::Normal,
+            ResizeAction::Pane => self.mode = InputMode::Pane,
+            ResizeAction::Locked => self.mode = InputMode::Locked,
         }
     }
 }
@@ -1734,6 +1776,7 @@ fn forward(
                         match keys.mode {
                             InputMode::Normal => FooterMode::Normal,
                             InputMode::Pane => FooterMode::Pane,
+                            InputMode::Resize => FooterMode::Resize,
                             InputMode::Locked => FooterMode::Locked,
                         },
                         shortcuts,
@@ -1880,7 +1923,7 @@ fn forward(
                     && shortcuts
                         .pane_binding(27)
                         .is_some_and(|binding| binding.action == crate::config::PaneAction::Locked);
-                let was_pane = keys.mode == InputMode::Pane;
+                let was_local_mode = matches!(keys.mode, InputMode::Pane | InputMode::Resize);
                 if keys.mode == InputMode::Normal {
                     keys.mode = InputMode::Locked;
                     if !cancel_normal {
@@ -1889,12 +1932,12 @@ fn forward(
                     bar_dirty = true;
                     force_redraw = true;
                 }
-                if keys.mode == InputMode::Pane {
+                if matches!(keys.mode, InputMode::Pane | InputMode::Resize) {
                     keys.mode = InputMode::Locked;
                     bar_dirty = true;
                     force_redraw = true;
                 }
-                if !cancel_normal && !cancel_pane && !was_pane {
+                if !cancel_normal && !cancel_pane && !was_local_mode {
                     state.to_shell.extend(pending);
                 }
             }
@@ -2064,6 +2107,7 @@ fn forward(
                     match keys.mode {
                         InputMode::Normal => FooterMode::Normal,
                         InputMode::Pane => FooterMode::Pane,
+                        InputMode::Resize => FooterMode::Resize,
                         InputMode::Locked => FooterMode::Locked,
                     },
                     session_name.is_some(),
@@ -3336,6 +3380,88 @@ r = { actions = ["new-pane-right", { action = "switch-mode", mode = "locked" }] 
             assert_eq!(actions, [expected]);
             assert_eq!(keys.mode, InputMode::Locked);
         }
+    }
+
+    #[test]
+    fn resize_mode_keeps_directional_actions_local_until_a_transition() {
+        let shortcuts = crate::config::Shortcuts::test_from_config(
+            r#"
+[keybinds.normal]
+r = { actions = [{ action = "switch-mode", mode = "resize" }] }
+"Ctrl p" = { actions = [{ action = "switch-mode", mode = "pane" }] }
+[keybinds.resize]
+h = { actions = ["resize-pane-left"] }
+l = { actions = ["resize-pane-right"] }
+left = { actions = ["resize-pane-left"] }
+right = { actions = ["resize-pane-right"] }
+r = { actions = [{ action = "switch-mode", mode = "normal" }] }
+"Ctrl p" = { actions = [{ action = "switch-mode", mode = "pane" }] }
+esc = { actions = [{ action = "switch-mode", mode = "locked" }] }
+"#,
+        );
+        let mut keys = WindowInput {
+            shortcuts,
+            ..WindowInput::default()
+        };
+        let mut actions = Vec::new();
+        for &byte in b"\x02rhl\x1b[D\x1bOC\x1b[1;2D" {
+            keys.feed(byte, &mut actions);
+        }
+        assert_eq!(
+            actions,
+            [
+                WindowKey::ResizePane(Direction::Left),
+                WindowKey::ResizePane(Direction::Right),
+                WindowKey::ResizePane(Direction::Left),
+                WindowKey::ResizePane(Direction::Right),
+            ]
+        );
+        assert_eq!(keys.mode, InputMode::Resize);
+        keys.feed(b'r', &mut actions);
+        assert_eq!(keys.mode, InputMode::Normal);
+        keys.feed(16, &mut actions);
+        assert_eq!(keys.mode, InputMode::Pane);
+        keys.mode = InputMode::Resize;
+        keys.feed(16, &mut actions);
+        assert_eq!(keys.mode, InputMode::Pane);
+        assert_eq!(actions.len(), 4);
+    }
+
+    #[test]
+    fn resize_footer_click_uses_configured_direction_and_stays_in_mode() {
+        let shortcuts = crate::config::Shortcuts::test_from_config(
+            r#"
+[keybinds.normal]
+r = { actions = [{ action = "switch-mode", mode = "resize" }] }
+[keybinds.resize]
+h = { actions = ["resize-pane-left"] }
+j = { actions = ["resize-pane-down"] }
+k = { actions = ["resize-pane-up"] }
+l = { actions = ["resize-pane-right"] }
+r = { actions = [{ action = "switch-mode", mode = "normal" }] }
+esc = { actions = [{ action = "switch-mode", mode = "locked" }] }
+"#,
+        );
+        let boxes =
+            crate::chrome::footer_hitboxes_for_mode(120, FooterMode::Resize, false, shortcuts);
+        let column = boxes
+            .iter()
+            .find(|(_, _, action)| *action == b'l')
+            .unwrap()
+            .0;
+        let mut keys = WindowInput {
+            mode: InputMode::Resize,
+            shortcuts,
+            footer_row: Some(24),
+            footer_hitboxes: boxes,
+            ..WindowInput::default()
+        };
+        let mut actions = Vec::new();
+        for byte in format!("\x1b[<0;{column};24M\x1b[<0;{column};24m").bytes() {
+            keys.feed(byte, &mut actions);
+        }
+        assert_eq!(actions, [WindowKey::ResizePane(Direction::Right)]);
+        assert_eq!(keys.mode, InputMode::Resize);
     }
 
     #[test]

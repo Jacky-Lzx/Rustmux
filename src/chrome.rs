@@ -195,6 +195,7 @@ pub(crate) enum FooterMode {
     Locked,
     Normal,
     Pane,
+    Resize,
 }
 
 const PANE_SHORTCUTS: &[ShortcutHint] = &[
@@ -235,6 +236,46 @@ const PANE_SHORTCUTS: &[ShortcutHint] = &[
     },
 ];
 
+const RESIZE_SHORTCUTS: &[ShortcutHint] = &[
+    ShortcutHint {
+        key: "h/j/k/l",
+        label: "Resize",
+        actions: &[(0, b'h'), (2, b'j'), (4, b'k'), (6, b'l')],
+    },
+    ShortcutHint {
+        key: "r",
+        label: "Normal",
+        actions: &[(0, b'r')],
+    },
+    ShortcutHint {
+        key: "Esc",
+        label: "Lock",
+        actions: &[(0, 27)],
+    },
+];
+
+fn resize_action(key: u8) -> Option<crate::config::ResizeAction> {
+    use crate::config::ResizeAction;
+    use crate::layout::Direction;
+    Some(match key {
+        b'h' => ResizeAction::Resize(Direction::Left),
+        b'j' => ResizeAction::Resize(Direction::Down),
+        b'k' => ResizeAction::Resize(Direction::Up),
+        b'l' => ResizeAction::Resize(Direction::Right),
+        b'r' => ResizeAction::Normal,
+        27 => ResizeAction::Locked,
+        _ => return None,
+    })
+}
+
+fn hint_action_key(key: u8, mode: FooterMode, shortcuts: crate::config::Shortcuts) -> Option<u8> {
+    match mode {
+        FooterMode::Pane => shortcuts.pane_key(pane_action(key)?),
+        FooterMode::Resize => shortcuts.resize_key(resize_action(key)?),
+        _ => Some(key),
+    }
+}
+
 fn pane_action(key: u8) -> Option<crate::config::PaneAction> {
     use crate::config::PaneAction;
     Some(match key {
@@ -271,15 +312,27 @@ fn pane_hint_key(hint: ShortcutHint, shortcuts: crate::config::Shortcuts) -> Str
         .join("/")
 }
 
+fn resize_hint_key(hint: ShortcutHint, shortcuts: crate::config::Shortcuts) -> String {
+    hint.actions
+        .iter()
+        .filter_map(|(_, key)| {
+            shortcuts
+                .resize_key(resize_action(*key)?)
+                .map(displayed_key)
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 fn hint_key_for_mode(
     hint: ShortcutHint,
     mode: FooterMode,
     shortcuts: crate::config::Shortcuts,
 ) -> String {
-    if mode == FooterMode::Pane {
-        pane_hint_key(hint, shortcuts)
-    } else {
-        hint_key(hint, shortcuts)
+    match mode {
+        FooterMode::Pane => pane_hint_key(hint, shortcuts),
+        FooterMode::Resize => resize_hint_key(hint, shortcuts),
+        _ => hint_key(hint, shortcuts),
     }
 }
 
@@ -314,6 +367,7 @@ fn visible_shortcuts(
     let shortcuts = match mode {
         FooterMode::Normal => NORMAL_SHORTCUTS,
         FooterMode::Pane => PANE_SHORTCUTS,
+        FooterMode::Resize => RESIZE_SHORTCUTS,
         FooterMode::Locked => LOCKED_SHORTCUTS,
     };
     let mut visible = Vec::new();
@@ -353,9 +407,9 @@ fn visible_shortcuts(
     }
     for hint in shortcuts {
         if !hint.actions.iter().all(|(_, action)| match mode {
-            FooterMode::Pane => pane_action(*action)
-                .and_then(|action| bindings.pane_key(action))
-                .is_some(),
+            FooterMode::Pane | FooterMode::Resize => {
+                hint_action_key(*action, mode, bindings).is_some()
+            }
             _ => bindings.action_is_active(*action),
         }) {
             continue;
@@ -446,25 +500,21 @@ pub(crate) fn footer_hitboxes_for_mode(
             if index != 0 {
                 key_offset += 1;
             }
-            let action = if mode == FooterMode::Pane {
-                pane_action(*action).and_then(|action| bindings.pane_key(action))
-            } else {
-                Some(*action)
-            };
+            let action = hint_action_key(*action, mode, bindings);
             if let Some(action) = action {
                 let width = display_width(&displayed_key(action));
-                let width = if mode == FooterMode::Pane { width } else { 1 };
+                let width = if matches!(mode, FooterMode::Pane | FooterMode::Resize) {
+                    width
+                } else {
+                    1
+                };
                 let column = used + 2 + key_offset;
                 hitboxes.push((column, column + width, action));
                 key_offset += width;
             }
         }
         if let Some((_, action)) = hint.actions.first() {
-            let action = if mode == FooterMode::Pane {
-                pane_action(*action).and_then(|action| bindings.pane_key(action))
-            } else {
-                Some(*action)
-            };
+            let action = hint_action_key(*action, mode, bindings);
             if let Some(action) = action {
                 hitboxes.push((used + 1, used + width + 1, action));
             }
@@ -526,6 +576,7 @@ fn mode_label(mode: FooterMode) -> &'static str {
     match mode {
         FooterMode::Normal => " NORMAL ",
         FooterMode::Pane => " PANE ",
+        FooterMode::Resize => " RESIZE ",
         FooterMode::Locked => " LOCKED ",
     }
 }
@@ -569,6 +620,7 @@ fn draw_footer(
         background: match mode {
             FooterMode::Normal => GREEN,
             FooterMode::Pane => LAVENDER,
+            FooterMode::Resize => PEACH,
             FooterMode::Locked => RED,
         },
         bold: true,

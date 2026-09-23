@@ -47,14 +47,33 @@ pub struct PaneArrowBinding {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResizeAction {
+    Resize(Direction),
+    Normal,
+    Pane,
+    Locked,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ResizeBinding {
+    key: u8,
+    pub action: ResizeAction,
+    preferred: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Shortcuts {
     keys: [u8; 3],
     normal_actions: [Option<(u8, u8)>; 16],
     normal_action_len: usize,
     pane_enter: Option<u8>,
+    resize_enter: Option<u8>,
     pane_bindings: [Option<PaneBinding>; 32],
     pane_binding_len: usize,
     pane_arrows: [Option<PaneArrowBinding>; 4],
+    resize_bindings: [Option<ResizeBinding>; 16],
+    resize_binding_len: usize,
+    resize_arrows: [Option<ResizeAction>; 4],
     normal_exit: [u8; 8],
     normal_exit_len: usize,
 }
@@ -66,9 +85,13 @@ impl Default for Shortcuts {
             normal_actions: [None; 16],
             normal_action_len: 0,
             pane_enter: None,
+            resize_enter: None,
             pane_bindings: [None; 32],
             pane_binding_len: 0,
             pane_arrows: [None; 4],
+            resize_bindings: [None; 16],
+            resize_binding_len: 0,
+            resize_arrows: [None; 4],
             normal_exit: [0; 8],
             normal_exit_len: 0,
         }
@@ -159,6 +182,10 @@ impl Shortcuts {
         self.pane_enter == Some(key)
     }
 
+    pub fn enters_resize(self, key: u8) -> bool {
+        self.resize_enter == Some(key)
+    }
+
     pub fn pane_binding(self, key: u8) -> Option<PaneBinding> {
         self.pane_bindings[..self.pane_binding_len]
             .iter()
@@ -173,6 +200,27 @@ impl Shortcuts {
 
     pub fn pane_key(self, action: PaneAction) -> Option<u8> {
         self.pane_bindings[..self.pane_binding_len]
+            .iter()
+            .flatten()
+            .filter(|binding| binding.action == action)
+            .max_by_key(|binding| binding.preferred)
+            .map(|binding| binding.key)
+    }
+
+    pub fn resize_binding(self, key: u8) -> Option<ResizeBinding> {
+        self.resize_bindings[..self.resize_binding_len]
+            .iter()
+            .flatten()
+            .find(|binding| binding.key == key)
+            .copied()
+    }
+
+    pub fn resize_arrow_action(self, direction: Direction) -> Option<ResizeAction> {
+        self.resize_arrows[arrow_index(direction)]
+    }
+
+    pub fn resize_key(self, action: ResizeAction) -> Option<u8> {
+        self.resize_bindings[..self.resize_binding_len]
             .iter()
             .flatten()
             .filter(|binding| binding.action == action)
@@ -506,6 +554,22 @@ fn parse_keybinds(
                 .as_table()
                 .and_then(|table| table.get("mode"))
                 .and_then(toml::Value::as_str)
+                == Some("resize")
+            && let Some(byte) = parse_mode_key(key)
+        {
+            if shortcuts.resize_enter.replace(byte).is_some() {
+                return Err(
+                    "multiple keybinds.normal resize-mode entry keys are not supported yet"
+                        .to_owned(),
+                );
+            }
+        } else if actions.len() == 1
+            && names.len() == 1
+            && names[0] == "switch-mode"
+            && actions[0]
+                .as_table()
+                .and_then(|table| table.get("mode"))
+                .and_then(toml::Value::as_str)
                 == Some("locked")
             && let Some(byte) = parse_mode_key(key)
         {
@@ -521,6 +585,7 @@ fn parse_keybinds(
     }
     validate_shortcuts(shortcuts)?;
     parse_pane_bindings(keybinds.get("pane"), &mut shortcuts)?;
+    parse_resize_bindings(keybinds.get("resize"), &mut shortcuts)?;
     for (key, _) in shortcuts.normal_actions[..shortcuts.normal_action_len]
         .iter()
         .flatten()
@@ -632,6 +697,63 @@ fn parse_pane_bindings(
             preferred,
         });
         shortcuts.pane_binding_len += 1;
+    }
+    Ok(())
+}
+
+fn parse_resize_bindings(
+    value: Option<&toml::Value>,
+    shortcuts: &mut Shortcuts,
+) -> Result<(), String> {
+    let Some(value) = value else {
+        return Ok(());
+    };
+    let resize = value.as_table().ok_or("keybinds.resize must be a table")?;
+    for (key, binding) in resize {
+        let Some(table) = binding.as_table() else {
+            continue;
+        };
+        let Some(actions) = table.get("actions").and_then(toml::Value::as_array) else {
+            continue;
+        };
+        let [single] = actions.as_slice() else {
+            continue;
+        };
+        let action = match single.as_str() {
+            Some("resize-pane-left") => Some(ResizeAction::Resize(Direction::Left)),
+            Some("resize-pane-down") => Some(ResizeAction::Resize(Direction::Down)),
+            Some("resize-pane-up") => Some(ResizeAction::Resize(Direction::Up)),
+            Some("resize-pane-right") => Some(ResizeAction::Resize(Direction::Right)),
+            _ => single.as_table().and_then(|value| {
+                (value.get("action").and_then(toml::Value::as_str) == Some("switch-mode"))
+                    .then(|| match value.get("mode").and_then(toml::Value::as_str) {
+                        Some("normal") => Some(ResizeAction::Normal),
+                        Some("pane") => Some(ResizeAction::Pane),
+                        Some("locked") => Some(ResizeAction::Locked),
+                        _ => None,
+                    })
+                    .flatten()
+            }),
+        };
+        let Some(action) = action else {
+            continue;
+        };
+        if let Some(direction) = parse_arrow_key(key) {
+            shortcuts.resize_arrows[arrow_index(direction)] = Some(action);
+            continue;
+        }
+        let Some(key) = parse_mode_key(key) else {
+            continue;
+        };
+        if shortcuts.resize_binding_len == shortcuts.resize_bindings.len() {
+            return Err("too many supported keybinds.resize bindings".to_owned());
+        }
+        shortcuts.resize_bindings[shortcuts.resize_binding_len] = Some(ResizeBinding {
+            key,
+            action,
+            preferred: table.get("display").and_then(toml::Value::as_str) == Some("always"),
+        });
+        shortcuts.resize_binding_len += 1;
     }
     Ok(())
 }
@@ -905,6 +1027,56 @@ esc = { actions = [{ action = "switch-mode", mode = "locked" }] }
         assert_eq!(
             shortcuts.pane_binding(b']').unwrap().action,
             PaneAction::MoveNextWindow
+        );
+    }
+
+    #[test]
+    fn resize_mode_reads_main_style_directional_and_transition_bindings() {
+        let shortcuts = Shortcuts::test_from_config(
+            r#"
+[keybinds.normal]
+r = { actions = [{ action = "switch-mode", mode = "resize" }] }
+[keybinds.resize]
+left = { actions = ["resize-pane-left"] }
+down = { actions = ["resize-pane-down"] }
+up = { actions = ["resize-pane-up"] }
+right = { actions = ["resize-pane-right"] }
+h = { actions = ["resize-pane-left"], display = "always" }
+j = { actions = ["resize-pane-down"] }
+k = { actions = ["resize-pane-up"] }
+l = { actions = ["resize-pane-right"] }
+r = { actions = [{ action = "switch-mode", mode = "normal" }] }
+"Ctrl p" = { actions = [{ action = "switch-mode", mode = "pane" }] }
+esc = { actions = [{ action = "switch-mode", mode = "locked" }] }
+"#,
+        );
+        assert!(shortcuts.enters_resize(b'r'));
+        assert_eq!(
+            shortcuts.resize_key(ResizeAction::Resize(Direction::Left)),
+            Some(b'h')
+        );
+        for direction in [
+            Direction::Left,
+            Direction::Down,
+            Direction::Up,
+            Direction::Right,
+        ] {
+            assert_eq!(
+                shortcuts.resize_arrow_action(direction),
+                Some(ResizeAction::Resize(direction))
+            );
+        }
+        assert_eq!(
+            shortcuts.resize_binding(b'r').unwrap().action,
+            ResizeAction::Normal
+        );
+        assert_eq!(
+            shortcuts.resize_binding(16).unwrap().action,
+            ResizeAction::Pane
+        );
+        assert_eq!(
+            shortcuts.resize_binding(27).unwrap().action,
+            ResizeAction::Locked
         );
     }
 

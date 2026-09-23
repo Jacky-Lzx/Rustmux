@@ -78,6 +78,15 @@ right. The destination becomes active; if the source window empties, it closes.
 An invalid destination split leaves both windows unchanged and rings the bell.
 Esc exits without reaching the shell.
 
+Main-style RESIZE mode is also supported: a `[keybinds.normal]` binding such as
+`r = { actions = [{ action = "switch-mode", mode = "resize" }] }` enters it.
+In `[keybinds.resize]`, bind `resize-pane-left/down/up/right` to `h/j/k/l` or
+the matching arrow keys. Repeated presses adjust the active pane's border one
+step at a time and stay in RESIZE mode; minimum-size limits and zoom leave the
+layout unchanged. A standalone `switch-mode` binding can return to NORMAL,
+PANE, or LOCKED; Esc exits without passing a byte to the shell. The footer
+shows RESIZE and the configured directional shortcuts.
+
 Other mode tables and unsupported actions from main's larger configuration are
 still ignored. `clear_defaults` is not implemented yet. Ctrl-B remains the only
 supported LOCKED-to-NORMAL key. PANE's floating action is not yet supported.

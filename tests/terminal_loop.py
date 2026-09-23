@@ -1068,6 +1068,64 @@ with tempfile.TemporaryDirectory(prefix="rustmux-pane-window-move-") as director
     finally:
         s.close()
 
+with tempfile.TemporaryDirectory(prefix="rustmux-resize-mode-") as directory:
+    os.mkdir(os.path.join(directory, "rustmux"))
+    with open(os.path.join(directory, "rustmux", "config.toml"), "w", encoding="utf-8") as config:
+        config.write(
+            "[keybinds.normal]\n"
+            "r = { actions = [{ action = 'switch-mode', mode = 'resize' }] }\n"
+            "[keybinds.resize]\n"
+            "h = { actions = ['resize-pane-left'], display = 'always' }\n"
+            "j = { actions = ['resize-pane-down'], display = 'always' }\n"
+            "k = { actions = ['resize-pane-up'], display = 'always' }\n"
+            "l = { actions = ['resize-pane-right'], display = 'always' }\n"
+            "left = { actions = ['resize-pane-left'] }\n"
+            "r = { actions = [{ action = 'switch-mode', mode = 'normal' }] }\n"
+            "esc = { actions = [{ action = 'switch-mode', mode = 'locked' }] }\n"
+        )
+    s = Session(extra_env={"XDG_CONFIG_HOME": directory})
+    try:
+        s.expect(b"RUSTMUX_READY> ")
+        s.send(b"\x02%")
+        divider = "│".encode()
+        def separator_column():
+            matches = [match.start() for match in re.finditer(re.escape(divider), s.physical_rows[2])]
+            return matches[1] if len(matches) >= 4 else None
+        deadline = time.monotonic() + 3
+        while separator_column() is None:
+            s.read()
+            assert time.monotonic() < deadline, s.physical_rows
+        original = separator_column()
+        s.send(b"\x02r")
+        deadline = time.monotonic() + 3
+        while b"RESIZE" not in s.physical_rows[-1]:
+            s.read()
+            assert time.monotonic() < deadline, s.physical_rows[-1]
+        assert b"Resize" in s.physical_rows[-1], s.physical_rows[-1]
+        s.send(b"h")
+        deadline = time.monotonic() + 3
+        while separator_column() == original:
+            s.read()
+            assert time.monotonic() < deadline, s.physical_rows
+        after_h = separator_column()
+        assert b"RESIZE" in s.physical_rows[-1], s.physical_rows[-1]
+        s.send(b"\x1b[D")
+        deadline = time.monotonic() + 3
+        while separator_column() == after_h:
+            s.read()
+            assert time.monotonic() < deadline, s.physical_rows
+        s.send(b"\x1b")
+        deadline = time.monotonic() + 3
+        while b"LOCKED" not in s.physical_rows[-1]:
+            s.read()
+            assert time.monotonic() < deadline, s.physical_rows[-1]
+        s.send(b"printf 'RESIZE_MODE_DONE\\n'\n")
+        s.expect(b"RESIZE_MODE_DONE")
+        os.kill(s.app_pid, signal.SIGTERM)
+        s.finish(128 + signal.SIGTERM)
+    finally:
+        s.close()
+
 with tempfile.TemporaryDirectory(prefix="rustmux-normal-window-") as directory:
     os.mkdir(os.path.join(directory, "rustmux"))
     with open(os.path.join(directory, "rustmux", "config.toml"), "w", encoding="utf-8") as config:
