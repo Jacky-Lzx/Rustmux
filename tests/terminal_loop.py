@@ -3504,6 +3504,28 @@ try:
     picker.send(b"q")
     picker.expect(b"RUSTMUX_READY>")
     expect_bar(picker, f"Rustmux ({picker_helper})".encode())
+
+    # A pane can enable Kitty keyboard encoding before the next prefix. The
+    # attached client forwards those sequences, so the named server must also
+    # recognize the Session Manager shortcut after decoding them.
+    picker.output.clear()
+    picker.frames.clear()
+    picker.send(b"printf '\\033[=1u'\n")
+    end = time.monotonic() + 8
+    while b"\x1b[=1u" not in picker.output:
+        picker.read()
+        assert time.monotonic() < end, bytes(picker.output[-2000:])
+    picker.output.clear()
+    picker.send(b"\x1b[98;5u\x1b[119;5u")
+    end = time.monotonic() + 8
+    while b"Session Manager" not in picker.output:
+        picker.read()
+        assert time.monotonic() < end, bytes(picker.output[-2000:])
+    picker.send(b"q")
+    picker.expect(b"RUSTMUX_READY>")
+    expect_bar(picker, f"Rustmux ({picker_helper})".encode())
+    picker.send(b"printf '\\033[=0u'\n")
+    picker.expect(b"RUSTMUX_READY>")
     picker.send(b"\x02d")
     picker.finish(0)
 

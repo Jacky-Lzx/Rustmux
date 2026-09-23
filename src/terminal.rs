@@ -621,6 +621,7 @@ enum InputMode {
 struct WindowInput {
     mode: InputMode,
     shortcuts: crate::config::Shortcuts,
+    session_available: bool,
     paste: bool,
     tail: VecDeque<u8>,
     mouse: Vec<u8>,
@@ -999,6 +1000,11 @@ impl WindowInput {
     }
 
     fn shortcut(&mut self, byte: u8, output: &mut Vec<WindowKey>) {
+        if self.session_available && byte == 23 {
+            self.mode = InputMode::Locked;
+            output.push(WindowKey::SessionManager);
+            return;
+        }
         if self.shortcuts.enters_pane(byte) {
             self.mode = InputMode::Pane;
             return;
@@ -2198,6 +2204,7 @@ fn forward(
                 break;
             }
             keys.shortcuts = shortcuts;
+            keys.session_available = session_name.is_some();
             keys.pane_height = pane.screen().dimensions().0;
             let set = windows.active().unwrap().content();
             let rect = set
@@ -3989,6 +3996,41 @@ n = { actions = ["new-window", { action = "switch-mode", mode = "locked" }] }
                 WindowKey::Byte(b'q')
             ]
         );
+    }
+
+    #[test]
+    fn named_session_opens_manager_for_kitty_encoded_ctrl_b_ctrl_w() {
+        let mut decoder = WindowInput {
+            session_available: true,
+            kitty_keyboard_flags: 1,
+            ..WindowInput::default()
+        };
+        let mut actions = Vec::new();
+        for &byte in b"\x1b[98;5u\x1b[119;5u" {
+            decoder.feed(byte, &mut actions);
+        }
+        assert_eq!(actions, [WindowKey::SessionManager]);
+        assert_eq!(decoder.mode, InputMode::Locked);
+    }
+
+    #[test]
+    fn session_manager_fallback_only_applies_to_named_sessions() {
+        let mut named = WindowInput {
+            session_available: true,
+            ..WindowInput::default()
+        };
+        let mut actions = Vec::new();
+        for &byte in b"\x02\x17" {
+            named.feed(byte, &mut actions);
+        }
+        assert_eq!(actions, [WindowKey::SessionManager]);
+
+        let mut local = WindowInput::default();
+        actions.clear();
+        for &byte in b"\x02\x17" {
+            local.feed(byte, &mut actions);
+        }
+        assert_eq!(actions, [WindowKey::Byte(2), WindowKey::Byte(23)]);
     }
 
     #[test]
