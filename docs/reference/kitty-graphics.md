@@ -26,14 +26,19 @@ assembler. File, temporary-file and shared-memory media are not read, and
 compressed data is not decompressed. The chunk and continuation rules follow
 the [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
 
-The runtime does not yet use the framer or assembler to store, place, redraw or
-delete images. It does not answer graphics capability queries or claim Yazi preview
-compatibility. Those are later review increments, along with per-pane image ID
-isolation and lifecycle cleanup. Until then, the existing display parser
-continues to ignore APC content.
+Every pane now passes PTY output through its own framer before the text parser
+and OSC observer. Graphics bytes cannot appear as screen text or shell-command
+output; the hidden close/undo path uses the same pane pipeline. Callers can opt
+in to complete direct transfers with `Pane::process_output_with_graphics`.
+The normal runtime instead discards graphics commands without assembling or
+retaining image data. It does not store, place, redraw or delete images, answer
+graphics capability queries, or claim Yazi preview compatibility. Those are
+later review increments, along with per-pane image ID isolation and lifecycle
+cleanup.
 
 Unit tests cover every two-chunk split of a command, ordinary output ordering,
 non-graphics APCs, UTF-8/C1 ambiguity, oversized and cancelled commands, and
 EOF recovery. Assembler tests cover chunk inheritance, raw byte counts, bounds,
-unsupported media and recovery. Run `cargo test --lib graphics::tests` and
-`cargo test --lib graphics_transfer::tests`.
+unsupported media and recovery. Pane tests cover interleaved text, per-pane
+isolation and command-output filtering. Run `cargo test --lib graphics::tests`,
+`cargo test --lib graphics_transfer::tests` and `cargo test --test panes`.

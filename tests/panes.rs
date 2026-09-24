@@ -51,6 +51,51 @@ fn until(pane: &mut Pane, condition: impl Fn(&Pane) -> bool) {
 }
 
 #[test]
+fn kitty_transfer_callbacks_and_partial_commands_stay_with_their_pane() {
+    let mut left = Pane::spawn("/bin/sh", 6, 40).unwrap();
+    let mut right = Pane::spawn("/bin/sh", 6, 40).unwrap();
+    let mut left_images = Vec::new();
+    let mut right_images = Vec::new();
+    left.process_output_with_graphics(
+        b"left\x1b_Ga=T,f=32,s=1,v=1,i=7,m=1;AQ",
+        &mut |_| {},
+        &mut |image| left_images.push(image),
+    );
+    right.process_output_with_graphics(
+        b"right\x1b_Ga=T,f=24,s=1,v=1,i=7;BAUG\x1b\\",
+        &mut |_| {},
+        &mut |image| right_images.push(image),
+    );
+    left.process_output_with_graphics(
+        b"ID\x1b\\middle\x1b_Gm=0;BA==\x1b\\end",
+        &mut |_| {},
+        &mut |image| left_images.push(image),
+    );
+    assert_eq!(left_images.len(), 1);
+    assert_eq!(left_images[0].data, [1, 2, 3, 4]);
+    assert_eq!(left_images[0].control(b'i'), Some(b"7".as_slice()));
+    assert_eq!(right_images.len(), 1);
+    assert_eq!(right_images[0].data, [4, 5, 6]);
+    assert!(text(&left).starts_with("leftmiddleend"), "{}", text(&left));
+    assert!(text(&right).starts_with("right"), "{}", text(&right));
+
+    // The ordinary runtime path does not retain or surface image data.
+    left.process_output(b"\x1b_Gf=100;U0VDUkVU\x1b\\tail", &mut |_| {});
+    assert!(!text(&left).contains("SECRET"));
+    assert!(text(&left).contains("tail"));
+
+    // Switching to the non-capturing path abandons a partial transfer.
+    left.process_output_with_graphics(b"\x1b_Gf=100,m=1;QUJD\x1b\\", &mut |_| {}, &mut |image| {
+        left_images.push(image)
+    });
+    left.process_output(b"plain", &mut |_| {});
+    left.process_output_with_graphics(b"\x1b_Gm=0;RA==\x1b\\", &mut |_| {}, &mut |image| {
+        left_images.push(image)
+    });
+    assert_eq!(left_images.len(), 1);
+}
+
+#[test]
 fn real_windows_keep_processes_and_terminal_state_isolated() {
     assert!(Pane::spawn("/definitely/missing/rustmux-shell", 24, 80).is_err());
     assert!(Pane::spawn("/bin/sh", 0, 80).is_err());

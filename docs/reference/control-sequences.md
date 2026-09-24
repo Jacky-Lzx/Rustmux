@@ -89,9 +89,10 @@ through BEL or ST (ESC followed by backslash). A separate bounded observer
 recognizes OSC 7 working-directory metadata and OSC 133 command-output boundaries
 for Ctrl-B `e`; other OSC payload remains uninterpreted.
 DCS retains at most 64 bytes to recognize the supported DECRQSS queries; other
-DCS, SOS, PM and APC payloads are discarded through ST. A separate
-[Kitty graphics framer](kitty-graphics.md) can extract APC G commands, but it
-is not yet connected to image display. An unterminated string
+DCS, SOS and PM payloads are discarded through ST. Each pane's
+[Kitty graphics framer](kitty-graphics.md) extracts APC G commands before text
+and shell-output parsing; the normal runtime still discards them rather than
+displaying images. Other APC payloads remain unsupported. An unterminated string
 continues to discard input until its terminator or cancellation. Other unsupported
 controls are ignored.
 UTF-8 decoding and replacement are

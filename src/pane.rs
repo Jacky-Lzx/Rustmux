@@ -1,6 +1,8 @@
 //! Per-pane process and terminal state. Polling and rendering belong to the caller.
 
 use crate::{
+    graphics::{GraphicsEvent, GraphicsFramer},
+    graphics_transfer::{AssembledDirectTransfer, DirectTransferAssembler},
     parser::Parser,
     pty::PtyShell,
     screen::Screen,
@@ -29,6 +31,8 @@ pub(crate) const MAX_REPLY_DRAIN_BYTES: usize = 8192;
 pub struct Pane {
     shell: PtyShell,
     parser: Parser,
+    graphics_framer: GraphicsFramer,
+    graphics_transfer: DirectTransferAssembler,
     screen: Screen,
     io: PaneIo,
     command_bell_after: Option<Duration>,
@@ -183,6 +187,8 @@ impl Pane {
         Ok(Self {
             shell,
             parser: Parser::new(),
+            graphics_framer: GraphicsFramer::new(),
+            graphics_transfer: DirectTransferAssembler::new(),
             screen,
             io,
             command_bell_after: notifications.command_bell_after(),
@@ -216,6 +222,8 @@ impl Pane {
         Ok(Self {
             shell,
             parser: Parser::new(),
+            graphics_framer: GraphicsFramer::new(),
+            graphics_transfer: DirectTransferAssembler::new(),
             screen,
             io: PaneIo::default(),
             command_bell_after: None,
@@ -230,6 +238,8 @@ impl Pane {
         if stopped {
             // A killed full-screen job cannot restore these modes itself.
             self.parser = Parser::new();
+            self.graphics_framer = GraphicsFramer::new();
+            self.graphics_transfer.reset();
             self.screen.leave_alternate();
             self.screen.soft_reset();
             self.screen
@@ -334,7 +344,55 @@ impl Pane {
     /// Consume child output and route terminal replies back to this same child.
     /// The caller must reserve reply capacity before reading (MAX_REPLY_BYTES).
     pub fn process_output(&mut self, bytes: &[u8], reply: &mut impl FnMut(&[u8])) {
+        self.process_output_inner(bytes, reply, None);
+    }
+
+    /// Opt in to receiving complete direct-data transfers. The ordinary
+    /// runtime path discards graphics commands until image display is ready,
+    /// so it cannot claim graphics support or buffer unrendered images.
+    pub fn process_output_with_graphics(
+        &mut self,
+        bytes: &[u8],
+        reply: &mut impl FnMut(&[u8]),
+        graphics: &mut impl FnMut(AssembledDirectTransfer),
+    ) {
+        self.process_output_inner(bytes, reply, Some(graphics));
+    }
+
+    fn process_output_inner(
+        &mut self,
+        bytes: &[u8],
+        reply: &mut impl FnMut(&[u8]),
+        mut graphics: Option<&mut dyn FnMut(AssembledDirectTransfer)>,
+    ) {
         self.io.dirty = true;
+        if graphics.is_none() {
+            self.graphics_transfer.reset();
+        }
+        for event in self.graphics_framer.advance(bytes) {
+            match event {
+                GraphicsEvent::Terminal(bytes) => self.process_terminal_output(&bytes, reply),
+                GraphicsEvent::Command(command) => {
+                    if let Some(handler) = graphics.as_mut()
+                        && let Some(transfer) = self.graphics_transfer.accept(&command)
+                    {
+                        handler(transfer);
+                    }
+                }
+            }
+        }
+        let completed_commands = self.io.semantic.take_completed_commands();
+        if self.command_bell_after.is_some_and(|threshold| {
+            completed_commands
+                .into_iter()
+                .any(|duration| duration >= threshold)
+        }) {
+            self.io.bell_pending = true;
+            self.io.command_bell_pending = true;
+        }
+    }
+
+    fn process_terminal_output(&mut self, bytes: &[u8], reply: &mut impl FnMut(&[u8])) {
         let mut events = Vec::new();
         self.io
             .semantic
@@ -349,15 +407,6 @@ impl Pane {
             start = end;
         }
         self.process_output_segment(&bytes[start..], reply);
-        let completed_commands = self.io.semantic.take_completed_commands();
-        if self.command_bell_after.is_some_and(|threshold| {
-            completed_commands
-                .into_iter()
-                .any(|duration| duration >= threshold)
-        }) {
-            self.io.bell_pending = true;
-            self.io.command_bell_pending = true;
-        }
     }
 
     pub(crate) fn take_command_bell(&mut self) -> bool {
@@ -377,6 +426,12 @@ impl Pane {
 
     /// Flush an incomplete UTF-8 sequence when the caller observes PTY EOF.
     pub fn finish_output(&mut self) {
+        for event in self.graphics_framer.finish() {
+            if let GraphicsEvent::Terminal(bytes) = event {
+                self.process_terminal_output(&bytes, &mut |_| {});
+            }
+        }
+        self.graphics_transfer.reset();
         self.parser.finish(&mut self.screen);
         self.io.dirty = true;
         self.io.eof = true;
@@ -403,6 +458,19 @@ mod io_tests {
     use super::*;
     use crate::{parser::MAX_REPLY_BYTES, window::Windows};
     use std::{os::unix::process::ExitStatusExt, time::Duration};
+
+    #[test]
+    fn graphics_payload_does_not_enter_semantic_command_output() {
+        let mut pane = Pane::spawn("/bin/sh", 4, 40).unwrap();
+        for part in [
+            b"\x1b]133;C\x07before\x9fGf=100;U0VD".as_slice(),
+            b"UkVU\x9cafter\x1b]133;D\x07",
+        ] {
+            pane.process_output(part, &mut |_| {});
+        }
+        assert_eq!(pane.last_command_output().as_deref(), Some("beforeafter"));
+        assert_eq!(pane.screen().row(0).unwrap()[0].character, 'b');
+    }
 
     #[test]
     fn input_and_reply_capacity_stop_at_lifecycle_boundaries() {

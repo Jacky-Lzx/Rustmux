@@ -47,6 +47,7 @@ enum State {
 }
 
 impl SemanticOutput {
+    #[cfg(test)]
     pub fn advance(&mut self, input: &[u8]) {
         self.advance_with_prompt_events(input, &mut |_, _| {});
     }

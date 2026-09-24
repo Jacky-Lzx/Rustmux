@@ -20,20 +20,21 @@ impl ClosedPane {
     // Nonblocking bounded maintenance. Hidden PTY readiness wakes the event loop,
     // so output and terminal queries drain without scheduling redraws.
     pub fn service(&mut self) -> io::Result<bool> {
-        let (shell, parser, screen, state) = self.pane.as_mut().unwrap().parts_mut();
-        if shell.try_wait()?.is_some() {
+        let pane = self.pane.as_mut().unwrap();
+        if pane.shell_mut().try_wait()?.is_some() {
             return Ok(false);
         }
-        let limit = state.reply_read_limit().min(MAX_REPLY_DRAIN_BYTES);
+        let limit = pane.io().reply_read_limit().min(MAX_REPLY_DRAIN_BYTES);
         if limit > 0 {
             let mut bytes = [0; MAX_REPLY_DRAIN_BYTES];
-            match shell.read(&mut bytes[..limit]) {
+            match pane.shell_mut().read(&mut bytes[..limit]) {
                 Ok(0) => return Ok(false),
                 Ok(count) => {
-                    state.semantic.advance(&bytes[..count]);
-                    parser.advance_with_replies(screen, &bytes[..count], &mut |reply| {
-                        state.to_shell.extend(reply)
-                    })
+                    let mut replies = Vec::new();
+                    pane.process_output(&bytes[..count], &mut |reply| {
+                        replies.extend_from_slice(reply);
+                    });
+                    pane.parts_mut().3.to_shell.extend(replies);
                 }
                 Err(error)
                     if matches!(
@@ -43,6 +44,7 @@ impl ClosedPane {
                 Err(error) => return Err(error),
             }
         }
+        let (shell, _, _, state) = pane.parts_mut();
         if !state.to_shell.is_empty() {
             match shell.write(state.to_shell.as_slices().0) {
                 Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
