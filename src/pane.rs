@@ -370,8 +370,8 @@ impl Pane {
         self.process_output_inner(bytes, reply, GraphicsSink::Callback(graphics));
     }
 
-    /// Opt in to bounded, pane-local image data retention. This does not
-    /// implement image placement, deletion commands, rendering or replies.
+    /// Opt in to bounded, pane-local image data and placement references.
+    /// This does not implement screen geometry, rendering or replies.
     pub fn process_output_with_image_store(&mut self, bytes: &[u8], reply: &mut impl FnMut(&[u8])) {
         self.process_output_inner(bytes, reply, GraphicsSink::Store);
     }
@@ -397,19 +397,21 @@ impl Pane {
         for event in self.graphics_framer.advance(bytes) {
             match event {
                 GraphicsEvent::Terminal(bytes) => self.process_terminal_output(&bytes, reply),
-                GraphicsEvent::Command(command) => {
-                    if !matches!(graphics, GraphicsSink::Drop)
-                        && let Some(transfer) = self.graphics_transfer.accept(&command)
-                    {
-                        match &mut graphics {
-                            GraphicsSink::Drop => unreachable!(),
-                            GraphicsSink::Callback(handler) => handler(transfer),
-                            GraphicsSink::Store => {
-                                let _ = self.image_store.insert(transfer);
-                            }
+                GraphicsEvent::Command(command) => match &mut graphics {
+                    GraphicsSink::Drop => {}
+                    GraphicsSink::Callback(handler) => {
+                        if let Some(transfer) = self.graphics_transfer.accept(&command) {
+                            handler(transfer);
                         }
                     }
-                }
+                    GraphicsSink::Store => {
+                        if let Some(transfer) = self.graphics_transfer.accept(&command) {
+                            let _ = self.image_store.insert(transfer);
+                        } else {
+                            let _ = self.image_store.accept_control(&command);
+                        }
+                    }
+                },
             }
         }
         let completed_commands = self.io.semantic.take_completed_commands();

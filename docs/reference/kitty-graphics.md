@@ -36,13 +36,24 @@ Replacement and explicit removal update byte accounting; oldest entries are
 evicted at 32 MiB or 256 images per pane. The store rejects query action `a=q`
 and image-number allocation `I`; it preserves PNG bytes without decoding them.
 It is cleared when a stopped foreground job resets its pane or its PTY reaches
-EOF. Full Kitty `a=d` semantics require placements, so the store's `remove` method is only an
-internal data-lifecycle operation, not a protocol delete implementation.
+EOF.
+
+The opt-in store now tracks placement *references* for `a=T` and a strict
+`a=p,i=<id>[,p=<id>]` subset. A named placement replaces the same `(i,p)`
+reference; an absent or zero `p` creates an anonymous reference. Re-transmitting
+an image ID drops its old references. The supported delete subset is
+`a=d,d=i/I,i=<id>[,p=<id>]`: lowercase removes matching references but keeps
+data, while uppercase also releases data once no references remain. Image
+eviction drops its references. There are at most 1024 references per pane.
+These rules follow the [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/),
+but the model does not track coordinates, visibility, scrollback references,
+cursor motion, or the other delete selectors; it cannot render placements or
+respond to placement commands yet.
 
 The normal runtime still discards graphics commands without assembling or
-retaining image data. It does not place, redraw or delete images, answer
-graphics capability queries, or claim Yazi preview compatibility. Those are
-later review increments.
+retaining image data. It does not place, redraw or delete visible images,
+answer graphics capability queries, or claim Yazi preview compatibility.
+Those are later review increments.
 
 Unit tests cover every two-chunk split of a command, ordinary output ordering,
 non-graphics APCs, UTF-8/C1 ambiguity, oversized and cancelled commands, and
@@ -50,4 +61,5 @@ EOF recovery. Assembler tests cover chunk inheritance, raw byte counts, bounds,
 unsupported media and recovery. Pane tests cover interleaved text, per-pane
 isolation and command-output filtering. Run `cargo test --lib graphics::tests`,
 `cargo test --lib graphics_transfer::tests` and `cargo test --test panes`.
-Store tests also cover replacement, isolation, eviction and explicit removal.
+Store tests also cover replacement, isolation, eviction, explicit removal,
+named and anonymous references, and soft versus hard deletion.

@@ -1,10 +1,12 @@
-//! Bounded image-data ownership for one pane. This does not model placements.
+//! Bounded image data and placement references for one pane. No coordinates
+//! or pixels are rendered here.
 
-use crate::graphics_transfer::AssembledDirectTransfer;
+use crate::{graphics::MAX_GRAPHICS_COMMAND_BYTES, graphics_transfer::AssembledDirectTransfer};
 use std::collections::{BTreeMap, VecDeque};
 
 pub const MAX_PANE_IMAGE_BYTES: usize = 32 * 1024 * 1024;
 pub const MAX_PANE_IMAGES: usize = 256;
+pub const MAX_PANE_PLACEMENTS: usize = 1024;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum ImageFormat {
@@ -23,13 +25,23 @@ pub struct StoredImage {
 pub enum StoreError {
     UnsupportedIdentity,
     UnsupportedAction,
+    InvalidPlacement,
+    MissingImage,
     TooLarge,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct Placement {
+    pub image_id: u32,
+    /// None is an anonymous placement (the protocol's absent or zero `p`).
+    pub placement_id: Option<u32>,
 }
 
 #[derive(Debug, Default)]
 pub struct ImageStore {
     images: BTreeMap<u32, StoredImage>,
     oldest: VecDeque<u32>,
+    placements: VecDeque<Placement>,
     total_bytes: usize,
 }
 
@@ -54,13 +66,24 @@ impl ImageStore {
         self.total_bytes
     }
 
+    pub fn placements(&self) -> impl Iterator<Item = &Placement> {
+        self.placements.iter()
+    }
+
     /// Retain a completed transfer with an explicit nonzero image ID. Query
     /// commands and image-number allocation require a later protocol stage.
     /// Replacement is atomic if the new transfer cannot fit by itself.
     pub fn insert(&mut self, transfer: AssembledDirectTransfer) -> Result<u32, StoreError> {
-        if !matches!(transfer.control(b'a'), None | Some(b"t" | b"T")) {
-            return Err(StoreError::UnsupportedAction);
-        }
+        let display = match transfer.control(b'a') {
+            None | Some(b"t") => false,
+            Some(b"T") => true,
+            _ => return Err(StoreError::UnsupportedAction),
+        };
+        let placement_id = if display {
+            parse_optional_placement_id(transfer.control(b'p'))?
+        } else {
+            None
+        };
         if transfer.control(b'I').is_some() {
             return Err(StoreError::UnsupportedIdentity);
         }
@@ -83,9 +106,8 @@ impl ImageStore {
         self.remove(id);
         while self.images.len() >= MAX_PANE_IMAGES || self.total_bytes + size > MAX_PANE_IMAGE_BYTES
         {
-            let oldest = self.oldest.pop_front().expect("nonempty image store");
-            let removed = self.images.remove(&oldest).expect("indexed image exists");
-            self.total_bytes -= removed.data.len();
+            let oldest = *self.oldest.front().expect("nonempty image store");
+            self.remove(oldest);
         }
         self.total_bytes += size;
         self.oldest.push_back(id);
@@ -96,23 +118,171 @@ impl ImageStore {
                 data: transfer.data,
             },
         );
+        if display {
+            self.place(id, placement_id)?;
+        }
         Ok(id)
     }
 
-    /// Explicit data removal. This is not yet a Kitty `a=d` operation: the
-    /// protocol's lowercase/uppercase forms depend on placement references.
+    /// Record only an explicit-ID placement reference. Screen position,
+    /// geometry, cursor movement, and acknowledgements are not modeled.
+    pub fn place(&mut self, image_id: u32, placement_id: Option<u32>) -> Result<(), StoreError> {
+        if placement_id == Some(0) {
+            return Err(StoreError::InvalidPlacement);
+        }
+        if !self.images.contains_key(&image_id) {
+            return Err(StoreError::MissingImage);
+        }
+        if let Some(placement_id) = placement_id {
+            self.placements.retain(|placement| {
+                placement.image_id != image_id || placement.placement_id != Some(placement_id)
+            });
+        }
+        if self.placements.len() >= MAX_PANE_PLACEMENTS {
+            self.placements.pop_front();
+        }
+        self.placements.push_back(Placement {
+            image_id,
+            placement_id,
+        });
+        Ok(())
+    }
+
+    /// A strict, deliberately small APC G control-command subset: `a=p`
+    /// with `i`/`p`, and `a=d,d=i/I` with `i` and optional `p`.
+    pub fn accept_control(&mut self, command: &[u8]) -> Result<(), StoreError> {
+        let controls = parse_control_command(command).ok_or(StoreError::UnsupportedAction)?;
+        match controls.get(&b'a').map(Vec::as_slice) {
+            Some(b"p") => {
+                if !only_keys(&controls, b"aipq") {
+                    return Err(StoreError::UnsupportedAction);
+                }
+                let id = required_id(&controls)?;
+                let placement_id =
+                    parse_optional_placement_id(controls.get(&b'p').map(Vec::as_slice))?;
+                self.place(id, placement_id)
+            }
+            Some(b"d") => {
+                if !only_keys(&controls, b"adipq") {
+                    return Err(StoreError::UnsupportedAction);
+                }
+                let id = required_id(&controls)?;
+                let placement_id =
+                    parse_optional_placement_id(controls.get(&b'p').map(Vec::as_slice))?;
+                match controls.get(&b'd').map(Vec::as_slice) {
+                    Some(b"i") => self.delete_placements(id, placement_id, false),
+                    Some(b"I") => self.delete_placements(id, placement_id, true),
+                    _ => return Err(StoreError::UnsupportedAction),
+                }
+                Ok(())
+            }
+            _ => Err(StoreError::UnsupportedAction),
+        }
+    }
+
+    fn delete_placements(&mut self, image_id: u32, placement_id: Option<u32>, free_data: bool) {
+        self.placements.retain(|placement| {
+            placement.image_id != image_id
+                || placement_id.is_some_and(|id| placement.placement_id != Some(id))
+        });
+        if free_data
+            && !self
+                .placements
+                .iter()
+                .any(|placement| placement.image_id == image_id)
+        {
+            self.remove(image_id);
+        }
+    }
+
+    /// Explicit data removal, including its placement references.
     pub fn remove(&mut self, id: u32) -> Option<StoredImage> {
         let removed = self.images.remove(&id)?;
         self.total_bytes -= removed.data.len();
         self.oldest.retain(|&entry| entry != id);
+        self.placements.retain(|placement| placement.image_id != id);
         Some(removed)
     }
 
     pub fn clear(&mut self) {
         self.images.clear();
         self.oldest.clear();
+        self.placements.clear();
         self.total_bytes = 0;
     }
+}
+
+type Controls = BTreeMap<u8, Vec<u8>>;
+
+fn parse_control_command(command: &[u8]) -> Option<Controls> {
+    if command.len() > MAX_GRAPHICS_COMMAND_BYTES {
+        return None;
+    }
+    let body = if let Some(bytes) = command.strip_prefix(b"\x1b_G") {
+        bytes.strip_suffix(b"\x1b\\")?
+    } else {
+        let bytes = command.strip_prefix(&[0x9f, b'G'])?;
+        bytes
+            .strip_suffix(&[0x9c])
+            .or_else(|| bytes.strip_suffix(b"\x1b\\"))?
+    };
+    let body = body.strip_suffix(b";").unwrap_or(body);
+    if body.is_empty() || body.contains(&b';') {
+        return None;
+    }
+    let mut controls = Controls::new();
+    for pair in body.split(|&byte| byte == b',') {
+        let equals = pair.iter().position(|&byte| byte == b'=')?;
+        let (key, with_equals) = pair.split_at(equals);
+        let value = &with_equals[1..];
+        if key.len() != 1
+            || !key[0].is_ascii_alphabetic()
+            || value.is_empty()
+            || !value.iter().all(u8::is_ascii_graphic)
+            || controls.insert(key[0], value.to_vec()).is_some()
+        {
+            return None;
+        }
+    }
+    if controls
+        .get(&b'q')
+        .is_some_and(|q| !matches!(q.as_slice(), b"0" | b"1" | b"2"))
+    {
+        return None;
+    }
+    Some(controls)
+}
+
+fn only_keys(controls: &Controls, allowed: &[u8]) -> bool {
+    controls.keys().all(|key| allowed.contains(key))
+}
+
+fn required_id(controls: &Controls) -> Result<u32, StoreError> {
+    controls
+        .get(&b'i')
+        .and_then(|bytes| parse_positive_u32(bytes))
+        .ok_or(StoreError::UnsupportedIdentity)
+}
+
+fn parse_optional_placement_id(value: Option<&[u8]>) -> Result<Option<u32>, StoreError> {
+    value
+        .map(|bytes| {
+            let id = parse_u32(bytes).ok_or(StoreError::InvalidPlacement)?;
+            Ok((id != 0).then_some(id))
+        })
+        .transpose()
+        .map(Option::flatten)
+}
+
+fn parse_positive_u32(bytes: &[u8]) -> Option<u32> {
+    parse_u32(bytes).filter(|&value| value != 0)
+}
+
+fn parse_u32(bytes: &[u8]) -> Option<u32> {
+    if !bytes.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    std::str::from_utf8(bytes).ok()?.parse::<u32>().ok()
 }
 
 #[cfg(test)]
@@ -177,5 +347,130 @@ mod tests {
         assert!(store.get(2).is_some());
         store.clear();
         assert!(store.is_empty());
+    }
+
+    #[test]
+    fn transmit_and_put_track_anonymous_and_named_references() {
+        let mut store = ImageStore::new();
+        store
+            .insert(transfer(b"\x1b_Ga=T,f=100,i=7,p=9;QQ==\x1b\\"))
+            .unwrap();
+        assert_eq!(
+            store.placements().copied().collect::<Vec<_>>(),
+            [Placement {
+                image_id: 7,
+                placement_id: Some(9)
+            }]
+        );
+        store.accept_control(b"\x1b_Ga=p,i=7,p=9\x1b\\").unwrap();
+        assert_eq!(store.placements().count(), 1);
+        store.accept_control(b"\x1b_Ga=p,i=7,p=0\x1b\\").unwrap();
+        store.accept_control(b"\x1b_Ga=p,i=7\x1b\\").unwrap();
+        assert_eq!(store.placements().count(), 3);
+        assert_eq!(
+            store
+                .placements()
+                .filter(|placement| placement.placement_id.is_none())
+                .count(),
+            2
+        );
+        store
+            .insert(transfer(b"\x1b_Ga=t,f=100,i=7;Qg==\x1b\\"))
+            .unwrap();
+        assert_eq!(store.placements().count(), 0);
+        assert_eq!(store.get(7).unwrap().data, b"B");
+    }
+
+    #[test]
+    fn soft_and_hard_id_deletion_have_distinct_data_lifetimes() {
+        let mut store = ImageStore::new();
+        store
+            .insert(transfer(b"\x1b_Ga=T,f=100,i=7,p=1;QQ==\x1b\\"))
+            .unwrap();
+        store.place(7, Some(2)).unwrap();
+        store
+            .accept_control(b"\x1b_Ga=d,d=I,i=7,p=1\x1b\\")
+            .unwrap();
+        assert!(store.get(7).is_some());
+        assert_eq!(store.placements().count(), 1);
+        store
+            .accept_control(b"\x1b_Ga=d,d=i,i=7,p=2\x1b\\")
+            .unwrap();
+        assert!(store.get(7).is_some());
+        assert_eq!(store.placements().count(), 0);
+        store.accept_control(b"\x1b_Ga=d,d=I,i=7\x1b\\").unwrap();
+        assert!(store.is_empty());
+        assert_eq!(store.total_bytes(), 0);
+    }
+
+    #[test]
+    fn invalid_controls_and_missing_images_do_not_change_references() {
+        let mut store = ImageStore::new();
+        store
+            .insert(transfer(b"\x1b_Ga=t,f=100,i=7;QQ==\x1b\\"))
+            .unwrap();
+        assert_eq!(
+            store.accept_control(b"\x1b_Ga=p,i=8,p=2\x1b\\"),
+            Err(StoreError::MissingImage)
+        );
+        assert_eq!(store.place(7, Some(0)), Err(StoreError::InvalidPlacement));
+        for command in [
+            b"\x1b_Ga=p,i=7,p=no\x1b\\".as_slice(),
+            b"\x1b_Ga=d,d=I,i=7,p=no\x1b\\",
+            b"\x1b_Ga=d,d=A\x1b\\",
+            b"\x1b_Ga=p,i=7,z=1\x1b\\",
+            b"\x1b_Ga=d,d=I,i=7;payload\x1b\\",
+        ] {
+            assert!(store.accept_control(command).is_err());
+        }
+        assert!(store.get(7).is_some());
+        assert_eq!(store.placements().count(), 0);
+        store.accept_control(b"\x9fGa=p,i=7,p=2\x9c").unwrap();
+        assert_eq!(store.placements().count(), 1);
+        let oversized = format!(
+            "\x1b_Ga=p,i=7,q={};\x1b\\",
+            "0".repeat(MAX_GRAPHICS_COMMAND_BYTES)
+        );
+        assert_eq!(
+            store.accept_control(oversized.as_bytes()),
+            Err(StoreError::UnsupportedAction)
+        );
+        assert_eq!(store.placements().count(), 1);
+    }
+
+    #[test]
+    fn evicting_image_also_removes_its_references() {
+        let mut store = ImageStore::new();
+        store
+            .insert(transfer(b"\x1b_Ga=T,f=100,i=1;QQ==\x1b\\"))
+            .unwrap();
+        for id in 2..=MAX_PANE_IMAGES + 1 {
+            let command = format!("\x1b_Ga=t,f=100,i={id};QQ==\x1b\\");
+            store.insert(transfer(command.as_bytes())).unwrap();
+        }
+        assert!(store.get(1).is_none());
+        assert_eq!(store.placements().count(), 0);
+    }
+
+    #[test]
+    fn placement_references_are_bounded() {
+        let mut store = ImageStore::new();
+        store
+            .insert(transfer(b"\x1b_Ga=t,f=100,i=1;QQ==\x1b\\"))
+            .unwrap();
+        for id in 1..=MAX_PANE_PLACEMENTS + 1 {
+            store.place(1, Some(id as u32)).unwrap();
+        }
+        assert_eq!(store.placements().count(), MAX_PANE_PLACEMENTS);
+        assert!(
+            !store
+                .placements()
+                .any(|placement| placement.placement_id == Some(1))
+        );
+        assert!(
+            store
+                .placements()
+                .any(|placement| placement.placement_id == Some(2))
+        );
     }
 }

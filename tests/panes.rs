@@ -115,6 +115,34 @@ fn kitty_image_data_is_opt_in_and_isolated_per_pane() {
 }
 
 #[test]
+fn kitty_placement_lifecycle_commands_stay_with_their_pane() {
+    let mut left = Pane::spawn("/bin/sh", 6, 40).unwrap();
+    let mut right = Pane::spawn("/bin/sh", 6, 40).unwrap();
+    for pane in [&mut left, &mut right] {
+        pane.process_output_with_image_store(b"\x1b_Ga=T,f=100,i=7,p=1;QQ==\x1b\\", &mut |_| {});
+    }
+    left.process_output_with_image_store(b"\x1b_Ga=p,i=7,p=2\x1b\\", &mut |_| {});
+    left.process_output_with_image_store(b"\x1b_Ga=d,d=I,i=7,p=1\x1b\\", &mut |_| {});
+    assert_eq!(left.image_store().placements().count(), 1);
+    assert_eq!(right.image_store().placements().count(), 1);
+    assert!(left.image_store().get(7).is_some());
+    left.process_output_with_image_store(b"\x1b_Ga=d,d=I,i=7", &mut |_| {});
+    left.process_output_with_image_store(b"\x1b\\", &mut |_| {});
+    assert!(left.image_store().get(7).is_none());
+    assert!(right.image_store().get(7).is_some());
+}
+
+#[test]
+fn kitty_delete_aborts_an_unfinished_transfer() {
+    let mut pane = Pane::spawn("/bin/sh", 6, 40).unwrap();
+    pane.process_output_with_image_store(b"\x1b_Ga=T,f=100,i=7,m=1;QUJD\x1b\\", &mut |_| {});
+    pane.process_output_with_image_store(b"\x1b_Ga=d,d=I,i=7\x1b\\", &mut |_| {});
+    pane.process_output_with_image_store(b"\x1b_Gm=0;RA==\x1b\\", &mut |_| {});
+    assert!(pane.image_store().is_empty());
+    assert_eq!(pane.image_store().placements().count(), 0);
+}
+
+#[test]
 fn real_windows_keep_processes_and_terminal_state_isolated() {
     assert!(Pane::spawn("/definitely/missing/rustmux-shell", 24, 80).is_err());
     assert!(Pane::spawn("/bin/sh", 0, 80).is_err());
