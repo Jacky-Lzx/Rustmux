@@ -92,6 +92,17 @@ impl ImageStore {
         self.placements.iter()
     }
 
+    /// Clear visible, cursor-anchored references on one screen without
+    /// discarding their image data. Unanchored virtual/relative references are
+    /// not classified as visible until their layout is modeled.
+    pub fn clear_screen_placements(&mut self, alternate: bool) {
+        self.placements.retain(|placement| {
+            placement
+                .geometry
+                .is_none_or(|geometry| geometry.anchor.alternate != alternate)
+        });
+    }
+
     /// Retain a completed transfer with an explicit nonzero image ID. Query
     /// commands and image-number allocation require a later protocol stage.
     /// Replacement is atomic if the new transfer cannot fit by itself.

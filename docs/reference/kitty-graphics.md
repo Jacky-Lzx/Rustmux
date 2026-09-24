@@ -64,8 +64,16 @@ the cursor at that command. Explicit `c`/`r` cell extents, signed `z` index,
 and `C=1` no-move request are parsed and retained. Missing extents remain
 unknown until pixel-cell sizing is available. Virtual and relative placements
 do not get a cursor anchor. This is metadata only: image placement does not yet
-move the cursor, follow scrolling or screen clears, compose pixels, redraw, or
-send graphics replies.
+move the cursor, follow scrolling, compose pixels, redraw, or send graphics replies.
+
+The opt-in pane path now removes cursor-anchored placement references when
+`CSI 2 J` clears their screen, when RIS resets both screens, and when an
+alternate screen is cleared by mode 1049 entry/exit or mode 1047 exit.
+Mode 47 preserves its alternate placements on exit; other text erasures do
+not clear graphics. Stored image data remains available for a later `a=p`.
+Unanchored virtual/relative references are not classified as visible, and
+scrolling and scrollback placement lifetimes remain unmodeled. These clear
+rules follow the [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
 
 The normal runtime still discards graphics commands without assembling or
 retaining image data. It does not place, redraw or delete visible images,
@@ -84,3 +92,5 @@ Decoder tests cover raw and PNG formats, palette transparency, corrupted PNGs,
 dimension checks and the output-size bound.
 Anchor tests cover interleaved text, final-chunk position, alternate-screen
 identity, explicit layout options, malformed metadata, and named replacement.
+Screen-lifecycle tests cover split `CSI 2 J`, non-clearing text erasures,
+alternate-buffer transitions, RIS, and commands after a clear in the same read.

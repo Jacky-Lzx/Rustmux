@@ -155,6 +155,9 @@ pub struct Parser {
     utf8: [u8; 4],
     utf8_len: usize,
     bell_received: bool,
+    /// Screen-local image placements invalidated by terminal controls.
+    /// Index 0 is the main screen, index 1 is the alternate screen.
+    graphics_clears: [bool; 2],
 }
 
 impl Parser {
@@ -193,6 +196,10 @@ impl Parser {
 
     pub(crate) fn take_bell(&mut self) -> bool {
         std::mem::take(&mut self.bell_received)
+    }
+
+    pub(crate) fn take_graphics_clears(&mut self) -> [bool; 2] {
+        std::mem::take(&mut self.graphics_clears)
     }
 
     fn text_byte(&mut self, screen: &mut Screen, byte: u8, reply: &mut impl FnMut(&[u8])) {
@@ -325,6 +332,7 @@ impl Parser {
                     let bell_received = self.bell_received;
                     *self = Self::new();
                     self.bell_received = bell_received;
+                    self.graphics_clears = [true, true];
                     State::Ground
                 }
                 b'(' | b')' => State::DesignateCharacterSet { g1: byte == b')' },
@@ -387,7 +395,7 @@ impl Parser {
                 let parameters = &mut self.parameters;
                 if (0x40..=0x7e).contains(&byte) {
                     if !parameters.invalid {
-                        Self::dispatch(screen, parameters, byte, reply);
+                        Self::dispatch(screen, parameters, byte, reply, &mut self.graphics_clears);
                     }
                     State::Ground
                 } else {
@@ -619,6 +627,7 @@ impl Parser {
         parameters: &Parameters,
         command: u8,
         reply: &mut impl FnMut(&[u8]),
+        graphics_clears: &mut [bool; 2],
     ) {
         if command == b'u' && (parameters.private || parameters.keyboard_prefix.is_some()) {
             if parameters.private
@@ -814,13 +823,22 @@ impl Parser {
                         if command == b'h' {
                             screen.enter_alternate_buffer();
                         } else {
+                            if *mode == Some(1047) && screen.is_alternate() {
+                                graphics_clears[1] = true;
+                            }
                             screen.leave_alternate_buffer(*mode == Some(1047));
                         }
                     }
                     if *mode == Some(1049) {
                         if command == b'h' {
+                            if !screen.is_alternate() {
+                                graphics_clears[1] = true;
+                            }
                             screen.enter_alternate();
                         } else {
+                            if screen.is_alternate() {
+                                graphics_clears[1] = true;
+                            }
                             screen.leave_alternate();
                         }
                     }
@@ -926,6 +944,9 @@ impl Parser {
                 };
                 if command == b'J' {
                     screen.erase_display(mode);
+                    if mode == EraseMode::All {
+                        graphics_clears[usize::from(screen.is_alternate())] = true;
+                    }
                 } else {
                     screen.erase_line(mode);
                 }

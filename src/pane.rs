@@ -371,8 +371,8 @@ impl Pane {
     }
 
     /// Opt in to bounded, pane-local image data and placement references.
-    /// Cell anchors are captured, but cursor movement, scrolling, rendering
-    /// and graphics replies are not implemented.
+    /// Cell anchors and screen-clear invalidation are captured, but cursor
+    /// movement, scrolling, rendering and graphics replies are not implemented.
     pub fn process_output_with_image_store(&mut self, bytes: &[u8], reply: &mut impl FnMut(&[u8])) {
         self.process_output_inner(bytes, reply, GraphicsSink::Store);
     }
@@ -457,6 +457,12 @@ impl Pane {
         let before = self.screen.primary_scroll_count();
         self.parser
             .advance_with_replies(&mut self.screen, bytes, reply);
+        let graphics_clears = self.parser.take_graphics_clears();
+        for (alternate, clear) in graphics_clears.into_iter().enumerate() {
+            if clear {
+                self.image_store.clear_screen_placements(alternate != 0);
+            }
+        }
         self.io.bell_pending |= self.parser.take_bell();
         let scrolled = self.screen.primary_scroll_count().saturating_sub(before);
         if let Some((row, column)) = self.io.prompt_start {

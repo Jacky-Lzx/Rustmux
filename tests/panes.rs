@@ -181,6 +181,71 @@ fn kitty_placement_anchor_uses_cursor_at_final_chunk_and_put() {
 }
 
 #[test]
+fn kitty_screen_clear_only_removes_active_anchored_placements() {
+    let mut pane = Pane::spawn("/bin/sh", 6, 40).unwrap();
+    pane.process_output_with_image_store(b"\x1b_Ga=T,f=100,i=7,p=1;QQ==\x1b\\", &mut |_| {});
+    for erase in [
+        b"\x1b[J".as_slice(),
+        b"\x1b[1J",
+        b"\x1b[2K",
+        b"\x1b[3J",
+        b"\x1b[!p",
+    ] {
+        pane.process_output_with_image_store(erase, &mut |_| {});
+        assert_eq!(pane.image_store().placements().count(), 1);
+    }
+    pane.process_output_with_image_store(b"\x1b[2", &mut |_| {});
+    assert_eq!(pane.image_store().placements().count(), 1);
+    pane.process_output_with_image_store(b"J\x1b_Ga=p,i=7,p=2\x1b\\", &mut |_| {});
+    let placements: Vec<_> = pane.image_store().placements().copied().collect();
+    assert_eq!(placements.len(), 1);
+    assert_eq!(placements[0].placement_id, Some(2));
+    assert!(pane.image_store().get(7).is_some());
+}
+
+#[test]
+fn kitty_alternate_screen_clears_do_not_remove_main_placements() {
+    let mut pane = Pane::spawn("/bin/sh", 6, 40).unwrap();
+    pane.process_output_with_image_store(b"\x1b_Ga=T,f=100,i=7,p=1;QQ==\x1b\\", &mut |_| {});
+    pane.process_output_with_image_store(b"\x1b[?1049h\x1b_Ga=p,i=7,p=2\x1b\\", &mut |_| {});
+    assert_eq!(pane.image_store().placements().count(), 2);
+    pane.process_output_with_image_store(b"\x1b[?1049h", &mut |_| {});
+    assert_eq!(pane.image_store().placements().count(), 2);
+    pane.process_output_with_image_store(b"\x1b[2J", &mut |_| {});
+    assert_eq!(pane.image_store().placements().count(), 1);
+    assert_eq!(
+        pane.image_store().placements().next().unwrap().placement_id,
+        Some(1)
+    );
+    pane.process_output_with_image_store(b"\x1b_Ga=p,i=7,p=3\x1b\\\x1b[?1049l", &mut |_| {});
+    assert_eq!(pane.image_store().placements().count(), 1);
+    pane.process_output_with_image_store(b"\x1b[?47h\x1b_Ga=p,i=7,p=4\x1b\\\x1b[?47l", &mut |_| {});
+    assert_eq!(pane.image_store().placements().count(), 2);
+    pane.process_output_with_image_store(b"\x1b[?1049h", &mut |_| {});
+    assert_eq!(pane.image_store().placements().count(), 1);
+    pane.process_output_with_image_store(b"\x1b[?1049l", &mut |_| {});
+    pane.process_output_with_image_store(b"\x1b[?1047h\x1b_Ga=p,i=7,p=5\x1b\\", &mut |_| {});
+    assert_eq!(pane.image_store().placements().count(), 2);
+    pane.process_output_with_image_store(b"\x1b[?1047l", &mut |_| {});
+    assert_eq!(pane.image_store().placements().count(), 1);
+    assert!(pane.image_store().get(7).is_some());
+}
+
+#[test]
+fn kitty_ris_clears_both_screens_but_later_put_in_same_chunk_survives() {
+    let mut pane = Pane::spawn("/bin/sh", 6, 40).unwrap();
+    pane.process_output_with_image_store(b"\x1b_Ga=T,f=100,i=7,p=1;QQ==\x1b\\", &mut |_| {});
+    pane.process_output_with_image_store(b"\x1b[?47h\x1b_Ga=p,i=7,p=2\x1b\\", &mut |_| {});
+    assert_eq!(pane.image_store().placements().count(), 2);
+    pane.process_output_with_image_store(b"\x1bc\x1b_Ga=p,i=7,p=3\x1b\\", &mut |_| {});
+    let placements: Vec<_> = pane.image_store().placements().copied().collect();
+    assert_eq!(placements.len(), 1);
+    assert_eq!(placements[0].placement_id, Some(3));
+    assert!(!placements[0].geometry.unwrap().anchor.alternate);
+    assert!(pane.image_store().get(7).is_some());
+}
+
+#[test]
 fn real_windows_keep_processes_and_terminal_state_isolated() {
     assert!(Pane::spawn("/definitely/missing/rustmux-shell", 24, 80).is_err());
     assert!(Pane::spawn("/bin/sh", 0, 80).is_err());
