@@ -371,8 +371,8 @@ impl Pane {
     }
 
     /// Opt in to bounded, pane-local image data and placement references.
-    /// Cell anchors, screen clears, and vertical row shifts are captured, but
-    /// image-driven cursor motion, pixel rendering and replies are not implemented.
+    /// Cell anchors, screen clears, vertical row shifts and explicit-cell
+    /// cursor motion are modeled; pixel rendering and replies are not.
     pub fn process_output_with_image_store(&mut self, bytes: &[u8], reply: &mut impl FnMut(&[u8])) {
         self.process_output_inner(bytes, reply, GraphicsSink::Store);
     }
@@ -412,10 +412,20 @@ impl Pane {
                             column,
                             alternate: self.screen.is_alternate(),
                         };
-                        if let Some(transfer) = self.graphics_transfer.accept(&command) {
-                            let _ = self.image_store.insert_at(transfer, anchor);
+                        let placed = if let Some(transfer) = self.graphics_transfer.accept(&command)
+                        {
+                            self.image_store.insert_for_pane(transfer, anchor)
                         } else {
-                            let _ = self.image_store.accept_control_at(&command, anchor);
+                            self.image_store.accept_control_for_pane(&command, anchor)
+                        };
+                        if let Ok(Some(geometry)) = placed
+                            && !geometry.cursor_stays
+                            && let (Some(columns), Some(rows)) = (geometry.columns, geometry.rows)
+                        {
+                            self.screen.move_to(
+                                row.saturating_add(rows as usize),
+                                column.saturating_add(columns as usize),
+                            );
                         }
                     }
                 },

@@ -54,8 +54,7 @@ an image ID drops its old references. The supported delete subset is
 data, while uppercase also releases data once no references remain. Image
 eviction drops its references. There are at most 1024 references per pane.
 These rules follow the [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/),
-but the model does not track visibility, scrollback references, or the other
-delete selectors.
+but the model does not track visibility or the other delete selectors.
 
 For the pane opt-in path, cursor-anchored placements now record a zero-based
 cell row and column, plus whether they belong to the alternate screen. A
@@ -64,7 +63,16 @@ the cursor at that command. Explicit `c`/`r` cell extents, signed `z` index,
 and `C=1` no-move request are parsed and retained. Missing extents remain
 unknown until pixel-cell sizing is available. Virtual and relative placements
 do not get a cursor anchor. This is metadata only: image placement does not yet
-move the cursor, compose pixels, redraw, or send graphics replies.
+compose pixels, redraw, or send graphics replies.
+
+In the opt-in pane path, a successful `a=T` or `a=p` placement with both
+explicit `c` and `r` now moves the cursor right by `c` cells and down by `r`
+cells before subsequent text is parsed. `C=1` suppresses the move. The screen
+model clamps an out-of-bounds destination, which the protocol leaves undefined.
+Missing either extent leaves the cursor unchanged until pixel-cell geometry can
+infer it; failed, virtual, or non-placement commands also do not move it.
+The normal runtime still discards these commands and leaves its cursor alone.
+This follows the [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
 
 The opt-in pane path now removes cursor-anchored placement references when
 `CSI 2 J` clears their screen, when RIS resets both screens, and when an
@@ -108,3 +116,5 @@ Screen-lifecycle tests cover split `CSI 2 J`, non-clearing text erasures,
 alternate-buffer transitions, RIS, and commands after a clear in the same read.
 Scroll tests cover full-screen primary/alternate movement, retained scrollback
 references, margin clipping, reverse index, unknown height, and event overflow.
+Cursor tests cover `a=T` and `a=p` ordering, final-chunk anchoring, `C=1`,
+unknown extents, failed placements, and bounded destinations.

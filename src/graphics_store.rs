@@ -178,7 +178,7 @@ impl ImageStore {
     /// commands and image-number allocation require a later protocol stage.
     /// Replacement is atomic if the new transfer cannot fit by itself.
     pub fn insert(&mut self, transfer: AssembledDirectTransfer) -> Result<u32, StoreError> {
-        self.insert_inner(transfer, None)
+        self.insert_inner(transfer, None).map(|(id, _)| id)
     }
 
     /// Pane path: snapshot the cursor at the final chunk of `a=T`.
@@ -187,14 +187,23 @@ impl ImageStore {
         transfer: AssembledDirectTransfer,
         anchor: CellAnchor,
     ) -> Result<u32, StoreError> {
+        self.insert_inner(transfer, Some(anchor)).map(|(id, _)| id)
+    }
+
+    pub(crate) fn insert_for_pane(
+        &mut self,
+        transfer: AssembledDirectTransfer,
+        anchor: CellAnchor,
+    ) -> Result<Option<PlacementGeometry>, StoreError> {
         self.insert_inner(transfer, Some(anchor))
+            .map(|(_, geometry)| geometry)
     }
 
     fn insert_inner(
         &mut self,
         transfer: AssembledDirectTransfer,
         anchor: Option<CellAnchor>,
-    ) -> Result<u32, StoreError> {
+    ) -> Result<(u32, Option<PlacementGeometry>), StoreError> {
         let display = match transfer.control(b'a') {
             None | Some(b"t") => false,
             Some(b"T") => true,
@@ -256,11 +265,11 @@ impl ImageStore {
         if display {
             self.place_with_geometry(id, placement_id, geometry)?;
         }
-        Ok(id)
+        Ok((id, geometry))
     }
 
     /// Record only an explicit-ID placement reference without an anchor.
-    /// Cursor movement and acknowledgements are not modeled.
+    /// This low-level method has no screen to move; acknowledgements are absent.
     pub fn place(&mut self, image_id: u32, placement_id: Option<u32>) -> Result<(), StoreError> {
         self.place_with_geometry(image_id, placement_id, None)
     }
@@ -296,7 +305,7 @@ impl ImageStore {
     /// A strict, deliberately small APC G control-command subset: `a=p`
     /// with `i`/`p`, and `a=d,d=i/I` with `i` and optional `p`.
     pub fn accept_control(&mut self, command: &[u8]) -> Result<(), StoreError> {
-        self.accept_control_inner(command, None)
+        self.accept_control_inner(command, None).map(|_| ())
     }
 
     /// Pane path: snapshot the cursor when an `a=p` command arrives.
@@ -305,6 +314,14 @@ impl ImageStore {
         command: &[u8],
         anchor: CellAnchor,
     ) -> Result<(), StoreError> {
+        self.accept_control_inner(command, Some(anchor)).map(|_| ())
+    }
+
+    pub(crate) fn accept_control_for_pane(
+        &mut self,
+        command: &[u8],
+        anchor: CellAnchor,
+    ) -> Result<Option<PlacementGeometry>, StoreError> {
         self.accept_control_inner(command, Some(anchor))
     }
 
@@ -312,7 +329,7 @@ impl ImageStore {
         &mut self,
         command: &[u8],
         anchor: Option<CellAnchor>,
-    ) -> Result<(), StoreError> {
+    ) -> Result<Option<PlacementGeometry>, StoreError> {
         let controls = parse_control_command(command).ok_or(StoreError::UnsupportedAction)?;
         match controls.get(&b'a').map(Vec::as_slice) {
             Some(b"p") => {
@@ -326,7 +343,8 @@ impl ImageStore {
                     controls.get(&key).map(Vec::as_slice)
                 })?;
                 let geometry = anchor.map(|_| parsed);
-                self.place_with_geometry(id, placement_id, geometry)
+                self.place_with_geometry(id, placement_id, geometry)?;
+                Ok(geometry)
             }
             Some(b"d") => {
                 if !only_keys(&controls, b"adipq") {
@@ -340,7 +358,7 @@ impl ImageStore {
                     Some(b"I") => self.delete_placements(id, placement_id, true),
                     _ => return Err(StoreError::UnsupportedAction),
                 }
-                Ok(())
+                Ok(None)
             }
             _ => Err(StoreError::UnsupportedAction),
         }

@@ -193,6 +193,62 @@ fn kitty_placement_anchor_uses_cursor_at_final_chunk_and_put() {
 }
 
 #[test]
+fn kitty_explicit_cell_extent_moves_cursor_before_following_text() {
+    let mut pane = Pane::spawn("/bin/sh", 6, 20).unwrap();
+    pane.process_output_with_image_store(
+        b"ab\x1b_Ga=T,f=100,i=7,p=1,c=2,r=1;QQ==\x1b\\X\x1b_Ga=p,i=7,p=2,c=3,r=2\x1b\\Y",
+        &mut |_| {},
+    );
+    assert_eq!(placement_geometry(&pane, 1).anchor.column, 2);
+    assert_eq!(
+        placement_geometry(&pane, 2).anchor,
+        rustmux::graphics_store::CellAnchor {
+            row: 1,
+            column: 5,
+            alternate: false,
+        }
+    );
+    assert_eq!(pane.screen().cursor(), (3, 9));
+    assert_eq!(pane.screen().row(1).unwrap()[4].character, 'X');
+    assert_eq!(pane.screen().row(3).unwrap()[8].character, 'Y');
+    pane.process_output(b"\x1b_Ga=p,i=7,c=2,r=1\x1b\\", &mut |_| {});
+    assert_eq!(pane.screen().cursor(), (3, 9));
+}
+
+#[test]
+fn kitty_cursor_stays_for_opt_out_unknown_extent_and_failed_placement() {
+    let mut pane = Pane::spawn("/bin/sh", 6, 20).unwrap();
+    pane.process_output_with_image_store(
+        b"ab\x1b_Ga=T,f=100,i=7,c=2,r=1,C=1;QQ==\x1b\\X",
+        &mut |_| {},
+    );
+    assert_eq!(pane.screen().cursor(), (0, 3));
+    pane.process_output_with_image_store(
+        b"\x1b_Ga=p,i=7,p=2,c=2\x1b\\\x1b_Ga=p,i=7,c=2,r=1,C=1\x1b\\\x1b_Ga=p,i=999,c=2,r=1\x1b\\\x1b_Ga=p,i=7,c=bad,r=1\x1b\\Y",
+        &mut |_| {},
+    );
+    assert_eq!(pane.screen().cursor(), (0, 4));
+    assert_eq!(pane.screen().row(0).unwrap()[3].character, 'Y');
+    assert_eq!(placement_geometry(&pane, 2).columns, Some(2));
+    assert_eq!(placement_geometry(&pane, 2).rows, None);
+}
+
+#[test]
+fn kitty_final_chunk_uses_final_cursor_then_clamps_out_of_bounds_motion() {
+    let mut pane = Pane::spawn("/bin/sh", 3, 5).unwrap();
+    pane.process_output_with_image_store(
+        b"\x1b_Ga=T,f=100,i=7,p=1,c=2,r=1,m=1;QQ==\x1b\\ab",
+        &mut |_| {},
+    );
+    assert_eq!(pane.screen().cursor(), (0, 2));
+    pane.process_output_with_image_store(b"\x1b_Gm=0;Qg==\x1b\\", &mut |_| {});
+    assert_eq!(placement_geometry(&pane, 1).anchor.column, 2);
+    assert_eq!(pane.screen().cursor(), (1, 4));
+    pane.process_output_with_image_store(b"\x1b_Ga=p,i=7,p=2,c=99,r=99\x1b\\", &mut |_| {});
+    assert_eq!(pane.screen().cursor(), (2, 4));
+}
+
+#[test]
 fn kitty_screen_clear_only_removes_active_anchored_placements() {
     let mut pane = Pane::spawn("/bin/sh", 6, 40).unwrap();
     pane.process_output_with_image_store(b"\x1b_Ga=T,f=100,i=7,p=1;QQ==\x1b\\", &mut |_| {});
