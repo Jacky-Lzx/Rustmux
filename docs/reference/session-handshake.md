@@ -4,7 +4,8 @@
 Both sides use a two-second read and write timeout while negotiating, then
 return the accepted stream to nonblocking mode for event-loop integration.
 
-The client sends `Hello` with protocol version and nonzero terminal dimensions.
+The client sends `Hello` with protocol version, nonzero terminal row/column
+dimensions, and reported pixel dimensions (zero when unavailable).
 The server requires it to be the first message and responds with `Attached` only
 for the exact supported version. Invalid first messages and incompatible
 versions receive a bounded `Rejected` reason before the connection is closed.

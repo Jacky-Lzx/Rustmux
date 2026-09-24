@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-pub const PROTOCOL_VERSION: u16 = 5;
+pub const PROTOCOL_VERSION: u16 = 6;
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
 pub const MAX_ERROR_BYTES: usize = 1024;
 
@@ -24,11 +24,15 @@ pub enum ClientMessage {
         version: u16,
         rows: u16,
         columns: u16,
+        pixel_width: u16,
+        pixel_height: u16,
     },
     Input(Vec<u8>),
     Resize {
         rows: u16,
         columns: u16,
+        pixel_width: u16,
+        pixel_height: u16,
     },
     Detach,
 }
@@ -40,20 +44,31 @@ impl ClientMessage {
                 version,
                 rows,
                 columns,
+                pixel_width,
+                pixel_height,
             } => {
                 validate_size(*rows, *columns)?;
-                let mut payload = Vec::with_capacity(6);
+                let mut payload = Vec::with_capacity(10);
                 payload.extend_from_slice(&version.to_be_bytes());
                 payload.extend_from_slice(&rows.to_be_bytes());
                 payload.extend_from_slice(&columns.to_be_bytes());
+                payload.extend_from_slice(&pixel_width.to_be_bytes());
+                payload.extend_from_slice(&pixel_height.to_be_bytes());
                 encode_frame(CLIENT_HELLO, &payload)
             }
             Self::Input(bytes) => encode_frame(CLIENT_INPUT, bytes),
-            Self::Resize { rows, columns } => {
+            Self::Resize {
+                rows,
+                columns,
+                pixel_width,
+                pixel_height,
+            } => {
                 validate_size(*rows, *columns)?;
-                let mut payload = Vec::with_capacity(4);
+                let mut payload = Vec::with_capacity(8);
                 payload.extend_from_slice(&rows.to_be_bytes());
                 payload.extend_from_slice(&columns.to_be_bytes());
+                payload.extend_from_slice(&pixel_width.to_be_bytes());
+                payload.extend_from_slice(&pixel_height.to_be_bytes());
                 encode_frame(CLIENT_RESIZE, &payload)
             }
             Self::Detach => encode_frame(CLIENT_DETACH, &[]),
@@ -265,24 +280,35 @@ fn encode_frame(message: u8, payload: &[u8]) -> Result<Vec<u8>, ProtocolError> {
 fn decode_client(frame: Frame) -> Result<ClientMessage, ProtocolError> {
     match frame.message {
         CLIENT_HELLO => {
-            require_length(&frame, 6)?;
+            require_length(&frame, 10)?;
             let version = u16::from_be_bytes(frame.payload[0..2].try_into().unwrap());
             let rows = u16::from_be_bytes(frame.payload[2..4].try_into().unwrap());
             let columns = u16::from_be_bytes(frame.payload[4..6].try_into().unwrap());
+            let pixel_width = u16::from_be_bytes(frame.payload[6..8].try_into().unwrap());
+            let pixel_height = u16::from_be_bytes(frame.payload[8..10].try_into().unwrap());
             validate_size(rows, columns)?;
             Ok(ClientMessage::Hello {
                 version,
                 rows,
                 columns,
+                pixel_width,
+                pixel_height,
             })
         }
         CLIENT_INPUT => Ok(ClientMessage::Input(frame.payload)),
         CLIENT_RESIZE => {
-            require_length(&frame, 4)?;
+            require_length(&frame, 8)?;
             let rows = u16::from_be_bytes(frame.payload[0..2].try_into().unwrap());
             let columns = u16::from_be_bytes(frame.payload[2..4].try_into().unwrap());
+            let pixel_width = u16::from_be_bytes(frame.payload[4..6].try_into().unwrap());
+            let pixel_height = u16::from_be_bytes(frame.payload[6..8].try_into().unwrap());
             validate_size(rows, columns)?;
-            Ok(ClientMessage::Resize { rows, columns })
+            Ok(ClientMessage::Resize {
+                rows,
+                columns,
+                pixel_width,
+                pixel_height,
+            })
         }
         CLIENT_DETACH => {
             require_length(&frame, 0)?;
@@ -366,11 +392,15 @@ mod tests {
                 version: PROTOCOL_VERSION,
                 rows: 42,
                 columns: 120,
+                pixel_width: 960,
+                pixel_height: 840,
             },
             ClientMessage::Input(vec![0, b'a', 0xff, b'\n']),
             ClientMessage::Resize {
                 rows: 24,
                 columns: 80,
+                pixel_width: 0,
+                pixel_height: 0,
             },
             ClientMessage::Detach,
         ];
@@ -415,7 +445,9 @@ mod tests {
         assert_eq!(
             ClientMessage::Resize {
                 rows: 0,
-                columns: 80
+                columns: 80,
+                pixel_width: 640,
+                pixel_height: 480,
             }
             .encode(),
             Err(ProtocolError::InvalidTerminalSize)
@@ -450,10 +482,25 @@ mod tests {
             ClientDecoder::default().push(&malformed),
             Err(ProtocolError::InvalidLength {
                 message: CLIENT_RESIZE,
-                expected: 4,
+                expected: 8,
                 actual: 2,
             })
         );
+
+        for (message, payload, expected) in [
+            (CLIENT_HELLO, vec![0, 5, 0, 24, 0, 80], 10),
+            (CLIENT_RESIZE, vec![0, 24, 0, 80], 8),
+        ] {
+            let old_layout = encode_frame(message, &payload).unwrap();
+            assert_eq!(
+                ClientDecoder::default().push(&old_layout),
+                Err(ProtocolError::InvalidLength {
+                    message,
+                    expected,
+                    actual: payload.len(),
+                })
+            );
+        }
 
         let malformed_attached =
             encode_frame(SERVER_ATTACHED, &PROTOCOL_VERSION.to_be_bytes()).unwrap();

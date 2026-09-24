@@ -28,7 +28,7 @@ const MAX_BUFFERED_OUTPUT_BYTES: usize = MAX_FRAME_BYTES + READ_BYTES;
 pub(crate) fn run(stream: UnixStream, name: &SessionName) -> io::Result<ClientExit> {
     let file = TerminalDevice::open_controlling()?;
     let size = crate::terminal_device::window_size(&file)?;
-    let peer = handshake::client(stream, size.ws_row, size.ws_col)?;
+    let peer = handshake::client_with_size(stream, size)?;
     record_connection(name)?;
     let signals = ClientSignals::install()?;
     run_attached(file, peer, &signals)
@@ -76,6 +76,8 @@ fn bridge(
                 outbound.push(ClientMessage::Resize {
                     rows: size.ws_row,
                     columns: size.ws_col,
+                    pixel_width: size.ws_xpixel,
+                    pixel_height: size.ws_ypixel,
                 })?;
             }
             pending_resize = false;
@@ -469,8 +471,8 @@ mod tests {
         let size = Winsize {
             ws_row: 24,
             ws_col: 80,
-            ws_xpixel: 0,
-            ws_ypixel: 0,
+            ws_xpixel: 640,
+            ws_ypixel: 384,
         };
         let pair = openpty(Some(&size), None).unwrap();
         let mut master: File = pair.master.into();
@@ -481,6 +483,7 @@ mod tests {
         let server = thread::spawn(move || {
             let mut peer = handshake::server(server_stream).unwrap();
             assert_eq!(peer.size(), (24, 80));
+            assert_eq!(peer.pixel_size(), (640, 384));
             let mut saw_resize = false;
             loop {
                 let mut bytes = [0; READ_BYTES];
@@ -488,8 +491,14 @@ mod tests {
                     Ok(count) => {
                         for message in peer.decode(&bytes[..count]).unwrap() {
                             match message {
-                                ClientMessage::Resize { rows, columns } => {
+                                ClientMessage::Resize {
+                                    rows,
+                                    columns,
+                                    pixel_width,
+                                    pixel_height,
+                                } => {
                                     assert_eq!((rows, columns), (24, 80));
+                                    assert_eq!((pixel_width, pixel_height), (640, 384));
                                     saw_resize = true;
                                 }
                                 ClientMessage::Input(bytes) => {
@@ -512,7 +521,7 @@ mod tests {
                 }
             }
         });
-        let peer = handshake::client(client_stream, 24, 80).unwrap();
+        let peer = handshake::client_with_size(client_stream, size).unwrap();
         let signals = ClientSignals {
             pending: Arc::new(AtomicUsize::new(0)),
             resize: Arc::new(AtomicBool::new(true)),

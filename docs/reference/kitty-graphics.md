@@ -85,8 +85,10 @@ needed, invalid image data or an unrepresentable computed extent leaves the
 original metadata and cursor unchanged. Replacing or evicting an image
 invalidates its dimension cache.
 The local/detached runtime does not yet propagate trustworthy pixel cell size
-to panes, so it does not use this path automatically; no size is guessed from
-row/column counts alone. This follows the sizing rules in the
+to panes, so it does not use this path automatically. The detached client now
+transports reported terminal pixel dimensions to the server frontend, but pane
+cell sizes are not derived from them yet; no size is guessed from row/column
+counts alone. This follows the sizing rules in the
 [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
 
 The opt-in pane path now removes cursor-anchored placement references when

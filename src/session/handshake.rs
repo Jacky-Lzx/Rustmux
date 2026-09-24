@@ -5,6 +5,8 @@ use std::io::{self, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::time::Duration;
 
+use nix::pty::Winsize;
+
 use super::protocol::{
     ClientDecoder, ClientMessage, PROTOCOL_VERSION, ProtocolError, ServerDecoder, ServerMessage,
 };
@@ -64,6 +66,8 @@ pub struct ServerPeer {
     pending: VecDeque<ClientMessage>,
     rows: u16,
     columns: u16,
+    pixel_width: u16,
+    pixel_height: u16,
 }
 
 impl ServerPeer {
@@ -77,6 +81,10 @@ impl ServerPeer {
 
     pub fn size(&self) -> (u16, u16) {
         (self.rows, self.columns)
+    }
+
+    pub fn pixel_size(&self) -> (u16, u16) {
+        (self.pixel_width, self.pixel_height)
     }
 
     /// Decode bytes after the handshake, including messages read with the hello.
@@ -98,12 +106,27 @@ impl ServerPeer {
 }
 
 /// Send a hello, verify the reply and leave the connected stream nonblocking.
-pub fn client(mut stream: UnixStream, rows: u16, columns: u16) -> io::Result<ClientPeer> {
+pub fn client(stream: UnixStream, rows: u16, columns: u16) -> io::Result<ClientPeer> {
+    client_with_size(
+        stream,
+        Winsize {
+            ws_row: rows,
+            ws_col: columns,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        },
+    )
+}
+
+/// Send a hello with the terminal's reported pixel dimensions, if available.
+pub fn client_with_size(mut stream: UnixStream, size: Winsize) -> io::Result<ClientPeer> {
     begin(&stream)?;
     let hello = ClientMessage::Hello {
         version: PROTOCOL_VERSION,
-        rows,
-        columns,
+        rows: size.ws_row,
+        columns: size.ws_col,
+        pixel_width: size.ws_xpixel,
+        pixel_height: size.ws_ypixel,
     }
     .encode()
     .map_err(invalid_protocol)?;
@@ -164,14 +187,17 @@ pub fn server_with_keybinds(
     begin(&stream)?;
     let mut decoder = ClientDecoder::default();
     let mut messages = read_client_messages(&mut stream, &mut decoder)?;
-    let (version, rows, columns) = match messages.pop_front().expect("reader returns a message") {
-        ClientMessage::Hello {
-            version,
-            rows,
-            columns,
-        } => (version, rows, columns),
-        _ => return reject(&mut stream, "first client message must be Hello"),
-    };
+    let (version, rows, columns, pixel_width, pixel_height) =
+        match messages.pop_front().expect("reader returns a message") {
+            ClientMessage::Hello {
+                version,
+                rows,
+                columns,
+                pixel_width,
+                pixel_height,
+            } => (version, rows, columns, pixel_width, pixel_height),
+            _ => return reject(&mut stream, "first client message must be Hello"),
+        };
     if version != PROTOCOL_VERSION {
         return reject(
             &mut stream,
@@ -195,6 +221,8 @@ pub fn server_with_keybinds(
         pending: messages,
         rows,
         columns,
+        pixel_width,
+        pixel_height,
     })
 }
 
@@ -307,6 +335,8 @@ mod tests {
             version: PROTOCOL_VERSION,
             rows: 37,
             columns: 101,
+            pixel_width: 808,
+            pixel_height: 592,
         }
         .encode()
         .unwrap();
@@ -326,6 +356,7 @@ mod tests {
 
         let mut peer = server.join().unwrap();
         assert_eq!(peer.size(), (37, 101));
+        assert_eq!(peer.pixel_size(), (808, 592));
         assert_eq!(
             peer.decode(&[]).unwrap(),
             [ClientMessage::Input(b"pending".to_vec())]
@@ -340,6 +371,7 @@ mod tests {
         let mut client = client(client_stream, 24, 80).unwrap();
         let server = server.join().unwrap();
         assert_eq!(server.size(), (24, 80));
+        assert_eq!(server.pixel_size(), (0, 0));
         assert_eq!(client.locked_entry_key(), 2);
         assert!(client.legacy_client_shortcuts());
         assert!(client.decode(&[]).unwrap().is_empty());
@@ -366,6 +398,8 @@ mod tests {
                     version: PROTOCOL_VERSION + 1,
                     rows: 24,
                     columns: 80,
+                    pixel_width: 0,
+                    pixel_height: 0,
                 }
                 .encode()
                 .unwrap(),
@@ -453,6 +487,8 @@ mod tests {
             version: PROTOCOL_VERSION,
             rows: 24,
             columns: 80,
+            pixel_width: 0,
+            pixel_height: 0,
         }
         .encode()
         .unwrap();

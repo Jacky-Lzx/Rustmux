@@ -35,10 +35,11 @@ pub struct ServerFrontend {
 impl ServerFrontend {
     pub fn new(peer: ServerPeer) -> Self {
         let (rows, columns) = peer.size();
+        let (pixel_width, pixel_height) = peer.pixel_size();
         Self {
             peer,
             input: VecDeque::new(),
-            resize: Some(winsize(rows, columns)),
+            resize: Some(winsize(rows, columns, pixel_width, pixel_height)),
             state: ConnectionState::Attached,
             outbound: Outbound::default(),
         }
@@ -115,8 +116,13 @@ impl ServerFrontend {
                     }
                     self.input.extend(bytes);
                 }
-                ClientMessage::Resize { rows, columns } => {
-                    self.resize = Some(winsize(rows, columns));
+                ClientMessage::Resize {
+                    rows,
+                    columns,
+                    pixel_width,
+                    pixel_height,
+                } => {
+                    self.resize = Some(winsize(rows, columns, pixel_width, pixel_height));
                 }
                 ClientMessage::Detach => self.state = ConnectionState::Detached,
                 ClientMessage::Hello { .. } => {
@@ -185,12 +191,12 @@ impl ServerFrontend {
     }
 }
 
-fn winsize(rows: u16, columns: u16) -> Winsize {
+fn winsize(rows: u16, columns: u16, pixel_width: u16, pixel_height: u16) -> Winsize {
     Winsize {
         ws_row: rows,
         ws_col: columns,
-        ws_xpixel: 0,
-        ws_ypixel: 0,
+        ws_xpixel: pixel_width,
+        ws_ypixel: pixel_height,
     }
 }
 
@@ -271,6 +277,7 @@ mod tests {
         let (mut client, mut frontend) = connected(24, 80);
         let initial = frontend.take_resize().unwrap();
         assert_eq!((initial.ws_row, initial.ws_col), (24, 80));
+        assert_eq!((initial.ws_xpixel, initial.ws_ypixel), (0, 0));
 
         write_messages(
             &mut client,
@@ -279,10 +286,14 @@ mod tests {
                 ClientMessage::Resize {
                     rows: 40,
                     columns: 100,
+                    pixel_width: 800,
+                    pixel_height: 640,
                 },
                 ClientMessage::Resize {
                     rows: 41,
                     columns: 101,
+                    pixel_width: 808,
+                    pixel_height: 656,
                 },
                 ClientMessage::Input(b"second".to_vec()),
                 ClientMessage::Detach,
@@ -291,11 +302,30 @@ mod tests {
         assert_eq!(frontend.receive().unwrap(), ConnectionState::Detached);
         let resize = frontend.take_resize().unwrap();
         assert_eq!((resize.ws_row, resize.ws_col), (41, 101));
+        assert_eq!((resize.ws_xpixel, resize.ws_ypixel), (808, 656));
         let mut input = VecDeque::new();
         assert_eq!(frontend.drain_input(&mut input, 7), 7);
         assert_eq!(input, b"firstse".to_vec());
         assert_eq!(frontend.drain_input(&mut input, 11), 4);
         assert_eq!(input, b"firstsecond".to_vec());
+    }
+
+    #[test]
+    fn initial_resize_preserves_reported_pixel_dimensions() {
+        let (client_stream, server_stream) = UnixStream::pair().unwrap();
+        let server = thread::spawn(move || handshake::server(server_stream).unwrap());
+        let size = Winsize {
+            ws_row: 30,
+            ws_col: 100,
+            ws_xpixel: 900,
+            ws_ypixel: 600,
+        };
+        let client = handshake::client_with_size(client_stream, size).unwrap();
+        let mut frontend = ServerFrontend::new(server.join().unwrap());
+        let initial = frontend.take_resize().unwrap();
+        assert_eq!((initial.ws_row, initial.ws_col), (30, 100));
+        assert_eq!((initial.ws_xpixel, initial.ws_ypixel), (900, 600));
+        drop(client);
     }
 
     #[test]
@@ -313,6 +343,8 @@ mod tests {
             version: crate::session::protocol::PROTOCOL_VERSION,
             rows: 24,
             columns: 80,
+            pixel_width: 0,
+            pixel_height: 0,
         }
         .encode()
         .unwrap();
