@@ -3544,10 +3544,12 @@ with tempfile.TemporaryDirectory(prefix="rustmux-session-mode-") as directory:
         while b"Session Manager" not in s.output:
             s.read()
             assert time.monotonic() < end, bytes(s.output[-2000:])
-        s.send(b"q")
-        s.expect(b"RUSTMUX_READY> ")
+        # Require a prompt emitted by the reattached client, not one retained
+        # from before the session manager took over the terminal.
         s.output.clear()
         s.frames.clear()
+        s.send(b"q")
+        s.expect(b"RUSTMUX_READY> ")
         s.send(b"printf '\\033[=1u'\n")
         end = time.monotonic() + 8
         while b"\x1b[=1u" not in s.output:
