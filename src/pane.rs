@@ -2,7 +2,7 @@
 
 use crate::{
     graphics::{GraphicsEvent, GraphicsFramer},
-    graphics_store::ImageStore,
+    graphics_store::{CellAnchor, ImageStore},
     graphics_transfer::{AssembledDirectTransfer, DirectTransferAssembler},
     parser::Parser,
     pty::PtyShell,
@@ -371,7 +371,8 @@ impl Pane {
     }
 
     /// Opt in to bounded, pane-local image data and placement references.
-    /// This does not implement screen geometry, rendering or replies.
+    /// Cell anchors are captured, but cursor movement, scrolling, rendering
+    /// and graphics replies are not implemented.
     pub fn process_output_with_image_store(&mut self, bytes: &[u8], reply: &mut impl FnMut(&[u8])) {
         self.process_output_inner(bytes, reply, GraphicsSink::Store);
     }
@@ -405,10 +406,16 @@ impl Pane {
                         }
                     }
                     GraphicsSink::Store => {
+                        let (row, column) = self.screen.cursor();
+                        let anchor = CellAnchor {
+                            row,
+                            column,
+                            alternate: self.screen.is_alternate(),
+                        };
                         if let Some(transfer) = self.graphics_transfer.accept(&command) {
-                            let _ = self.image_store.insert(transfer);
+                            let _ = self.image_store.insert_at(transfer, anchor);
                         } else {
-                            let _ = self.image_store.accept_control(&command);
+                            let _ = self.image_store.accept_control_at(&command, anchor);
                         }
                     }
                 },

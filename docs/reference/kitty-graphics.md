@@ -54,9 +54,18 @@ an image ID drops its old references. The supported delete subset is
 data, while uppercase also releases data once no references remain. Image
 eviction drops its references. There are at most 1024 references per pane.
 These rules follow the [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/),
-but the model does not track coordinates, visibility, scrollback references,
-cursor motion, or the other delete selectors; it cannot render placements or
-respond to placement commands yet.
+but the model does not track visibility, scrollback references, or the other
+delete selectors.
+
+For the pane opt-in path, cursor-anchored placements now record a zero-based
+cell row and column, plus whether they belong to the alternate screen. A
+chunked `a=T` records the cursor when its final chunk arrives; `a=p` records
+the cursor at that command. Explicit `c`/`r` cell extents, signed `z` index,
+and `C=1` no-move request are parsed and retained. Missing extents remain
+unknown until pixel-cell sizing is available. Virtual and relative placements
+do not get a cursor anchor. This is metadata only: image placement does not yet
+move the cursor, follow scrolling or screen clears, compose pixels, redraw, or
+send graphics replies.
 
 The normal runtime still discards graphics commands without assembling or
 retaining image data. It does not place, redraw or delete visible images,
@@ -73,3 +82,5 @@ Store tests also cover replacement, isolation, eviction, explicit removal,
 named and anonymous references, and soft versus hard deletion.
 Decoder tests cover raw and PNG formats, palette transparency, corrupted PNGs,
 dimension checks and the output-size bound.
+Anchor tests cover interleaved text, final-chunk position, alternate-screen
+identity, explicit layout options, malformed metadata, and named replacement.

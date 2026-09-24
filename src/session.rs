@@ -646,6 +646,20 @@ mod tests {
 
     static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
+    fn wait_for_stale_socket(path: &Path) {
+        // Some hosts briefly accept a connect after the listener is closed.
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            match UnixStream::connect(path) {
+                Err(error) if error.kind() == io::ErrorKind::ConnectionRefused => break,
+                Ok(stream) => drop(stream),
+                Err(error) => panic!("unexpected stale socket probe error: {error}"),
+            }
+            assert!(Instant::now() < deadline, "socket remained active");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
     struct TestDirectory(PathBuf);
 
     impl TestDirectory {
@@ -722,19 +736,7 @@ mod tests {
 
         let stale = UnixListener::bind(&path).unwrap();
         drop(stale);
-        // On some hosts a just-closed listener can briefly accept a connect.
-        // Observe the refused connection that defines a stale socket before
-        // asserting that bind_in will reclaim its pathname.
-        let deadline = Instant::now() + Duration::from_secs(1);
-        loop {
-            match UnixStream::connect(&path) {
-                Err(error) if error.kind() == io::ErrorKind::ConnectionRefused => break,
-                Ok(stream) => drop(stream),
-                Err(error) => panic!("unexpected stale socket probe error: {error}"),
-            }
-            assert!(Instant::now() < deadline, "socket remained active");
-            std::thread::sleep(Duration::from_millis(1));
-        }
+        wait_for_stale_socket(&path);
         let endpoint = SessionEndpoint::bind_in(&directory.0, &name).unwrap();
         drop(endpoint);
 
@@ -886,6 +888,7 @@ mod tests {
         let stale = UnixListener::bind(&stale_path).unwrap();
         fs::set_permissions(&stale_path, fs::Permissions::from_mode(0o600)).unwrap();
         drop(stale);
+        wait_for_stale_socket(&stale_path);
         drop(open_lock_file(&directory.0, &SessionName::new("stale").unwrap()).unwrap());
         let insecure_path = directory.0.join("insecure.sock");
         let insecure = UnixListener::bind(&insecure_path).unwrap();

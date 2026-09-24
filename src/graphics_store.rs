@@ -1,5 +1,5 @@
-//! Bounded image data and placement references for one pane. No coordinates
-//! or pixels are rendered here.
+//! Bounded image data and placement references for one pane. Optional cell
+//! anchors are recorded, but no pixels are rendered here.
 
 use crate::{graphics::MAX_GRAPHICS_COMMAND_BYTES, graphics_transfer::AssembledDirectTransfer};
 use std::collections::{BTreeMap, VecDeque};
@@ -37,6 +37,26 @@ pub struct Placement {
     pub image_id: u32,
     /// None is an anonymous placement (the protocol's absent or zero `p`).
     pub placement_id: Option<u32>,
+    /// Only pane-local, cursor-anchored placements have geometry so far.
+    pub geometry: Option<PlacementGeometry>,
+}
+
+#[derive(Debug, Default, Clone, Copy, Eq, PartialEq)]
+pub struct CellAnchor {
+    pub row: usize,
+    pub column: usize,
+    pub alternate: bool,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct PlacementGeometry {
+    pub anchor: CellAnchor,
+    /// Explicit cell extent, when requested. Missing values need pixel-cell
+    /// geometry before a renderer can infer them.
+    pub columns: Option<u32>,
+    pub rows: Option<u32>,
+    pub z_index: i32,
+    pub cursor_stays: bool,
 }
 
 #[derive(Debug, Default)]
@@ -76,6 +96,23 @@ impl ImageStore {
     /// commands and image-number allocation require a later protocol stage.
     /// Replacement is atomic if the new transfer cannot fit by itself.
     pub fn insert(&mut self, transfer: AssembledDirectTransfer) -> Result<u32, StoreError> {
+        self.insert_inner(transfer, None)
+    }
+
+    /// Pane path: snapshot the cursor at the final chunk of `a=T`.
+    pub fn insert_at(
+        &mut self,
+        transfer: AssembledDirectTransfer,
+        anchor: CellAnchor,
+    ) -> Result<u32, StoreError> {
+        self.insert_inner(transfer, Some(anchor))
+    }
+
+    fn insert_inner(
+        &mut self,
+        transfer: AssembledDirectTransfer,
+        anchor: Option<CellAnchor>,
+    ) -> Result<u32, StoreError> {
         let display = match transfer.control(b'a') {
             None | Some(b"t") => false,
             Some(b"T") => true,
@@ -83,6 +120,16 @@ impl ImageStore {
         };
         let placement_id = if display {
             parse_optional_placement_id(transfer.control(b'p'))?
+        } else {
+            None
+        };
+        let geometry = if display
+            && transfer.control(b'U') != Some(b"1")
+            && transfer.control(b'P').is_none()
+            && transfer.control(b'Q').is_none()
+        {
+            let parsed = parse_geometry(anchor.unwrap_or_default(), |key| transfer.control(key))?;
+            anchor.map(|_| parsed)
         } else {
             None
         };
@@ -125,14 +172,23 @@ impl ImageStore {
             },
         );
         if display {
-            self.place(id, placement_id)?;
+            self.place_with_geometry(id, placement_id, geometry)?;
         }
         Ok(id)
     }
 
-    /// Record only an explicit-ID placement reference. Screen position,
-    /// geometry, cursor movement, and acknowledgements are not modeled.
+    /// Record only an explicit-ID placement reference without an anchor.
+    /// Cursor movement and acknowledgements are not modeled.
     pub fn place(&mut self, image_id: u32, placement_id: Option<u32>) -> Result<(), StoreError> {
+        self.place_with_geometry(image_id, placement_id, None)
+    }
+
+    fn place_with_geometry(
+        &mut self,
+        image_id: u32,
+        placement_id: Option<u32>,
+        geometry: Option<PlacementGeometry>,
+    ) -> Result<(), StoreError> {
         if placement_id == Some(0) {
             return Err(StoreError::InvalidPlacement);
         }
@@ -150,6 +206,7 @@ impl ImageStore {
         self.placements.push_back(Placement {
             image_id,
             placement_id,
+            geometry,
         });
         Ok(())
     }
@@ -157,16 +214,37 @@ impl ImageStore {
     /// A strict, deliberately small APC G control-command subset: `a=p`
     /// with `i`/`p`, and `a=d,d=i/I` with `i` and optional `p`.
     pub fn accept_control(&mut self, command: &[u8]) -> Result<(), StoreError> {
+        self.accept_control_inner(command, None)
+    }
+
+    /// Pane path: snapshot the cursor when an `a=p` command arrives.
+    pub fn accept_control_at(
+        &mut self,
+        command: &[u8],
+        anchor: CellAnchor,
+    ) -> Result<(), StoreError> {
+        self.accept_control_inner(command, Some(anchor))
+    }
+
+    fn accept_control_inner(
+        &mut self,
+        command: &[u8],
+        anchor: Option<CellAnchor>,
+    ) -> Result<(), StoreError> {
         let controls = parse_control_command(command).ok_or(StoreError::UnsupportedAction)?;
         match controls.get(&b'a').map(Vec::as_slice) {
             Some(b"p") => {
-                if !only_keys(&controls, b"aipq") {
+                if !only_keys(&controls, b"aipqcrzC") {
                     return Err(StoreError::UnsupportedAction);
                 }
                 let id = required_id(&controls)?;
                 let placement_id =
                     parse_optional_placement_id(controls.get(&b'p').map(Vec::as_slice))?;
-                self.place(id, placement_id)
+                let parsed = parse_geometry(anchor.unwrap_or_default(), |key| {
+                    controls.get(&key).map(Vec::as_slice)
+                })?;
+                let geometry = anchor.map(|_| parsed);
+                self.place_with_geometry(id, placement_id, geometry)
             }
             Some(b"d") => {
                 if !only_keys(&controls, b"adipq") {
@@ -291,6 +369,39 @@ fn parse_u32(bytes: &[u8]) -> Option<u32> {
     std::str::from_utf8(bytes).ok()?.parse::<u32>().ok()
 }
 
+fn parse_geometry<'a>(
+    anchor: CellAnchor,
+    control: impl Fn(u8) -> Option<&'a [u8]>,
+) -> Result<PlacementGeometry, StoreError> {
+    let extent = |key| {
+        control(key)
+            .map(|bytes| parse_u32(bytes).ok_or(StoreError::InvalidPlacement))
+            .transpose()
+            .map(|value| value.filter(|&number| number != 0))
+    };
+    let z_index = control(b'z')
+        .map(|bytes| {
+            std::str::from_utf8(bytes)
+                .ok()
+                .and_then(|value| value.parse::<i32>().ok())
+                .ok_or(StoreError::InvalidPlacement)
+        })
+        .transpose()?
+        .unwrap_or(0);
+    let cursor_stays = match control(b'C') {
+        None | Some(b"0") => false,
+        Some(b"1") => true,
+        _ => return Err(StoreError::InvalidPlacement),
+    };
+    Ok(PlacementGeometry {
+        anchor,
+        columns: extent(b'c')?,
+        rows: extent(b'r')?,
+        z_index,
+        cursor_stays,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -365,7 +476,8 @@ mod tests {
             store.placements().copied().collect::<Vec<_>>(),
             [Placement {
                 image_id: 7,
-                placement_id: Some(9)
+                placement_id: Some(9),
+                geometry: None,
             }]
         );
         store.accept_control(b"\x1b_Ga=p,i=7,p=9\x1b\\").unwrap();
@@ -424,7 +536,7 @@ mod tests {
             b"\x1b_Ga=p,i=7,p=no\x1b\\".as_slice(),
             b"\x1b_Ga=d,d=I,i=7,p=no\x1b\\",
             b"\x1b_Ga=d,d=A\x1b\\",
-            b"\x1b_Ga=p,i=7,z=1\x1b\\",
+            b"\x1b_Ga=p,i=7,z=no\x1b\\",
             b"\x1b_Ga=d,d=I,i=7;payload\x1b\\",
         ] {
             assert!(store.accept_control(command).is_err());
@@ -478,5 +590,61 @@ mod tests {
                 .placements()
                 .any(|placement| placement.placement_id == Some(2))
         );
+    }
+
+    #[test]
+    fn anchored_placement_records_explicit_cell_layout_and_replacement() {
+        let mut store = ImageStore::new();
+        let first = CellAnchor {
+            row: 2,
+            column: 3,
+            alternate: false,
+        };
+        store
+            .insert_at(
+                transfer(b"\x1b_Ga=T,f=100,i=7,p=9,c=2,r=3,z=-4,C=1;QQ==\x1b\\"),
+                first,
+            )
+            .unwrap();
+        assert_eq!(
+            store.placements().next().unwrap().geometry,
+            Some(PlacementGeometry {
+                anchor: first,
+                columns: Some(2),
+                rows: Some(3),
+                z_index: -4,
+                cursor_stays: true,
+            })
+        );
+        let second = CellAnchor {
+            row: 4,
+            column: 5,
+            alternate: true,
+        };
+        store
+            .accept_control_at(b"\x1b_Ga=p,i=7,p=9,c=1,r=2,z=3\x1b\\", second)
+            .unwrap();
+        let placements: Vec<_> = store.placements().copied().collect();
+        assert_eq!(placements.len(), 1);
+        assert_eq!(placements[0].geometry.unwrap().anchor, second);
+        assert_eq!(placements[0].geometry.unwrap().columns, Some(1));
+        assert_eq!(placements[0].geometry.unwrap().rows, Some(2));
+        assert_eq!(placements[0].geometry.unwrap().z_index, 3);
+        assert!(!placements[0].geometry.unwrap().cursor_stays);
+    }
+
+    #[test]
+    fn malformed_layout_does_not_replace_existing_image() {
+        let mut store = ImageStore::new();
+        store
+            .insert(transfer(b"\x1b_Ga=t,f=100,i=7;QQ==\x1b\\"))
+            .unwrap();
+        let anchor = CellAnchor::default();
+        assert_eq!(
+            store.insert_at(transfer(b"\x1b_Ga=T,f=100,i=7,c=no;Qg==\x1b\\"), anchor,),
+            Err(StoreError::InvalidPlacement)
+        );
+        assert_eq!(store.get(7).unwrap().data, b"A");
+        assert!(store.placements().next().is_none());
     }
 }

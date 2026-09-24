@@ -152,6 +152,35 @@ fn kitty_stored_raw_image_decodes_on_demand() {
 }
 
 #[test]
+fn kitty_placement_anchor_uses_cursor_at_final_chunk_and_put() {
+    let mut pane = Pane::spawn("/bin/sh", 6, 40).unwrap();
+    pane.process_output_with_image_store(
+        b"ab\x1b_Ga=T,f=24,i=7,s=1,v=1,p=1,c=2,r=1,C=1,m=1;AQID\x1b\\",
+        &mut |_| {},
+    );
+    pane.process_output_with_image_store(b"cd\x1b_Gm=0;\x1b\\", &mut |_| {});
+    let first = pane.image_store().placements().next().unwrap();
+    let geometry = first.geometry.unwrap();
+    assert_eq!((geometry.anchor.row, geometry.anchor.column), (0, 4));
+    assert_eq!((geometry.columns, geometry.rows), (Some(2), Some(1)));
+    assert!(geometry.cursor_stays);
+
+    pane.process_output_with_image_store(
+        b"\x1b[?1049h\x1b[3;4H\x1b_Ga=p,i=7,p=2,c=1,r=2,z=-1\x1b\\",
+        &mut |_| {},
+    );
+    let second = pane
+        .image_store()
+        .placements()
+        .find(|placement| placement.placement_id == Some(2))
+        .unwrap();
+    let geometry = second.geometry.unwrap();
+    assert_eq!((geometry.anchor.row, geometry.anchor.column), (2, 3));
+    assert!(geometry.anchor.alternate);
+    assert_eq!(geometry.z_index, -1);
+}
+
+#[test]
 fn real_windows_keep_processes_and_terminal_state_isolated() {
     assert!(Pane::spawn("/definitely/missing/rustmux-shell", 24, 80).is_err());
     assert!(Pane::spawn("/bin/sh", 0, 80).is_err());
