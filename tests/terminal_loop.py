@@ -2379,21 +2379,43 @@ finally:
     s.close()
 
 # Dragging a separator resizes that split and keeps focus on the active pane.
+drag_monitor = r"""
+import os, signal
+count = 0
+def on_resize(*_):
+    global count
+    count += 1
+    size = os.get_terminal_size()
+    print("DRAG_WINCH:%s:%s:%s" % (count, size.lines, size.columns), flush=True)
+signal.signal(signal.SIGWINCH, on_resize)
+print("DRAG_MONITOR_READY", flush=True)
+while True:
+    signal.pause()
+"""
 s = Session()
 try:
     s.expect(b"RUSTMUX_READY> ")
     s.send(b"VAR=A\n\x02%")
     s.expect(b"RUSTMUX_READY>")
-    s.send(b"VAR=B; count=0; trap 'count=$((count+1)); echo DRAG_WINCH:$count' WINCH\n")
+    s.send(b"VAR=B\n")
     s.expect(b"RUSTMUX_READY>")
-    # Intermediate mouse positions are coalesced before the final PTY resize.
-    # This prevents prompt-redrawing shells from processing stale dimensions.
-    s.send(b"\x1b[M H%\x1b[M@M%\x1b[M@W%\x1b[M@R%\x1b[M#R%")
-    # On macOS the size can be visible to stty before the shell runs its
-    # queued SIGWINCH trap. Wait for the trap, then inspect the final state.
-    s.expect(b"DRAG_WINCH:1")
-    s.send(b"printf 'DRAG:%s:%s:%s\n' $VAR $count \"$(stty size)\"\n")
-    s.expect(b"DRAG:B:1:20 28")
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py") as source:
+        source.write(drag_monitor)
+        source.flush()
+        s.send(("python3 " + shlex.quote(source.name) + "\n").encode())
+        s.expect(b"DRAG_MONITOR_READY")
+        # A foreground process reports resize signals directly, independent of
+        # when an interactive shell chooses to run its trap.
+        s.send(b"\x1b[M H%\x1b[M@M%\x1b[M@W%\x1b[M@R%\x1b[M#R%")
+        observed = s.expect(b"DRAG_WINCH:1:20:28")
+        end = time.monotonic() + 0.1
+        while time.monotonic() < end:
+            s.read(max(0, end - time.monotonic()))
+        assert b"DRAG_WINCH:2" not in observed + s.output, bytes(s.output[-1000:])
+        s.send(b"\x03")
+        s.expect(b"RUSTMUX_READY> ")
+    s.send(b"printf 'DRAG:%s:%s\n' $VAR \"$(stty size)\"\n")
+    s.expect(b"DRAG:B:20 28")
     s.send(b"\x02hprintf 'DRAG:%s:%s\n' $VAR \"$(stty size)\"\n")
     s.expect(b"DRAG:A:20 48")
     os.kill(s.app_pid, signal.SIGTERM)
