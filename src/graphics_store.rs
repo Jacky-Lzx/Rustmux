@@ -56,6 +56,8 @@ pub struct PlacementGeometry {
     pub anchor: CellAnchor,
     /// Signed displacement from the original cursor anchor as text rows move.
     pub row_offset: i64,
+    /// Pixel rectangle selected from the source image before cell sizing.
+    pub source: SourceRect,
     /// Explicit cell extent, when requested. Missing values need pixel-cell
     /// geometry before a renderer can infer them.
     pub columns: Option<u32>,
@@ -65,6 +67,28 @@ pub struct PlacementGeometry {
     pub clip_bottom_rows: u32,
     pub z_index: i32,
     pub cursor_stays: bool,
+}
+
+#[derive(Debug, Default, Clone, Copy, Eq, PartialEq)]
+pub struct SourceRect {
+    pub left: u32,
+    pub top: u32,
+    /// None selects the remaining source width from `left`.
+    pub width: Option<u32>,
+    /// None selects the remaining source height from `top`.
+    pub height: Option<u32>,
+}
+
+impl SourceRect {
+    fn intersected_dimensions(self, image_width: u32, image_height: u32) -> Option<(u32, u32)> {
+        let width = image_width
+            .saturating_sub(self.left)
+            .min(self.width.unwrap_or(u32::MAX));
+        let height = image_height
+            .saturating_sub(self.top)
+            .min(self.height.unwrap_or(u32::MAX));
+        (width != 0 && height != 0).then_some((width, height))
+    }
 }
 
 /// Caller-supplied physical size of one terminal cell. The ordinary runtime
@@ -389,7 +413,9 @@ impl ImageStore {
             self.decoded_dimensions.insert(image_id, decoded);
             decoded
         };
-        let Some((width, height)) = dimensions else {
+        let Some((width, height)) = dimensions
+            .and_then(|(width, height)| geometry.source.intersected_dimensions(width, height))
+        else {
             return Some(geometry);
         };
         let Some((columns, rows)) =
@@ -413,7 +439,7 @@ impl ImageStore {
         let controls = parse_control_command(command).ok_or(StoreError::UnsupportedAction)?;
         match controls.get(&b'a').map(Vec::as_slice) {
             Some(b"p") => {
-                if !only_keys(&controls, b"aipqcrzC") {
+                if !only_keys(&controls, b"aipqcrzCxywh") {
                     return Err(StoreError::UnsupportedAction);
                 }
                 let id = required_id(&controls)?;
@@ -614,6 +640,18 @@ fn parse_geometry<'a>(
     Ok(PlacementGeometry {
         anchor,
         row_offset: 0,
+        source: SourceRect {
+            left: control(b'x')
+                .map(|bytes| parse_u32(bytes).ok_or(StoreError::InvalidPlacement))
+                .transpose()?
+                .unwrap_or(0),
+            top: control(b'y')
+                .map(|bytes| parse_u32(bytes).ok_or(StoreError::InvalidPlacement))
+                .transpose()?
+                .unwrap_or(0),
+            width: extent(b'w')?,
+            height: extent(b'h')?,
+        },
         columns: extent(b'c')?,
         rows: extent(b'r')?,
         clip_top_rows: 0,
@@ -832,6 +870,7 @@ mod tests {
             Some(PlacementGeometry {
                 anchor: first,
                 row_offset: 0,
+                source: SourceRect::default(),
                 columns: Some(2),
                 rows: Some(3),
                 clip_top_rows: 0,
@@ -864,10 +903,16 @@ mod tests {
             .insert(transfer(b"\x1b_Ga=t,f=100,i=7;QQ==\x1b\\"))
             .unwrap();
         let anchor = CellAnchor::default();
-        assert_eq!(
-            store.insert_at(transfer(b"\x1b_Ga=T,f=100,i=7,c=no;Qg==\x1b\\"), anchor,),
-            Err(StoreError::InvalidPlacement)
-        );
+        for command in [
+            b"\x1b_Ga=T,f=100,i=7,c=no;Qg==\x1b\\".as_slice(),
+            b"\x1b_Ga=T,f=100,i=7,x=no;Qg==\x1b\\",
+            b"\x1b_Ga=T,f=100,i=7,w=no;Qg==\x1b\\",
+        ] {
+            assert_eq!(
+                store.insert_at(transfer(command), anchor),
+                Err(StoreError::InvalidPlacement)
+            );
+        }
         assert_eq!(store.get(7).unwrap().data, b"A");
         assert!(store.placements().next().is_none());
     }
@@ -906,5 +951,41 @@ mod tests {
         assert_eq!(CellPixelSize::from_terminal_size(30, 100, 900, 0), None);
         assert_eq!(CellPixelSize::from_terminal_size(30, 100, 901, 600), None);
         assert_eq!(CellPixelSize::from_terminal_size(30, 100, 900, 601), None);
+    }
+
+    #[test]
+    fn source_rectangle_intersects_image_without_overflow() {
+        assert_eq!(
+            SourceRect::default().intersected_dimensions(6, 4),
+            Some((6, 4))
+        );
+        assert_eq!(
+            SourceRect {
+                left: 2,
+                top: 1,
+                width: Some(3),
+                height: Some(2),
+            }
+            .intersected_dimensions(6, 4),
+            Some((3, 2))
+        );
+        assert_eq!(
+            SourceRect {
+                left: 4,
+                top: 3,
+                width: Some(u32::MAX),
+                height: Some(u32::MAX),
+            }
+            .intersected_dimensions(6, 4),
+            Some((2, 1))
+        );
+        assert_eq!(
+            SourceRect {
+                left: 6,
+                ..SourceRect::default()
+            }
+            .intersected_dimensions(6, 4),
+            None
+        );
     }
 }

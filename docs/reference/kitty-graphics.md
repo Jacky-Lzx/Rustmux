@@ -60,8 +60,10 @@ but the model does not track visibility or the other delete selectors.
 For the pane opt-in path, cursor-anchored placements now record a zero-based
 cell row and column, plus whether they belong to the alternate screen. A
 chunked `a=T` records the cursor when its final chunk arrives; `a=p` records
-the cursor at that command. Explicit `c`/`r` cell extents, signed `z` index,
-and `C=1` no-move request are parsed and retained. Missing extents remain
+the cursor at that command. Source pixel rectangle keys `x/y/w/h`, explicit
+`c`/`r` cell extents, signed `z` index, and `C=1` no-move request are parsed
+and retained. The source rectangle intersects the decoded image; an omitted
+or zero `w/h` selects the remaining width/height. Missing extents remain
 unknown on the ordinary opt-in path. Virtual and relative placements
 do not get a cursor anchor. This is metadata only: image placement does not yet
 compose pixels, redraw, or send graphics replies.
@@ -78,12 +80,13 @@ This follows the [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graph
 `Pane::process_output_with_image_store_sized` is a separate opt-in path for a
 caller that has verified nonzero physical cell width and height in pixels.
 It validates and caches each image's decoded dimensions, then derives missing
-`c`/`r` using ceiling cell coverage and the source aspect ratio when only one
-extent is specified. The resolved extent is stored with the placement and is
-used for cursor motion and later row-shift bookkeeping. When inference is
-needed, invalid image data or an unrepresentable computed extent leaves the
-original metadata and cursor unchanged. Replacing or evicting an image
-invalidates its dimension cache.
+`c`/`r` using ceiling cell coverage of the intersected source rectangle and
+its aspect ratio when only one extent is specified. The resolved extent is
+stored with the placement and used for cursor motion and later row-shift
+bookkeeping. When inference is
+needed, invalid image data, an empty source intersection, or an unrepresentable
+computed extent leaves the original metadata and cursor unchanged. Replacing
+or evicting an image invalidates its dimension cache.
 
 `CellPixelSize::from_terminal_size` accepts reported terminal rows, columns and
 pixel dimensions only when they describe an exact, nonzero cell grid. The
@@ -144,5 +147,5 @@ references, margin clipping, reverse index, unknown height, and event overflow.
 Cursor tests cover `a=T` and `a=p` ordering, final-chunk anchoring, `C=1`,
 unknown extents, failed placements, and bounded destinations.
 Sized-path tests cover RGB and PNG dimensions, aspect-ratio inference,
-invalid PNG recovery, exact terminal-cell validation, and the unchanged
-unsized path.
+source cropping, invalid PNG recovery, exact terminal-cell validation, and
+the unchanged unsized path.

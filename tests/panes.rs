@@ -330,6 +330,74 @@ fn kitty_terminal_pixels_only_infer_from_an_exact_cell_grid() {
 }
 
 #[test]
+fn kitty_source_crop_controls_inferred_extent_and_cursor_motion() {
+    let mut pane = Pane::spawn("/bin/sh", 12, 30).unwrap();
+    let cell = CellPixelSize::new(2, 1).unwrap();
+    let image = format!(
+        "\x1b_Ga=T,f=24,s=6,v=4,i=7,p=1,x=2,y=1,w=3,h=2;{}\x1b\\",
+        STANDARD.encode([0; 72])
+    );
+    pane.process_output_with_image_store_sized(image.as_bytes(), &mut |_| {}, cell);
+    assert_eq!(
+        (
+            placement_geometry(&pane, 1).columns,
+            placement_geometry(&pane, 1).rows
+        ),
+        (Some(2), Some(2))
+    );
+    assert_eq!(placement_geometry(&pane, 1).source.left, 2);
+    assert_eq!(placement_geometry(&pane, 1).source.width, Some(3));
+    assert_eq!(pane.screen().cursor(), (2, 2));
+
+    pane.process_output_with_image_store_sized(
+        b"\x1b_Ga=p,i=7,p=2,x=2,y=1\x1b\\",
+        &mut |_| {},
+        cell,
+    );
+    assert_eq!(
+        (
+            placement_geometry(&pane, 2).columns,
+            placement_geometry(&pane, 2).rows
+        ),
+        (Some(2), Some(3))
+    );
+    assert_eq!(pane.screen().cursor(), (5, 4));
+
+    pane.process_output_with_image_store_sized(
+        b"\x1b_Ga=p,i=7,p=3,x=5,y=3,w=9,h=9,C=1\x1b\\",
+        &mut |_| {},
+        cell,
+    );
+    assert_eq!(
+        (
+            placement_geometry(&pane, 3).columns,
+            placement_geometry(&pane, 3).rows
+        ),
+        (Some(1), Some(1))
+    );
+    assert_eq!(pane.screen().cursor(), (5, 4));
+
+    pane.process_output_with_image_store_sized(
+        b"\x1b_Ga=p,i=7,p=4,x=6\x1b\\\x1b_Ga=p,i=7,p=5,x=bad\x1b\\",
+        &mut |_| {},
+        cell,
+    );
+    assert_eq!(placement_geometry(&pane, 4).source.left, 6);
+    assert_eq!(placement_geometry(&pane, 4).columns, None);
+    assert_eq!(pane.image_store().placements().count(), 4);
+    assert_eq!(pane.screen().cursor(), (5, 4));
+
+    pane.process_output_with_image_store_sized(
+        b"\x1b_Ga=p,i=7,p=6,x=2,y=1,w=3,h=2,c=4,C=1\x1b\\",
+        &mut |_| {},
+        cell,
+    );
+    assert_eq!(placement_geometry(&pane, 6).columns, Some(4));
+    assert_eq!(placement_geometry(&pane, 6).rows, Some(6));
+    assert_eq!(pane.screen().cursor(), (5, 4));
+}
+
+#[test]
 fn kitty_sized_png_inference_recovers_after_invalid_image_replacement() {
     let mut pane = Pane::spawn("/bin/sh", 6, 20).unwrap();
     let cell = CellPixelSize::new(2, 1).unwrap();
