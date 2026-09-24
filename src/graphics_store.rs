@@ -79,6 +79,27 @@ impl CellPixelSize {
     pub fn new(width: u16, height: u16) -> Option<Self> {
         (width != 0 && height != 0).then_some(Self { width, height })
     }
+
+    /// Derive a cell size only when the reported terminal pixel dimensions
+    /// cover an exact grid. Zero or leftover pixels may represent unknown
+    /// geometry or terminal padding, so they must not be guessed away.
+    pub fn from_terminal_size(
+        rows: u16,
+        columns: u16,
+        pixel_width: u16,
+        pixel_height: u16,
+    ) -> Option<Self> {
+        if rows == 0
+            || columns == 0
+            || pixel_width == 0
+            || pixel_height == 0
+            || !pixel_width.is_multiple_of(columns)
+            || !pixel_height.is_multiple_of(rows)
+        {
+            return None;
+        }
+        Self::new(pixel_width / columns, pixel_height / rows)
+    }
 }
 
 #[derive(Debug, Default)]
@@ -873,5 +894,17 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn terminal_pixels_require_an_exact_nonzero_cell_grid() {
+        let cell = CellPixelSize::new(9, 20);
+        assert_eq!(CellPixelSize::from_terminal_size(30, 100, 900, 600), cell);
+        assert_eq!(CellPixelSize::from_terminal_size(0, 100, 900, 600), None);
+        assert_eq!(CellPixelSize::from_terminal_size(30, 0, 900, 600), None);
+        assert_eq!(CellPixelSize::from_terminal_size(30, 100, 0, 600), None);
+        assert_eq!(CellPixelSize::from_terminal_size(30, 100, 900, 0), None);
+        assert_eq!(CellPixelSize::from_terminal_size(30, 100, 901, 600), None);
+        assert_eq!(CellPixelSize::from_terminal_size(30, 100, 900, 601), None);
     }
 }

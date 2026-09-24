@@ -10,6 +10,7 @@ use crate::{
     semantic::{PromptEvent, SemanticOutput},
 };
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
+use nix::pty::Winsize;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::{
@@ -386,6 +387,23 @@ impl Pane {
         cell_pixels: CellPixelSize,
     ) {
         self.process_output_inner(bytes, reply, GraphicsSink::Store(Some(cell_pixels)));
+    }
+
+    /// Opt in to image storage using an outer terminal's reported window size.
+    /// Inexact or absent pixel dimensions leave placement extents unresolved.
+    pub fn process_output_with_image_store_for_terminal(
+        &mut self,
+        bytes: &[u8],
+        reply: &mut impl FnMut(&[u8]),
+        terminal: Winsize,
+    ) {
+        let cell_pixels = CellPixelSize::from_terminal_size(
+            terminal.ws_row,
+            terminal.ws_col,
+            terminal.ws_xpixel,
+            terminal.ws_ypixel,
+        );
+        self.process_output_inner(bytes, reply, GraphicsSink::Store(cell_pixels));
     }
 
     pub fn image_store(&self) -> &ImageStore {

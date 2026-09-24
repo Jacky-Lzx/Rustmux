@@ -2,6 +2,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use nix::{
     errno::Errno,
     fcntl::{FcntlArg, OFlag, fcntl},
+    pty::Winsize,
     sys::wait::{WaitPidFlag, waitpid},
     unistd::Pid,
 };
@@ -288,6 +289,44 @@ fn kitty_supplied_cell_pixels_infer_raw_extents_and_cursor_motion() {
     assert_eq!(placement_geometry(&pane, 5).columns, Some(1));
     assert_eq!(placement_geometry(&pane, 5).rows, Some(1));
     assert_eq!(pane.screen().cursor(), (6, 6));
+}
+
+#[test]
+fn kitty_terminal_pixels_only_infer_from_an_exact_cell_grid() {
+    let mut pane = Pane::spawn("/bin/sh", 6, 20).unwrap();
+    let terminal = Winsize {
+        ws_row: 6,
+        ws_col: 20,
+        ws_xpixel: 40,
+        ws_ypixel: 6,
+    };
+    let image = format!(
+        "\x1b_Ga=T,f=24,s=4,v=2,i=7,p=1;{}\x1b\\",
+        STANDARD.encode([0; 24])
+    );
+    pane.process_output_with_image_store_for_terminal(image.as_bytes(), &mut |_| {}, terminal);
+    assert_eq!(placement_geometry(&pane, 1).columns, Some(2));
+    assert_eq!(placement_geometry(&pane, 1).rows, Some(2));
+    assert_eq!(pane.screen().cursor(), (2, 2));
+
+    pane.process_output_with_image_store_for_terminal(
+        b"\x1b_Ga=p,i=7,p=2\x1b\\",
+        &mut |_| {},
+        Winsize {
+            ws_xpixel: 41,
+            ..terminal
+        },
+    );
+    assert_eq!(placement_geometry(&pane, 2).columns, None);
+    assert_eq!(pane.screen().cursor(), (2, 2));
+
+    pane.process_output_with_image_store_for_terminal(
+        b"\x1b_Ga=p,i=7,p=3\x1b\\",
+        &mut |_| {},
+        terminal,
+    );
+    assert_eq!(placement_geometry(&pane, 3).columns, Some(2));
+    assert_eq!(pane.screen().cursor(), (4, 4));
 }
 
 #[test]

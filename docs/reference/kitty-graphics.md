@@ -84,6 +84,14 @@ used for cursor motion and later row-shift bookkeeping. When inference is
 needed, invalid image data or an unrepresentable computed extent leaves the
 original metadata and cursor unchanged. Replacing or evicting an image
 invalidates its dimension cache.
+
+`CellPixelSize::from_terminal_size` accepts reported terminal rows, columns and
+pixel dimensions only when they describe an exact, nonzero cell grid. The
+opt-in `Pane::process_output_with_image_store_for_terminal` uses that check;
+zero or non-divisible pixel dimensions fall back to the unsized store behavior
+without guessing through window padding. The supplied size describes the
+outer terminal, not one split pane.
+
 The local/detached runtime does not yet propagate trustworthy pixel cell size
 to panes, so it does not use this path automatically. The detached client now
 transports reported terminal pixel dimensions to the server frontend, but pane
@@ -136,4 +144,5 @@ references, margin clipping, reverse index, unknown height, and event overflow.
 Cursor tests cover `a=T` and `a=p` ordering, final-chunk anchoring, `C=1`,
 unknown extents, failed placements, and bounded destinations.
 Sized-path tests cover RGB and PNG dimensions, aspect-ratio inference,
-invalid PNG recovery, and the unchanged unsized path.
+invalid PNG recovery, exact terminal-cell validation, and the unchanged
+unsized path.
