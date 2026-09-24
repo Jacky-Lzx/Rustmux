@@ -1913,8 +1913,15 @@ with tempfile.TemporaryDirectory(prefix="rustmux-server-prefix-") as server_conf
         s.close()
     s = Session(arguments=("attach", prefix_name), extra_env={"XDG_CONFIG_HOME": client_config})
     try:
-        s.expect(b"RUSTMUX_READY> ")
+        expect_bar(s, f"Rustmux ({prefix_name})".encode())
         expect_footer(s, b"Ctrl-A")
+        # Reattachment preserves the shell's unfinished input, including the
+        # literal control bytes sent before detach. Cancel it before expecting
+        # a fresh, empty prompt for the following commands.
+        s.output.clear()
+        s.frames.clear()
+        s.send(b"\x03")
+        s.expect(b"RUSTMUX_READY> ")
         s.output.clear()
         s.frames.clear()
         s.send(b"printf '\\033[=1u'\n")
