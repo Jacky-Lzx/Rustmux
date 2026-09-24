@@ -7,7 +7,7 @@ use nix::{
     unistd::Pid,
 };
 use rustmux::{
-    graphics_store::{CellPixelSize, PlacementGeometry},
+    graphics_store::{CellPixelSize, PlacementGeometry, PlacementSizing},
     layout::SplitAxis,
     pane::Pane,
     pane_set::PaneSet,
@@ -270,6 +270,10 @@ fn kitty_supplied_cell_pixels_infer_raw_extents_and_cursor_motion() {
         (Some(2), Some(2))
     );
     assert_eq!(pane.screen().cursor(), (2, 2));
+    assert_eq!(
+        placement_geometry(&pane, 1).sizing,
+        PlacementSizing::Natural
+    );
 
     pane.process_output_with_image_store_sized(
         b"\x1b_Ga=p,i=7,p=2,c=4,C=1\x1b\\\x1b_Ga=p,i=7,p=3,r=3\x1b\\",
@@ -277,18 +281,47 @@ fn kitty_supplied_cell_pixels_infer_raw_extents_and_cursor_motion() {
         cell,
     );
     assert_eq!(placement_geometry(&pane, 2).rows, Some(4));
+    assert_eq!(
+        placement_geometry(&pane, 2).sizing,
+        PlacementSizing::FitWidth
+    );
     assert_eq!(placement_geometry(&pane, 3).columns, Some(3));
+    assert_eq!(
+        placement_geometry(&pane, 3).sizing,
+        PlacementSizing::FitHeight
+    );
     assert_eq!(pane.screen().cursor(), (5, 5));
 
     pane.process_output_with_image_store(b"\x1b_Ga=p,i=7,p=4\x1b\\", &mut |_| {});
     assert_eq!(placement_geometry(&pane, 4).columns, None);
+    assert_eq!(
+        placement_geometry(&pane, 4).sizing,
+        PlacementSizing::Natural
+    );
     assert_eq!(pane.screen().cursor(), (5, 5));
 
     pane.process_output_with_image_store(b"\x1b_Ga=t,f=24,s=1,v=1,i=8;AAAA\x1b\\", &mut |_| {});
     pane.process_output_with_image_store_sized(b"\x1b_Ga=p,i=8,p=5\x1b\\", &mut |_| {}, cell);
     assert_eq!(placement_geometry(&pane, 5).columns, Some(1));
     assert_eq!(placement_geometry(&pane, 5).rows, Some(1));
+    assert_eq!(
+        placement_geometry(&pane, 5).sizing,
+        PlacementSizing::Natural
+    );
     assert_eq!(pane.screen().cursor(), (6, 6));
+
+    pane.process_output_with_image_store_sized(
+        b"\x1b_Ga=p,i=7,p=6,c=3,r=2,C=1\x1b\\\x1b_Ga=p,i=7,p=7,c=0,r=0,C=1\x1b\\",
+        &mut |_| {},
+        cell,
+    );
+    assert_eq!(placement_geometry(&pane, 6).sizing, PlacementSizing::FitBox);
+    assert_eq!(
+        placement_geometry(&pane, 7).sizing,
+        PlacementSizing::Natural
+    );
+    assert_eq!(placement_geometry(&pane, 7).columns, Some(2));
+    assert_eq!(placement_geometry(&pane, 7).rows, Some(2));
 }
 
 #[test]

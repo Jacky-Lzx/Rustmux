@@ -64,11 +64,22 @@ pub struct PlacementGeometry {
     /// geometry before a renderer can infer them.
     pub columns: Option<u32>,
     pub rows: Option<u32>,
+    /// Whether the original command requested scaling, before missing extents
+    /// are inferred from the image and physical cell dimensions.
+    pub sizing: PlacementSizing,
     /// Permanently clipped source rows after a placement crosses a scroll margin.
     pub clip_top_rows: u32,
     pub clip_bottom_rows: u32,
     pub z_index: i32,
     pub cursor_stays: bool,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum PlacementSizing {
+    Natural,
+    FitWidth,
+    FitHeight,
+    FitBox,
 }
 
 #[derive(Debug, Default, Clone, Copy, Eq, PartialEq)]
@@ -671,6 +682,14 @@ fn parse_geometry<'a>(
         Some(b"1") => true,
         _ => return Err(StoreError::InvalidPlacement),
     };
+    let columns = extent(b'c')?;
+    let rows = extent(b'r')?;
+    let sizing = match (columns, rows) {
+        (None, None) => PlacementSizing::Natural,
+        (Some(_), None) => PlacementSizing::FitWidth,
+        (None, Some(_)) => PlacementSizing::FitHeight,
+        (Some(_), Some(_)) => PlacementSizing::FitBox,
+    };
     Ok(PlacementGeometry {
         anchor,
         row_offset: 0,
@@ -681,8 +700,9 @@ fn parse_geometry<'a>(
             height: extent(b'h')?,
         },
         cell_offset,
-        columns: extent(b'c')?,
-        rows: extent(b'r')?,
+        columns,
+        rows,
+        sizing,
         clip_top_rows: 0,
         clip_bottom_rows: 0,
         z_index,
@@ -903,6 +923,7 @@ mod tests {
                 cell_offset: CellPixelOffset { x: 3, y: 4 },
                 columns: Some(2),
                 rows: Some(3),
+                sizing: PlacementSizing::FitBox,
                 clip_top_rows: 0,
                 clip_bottom_rows: 0,
                 z_index: -4,
@@ -922,6 +943,10 @@ mod tests {
         assert_eq!(placements[0].geometry.unwrap().anchor, second);
         assert_eq!(placements[0].geometry.unwrap().columns, Some(1));
         assert_eq!(placements[0].geometry.unwrap().rows, Some(2));
+        assert_eq!(
+            placements[0].geometry.unwrap().sizing,
+            PlacementSizing::FitBox
+        );
         assert_eq!(
             placements[0].geometry.unwrap().cell_offset,
             CellPixelOffset { x: 1, y: 2 }

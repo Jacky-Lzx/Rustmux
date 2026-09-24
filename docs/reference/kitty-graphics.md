@@ -89,6 +89,13 @@ intersection, or an unrepresentable
 computed extent leaves the original metadata and cursor unchanged. Replacing
 or evicting an image invalidates its dimension cache.
 
+The placement also retains the original sizing intent separately from the
+resolved cell extent: neither `c` nor `r` (or zero values) means natural pixel
+size, only `c` means fit width, only `r` means fit height, and both mean fit
+within the specified cell box. This distinction survives cell-extent inference
+so a future pixel renderer can choose the correct scaling behavior; it does
+not render or scale pixels yet.
+
 `X/Y` position an image within its first cell; they are not added to `c/r` or
 cursor movement. On a sized opt-in call, either offset must be smaller than
 its cell pixel dimension. An invalid offset rejects the placement before an
