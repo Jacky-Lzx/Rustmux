@@ -108,6 +108,14 @@ rectangle. The calculation recomputes inferred extents for the supplied cell
 size and returns no layout for an empty crop, invalid offset, or overflowing
 pixel geometry. It does not decode, resample, clip, or composite pixels.
 
+After decoding, `DecodedImage::resample_placement` can now produce the cropped
+RGBA content for that layout with bounded nearest-neighbor sampling. It keeps
+the content's destination offset and alpha bytes, but does not allocate empty
+letterbox space. Invalid pixel buffers or rectangles are rejected, and output
+is capped at 32 MiB. Nearest-neighbor is this initial implementation choice,
+not a Kitty protocol requirement. This remains an opt-in data path: pane
+clipping, z-order blending, redraw, and the normal runtime are unchanged.
+
 `X/Y` position an image within its first cell; they are not added to `c/r` or
 cursor movement. On a sized opt-in call, either offset must be smaller than
 its cell pixel dimension. An invalid offset rejects the placement before an
@@ -164,7 +172,9 @@ isolation and command-output filtering. Run `cargo test --lib graphics::tests`,
 Store tests also cover replacement, isolation, eviction, explicit removal,
 named and anonymous references, and soft versus hard deletion.
 Decoder tests cover raw and PNG formats, palette transparency, corrupted PNGs,
-dimension checks and the output-size bound.
+dimension checks and the output-size bound. Resampling tests cover cropped
+nearest-neighbor enlargement, reduction, alpha preservation, invalid geometry,
+and the raster output limit.
 Anchor tests cover interleaved text, final-chunk position, alternate-screen
 identity, explicit layout options, malformed metadata, and named replacement.
 Screen-lifecycle tests cover split `CSI 2 J`, non-clearing text erasures,

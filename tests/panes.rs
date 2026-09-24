@@ -316,8 +316,9 @@ fn kitty_supplied_cell_pixels_infer_raw_extents_and_cursor_motion() {
         cell,
     );
     assert_eq!(placement_geometry(&pane, 6).sizing, PlacementSizing::FitBox);
+    let decoded = pane.image_store().get(7).unwrap().decode_rgba().unwrap();
     let pixel_layout = placement_geometry(&pane, 6)
-        .pixel_layout(4, 2, cell)
+        .pixel_layout(decoded.width, decoded.height, cell)
         .unwrap();
     assert_eq!(
         pixel_layout.cell_bounds,
@@ -325,6 +326,17 @@ fn kitty_supplied_cell_pixels_infer_raw_extents_and_cursor_motion() {
             width: 6,
             height: 2
         }
+    );
+    let resampled = decoded.resample_placement(pixel_layout).unwrap();
+    assert_eq!(resampled.destination, pixel_layout.destination);
+    assert_eq!(resampled.pixels.len(), 4 * 2 * 4);
+    assert!(
+        resampled
+            .pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|rgba| rgba[3] == 255)
     );
     assert_eq!(
         pixel_layout.destination,

@@ -1,11 +1,12 @@
 //! Opt-in, bounded conversion of stored Kitty image data to RGBA pixels.
 //! Decoding does not place or render an image in a terminal.
 
-use crate::graphics_store::{ImageFormat, StoredImage};
+use crate::graphics_store::{ImageFormat, PixelRect, PlacementPixelLayout, StoredImage};
 use png::{BitDepth, ColorType, Decoder, Limits, Transformations};
 use std::io::Cursor;
 
 pub const MAX_DECODED_IMAGE_BYTES: usize = 32 * 1024 * 1024;
+pub const MAX_RESAMPLED_PLACEMENT_BYTES: usize = MAX_DECODED_IMAGE_BYTES;
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct DecodedImage {
@@ -13,6 +14,22 @@ pub struct DecodedImage {
     pub height: u32,
     /// Row-major, eight-bit RGBA pixels.
     pub pixels: Vec<u8>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct ResampledPlacement {
+    /// Content rectangle relative to the placement's anchor cell. Letterbox
+    /// space is not allocated in `pixels`.
+    pub destination: PixelRect,
+    /// Row-major, eight-bit RGBA content pixels.
+    pub pixels: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum ResampleError {
+    InvalidPixels,
+    InvalidLayout,
+    OutputLimit,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -32,6 +49,71 @@ impl StoredImage {
             ImageFormat::Png => decode_png(self),
         }
     }
+}
+
+impl DecodedImage {
+    /// Sample a cropped placement into its content rectangle. The caller
+    /// composes the returned pixels at `destination`; this does not draw into
+    /// a pane or allocate transparent letterbox padding.
+    pub fn resample_placement(
+        &self,
+        layout: PlacementPixelLayout,
+    ) -> Result<ResampledPlacement, ResampleError> {
+        let expected = decoded_size(self.width, self.height).map_err(|error| match error {
+            DecodeError::OutputLimit => ResampleError::OutputLimit,
+            _ => ResampleError::InvalidPixels,
+        })?;
+        if self.pixels.len() != expected {
+            return Err(ResampleError::InvalidPixels);
+        }
+        let source = layout.source;
+        let destination = layout.destination;
+        if source.width == 0
+            || source.height == 0
+            || destination.width == 0
+            || destination.height == 0
+            || source
+                .x
+                .checked_add(source.width)
+                .is_none_or(|end| end > self.width)
+            || source
+                .y
+                .checked_add(source.height)
+                .is_none_or(|end| end > self.height)
+            || destination.x.checked_add(destination.width).is_none()
+            || destination.y.checked_add(destination.height).is_none()
+        {
+            return Err(ResampleError::InvalidLayout);
+        }
+        let output_size = decoded_size(destination.width, destination.height)
+            .map_err(|_| ResampleError::OutputLimit)?;
+        let mut pixels = vec![0; output_size];
+        let output_width = usize::try_from(destination.width).unwrap();
+        let input_width = usize::try_from(self.width).unwrap();
+        for (y, row) in pixels.chunks_exact_mut(output_width * 4).enumerate() {
+            let source_y = source.y + nearest_sample(y, source.height, destination.height);
+            for (x, rgba) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                let source_x = source.x + nearest_sample(x, source.width, destination.width);
+                let index = (usize::try_from(source_y).unwrap() * input_width
+                    + usize::try_from(source_x).unwrap())
+                    * 4;
+                rgba.copy_from_slice(&self.pixels[index..index + 4]);
+            }
+        }
+        Ok(ResampledPlacement {
+            destination,
+            pixels,
+        })
+    }
+}
+
+fn nearest_sample(output_index: usize, source_extent: u32, output_extent: u32) -> u32 {
+    // Sample at pixel centers. All extents are nonzero and the quotient is
+    // strictly smaller than `source_extent`.
+    let center = 2 * u128::try_from(output_index).unwrap() + 1;
+    let numerator = center * u128::from(source_extent);
+    let denominator = 2 * u128::from(output_extent);
+    u32::try_from(numerator / denominator).unwrap()
 }
 
 fn decoded_size(width: u32, height: u32) -> Result<usize, DecodeError> {
@@ -155,7 +237,10 @@ fn decode_png(image: &StoredImage) -> Result<DecodedImage, DecodeError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{graphics_store::ImageStore, graphics_transfer::DirectTransferAssembler};
+    use crate::{
+        graphics_store::{ImageStore, PixelSize},
+        graphics_transfer::DirectTransferAssembler,
+    };
     use base64::{Engine as _, engine::general_purpose::STANDARD};
 
     fn stored(controls: &str, bytes: &[u8]) -> StoredImage {
@@ -233,5 +318,191 @@ mod tests {
         *corrupt.last_mut().unwrap() ^= 1;
         let image = stored("a=t,f=100,i=1", &corrupt);
         assert_eq!(image.decode_rgba(), Err(DecodeError::InvalidData));
+    }
+
+    #[test]
+    fn resample_cropped_rgba_content_without_allocating_letterbox_padding() {
+        let rgba = [
+            1, 0, 0, 10, 2, 0, 0, 20, 3, 0, 0, 30, 4, 0, 0, 40, 5, 0, 0, 50, 6, 0, 0, 60,
+        ];
+        let image = stored("a=t,f=32,i=1,s=3,v=2", &rgba).decode_rgba().unwrap();
+        let layout = PlacementPixelLayout {
+            source: PixelRect {
+                x: 1,
+                y: 0,
+                width: 2,
+                height: 2,
+            },
+            cell_bounds: PixelSize {
+                width: 6,
+                height: 6,
+            },
+            destination: PixelRect {
+                x: 2,
+                y: 1,
+                width: 4,
+                height: 4,
+            },
+        };
+        let resampled = image.resample_placement(layout).unwrap();
+        assert_eq!(resampled.destination, layout.destination);
+        assert_eq!(resampled.pixels.len(), 4 * 4 * 4);
+        assert_eq!(
+            resampled
+                .pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|rgba| (rgba[0], rgba[3]))
+                .collect::<Vec<_>>(),
+            [
+                (2, 20),
+                (2, 20),
+                (3, 30),
+                (3, 30),
+                (2, 20),
+                (2, 20),
+                (3, 30),
+                (3, 30),
+                (5, 50),
+                (5, 50),
+                (6, 60),
+                (6, 60),
+                (5, 50),
+                (5, 50),
+                (6, 60),
+                (6, 60),
+            ]
+        );
+    }
+
+    #[test]
+    fn resample_uses_pixel_centers_when_shrinking() {
+        let mut pixels = Vec::new();
+        for value in 0..16 {
+            pixels.extend_from_slice(&[value, 0, 0, 255]);
+        }
+        let image = DecodedImage {
+            width: 4,
+            height: 4,
+            pixels,
+        };
+        let layout = PlacementPixelLayout {
+            source: PixelRect {
+                x: 0,
+                y: 0,
+                width: 4,
+                height: 4,
+            },
+            cell_bounds: PixelSize {
+                width: 2,
+                height: 2,
+            },
+            destination: PixelRect {
+                x: 0,
+                y: 0,
+                width: 2,
+                height: 2,
+            },
+        };
+        let resampled = image.resample_placement(layout).unwrap();
+        assert_eq!(
+            resampled
+                .pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|rgba| rgba[0])
+                .collect::<Vec<_>>(),
+            [5, 7, 13, 15]
+        );
+    }
+
+    #[test]
+    fn resample_rejects_bad_layout_pixels_and_excessive_output() {
+        let image = DecodedImage {
+            width: 1,
+            height: 1,
+            pixels: vec![1, 2, 3, 4],
+        };
+        let layout = PlacementPixelLayout {
+            source: PixelRect {
+                x: 0,
+                y: 0,
+                width: 1,
+                height: 1,
+            },
+            cell_bounds: PixelSize {
+                width: 1,
+                height: 1,
+            },
+            destination: PixelRect {
+                x: 0,
+                y: 0,
+                width: 1,
+                height: 1,
+            },
+        };
+        assert_eq!(
+            DecodedImage {
+                pixels: vec![1, 2, 3],
+                ..image
+            }
+            .resample_placement(layout),
+            Err(ResampleError::InvalidPixels)
+        );
+        assert_eq!(
+            image.resample_placement(PlacementPixelLayout {
+                source: PixelRect {
+                    x: 1,
+                    ..layout.source
+                },
+                ..layout
+            }),
+            Err(ResampleError::InvalidLayout)
+        );
+        assert_eq!(
+            image.resample_placement(PlacementPixelLayout {
+                source: PixelRect {
+                    x: u32::MAX,
+                    width: 2,
+                    ..layout.source
+                },
+                ..layout
+            }),
+            Err(ResampleError::InvalidLayout)
+        );
+        assert_eq!(
+            image.resample_placement(PlacementPixelLayout {
+                destination: PixelRect {
+                    width: 0,
+                    ..layout.destination
+                },
+                ..layout
+            }),
+            Err(ResampleError::InvalidLayout)
+        );
+        assert_eq!(
+            image.resample_placement(PlacementPixelLayout {
+                destination: PixelRect {
+                    width: 10_000,
+                    height: 10_000,
+                    ..layout.destination
+                },
+                ..layout
+            }),
+            Err(ResampleError::OutputLimit)
+        );
+        assert_eq!(
+            image.resample_placement(PlacementPixelLayout {
+                destination: PixelRect {
+                    x: u32::MAX,
+                    width: 2,
+                    ..layout.destination
+                },
+                ..layout
+            }),
+            Err(ResampleError::InvalidLayout)
+        );
     }
 }
