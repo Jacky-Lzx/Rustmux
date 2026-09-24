@@ -1,7 +1,10 @@
 //! Bounded image data and placement references for one pane. Optional cell
 //! anchors are recorded, but no pixels are rendered here.
 
-use crate::{graphics::MAX_GRAPHICS_COMMAND_BYTES, graphics_transfer::AssembledDirectTransfer};
+use crate::{
+    graphics::MAX_GRAPHICS_COMMAND_BYTES, graphics_transfer::AssembledDirectTransfer,
+    screen::ScrollEvent,
+};
 use std::collections::{BTreeMap, VecDeque};
 
 pub const MAX_PANE_IMAGE_BYTES: usize = 32 * 1024 * 1024;
@@ -51,10 +54,15 @@ pub struct CellAnchor {
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct PlacementGeometry {
     pub anchor: CellAnchor,
+    /// Signed displacement from the original cursor anchor as text rows move.
+    pub row_offset: i64,
     /// Explicit cell extent, when requested. Missing values need pixel-cell
     /// geometry before a renderer can infer them.
     pub columns: Option<u32>,
     pub rows: Option<u32>,
+    /// Permanently clipped source rows after a placement crosses a scroll margin.
+    pub clip_top_rows: u32,
+    pub clip_bottom_rows: u32,
     pub z_index: i32,
     pub cursor_stays: bool,
 }
@@ -100,6 +108,69 @@ impl ImageStore {
             placement
                 .geometry
                 .is_none_or(|geometry| geometry.anchor.alternate != alternate)
+        });
+    }
+
+    /// Follow a physical text-row shift. Explicit-height placements can be
+    /// clipped at margins; unknown-height placements only move when their
+    /// anchor is in a full-screen shift, so their extent is never guessed.
+    pub(crate) fn scroll_placements(&mut self, event: ScrollEvent, history_len: usize) {
+        let top = event.top as i64;
+        let bottom = event.bottom as i64 + 1;
+        let lines = event.lines as i64;
+        self.placements.retain_mut(|placement| {
+            let Some(geometry) = placement.geometry.as_mut() else {
+                return true;
+            };
+            if geometry.anchor.alternate != event.alternate {
+                return true;
+            }
+            let start = (geometry.anchor.row as i64).saturating_add(geometry.row_offset);
+            let visible_top = start.saturating_add(i64::from(geometry.clip_top_rows));
+            let Some(rows) = geometry.rows else {
+                if (event.full_screen && (top..bottom).contains(&start))
+                    || (event.archive && start < top)
+                {
+                    geometry.row_offset =
+                        geometry
+                            .row_offset
+                            .saturating_add(if event.down { lines } else { -lines });
+                }
+                // The source height is unknown; do not discard a placement
+                // that might still overlap the screen or retained history.
+                return true;
+            };
+            let visible_bottom = start
+                .saturating_add(i64::from(rows))
+                .saturating_sub(i64::from(geometry.clip_bottom_rows));
+            let within_region = visible_top >= top && visible_bottom <= bottom;
+            if !within_region && !(event.archive && visible_bottom <= top) {
+                return true;
+            }
+            geometry.row_offset =
+                geometry
+                    .row_offset
+                    .saturating_add(if event.down { lines } else { -lines });
+            let shifted_start = (geometry.anchor.row as i64).saturating_add(geometry.row_offset);
+            if event.archive {
+                return shifted_start
+                    .saturating_add(i64::from(rows))
+                    .saturating_sub(i64::from(geometry.clip_bottom_rows))
+                    > -(history_len as i64);
+            }
+            geometry.clip_top_rows = geometry
+                .clip_top_rows
+                .max(top.saturating_sub(shifted_start).clamp(0, i64::from(rows)) as u32);
+            geometry.clip_bottom_rows = geometry.clip_bottom_rows.max(
+                shifted_start
+                    .saturating_add(i64::from(rows))
+                    .saturating_sub(bottom)
+                    .clamp(0, i64::from(rows)) as u32,
+            );
+            geometry
+                .clip_top_rows
+                .saturating_add(geometry.clip_bottom_rows)
+                < rows
         });
     }
 
@@ -406,8 +477,11 @@ fn parse_geometry<'a>(
     };
     Ok(PlacementGeometry {
         anchor,
+        row_offset: 0,
         columns: extent(b'c')?,
         rows: extent(b'r')?,
+        clip_top_rows: 0,
+        clip_bottom_rows: 0,
         z_index,
         cursor_stays,
     })
@@ -621,8 +695,11 @@ mod tests {
             store.placements().next().unwrap().geometry,
             Some(PlacementGeometry {
                 anchor: first,
+                row_offset: 0,
                 columns: Some(2),
                 rows: Some(3),
+                clip_top_rows: 0,
+                clip_bottom_rows: 0,
                 z_index: -4,
                 cursor_stays: true,
             })

@@ -64,16 +64,28 @@ the cursor at that command. Explicit `c`/`r` cell extents, signed `z` index,
 and `C=1` no-move request are parsed and retained. Missing extents remain
 unknown until pixel-cell sizing is available. Virtual and relative placements
 do not get a cursor anchor. This is metadata only: image placement does not yet
-move the cursor, follow scrolling, compose pixels, redraw, or send graphics replies.
+move the cursor, compose pixels, redraw, or send graphics replies.
 
 The opt-in pane path now removes cursor-anchored placement references when
 `CSI 2 J` clears their screen, when RIS resets both screens, and when an
 alternate screen is cleared by mode 1049 entry/exit or mode 1047 exit.
 Mode 47 preserves its alternate placements on exit; other text erasures do
 not clear graphics. Stored image data remains available for a later `a=p`.
-Unanchored virtual/relative references are not classified as visible, and
-scrolling and scrollback placement lifetimes remain unmodeled. These clear
-rules follow the [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
+Unanchored virtual/relative references are not classified as visible. These
+clear rules follow the [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
+
+Cursor-anchored placements now follow physical vertical row shifts caused by
+line feed/wrap, reverse index, `CSI S/T`, and insert/delete lines. The screen
+model passes bounded, ordered row-shift events to the pane store. Explicit `r` height
+allows permanent top/bottom clipping at scroll margins; placements crossing a
+margin before a shift stay in place. Full-screen main-buffer upward scrolling
+retains references as they enter scrollback, until their known row extent falls
+out of retained history. If height is unknown, only full-screen shifts move its
+anchor; its visibility and expiry cannot yet be determined. An overflowing
+event batch safely drops anchored references but keeps image data. Horizontal
+shifts, resize/reflow relocation, pixel-level clipping, and scrollback rendering
+remain out of scope. These choices follow the scrolling rules in the
+[Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
 
 The normal runtime still discards graphics commands without assembling or
 retaining image data. It does not place, redraw or delete visible images,
@@ -94,3 +106,5 @@ Anchor tests cover interleaved text, final-chunk position, alternate-screen
 identity, explicit layout options, malformed metadata, and named replacement.
 Screen-lifecycle tests cover split `CSI 2 J`, non-clearing text erasures,
 alternate-buffer transitions, RIS, and commands after a clear in the same read.
+Scroll tests cover full-screen primary/alternate movement, retained scrollback
+references, margin clipping, reverse index, unknown height, and event overflow.

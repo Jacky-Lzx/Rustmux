@@ -107,6 +107,7 @@ pub struct Screen {
     inactive_cells: Vec<Cell>,
     scrollback: Scrollback,
     primary_scroll_count: u64,
+    pending_scrolls: PendingScrolls,
     continued: Vec<bool>,
     inactive_continued: Vec<bool>,
     used: Vec<usize>,
@@ -145,6 +146,36 @@ pub struct Screen {
     palette: [Option<(u8, u8, u8)>; 256],
 }
 
+/// A physical row shift performed by the screen model, not merely cursor motion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ScrollEvent {
+    pub top: usize,
+    pub bottom: usize,
+    pub lines: usize,
+    pub down: bool,
+    pub alternate: bool,
+    pub archive: bool,
+    pub full_screen: bool,
+}
+
+const MAX_PENDING_SCROLL_EVENTS: usize = 128;
+
+/// Notifications are not terminal display state, so Screen equality ignores
+/// whether a pane has consumed them yet.
+#[derive(Debug, Clone, Default)]
+struct PendingScrolls {
+    events: Vec<ScrollEvent>,
+    overflowed: bool,
+}
+
+impl PartialEq for PendingScrolls {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for PendingScrolls {}
+
 impl Screen {
     /// Number of retained primary-screen rows, ordered oldest to newest.
     pub fn history_len(&self) -> usize {
@@ -154,6 +185,13 @@ impl Screen {
     /// Number of rows scrolled from the primary grid by terminal output.
     pub(crate) fn primary_scroll_count(&self) -> u64 {
         self.primary_scroll_count
+    }
+
+    pub(crate) fn take_scroll_events(&mut self) -> (Vec<ScrollEvent>, bool) {
+        (
+            std::mem::take(&mut self.pending_scrolls.events),
+            std::mem::take(&mut self.pending_scrolls.overflowed),
+        )
     }
 
     /// Read a retained physical row at its original width, including cell styles.
@@ -245,6 +283,7 @@ impl Screen {
             inactive_cells,
             scrollback: Scrollback::new(scrollback_lines),
             primary_scroll_count: 0,
+            pending_scrolls: PendingScrolls::default(),
             alternate: false,
             saved_main_cursor: None,
             saved_cursor: None,
@@ -346,6 +385,7 @@ impl Screen {
         self.cells.fill(Cell::default());
         self.inactive_cells.fill(Cell::default());
         self.clear_history();
+        self.pending_scrolls = PendingScrolls::default();
         self.continued.fill(false);
         self.inactive_continued.fill(false);
         self.used.fill(0);
@@ -528,6 +568,7 @@ impl Screen {
         // Build history on the destination before moving cells out of the source.
         // Snapshot sharing keeps the old history untouched during preparation.
         resized.scrollback = self.scrollback.clone();
+        resized.pending_scrolls.clone_from(&self.pending_scrolls);
         let main_cells = if self.is_alternate() {
             &self.inactive_cells
         } else {
@@ -1545,7 +1586,7 @@ impl Screen {
         if count == 0 || self.row < self.scroll_region.0 || self.row > self.scroll_region.1 {
             return;
         }
-        self.shift_rows(self.row, self.scroll_region.1, count, true);
+        self.shift_rows(self.row, self.scroll_region.1, count, true, false);
         self.move_to(self.row, 0);
     }
 
@@ -1554,7 +1595,7 @@ impl Screen {
         if count == 0 || self.row < self.scroll_region.0 || self.row > self.scroll_region.1 {
             return;
         }
-        self.shift_rows(self.row, self.scroll_region.1, count, false);
+        self.shift_rows(self.row, self.scroll_region.1, count, false, false);
         self.continued[self.row] = false;
         self.move_to(self.row, 0);
     }
@@ -1574,7 +1615,14 @@ impl Screen {
                 self.primary_scroll_count =
                     self.primary_scroll_count.saturating_add(captured as u64);
             }
-            self.shift_rows(self.scroll_region.0, self.scroll_region.1, count, false);
+            let archive = !self.is_alternate() && self.scroll_region == (0, self.rows - 1);
+            self.shift_rows(
+                self.scroll_region.0,
+                self.scroll_region.1,
+                count,
+                false,
+                archive,
+            );
             self.wrap_pending = false;
         }
     }
@@ -1582,15 +1630,50 @@ impl Screen {
     /// Scroll the entire region downward, retaining cursor coordinates.
     pub fn scroll_down(&mut self, count: usize) {
         if count != 0 {
-            self.shift_rows(self.scroll_region.0, self.scroll_region.1, count, true);
+            self.shift_rows(
+                self.scroll_region.0,
+                self.scroll_region.1,
+                count,
+                true,
+                false,
+            );
             self.wrap_pending = false;
         }
     }
 
     // Clamp before multiplication. Moving whole rows preserves wide-cell pairs
     // and moves combining suffix allocations without cloning or allocating.
-    fn shift_rows(&mut self, top: usize, bottom: usize, count: usize, down: bool) {
+    fn shift_rows(&mut self, top: usize, bottom: usize, count: usize, down: bool, archive: bool) {
         let lines = count.min(bottom - top + 1);
+        if !self.pending_scrolls.overflowed {
+            let event = ScrollEvent {
+                top,
+                bottom,
+                lines,
+                down,
+                alternate: self.is_alternate(),
+                archive,
+                full_screen: top == 0 && bottom == self.rows - 1,
+            };
+            if let Some(last) = self.pending_scrolls.events.last_mut()
+                && last.top == top
+                && last.bottom == bottom
+                && last.down == down
+                && last.alternate == event.alternate
+                && last.archive == archive
+                && last.full_screen == event.full_screen
+            {
+                last.lines = last.lines.saturating_add(lines);
+                if !archive {
+                    last.lines = last.lines.min(bottom - top + 1);
+                }
+            } else if self.pending_scrolls.events.len() < MAX_PENDING_SCROLL_EVENTS {
+                self.pending_scrolls.events.push(event);
+            } else {
+                self.pending_scrolls.events.clear();
+                self.pending_scrolls.overflowed = true;
+            }
+        }
         let amount = lines * self.columns;
         let blank_used = if self.blank().style == Style::default() {
             0
@@ -1662,7 +1745,7 @@ impl Screen {
 
 #[cfg(test)]
 mod tests {
-    use super::{MouseTracking, Screen};
+    use super::{MouseTracking, Screen, ScrollEvent};
 
     fn lines(screen: &Screen) -> Vec<String> {
         (0..screen.dimensions().0)
@@ -1675,6 +1758,51 @@ mod tests {
                     .collect()
             })
             .collect()
+    }
+
+    #[test]
+    fn physical_row_shifts_report_wrap_insert_and_delete_in_order() {
+        let mut screen = Screen::new(3, 4).unwrap();
+        screen.position(2, 3);
+        screen.write_ascii(b"AB").unwrap();
+        screen.position(1, 0);
+        screen.insert_lines(1);
+        screen.delete_lines(1);
+        let (events, overflowed) = screen.take_scroll_events();
+        assert!(!overflowed);
+        assert_eq!(
+            events,
+            [
+                ScrollEvent {
+                    top: 0,
+                    bottom: 2,
+                    lines: 1,
+                    down: false,
+                    alternate: false,
+                    archive: true,
+                    full_screen: true,
+                },
+                ScrollEvent {
+                    top: 1,
+                    bottom: 2,
+                    lines: 1,
+                    down: true,
+                    alternate: false,
+                    archive: false,
+                    full_screen: false,
+                },
+                ScrollEvent {
+                    top: 1,
+                    bottom: 2,
+                    lines: 1,
+                    down: false,
+                    alternate: false,
+                    archive: false,
+                    full_screen: false,
+                },
+            ]
+        );
+        assert!(screen.take_scroll_events().0.is_empty());
     }
 
     #[test]

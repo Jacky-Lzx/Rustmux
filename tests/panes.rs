@@ -4,7 +4,10 @@ use nix::{
     sys::wait::{WaitPidFlag, waitpid},
     unistd::Pid,
 };
-use rustmux::{layout::SplitAxis, pane::Pane, pane_set::PaneSet, window::Windows};
+use rustmux::{
+    graphics_store::PlacementGeometry, layout::SplitAxis, pane::Pane, pane_set::PaneSet,
+    window::Windows,
+};
 use std::{
     io::{Read, Write},
     thread,
@@ -16,6 +19,15 @@ fn text(pane: &Pane) -> String {
         .flat_map(|row| pane.screen().row(row).unwrap())
         .map(|cell| cell.character)
         .collect()
+}
+
+fn placement_geometry(pane: &Pane, id: u32) -> PlacementGeometry {
+    pane.image_store()
+        .placements()
+        .find(|placement| placement.placement_id == Some(id))
+        .unwrap()
+        .geometry
+        .unwrap()
 }
 
 fn read_once(pane: &mut Pane) -> bool {
@@ -242,6 +254,92 @@ fn kitty_ris_clears_both_screens_but_later_put_in_same_chunk_survives() {
     assert_eq!(placements.len(), 1);
     assert_eq!(placements[0].placement_id, Some(3));
     assert!(!placements[0].geometry.unwrap().anchor.alternate);
+    assert!(pane.image_store().get(7).is_some());
+}
+
+#[test]
+fn kitty_placements_follow_full_screen_scrolling_and_keep_main_scrollback_refs() {
+    let mut pane = Pane::spawn("/bin/sh", 3, 20).unwrap();
+    pane.process_output_with_image_store(
+        b"\x1b[1;1H\x1b_Ga=T,f=100,i=7,p=1,r=1;QQ==\x1b\\\x1b[2;1H\x1b_Ga=p,i=7,p=2,r=1\x1b\\",
+        &mut |_| {},
+    );
+    pane.process_output_with_image_store(b"\x1b[3;1H\n", &mut |_| {});
+    let placements: Vec<_> = pane.image_store().placements().copied().collect();
+    assert_eq!(placements.len(), 2);
+    assert_eq!(placements[0].geometry.unwrap().row_offset, -1);
+    assert_eq!(placements[1].geometry.unwrap().row_offset, -1);
+    assert!(pane.screen().history_len() >= 1);
+    pane.process_output_with_image_store(b"\x1b[3;1H\n\n", &mut |_| {});
+    assert_eq!(placement_geometry(&pane, 1).row_offset, -3);
+    assert_eq!(placement_geometry(&pane, 2).row_offset, -3);
+
+    pane.process_output_with_image_store(
+        b"\x1b[?1049h\x1b[1;1H\x1b_Ga=p,i=7,p=3,r=1\x1b\\\x1b[2;1H\x1b_Ga=p,i=7,p=4,r=1\x1b\\\x1b[3;1H\n",
+        &mut |_| {},
+    );
+    let placements: Vec<_> = pane.image_store().placements().copied().collect();
+    assert_eq!(placements.len(), 3);
+    assert!(placements.iter().all(|p| p.placement_id != Some(3)));
+    assert_eq!(
+        placements
+            .iter()
+            .find(|p| p.placement_id == Some(4))
+            .unwrap()
+            .geometry
+            .unwrap()
+            .row_offset,
+        -1
+    );
+}
+
+#[test]
+fn kitty_margin_scroll_clips_known_height_and_leaves_unknown_extent_alone() {
+    let mut pane = Pane::spawn("/bin/sh", 5, 20).unwrap();
+    pane.process_output_with_image_store(
+        b"\x1b_Ga=t,f=100,i=7;QQ==\x1b\\\x1b[1;1H\x1b_Ga=p,i=7,p=1,r=2\x1b\\\x1b[2;1H\x1b_Ga=p,i=7,p=2,r=2\x1b\\\x1b_Ga=p,i=7,p=3\x1b\\",
+        &mut |_| {},
+    );
+    pane.process_output_with_image_store(b"\x1b[2;4r\x1b[4;1H\n", &mut |_| {});
+    assert_eq!(placement_geometry(&pane, 1).row_offset, 0); // Crosses the top margin.
+    assert_eq!(placement_geometry(&pane, 2).row_offset, -1);
+    assert_eq!(placement_geometry(&pane, 2).clip_top_rows, 1);
+    assert_eq!(placement_geometry(&pane, 3).row_offset, 0); // Height cannot be inferred yet.
+    pane.process_output_with_image_store(b"\x1b[4;1H\n", &mut |_| {});
+    assert!(
+        pane.image_store()
+            .placements()
+            .all(|p| p.placement_id != Some(2))
+    );
+    assert_eq!(placement_geometry(&pane, 1).row_offset, 0);
+    assert_eq!(placement_geometry(&pane, 3).row_offset, 0);
+    pane.process_output_with_image_store(b"\x1b[1;3r\x1b[3;1H\n", &mut |_| {});
+    assert_eq!(placement_geometry(&pane, 3).row_offset, 0);
+}
+
+#[test]
+fn kitty_reverse_index_and_large_event_batches_keep_positions_bounded() {
+    let mut pane = Pane::spawn("/bin/sh", 3, 20).unwrap();
+    pane.process_output_with_image_store(
+        b"\x1b[2;1H\x1b_Ga=T,f=100,i=7,p=1,r=2;QQ==\x1b\\\x1b[1;1H\x1bM",
+        &mut |_| {},
+    );
+    let geometry = pane
+        .image_store()
+        .placements()
+        .next()
+        .unwrap()
+        .geometry
+        .unwrap();
+    assert_eq!(geometry.row_offset, 1);
+    assert_eq!(geometry.clip_bottom_rows, 1);
+
+    let mut input = Vec::new();
+    for _ in 0..129 {
+        input.extend_from_slice(b"\x1b[S\x1b[T");
+    }
+    pane.process_output_with_image_store(&input, &mut |_| {});
+    assert_eq!(pane.image_store().placements().count(), 0);
     assert!(pane.image_store().get(7).is_some());
 }
 
