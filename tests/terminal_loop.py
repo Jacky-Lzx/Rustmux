@@ -2377,11 +2377,15 @@ try:
     s.expect(b"RUSTMUX_READY> ")
     s.send(b"VAR=A\n\x02%")
     s.expect(b"RUSTMUX_READY>")
-    s.send(b"VAR=B; count=0; trap 'count=$((count+1))' WINCH\n")
+    s.send(b"VAR=B; count=0; trap 'count=$((count+1)); echo DRAG_WINCH:$count' WINCH\n")
     s.expect(b"RUSTMUX_READY>")
     # Intermediate mouse positions are coalesced before the final PTY resize.
     # This prevents prompt-redrawing shells from processing stale dimensions.
-    s.send(b"\x1b[M H%\x1b[M@M%\x1b[M@W%\x1b[M@R%\x1b[M#R%printf 'DRAG:%s:%s:%s\n' $VAR $count \"$(stty size)\"\n")
+    s.send(b"\x1b[M H%\x1b[M@M%\x1b[M@W%\x1b[M@R%\x1b[M#R%")
+    # On macOS the size can be visible to stty before the shell runs its
+    # queued SIGWINCH trap. Wait for the trap, then inspect the final state.
+    s.expect(b"DRAG_WINCH:1")
+    s.send(b"printf 'DRAG:%s:%s:%s\n' $VAR $count \"$(stty size)\"\n")
     s.expect(b"DRAG:B:1:20 28")
     s.send(b"\x02hprintf 'DRAG:%s:%s\n' $VAR \"$(stty size)\"\n")
     s.expect(b"DRAG:A:20 48")
