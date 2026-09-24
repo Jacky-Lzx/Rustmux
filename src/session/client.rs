@@ -440,9 +440,29 @@ impl Drop for ClientSignals {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nix::fcntl::{FcntlArg, OFlag, fcntl};
     use nix::pty::{Winsize, openpty};
     use nix::sys::termios::{self, LocalFlags};
     use std::thread;
+
+    // After the client has exited, every terminal write is complete, but a
+    // single PTY read may return only the alternate-screen entry sequence.
+    fn read_buffered_output(master: &mut File) -> Vec<u8> {
+        let flags = OFlag::from_bits_truncate(fcntl(master.as_fd(), FcntlArg::F_GETFL).unwrap());
+        fcntl(master.as_fd(), FcntlArg::F_SETFL(flags | OFlag::O_NONBLOCK)).unwrap();
+        let mut output = Vec::new();
+        loop {
+            let mut bytes = [0; 1024];
+            match master.read(&mut bytes) {
+                Ok(0) => break,
+                Ok(count) => output.extend_from_slice(&bytes[..count]),
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
+                Err(error) => panic!("PTY read failed: {error}"),
+            }
+        }
+        output
+    }
 
     #[test]
     fn bridges_input_output_resize_and_exit_then_restores_terminal() {
@@ -520,9 +540,7 @@ mod tests {
         assert_eq!(restored.local_flags, original.local_flags);
         assert_eq!(restored.control_chars, original.control_chars);
 
-        let mut rendered = vec![0; 1024];
-        let count = master.read(&mut rendered).unwrap();
-        rendered.truncate(count);
+        let rendered = read_buffered_output(&mut master);
         assert!(
             rendered
                 .windows(b"output".len())
@@ -574,9 +592,7 @@ mod tests {
         restored.local_flags.remove(LocalFlags::PENDIN);
         assert_eq!(restored.local_flags, original.local_flags);
 
-        let mut rendered = vec![0; 1024];
-        let count = master.read(&mut rendered).unwrap();
-        rendered.truncate(count);
+        let rendered = read_buffered_output(&mut master);
         assert!(
             rendered
                 .windows(b"before-manager".len())

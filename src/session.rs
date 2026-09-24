@@ -642,6 +642,7 @@ fn effective_user_id() -> u32 {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{Duration, Instant};
 
     static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
@@ -721,6 +722,19 @@ mod tests {
 
         let stale = UnixListener::bind(&path).unwrap();
         drop(stale);
+        // On some hosts a just-closed listener can briefly accept a connect.
+        // Observe the refused connection that defines a stale socket before
+        // asserting that bind_in will reclaim its pathname.
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            match UnixStream::connect(&path) {
+                Err(error) if error.kind() == io::ErrorKind::ConnectionRefused => break,
+                Ok(stream) => drop(stream),
+                Err(error) => panic!("unexpected stale socket probe error: {error}"),
+            }
+            assert!(Instant::now() < deadline, "socket remained active");
+            std::thread::sleep(Duration::from_millis(1));
+        }
         let endpoint = SessionEndpoint::bind_in(&directory.0, &name).unwrap();
         drop(endpoint);
 
