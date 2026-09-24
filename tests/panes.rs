@@ -96,6 +96,25 @@ fn kitty_transfer_callbacks_and_partial_commands_stay_with_their_pane() {
 }
 
 #[test]
+fn kitty_image_data_is_opt_in_and_isolated_per_pane() {
+    let mut left = Pane::spawn("/bin/sh", 6, 40).unwrap();
+    let mut right = Pane::spawn("/bin/sh", 6, 40).unwrap();
+    left.process_output_with_image_store(b"\x1b_Ga=T,f=100,i=7,m=1;QUJD\x1b\\", &mut |_| {});
+    right.process_output_with_image_store(b"\x1b_Ga=t,f=100,i=7;RA==\x1b\\", &mut |_| {});
+    left.process_output_with_image_store(b"\x1b_Gm=0;RA==\x1b\\", &mut |_| {});
+    assert_eq!(left.image_store().get(7).unwrap().data, b"ABCD");
+    assert_eq!(right.image_store().get(7).unwrap().data, b"D");
+
+    left.image_store_mut().remove(7);
+    assert!(left.image_store().is_empty());
+    assert_eq!(right.image_store().get(7).unwrap().data, b"D");
+    right.process_output(b"\x1b_Ga=t,f=100,i=8;QQ==\x1b\\", &mut |_| {});
+    assert!(right.image_store().get(8).is_none());
+    right.finish_output();
+    assert!(right.image_store().is_empty());
+}
+
+#[test]
 fn real_windows_keep_processes_and_terminal_state_isolated() {
     assert!(Pane::spawn("/definitely/missing/rustmux-shell", 24, 80).is_err());
     assert!(Pane::spawn("/bin/sh", 0, 80).is_err());

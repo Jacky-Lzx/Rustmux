@@ -2,6 +2,7 @@
 
 use crate::{
     graphics::{GraphicsEvent, GraphicsFramer},
+    graphics_store::ImageStore,
     graphics_transfer::{AssembledDirectTransfer, DirectTransferAssembler},
     parser::Parser,
     pty::PtyShell,
@@ -33,10 +34,17 @@ pub struct Pane {
     parser: Parser,
     graphics_framer: GraphicsFramer,
     graphics_transfer: DirectTransferAssembler,
+    image_store: ImageStore,
     screen: Screen,
     io: PaneIo,
     command_bell_after: Option<Duration>,
     _temporary_file: Option<TemporaryFile>,
+}
+
+enum GraphicsSink<'a> {
+    Drop,
+    Callback(&'a mut dyn FnMut(AssembledDirectTransfer)),
+    Store,
 }
 
 #[derive(Debug)]
@@ -189,6 +197,7 @@ impl Pane {
             parser: Parser::new(),
             graphics_framer: GraphicsFramer::new(),
             graphics_transfer: DirectTransferAssembler::new(),
+            image_store: ImageStore::new(),
             screen,
             io,
             command_bell_after: notifications.command_bell_after(),
@@ -224,6 +233,7 @@ impl Pane {
             parser: Parser::new(),
             graphics_framer: GraphicsFramer::new(),
             graphics_transfer: DirectTransferAssembler::new(),
+            image_store: ImageStore::new(),
             screen,
             io: PaneIo::default(),
             command_bell_after: None,
@@ -240,6 +250,7 @@ impl Pane {
             self.parser = Parser::new();
             self.graphics_framer = GraphicsFramer::new();
             self.graphics_transfer.reset();
+            self.image_store.clear();
             self.screen.leave_alternate();
             self.screen.soft_reset();
             self.screen
@@ -344,7 +355,7 @@ impl Pane {
     /// Consume child output and route terminal replies back to this same child.
     /// The caller must reserve reply capacity before reading (MAX_REPLY_BYTES).
     pub fn process_output(&mut self, bytes: &[u8], reply: &mut impl FnMut(&[u8])) {
-        self.process_output_inner(bytes, reply, None);
+        self.process_output_inner(bytes, reply, GraphicsSink::Drop);
     }
 
     /// Opt in to receiving complete direct-data transfers. The ordinary
@@ -356,27 +367,47 @@ impl Pane {
         reply: &mut impl FnMut(&[u8]),
         graphics: &mut impl FnMut(AssembledDirectTransfer),
     ) {
-        self.process_output_inner(bytes, reply, Some(graphics));
+        self.process_output_inner(bytes, reply, GraphicsSink::Callback(graphics));
+    }
+
+    /// Opt in to bounded, pane-local image data retention. This does not
+    /// implement image placement, deletion commands, rendering or replies.
+    pub fn process_output_with_image_store(&mut self, bytes: &[u8], reply: &mut impl FnMut(&[u8])) {
+        self.process_output_inner(bytes, reply, GraphicsSink::Store);
+    }
+
+    pub fn image_store(&self) -> &ImageStore {
+        &self.image_store
+    }
+
+    pub fn image_store_mut(&mut self) -> &mut ImageStore {
+        &mut self.image_store
     }
 
     fn process_output_inner(
         &mut self,
         bytes: &[u8],
         reply: &mut impl FnMut(&[u8]),
-        mut graphics: Option<&mut dyn FnMut(AssembledDirectTransfer)>,
+        mut graphics: GraphicsSink<'_>,
     ) {
         self.io.dirty = true;
-        if graphics.is_none() {
+        if matches!(graphics, GraphicsSink::Drop) {
             self.graphics_transfer.reset();
         }
         for event in self.graphics_framer.advance(bytes) {
             match event {
                 GraphicsEvent::Terminal(bytes) => self.process_terminal_output(&bytes, reply),
                 GraphicsEvent::Command(command) => {
-                    if let Some(handler) = graphics.as_mut()
+                    if !matches!(graphics, GraphicsSink::Drop)
                         && let Some(transfer) = self.graphics_transfer.accept(&command)
                     {
-                        handler(transfer);
+                        match &mut graphics {
+                            GraphicsSink::Drop => unreachable!(),
+                            GraphicsSink::Callback(handler) => handler(transfer),
+                            GraphicsSink::Store => {
+                                let _ = self.image_store.insert(transfer);
+                            }
+                        }
                     }
                 }
             }
@@ -432,6 +463,7 @@ impl Pane {
             }
         }
         self.graphics_transfer.reset();
+        self.image_store.clear();
         self.parser.finish(&mut self.screen);
         self.io.dirty = true;
         self.io.eof = true;

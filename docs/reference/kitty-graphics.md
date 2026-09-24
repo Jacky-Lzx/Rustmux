@@ -30,11 +30,19 @@ Every pane now passes PTY output through its own framer before the text parser
 and OSC observer. Graphics bytes cannot appear as screen text or shell-command
 output; the hidden close/undo path uses the same pane pipeline. Callers can opt
 in to complete direct transfers with `Pane::process_output_with_graphics`.
-The normal runtime instead discards graphics commands without assembling or
-retaining image data. It does not store, place, redraw or delete images, answer
+An additional opt-in path, `Pane::process_output_with_image_store`, retains
+complete transfers with explicit nonzero `i` IDs in a pane-local `ImageStore`.
+Replacement and explicit removal update byte accounting; oldest entries are
+evicted at 32 MiB or 256 images per pane. The store rejects query action `a=q`
+and image-number allocation `I`; it preserves PNG bytes without decoding them.
+It is cleared when a stopped foreground job resets its pane or its PTY reaches
+EOF. Full Kitty `a=d` semantics require placements, so the store's `remove` method is only an
+internal data-lifecycle operation, not a protocol delete implementation.
+
+The normal runtime still discards graphics commands without assembling or
+retaining image data. It does not place, redraw or delete images, answer
 graphics capability queries, or claim Yazi preview compatibility. Those are
-later review increments, along with per-pane image ID isolation and lifecycle
-cleanup.
+later review increments.
 
 Unit tests cover every two-chunk split of a command, ordinary output ordering,
 non-graphics APCs, UTF-8/C1 ambiguity, oversized and cancelled commands, and
@@ -42,3 +50,4 @@ EOF recovery. Assembler tests cover chunk inheritance, raw byte counts, bounds,
 unsupported media and recovery. Pane tests cover interleaved text, per-pane
 isolation and command-output filtering. Run `cargo test --lib graphics::tests`,
 `cargo test --lib graphics_transfer::tests` and `cargo test --test panes`.
+Store tests also cover replacement, isolation, eviction and explicit removal.
