@@ -82,6 +82,31 @@ pub enum PlacementSizing {
     FitBox,
 }
 
+/// Pixel geometry relative to the placement's anchor cell. This does not
+/// include clipping against the pane or scroll margins.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct PlacementPixelLayout {
+    pub source: PixelRect,
+    /// The `c` by `r` cell rectangle, excluding the first-cell `X/Y` offset.
+    pub cell_bounds: PixelSize,
+    /// The image content after scaling and any letterbox/pillarbox padding.
+    pub destination: PixelRect,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct PixelRect {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct PixelSize {
+    pub width: u32,
+    pub height: u32,
+}
+
 #[derive(Debug, Default, Clone, Copy, Eq, PartialEq)]
 pub struct SourceRect {
     pub left: u32,
@@ -108,6 +133,102 @@ impl SourceRect {
             .min(self.height.unwrap_or(u32::MAX));
         (width != 0 && height != 0).then_some((width, height))
     }
+}
+
+impl PlacementGeometry {
+    /// Resolve an opt-in placement's pixel dimensions without decoding or
+    /// drawing pixels. Recompute inferred extents for this cell size rather
+    /// than trusting extents inferred for a previous terminal size.
+    pub fn pixel_layout(
+        self,
+        image_width: u32,
+        image_height: u32,
+        cell: CellPixelSize,
+    ) -> Option<PlacementPixelLayout> {
+        if self.cell_offset.x >= u32::from(cell.width)
+            || self.cell_offset.y >= u32::from(cell.height)
+        {
+            return None;
+        }
+        let (source_width, source_height) = self
+            .source
+            .intersected_dimensions(image_width, image_height)?;
+        let explicit = match self.sizing {
+            PlacementSizing::Natural => (None, None),
+            PlacementSizing::FitWidth => (Some(self.columns?), None),
+            PlacementSizing::FitHeight => (None, Some(self.rows?)),
+            PlacementSizing::FitBox => (Some(self.columns?), Some(self.rows?)),
+        };
+        let (columns, rows) =
+            infer_cell_extent(source_width, source_height, explicit.0, explicit.1, cell)?;
+        let cell_bounds = PixelSize {
+            width: columns.checked_mul(u32::from(cell.width))?,
+            height: rows.checked_mul(u32::from(cell.height))?,
+        };
+        let (width, height) = match self.sizing {
+            PlacementSizing::Natural => (source_width, source_height),
+            PlacementSizing::FitWidth => (
+                cell_bounds.width,
+                round_scaled(source_height, cell_bounds.width, source_width)?,
+            ),
+            PlacementSizing::FitHeight => (
+                round_scaled(source_width, cell_bounds.height, source_height)?,
+                cell_bounds.height,
+            ),
+            PlacementSizing::FitBox => {
+                if u128::from(cell_bounds.width) * u128::from(source_height)
+                    <= u128::from(cell_bounds.height) * u128::from(source_width)
+                {
+                    (
+                        cell_bounds.width,
+                        round_scaled(source_height, cell_bounds.width, source_width)?
+                            .min(cell_bounds.height),
+                    )
+                } else {
+                    (
+                        round_scaled(source_width, cell_bounds.height, source_height)?
+                            .min(cell_bounds.width),
+                        cell_bounds.height,
+                    )
+                }
+            }
+        };
+        let padding_x = if self.sizing == PlacementSizing::FitBox {
+            (cell_bounds.width - width) / 2
+        } else {
+            0
+        };
+        let padding_y = if self.sizing == PlacementSizing::FitBox {
+            (cell_bounds.height - height) / 2
+        } else {
+            0
+        };
+        let x = self.cell_offset.x.checked_add(padding_x)?;
+        let y = self.cell_offset.y.checked_add(padding_y)?;
+        x.checked_add(width)?;
+        y.checked_add(height)?;
+        Some(PlacementPixelLayout {
+            source: PixelRect {
+                x: self.source.left,
+                y: self.source.top,
+                width: source_width,
+                height: source_height,
+            },
+            cell_bounds,
+            destination: PixelRect {
+                x,
+                y,
+                width,
+                height,
+            },
+        })
+    }
+}
+
+fn round_scaled(source_other: u32, target: u32, source_axis: u32) -> Option<u32> {
+    let numerator = u128::from(source_other) * u128::from(target);
+    let rounded = (numerator + u128::from(source_axis / 2)) / u128::from(source_axis);
+    u32::try_from(rounded.max(1)).ok()
 }
 
 /// Caller-supplied physical size of one terminal cell. The ordinary runtime
@@ -1044,6 +1165,185 @@ mod tests {
                 ..SourceRect::default()
             }
             .intersected_dimensions(6, 4),
+            None
+        );
+    }
+
+    #[test]
+    fn pixel_layout_preserves_natural_size_after_extent_inference() {
+        let cell = CellPixelSize::new(2, 2).unwrap();
+        let geometry = PlacementGeometry {
+            anchor: CellAnchor::default(),
+            row_offset: 0,
+            source: SourceRect {
+                left: 2,
+                top: 1,
+                width: Some(5),
+                height: Some(3),
+            },
+            cell_offset: CellPixelOffset { x: 1, y: 1 },
+            columns: Some(99),
+            rows: Some(99),
+            sizing: PlacementSizing::Natural,
+            clip_top_rows: 0,
+            clip_bottom_rows: 0,
+            z_index: 0,
+            cursor_stays: false,
+        };
+        assert_eq!(
+            geometry.pixel_layout(6, 4, cell),
+            Some(PlacementPixelLayout {
+                source: PixelRect {
+                    x: 2,
+                    y: 1,
+                    width: 4,
+                    height: 3,
+                },
+                cell_bounds: PixelSize {
+                    width: 4,
+                    height: 4,
+                },
+                destination: PixelRect {
+                    x: 1,
+                    y: 1,
+                    width: 4,
+                    height: 3,
+                },
+            })
+        );
+        assert_eq!(
+            geometry
+                .pixel_layout(6, 4, CellPixelSize::new(4, 3).unwrap())
+                .unwrap()
+                .cell_bounds,
+            PixelSize {
+                width: 4,
+                height: 3,
+            }
+        );
+        assert_eq!(
+            PlacementGeometry {
+                source: SourceRect {
+                    left: 6,
+                    ..SourceRect::default()
+                },
+                ..geometry
+            }
+            .pixel_layout(6, 4, cell),
+            None
+        );
+        assert_eq!(
+            PlacementGeometry {
+                cell_offset: CellPixelOffset { x: 2, y: 0 },
+                ..geometry
+            }
+            .pixel_layout(6, 4, cell),
+            None
+        );
+    }
+
+    #[test]
+    fn pixel_layout_scales_one_axis_and_centers_a_two_axis_box() {
+        let cell = CellPixelSize::new(2, 2).unwrap();
+        let base = PlacementGeometry {
+            anchor: CellAnchor::default(),
+            row_offset: 0,
+            source: SourceRect::default(),
+            cell_offset: CellPixelOffset::default(),
+            columns: Some(3),
+            rows: Some(99),
+            sizing: PlacementSizing::FitWidth,
+            clip_top_rows: 0,
+            clip_bottom_rows: 0,
+            z_index: 0,
+            cursor_stays: false,
+        };
+        let width_fit = base.pixel_layout(4, 3, cell).unwrap();
+        assert_eq!(
+            width_fit.cell_bounds,
+            PixelSize {
+                width: 6,
+                height: 6
+            }
+        );
+        assert_eq!(
+            width_fit.destination,
+            PixelRect {
+                x: 0,
+                y: 0,
+                width: 6,
+                height: 5,
+            }
+        );
+
+        let height_fit = PlacementGeometry {
+            columns: Some(99),
+            rows: Some(2),
+            sizing: PlacementSizing::FitHeight,
+            ..base
+        }
+        .pixel_layout(4, 3, cell)
+        .unwrap();
+        assert_eq!(
+            height_fit.cell_bounds,
+            PixelSize {
+                width: 6,
+                height: 4
+            }
+        );
+        assert_eq!(height_fit.destination.width, 5);
+        assert_eq!(height_fit.destination.height, 4);
+
+        let box_fit = PlacementGeometry {
+            columns: Some(3),
+            rows: Some(2),
+            sizing: PlacementSizing::FitBox,
+            ..base
+        }
+        .pixel_layout(2, 4, cell)
+        .unwrap();
+        assert_eq!(
+            box_fit.cell_bounds,
+            PixelSize {
+                width: 6,
+                height: 4
+            }
+        );
+        assert_eq!(
+            box_fit.destination,
+            PixelRect {
+                x: 2,
+                y: 0,
+                width: 2,
+                height: 4,
+            }
+        );
+
+        let letterbox = PlacementGeometry {
+            columns: Some(2),
+            rows: Some(3),
+            sizing: PlacementSizing::FitBox,
+            ..base
+        }
+        .pixel_layout(4, 2, cell)
+        .unwrap();
+        assert_eq!(
+            letterbox.cell_bounds,
+            PixelSize {
+                width: 4,
+                height: 6
+            }
+        );
+        assert_eq!(letterbox.destination.y, 2);
+        assert_eq!(letterbox.destination.height, 2);
+        assert_eq!(
+            PlacementGeometry {
+                columns: Some(u32::MAX),
+                rows: Some(1),
+                sizing: PlacementSizing::FitBox,
+                ..base
+            }
+            .pixel_layout(4, 3, cell),
             None
         );
     }

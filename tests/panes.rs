@@ -7,7 +7,7 @@ use nix::{
     unistd::Pid,
 };
 use rustmux::{
-    graphics_store::{CellPixelSize, PlacementGeometry, PlacementSizing},
+    graphics_store::{CellPixelSize, PixelRect, PixelSize, PlacementGeometry, PlacementSizing},
     layout::SplitAxis,
     pane::Pane,
     pane_set::PaneSet,
@@ -316,6 +316,25 @@ fn kitty_supplied_cell_pixels_infer_raw_extents_and_cursor_motion() {
         cell,
     );
     assert_eq!(placement_geometry(&pane, 6).sizing, PlacementSizing::FitBox);
+    let pixel_layout = placement_geometry(&pane, 6)
+        .pixel_layout(4, 2, cell)
+        .unwrap();
+    assert_eq!(
+        pixel_layout.cell_bounds,
+        PixelSize {
+            width: 6,
+            height: 2
+        }
+    );
+    assert_eq!(
+        pixel_layout.destination,
+        PixelRect {
+            x: 1,
+            y: 0,
+            width: 4,
+            height: 2,
+        }
+    );
     assert_eq!(
         placement_geometry(&pane, 7).sizing,
         PlacementSizing::Natural

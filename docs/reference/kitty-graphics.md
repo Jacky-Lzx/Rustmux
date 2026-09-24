@@ -96,6 +96,18 @@ within the specified cell box. This distinction survives cell-extent inference
 so a future pixel renderer can choose the correct scaling behavior; it does
 not render or scale pixels yet.
 
+`PlacementGeometry::pixel_layout` now provides the next opt-in, pure layout
+step when a caller supplies decoded image dimensions and a verified physical
+cell size. It intersects the source crop, computes the current cell rectangle,
+and returns the scaled content rectangle relative to the anchor cell. Natural
+placements keep their source pixel size; a single requested axis sets that
+pixel dimension and derives the other from the source aspect ratio. A two-axis
+box preserves aspect ratio and centers the content in any letterbox or
+pillarbox space. `X/Y` shift the content origin without enlarging the cell
+rectangle. The calculation recomputes inferred extents for the supplied cell
+size and returns no layout for an empty crop, invalid offset, or overflowing
+pixel geometry. It does not decode, resample, clip, or composite pixels.
+
 `X/Y` position an image within its first cell; they are not added to `c/r` or
 cursor movement. On a sized opt-in call, either offset must be smaller than
 its cell pixel dimension. An invalid offset rejects the placement before an
