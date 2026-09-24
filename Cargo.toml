@@ -9,6 +9,7 @@ license = "MIT"
 base64 = "0.23.1"
 clap = { version = "4.6.7", features = ["derive"] }
 nix = { version = "0.31", features = ["fs", "term", "process", "poll", "signal", "user"] }
+png = "0.18.1"
 signal-hook = "0.3"
 tempfile = "3.27.0"
 toml = "1.1.6"

@@ -19,6 +19,8 @@ pub enum ImageFormat {
 pub struct StoredImage {
     pub format: ImageFormat,
     pub data: Vec<u8>,
+    pub(crate) declared_width: Option<u32>,
+    pub(crate) declared_height: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -100,6 +102,8 @@ impl ImageStore {
             _ => return Err(StoreError::UnsupportedAction),
         };
         let size = transfer.data.len();
+        let declared_width = transfer.control(b's').and_then(parse_positive_u32);
+        let declared_height = transfer.control(b'v').and_then(parse_positive_u32);
         if size > MAX_PANE_IMAGE_BYTES {
             return Err(StoreError::TooLarge);
         }
@@ -116,6 +120,8 @@ impl ImageStore {
             StoredImage {
                 format,
                 data: transfer.data,
+                declared_width,
+                declared_height,
             },
         );
         if display {

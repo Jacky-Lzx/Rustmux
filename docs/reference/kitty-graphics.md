@@ -38,6 +38,14 @@ and image-number allocation `I`; it preserves PNG bytes without decoding them.
 It is cleared when a stopped foreground job resets its pane or its PTY reaches
 EOF.
 
+`StoredImage::decode_rgba()` now provides an optional, bounded pixel-decoding
+boundary. It converts raw RGB/RGBA and static PNG (including paletted PNG) to
+eight-bit RGBA with dimensions. The decoder checks PNG integrity and optional
+declared dimensions, rejects animation, and caps each decoded pixel buffer at
+32 MiB. PNG decoding also uses a 32 MiB internal-allocation limit. It does not
+cache the decoded pixels or render them; callers must opt in to decoding.
+Color-profile conversion is not yet implemented.
+
 The opt-in store now tracks placement *references* for `a=T` and a strict
 `a=p,i=<id>[,p=<id>]` subset. A named placement replaces the same `(i,p)`
 reference; an absent or zero `p` creates an anonymous reference. Re-transmitting
@@ -63,3 +71,5 @@ isolation and command-output filtering. Run `cargo test --lib graphics::tests`,
 `cargo test --lib graphics_transfer::tests` and `cargo test --test panes`.
 Store tests also cover replacement, isolation, eviction, explicit removal,
 named and anonymous references, and soft versus hard deletion.
+Decoder tests cover raw and PNG formats, palette transparency, corrupted PNGs,
+dimension checks and the output-size bound.

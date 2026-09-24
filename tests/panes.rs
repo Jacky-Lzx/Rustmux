@@ -143,6 +143,15 @@ fn kitty_delete_aborts_an_unfinished_transfer() {
 }
 
 #[test]
+fn kitty_stored_raw_image_decodes_on_demand() {
+    let mut pane = Pane::spawn("/bin/sh", 6, 40).unwrap();
+    pane.process_output_with_image_store(b"\x1b_Ga=t,f=24,i=7,s=1,v=1;AQID\x1b\\", &mut |_| {});
+    let decoded = pane.image_store().get(7).unwrap().decode_rgba().unwrap();
+    assert_eq!((decoded.width, decoded.height), (1, 1));
+    assert_eq!(decoded.pixels, [1, 2, 3, 255]);
+}
+
+#[test]
 fn real_windows_keep_processes_and_terminal_state_isolated() {
     assert!(Pane::spawn("/definitely/missing/rustmux-shell", 24, 80).is_err());
     assert!(Pane::spawn("/bin/sh", 0, 80).is_err());
