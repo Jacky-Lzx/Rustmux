@@ -5,6 +5,7 @@ pub mod cli;
 mod closed_pane;
 pub mod config;
 pub mod graphics;
+pub mod graphics_transfer;
 mod history_view;
 pub mod layout;
 pub mod pane;

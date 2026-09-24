@@ -31,7 +31,7 @@
 - [Cursor Shape](reference/cursor-shape.md)
 - [Focus Reporting](reference/focus-reporting.md)
 - [Kitty Keyboard Protocol](reference/kitty-keyboard.md)
-- [Kitty Graphics Framing](reference/kitty-graphics.md)
+- [Kitty Graphics Input](reference/kitty-graphics.md)
 - [Terminal Mode Queries](reference/mode-queries.md)
 - [Mouse Reporting](reference/mouse-reporting.md)
 - [Synchronized Output](reference/synchronized-output.md)

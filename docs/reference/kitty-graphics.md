@@ -1,7 +1,7 @@
-# Kitty Graphics Framing
+# Kitty Graphics Input
 
 The first Kitty graphics increment is a bounded stream framer, not image
-display. GraphicsFramer recognizes complete ESC _ G … ESC \ commands (and
+display. `GraphicsFramer` recognizes complete ESC _ G … ESC \ commands (and
 their 8-bit APC/ST form) across arbitrary PTY read boundaries. It emits graphics
 commands and ordinary terminal bytes as ordered events. Other APCs pass through
 unchanged. A UTF-8 continuation byte cannot be mistaken for an 8-bit APC.
@@ -12,12 +12,28 @@ incorrectly terminated or unfinished graphics command is discarded without expos
 payload as terminal text. The framer does not concatenate separate Kitty
 transfer chunks; each APC is one event.
 
-The runtime does not yet use these events to transmit, place, redraw or delete
-images. It does not answer graphics capability queries or claim Yazi preview
+`DirectTransferAssembler` is the next, separate data boundary. It parses
+complete APC G commands, decodes Base64 direct-data chunks, and combines them
+until `m=0`. Subsequent chunks may contain only `m` and optional `q`; an invalid
+or interrupted transfer is discarded, and the next independent transfer can
+start cleanly. It preserves the first chunk's control fields and the final
+chunk's optional `q` override. It checks the byte count for raw RGB/RGBA data;
+PNG bytes remain opaque until a later image decoder validates them.
+
+One encoded chunk is limited to 4096 bytes and one assembled transfer to
+16 MiB. Only uncompressed direct data (`t=d`, `a=t/T/q`) is accepted by this
+assembler. File, temporary-file and shared-memory media are not read, and
+compressed data is not decompressed. The chunk and continuation rules follow
+the [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
+
+The runtime does not yet use the framer or assembler to store, place, redraw or
+delete images. It does not answer graphics capability queries or claim Yazi preview
 compatibility. Those are later review increments, along with per-pane image ID
 isolation and lifecycle cleanup. Until then, the existing display parser
 continues to ignore APC content.
 
 Unit tests cover every two-chunk split of a command, ordinary output ordering,
 non-graphics APCs, UTF-8/C1 ambiguity, oversized and cancelled commands, and
-EOF recovery. Run cargo test --lib graphics::tests.
+EOF recovery. Assembler tests cover chunk inheritance, raw byte counts, bounds,
+unsupported media and recovery. Run `cargo test --lib graphics::tests` and
+`cargo test --lib graphics_transfer::tests`.
