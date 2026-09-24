@@ -1,7 +1,9 @@
 //! Opt-in, bounded conversion of stored Kitty image data to RGBA pixels.
 //! Decoding does not place or render an image in a terminal.
 
-use crate::graphics_store::{ImageFormat, PixelRect, PlacementPixelLayout, StoredImage};
+use crate::graphics_store::{
+    ImageFormat, PixelRect, PixelSize, PlacementPixelLayout, SignedPixelPoint, StoredImage,
+};
 use png::{BitDepth, ColorType, Decoder, Limits, Transformations};
 use std::io::Cursor;
 
@@ -23,6 +25,21 @@ pub struct ResampledPlacement {
     pub destination: PixelRect,
     /// Row-major, eight-bit RGBA content pixels.
     pub pixels: Vec<u8>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct ClippedPlacement {
+    /// Visible rectangle in viewport pixel coordinates.
+    pub destination: PixelRect,
+    /// Row-major RGBA pixels for only the visible rectangle.
+    pub pixels: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum ClipError {
+    InvalidPixels,
+    InvalidDestination,
+    OutputLimit,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -104,6 +121,71 @@ impl DecodedImage {
             destination,
             pixels,
         })
+    }
+}
+
+impl ResampledPlacement {
+    /// Intersect the content with a pane-sized viewport. `anchor` is the
+    /// signed pixel position of the placement's anchor cell within that
+    /// viewport; it may be negative after scrolling. No text or other images
+    /// are blended here.
+    pub fn clip_to_viewport(
+        &self,
+        anchor: SignedPixelPoint,
+        viewport: PixelSize,
+    ) -> Result<Option<ClippedPlacement>, ClipError> {
+        let source = self.destination;
+        let source_size =
+            decoded_size(source.width, source.height).map_err(|error| match error {
+                DecodeError::OutputLimit => ClipError::OutputLimit,
+                _ => ClipError::InvalidDestination,
+            })?;
+        if source.x.checked_add(source.width).is_none()
+            || source.y.checked_add(source.height).is_none()
+        {
+            return Err(ClipError::InvalidDestination);
+        }
+        if self.pixels.len() != source_size {
+            return Err(ClipError::InvalidPixels);
+        }
+        if viewport.width == 0 || viewport.height == 0 {
+            return Ok(None);
+        }
+        let left = i128::from(anchor.x) + i128::from(source.x);
+        let top = i128::from(anchor.y) + i128::from(source.y);
+        let right = left + i128::from(source.width);
+        let bottom = top + i128::from(source.height);
+        let visible_left = left.max(0);
+        let visible_top = top.max(0);
+        let visible_right = right.min(i128::from(viewport.width));
+        let visible_bottom = bottom.min(i128::from(viewport.height));
+        if visible_left >= visible_right || visible_top >= visible_bottom {
+            return Ok(None);
+        }
+        // Intersection with a validated source and viewport bounds all these
+        // values to u32/usize, even for an extreme signed anchor.
+        let x = u32::try_from(visible_left).unwrap();
+        let y = u32::try_from(visible_top).unwrap();
+        let width = u32::try_from(visible_right - visible_left).unwrap();
+        let height = u32::try_from(visible_bottom - visible_top).unwrap();
+        let skip_x = usize::try_from(visible_left - left).unwrap();
+        let skip_y = usize::try_from(visible_top - top).unwrap();
+        let input_width = usize::try_from(source.width).unwrap();
+        let output_width = usize::try_from(width).unwrap();
+        let mut pixels = vec![0; decoded_size(width, height).unwrap()];
+        for (row, destination_row) in pixels.chunks_exact_mut(output_width * 4).enumerate() {
+            let start = ((skip_y + row) * input_width + skip_x) * 4;
+            destination_row.copy_from_slice(&self.pixels[start..start + output_width * 4]);
+        }
+        Ok(Some(ClippedPlacement {
+            destination: PixelRect {
+                x,
+                y,
+                width,
+                height,
+            },
+            pixels,
+        }))
     }
 }
 
@@ -503,6 +585,188 @@ mod tests {
                 ..layout
             }),
             Err(ResampleError::InvalidLayout)
+        );
+    }
+
+    #[test]
+    fn viewport_clip_copies_only_visible_rows_and_columns() {
+        let mut pixels = Vec::new();
+        for value in 1..=12 {
+            pixels.extend_from_slice(&[value, 0, 0, 255 - value]);
+        }
+        let placement = ResampledPlacement {
+            destination: PixelRect {
+                x: 1,
+                y: 1,
+                width: 4,
+                height: 3,
+            },
+            pixels,
+        };
+        let clipped = placement
+            .clip_to_viewport(
+                SignedPixelPoint { x: -2, y: -2 },
+                PixelSize {
+                    width: 3,
+                    height: 2,
+                },
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            clipped.destination,
+            PixelRect {
+                x: 0,
+                y: 0,
+                width: 3,
+                height: 2,
+            }
+        );
+        assert_eq!(
+            clipped
+                .pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|rgba| (rgba[0], rgba[3]))
+                .collect::<Vec<_>>(),
+            [
+                (6, 249),
+                (7, 248),
+                (8, 247),
+                (10, 245),
+                (11, 244),
+                (12, 243)
+            ]
+        );
+        let right_bottom = placement
+            .clip_to_viewport(
+                SignedPixelPoint { x: 0, y: 0 },
+                PixelSize {
+                    width: 3,
+                    height: 3,
+                },
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            right_bottom.destination,
+            PixelRect {
+                x: 1,
+                y: 1,
+                width: 2,
+                height: 2,
+            }
+        );
+        assert_eq!(
+            right_bottom
+                .pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|rgba| rgba[0])
+                .collect::<Vec<_>>(),
+            [1, 2, 5, 6]
+        );
+        let entirely_visible = placement
+            .clip_to_viewport(
+                SignedPixelPoint { x: 5, y: 6 },
+                PixelSize {
+                    width: 20,
+                    height: 20,
+                },
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            entirely_visible.destination,
+            PixelRect {
+                x: 6,
+                y: 7,
+                width: 4,
+                height: 3,
+            }
+        );
+        assert_eq!(entirely_visible.pixels, placement.pixels);
+    }
+
+    #[test]
+    fn viewport_clip_handles_disjoint_and_invalid_inputs() {
+        let placement = ResampledPlacement {
+            destination: PixelRect {
+                x: 0,
+                y: 0,
+                width: 1,
+                height: 1,
+            },
+            pixels: vec![1, 2, 3, 4],
+        };
+        let viewport = PixelSize {
+            width: 2,
+            height: 2,
+        };
+        for anchor in [
+            SignedPixelPoint { x: 2, y: 0 },
+            SignedPixelPoint { x: -1, y: 0 },
+            SignedPixelPoint {
+                x: i64::MIN,
+                y: i64::MAX,
+            },
+        ] {
+            assert_eq!(placement.clip_to_viewport(anchor, viewport), Ok(None));
+        }
+        assert_eq!(
+            placement.clip_to_viewport(
+                SignedPixelPoint { x: 0, y: 0 },
+                PixelSize {
+                    width: 0,
+                    height: 2,
+                }
+            ),
+            Ok(None)
+        );
+        assert_eq!(
+            ResampledPlacement {
+                pixels: vec![1, 2, 3],
+                ..placement
+            }
+            .clip_to_viewport(SignedPixelPoint { x: 0, y: 0 }, viewport),
+            Err(ClipError::InvalidPixels)
+        );
+        assert_eq!(
+            ResampledPlacement {
+                destination: PixelRect {
+                    width: 0,
+                    ..placement.destination
+                },
+                pixels: placement.pixels.clone(),
+            }
+            .clip_to_viewport(SignedPixelPoint { x: 0, y: 0 }, viewport),
+            Err(ClipError::InvalidDestination)
+        );
+        assert_eq!(
+            ResampledPlacement {
+                destination: PixelRect {
+                    x: u32::MAX,
+                    width: 2,
+                    ..placement.destination
+                },
+                pixels: placement.pixels.clone(),
+            }
+            .clip_to_viewport(SignedPixelPoint { x: 0, y: 0 }, viewport),
+            Err(ClipError::InvalidDestination)
+        );
+        assert_eq!(
+            ResampledPlacement {
+                destination: PixelRect {
+                    width: 10_000,
+                    height: 10_000,
+                    ..placement.destination
+                },
+                pixels: placement.pixels.clone(),
+            }
+            .clip_to_viewport(SignedPixelPoint { x: 0, y: 0 }, viewport),
+            Err(ClipError::OutputLimit)
         );
     }
 }

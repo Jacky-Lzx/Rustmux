@@ -107,6 +107,12 @@ pub struct PixelSize {
     pub height: u32,
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct SignedPixelPoint {
+    pub x: i64,
+    pub y: i64,
+}
+
 #[derive(Debug, Default, Clone, Copy, Eq, PartialEq)]
 pub struct SourceRect {
     pub left: u32,
@@ -136,6 +142,17 @@ impl SourceRect {
 }
 
 impl PlacementGeometry {
+    /// Locate the original anchor cell within a pane after tracked row shifts.
+    /// Negative y positions are valid for placements entering scrollback.
+    pub fn pixel_anchor(self, cell: CellPixelSize) -> Option<SignedPixelPoint> {
+        let column = i128::try_from(self.anchor.column).ok()?;
+        let row = i128::try_from(self.anchor.row).ok()? + i128::from(self.row_offset);
+        Some(SignedPixelPoint {
+            x: i64::try_from(column.checked_mul(i128::from(cell.width))?).ok()?,
+            y: i64::try_from(row.checked_mul(i128::from(cell.height))?).ok()?,
+        })
+    }
+
     /// Resolve an opt-in placement's pixel dimensions without decoding or
     /// drawing pixels. Recompute inferred extents for this cell size rather
     /// than trusting extents inferred for a previous terminal size.
@@ -1238,6 +1255,39 @@ mod tests {
                 ..geometry
             }
             .pixel_layout(6, 4, cell),
+            None
+        );
+    }
+
+    #[test]
+    fn pixel_anchor_handles_scrolled_rows_and_overflow() {
+        let geometry = PlacementGeometry {
+            anchor: CellAnchor {
+                row: 2,
+                column: 3,
+                alternate: false,
+            },
+            row_offset: -4,
+            source: SourceRect::default(),
+            cell_offset: CellPixelOffset::default(),
+            columns: None,
+            rows: None,
+            sizing: PlacementSizing::Natural,
+            clip_top_rows: 0,
+            clip_bottom_rows: 0,
+            z_index: 0,
+            cursor_stays: false,
+        };
+        assert_eq!(
+            geometry.pixel_anchor(CellPixelSize::new(2, 3).unwrap()),
+            Some(SignedPixelPoint { x: 6, y: -6 })
+        );
+        assert_eq!(
+            PlacementGeometry {
+                row_offset: i64::MAX,
+                ..geometry
+            }
+            .pixel_anchor(CellPixelSize::new(2, 3).unwrap()),
             None
         );
     }

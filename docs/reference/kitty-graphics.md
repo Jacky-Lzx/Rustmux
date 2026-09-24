@@ -113,8 +113,15 @@ RGBA content for that layout with bounded nearest-neighbor sampling. It keeps
 the content's destination offset and alpha bytes, but does not allocate empty
 letterbox space. Invalid pixel buffers or rectangles are rejected, and output
 is capped at 32 MiB. Nearest-neighbor is this initial implementation choice,
-not a Kitty protocol requirement. This remains an opt-in data path: pane
-clipping, z-order blending, redraw, and the normal runtime are unchanged.
+not a Kitty protocol requirement. `ResampledPlacement::clip_to_viewport` then
+accepts a signed anchor-cell pixel position and pane viewport dimensions.
+`PlacementGeometry::pixel_anchor` derives that position from its cell anchor,
+tracked row displacement, and verified physical cell size. Clipping returns
+only the visible RGBA rows and columns in viewport coordinates.
+Negative positions after scrolling and fully off-screen placements are handled
+without unsigned wraparound. This remains an opt-in data path: applying the
+stored scroll-margin clip, z-order blending, redraw, and the normal runtime
+are unchanged.
 
 `X/Y` position an image within its first cell; they are not added to `c/r` or
 cursor movement. On a sized opt-in call, either offset must be smaller than
@@ -154,8 +161,9 @@ retains references as they enter scrollback, until their known row extent falls
 out of retained history. If height is unknown, only full-screen shifts move its
 anchor; its visibility and expiry cannot yet be determined. An overflowing
 event batch safely drops anchored references but keeps image data. Horizontal
-shifts, resize/reflow relocation, pixel-level clipping, and scrollback rendering
-remain out of scope. These choices follow the scrolling rules in the
+shifts, resize/reflow relocation, applying permanent margin clips to pixels,
+and scrollback rendering remain out of scope. These choices follow the scrolling
+rules in the
 [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
 
 The normal runtime still discards graphics commands without assembling or
@@ -174,7 +182,8 @@ named and anonymous references, and soft versus hard deletion.
 Decoder tests cover raw and PNG formats, palette transparency, corrupted PNGs,
 dimension checks and the output-size bound. Resampling tests cover cropped
 nearest-neighbor enlargement, reduction, alpha preservation, invalid geometry,
-and the raster output limit.
+and the raster output limit. Viewport tests cover all four clipped edges,
+negative and disjoint anchors, malformed buffers, and oversized geometry.
 Anchor tests cover interleaved text, final-chunk position, alternate-screen
 identity, explicit layout options, malformed metadata, and named replacement.
 Screen-lifecycle tests cover split `CSI 2 J`, non-clearing text erasures,
