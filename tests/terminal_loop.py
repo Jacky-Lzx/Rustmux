@@ -3362,10 +3362,15 @@ with tempfile.TemporaryDirectory(prefix="rustmux-osc7-") as directory:
         s.expect(b"RUSTMUX_READY>")
         s.send(("test \"$PWD\" = " + quoted + " && printf 'SPLIT_OSC7_OK\\n'\n").encode())
         s.expect(b"SPLIT_OSC7_OK")
-        s.frames.clear()
+        assert s.physical_rows[1].count("┌".encode()) == 2, s.physical_rows
         s.send(b"exit 0\n")
-        s.expect(b"RUSTMUX_READY>")
-        s.frames.clear()
+        # The surviving pane already has a prompt, so another rendered prompt
+        # does not prove the split pane has closed. Wait for the layout change
+        # before routing the next exit to the surviving pane.
+        deadline = time.monotonic() + 8
+        while not s.physical_rows or s.physical_rows[1].count("┌".encode()) != 1:
+            s.read()
+            assert time.monotonic() < deadline, s.physical_rows
         s.send(b"exit 0\n")
         expect_bar_without(s, b"2 shell")
         expect_bar(s, b"1 shell")
