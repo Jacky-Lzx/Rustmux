@@ -4,6 +4,7 @@ mod chrome;
 pub mod cli;
 mod closed_pane;
 pub mod config;
+pub mod graphics;
 mod history_view;
 pub mod layout;
 pub mod pane;
