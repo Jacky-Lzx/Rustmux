@@ -1983,6 +1983,11 @@ with tempfile.TemporaryDirectory(prefix="rustmux-clear-defaults-") as directory:
         s.frames.clear()
         s.send(b"q")
         s.expect(b"RUSTMUX_READY> ")
+        # The prompt can be drawn before the frame that clears Help arrives.
+        end = time.monotonic() + 8
+        while any(b"Shortcut Help" in row for row in s.physical_rows):
+            s.read()
+            assert time.monotonic() < end, s.physical_rows
         assert not any(b"Shortcut Help" in row for row in s.physical_rows)
         expect_footer(s, b"LOCKED")
         s.output.clear()
