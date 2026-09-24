@@ -34,7 +34,8 @@ An additional opt-in path, `Pane::process_output_with_image_store`, retains
 complete transfers with explicit nonzero `i` IDs in a pane-local `ImageStore`.
 Replacement and explicit removal update byte accounting; oldest entries are
 evicted at 32 MiB or 256 images per pane. The store rejects query action `a=q`
-and image-number allocation `I`; it preserves PNG bytes without decoding them.
+and image-number allocation `I`; the ordinary store path preserves PNG bytes
+without decoding them.
 It is cleared when a stopped foreground job resets its pane or its PTY reaches
 EOF.
 
@@ -61,18 +62,32 @@ cell row and column, plus whether they belong to the alternate screen. A
 chunked `a=T` records the cursor when its final chunk arrives; `a=p` records
 the cursor at that command. Explicit `c`/`r` cell extents, signed `z` index,
 and `C=1` no-move request are parsed and retained. Missing extents remain
-unknown until pixel-cell sizing is available. Virtual and relative placements
+unknown on the ordinary opt-in path. Virtual and relative placements
 do not get a cursor anchor. This is metadata only: image placement does not yet
 compose pixels, redraw, or send graphics replies.
 
 In the opt-in pane path, a successful `a=T` or `a=p` placement with both
-explicit `c` and `r` now moves the cursor right by `c` cells and down by `r`
+resolved `c` and `r` moves the cursor right by `c` cells and down by `r`
 cells before subsequent text is parsed. `C=1` suppresses the move. The screen
 model clamps an out-of-bounds destination, which the protocol leaves undefined.
-Missing either extent leaves the cursor unchanged until pixel-cell geometry can
-infer it; failed, virtual, or non-placement commands also do not move it.
+Without supplied pixel-cell geometry, a missing extent leaves the cursor
+unchanged; failed, virtual, or non-placement commands also do not move it.
 The normal runtime still discards these commands and leaves its cursor alone.
 This follows the [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
+
+`Pane::process_output_with_image_store_sized` is a separate opt-in path for a
+caller that has verified nonzero physical cell width and height in pixels.
+It validates and caches each image's decoded dimensions, then derives missing
+`c`/`r` using ceiling cell coverage and the source aspect ratio when only one
+extent is specified. The resolved extent is stored with the placement and is
+used for cursor motion and later row-shift bookkeeping. When inference is
+needed, invalid image data or an unrepresentable computed extent leaves the
+original metadata and cursor unchanged. Replacing or evicting an image
+invalidates its dimension cache.
+The local/detached runtime does not yet propagate trustworthy pixel cell size
+to panes, so it does not use this path automatically; no size is guessed from
+row/column counts alone. This follows the sizing rules in the
+[Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
 
 The opt-in pane path now removes cursor-anchored placement references when
 `CSI 2 J` clears their screen, when RIS resets both screens, and when an
@@ -118,3 +133,5 @@ Scroll tests cover full-screen primary/alternate movement, retained scrollback
 references, margin clipping, reverse index, unknown height, and event overflow.
 Cursor tests cover `a=T` and `a=p` ordering, final-chunk anchoring, `C=1`,
 unknown extents, failed placements, and bounded destinations.
+Sized-path tests cover RGB and PNG dimensions, aspect-ratio inference,
+invalid PNG recovery, and the unchanged unsized path.

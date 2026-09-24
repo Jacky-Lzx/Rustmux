@@ -67,9 +67,24 @@ pub struct PlacementGeometry {
     pub cursor_stays: bool,
 }
 
+/// Caller-supplied physical size of one terminal cell. The ordinary runtime
+/// does not yet propagate this through the detached-session protocol.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct CellPixelSize {
+    width: u16,
+    height: u16,
+}
+
+impl CellPixelSize {
+    pub fn new(width: u16, height: u16) -> Option<Self> {
+        (width != 0 && height != 0).then_some(Self { width, height })
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct ImageStore {
     images: BTreeMap<u32, StoredImage>,
+    decoded_dimensions: BTreeMap<u32, Option<(u32, u32)>>,
     oldest: VecDeque<u32>,
     placements: VecDeque<Placement>,
     total_bytes: usize,
@@ -194,9 +209,10 @@ impl ImageStore {
         &mut self,
         transfer: AssembledDirectTransfer,
         anchor: CellAnchor,
+        cell_pixels: Option<CellPixelSize>,
     ) -> Result<Option<PlacementGeometry>, StoreError> {
-        self.insert_inner(transfer, Some(anchor))
-            .map(|(_, geometry)| geometry)
+        let (id, geometry) = self.insert_inner(transfer, Some(anchor))?;
+        Ok(self.resolve_latest_geometry(id, geometry, cell_pixels))
     }
 
     fn insert_inner(
@@ -321,8 +337,51 @@ impl ImageStore {
         &mut self,
         command: &[u8],
         anchor: CellAnchor,
+        cell_pixels: Option<CellPixelSize>,
     ) -> Result<Option<PlacementGeometry>, StoreError> {
-        self.accept_control_inner(command, Some(anchor))
+        let geometry = self.accept_control_inner(command, Some(anchor))?;
+        let id = self.placements.back().map(|placement| placement.image_id);
+        Ok(id.and_then(|id| self.resolve_latest_geometry(id, geometry, cell_pixels)))
+    }
+
+    fn resolve_latest_geometry(
+        &mut self,
+        image_id: u32,
+        geometry: Option<PlacementGeometry>,
+        cell_pixels: Option<CellPixelSize>,
+    ) -> Option<PlacementGeometry> {
+        let mut geometry = geometry?;
+        let Some(cell_pixels) = cell_pixels else {
+            return Some(geometry);
+        };
+        if geometry.columns.is_some() && geometry.rows.is_some() {
+            return Some(geometry);
+        }
+        let dimensions = if let Some(&cached) = self.decoded_dimensions.get(&image_id) {
+            cached
+        } else {
+            let decoded = self
+                .images
+                .get(&image_id)
+                .and_then(|image| image.decode_rgba().ok())
+                .map(|image| (image.width, image.height));
+            self.decoded_dimensions.insert(image_id, decoded);
+            decoded
+        };
+        let Some((width, height)) = dimensions else {
+            return Some(geometry);
+        };
+        let Some((columns, rows)) =
+            infer_cell_extent(width, height, geometry.columns, geometry.rows, cell_pixels)
+        else {
+            return Some(geometry);
+        };
+        geometry.columns = Some(columns);
+        geometry.rows = Some(rows);
+        if let Some(last) = self.placements.back_mut() {
+            last.geometry = Some(geometry);
+        }
+        Some(geometry)
     }
 
     fn accept_control_inner(
@@ -382,6 +441,7 @@ impl ImageStore {
     /// Explicit data removal, including its placement references.
     pub fn remove(&mut self, id: u32) -> Option<StoredImage> {
         let removed = self.images.remove(&id)?;
+        self.decoded_dimensions.remove(&id);
         self.total_bytes -= removed.data.len();
         self.oldest.retain(|&entry| entry != id);
         self.placements.retain(|placement| placement.image_id != id);
@@ -390,6 +450,7 @@ impl ImageStore {
 
     pub fn clear(&mut self) {
         self.images.clear();
+        self.decoded_dimensions.clear();
         self.oldest.clear();
         self.placements.clear();
         self.total_bytes = 0;
@@ -467,6 +528,42 @@ fn parse_u32(bytes: &[u8]) -> Option<u32> {
         return None;
     }
     std::str::from_utf8(bytes).ok()?.parse::<u32>().ok()
+}
+
+fn infer_cell_extent(
+    pixel_width: u32,
+    pixel_height: u32,
+    columns: Option<u32>,
+    rows: Option<u32>,
+    cell: CellPixelSize,
+) -> Option<(u32, u32)> {
+    let ceil_ratio = |numerator: u128, denominator: u128| {
+        u32::try_from(numerator.checked_add(denominator - 1)? / denominator)
+            .ok()
+            .filter(|&value| value != 0)
+    };
+    let width = u128::from(pixel_width);
+    let height = u128::from(pixel_height);
+    let cell_width = u128::from(cell.width);
+    let cell_height = u128::from(cell.height);
+    match (columns, rows) {
+        (Some(columns), Some(rows)) => Some((columns, rows)),
+        (Some(columns), None) => Some((
+            columns,
+            ceil_ratio(
+                u128::from(columns) * cell_width * height,
+                width * cell_height,
+            )?,
+        )),
+        (None, Some(rows)) => Some((
+            ceil_ratio(u128::from(rows) * cell_height * width, height * cell_width)?,
+            rows,
+        )),
+        (None, None) => Some((
+            ceil_ratio(width, cell_width)?,
+            ceil_ratio(height, cell_height)?,
+        )),
+    }
 }
 
 fn parse_geometry<'a>(
@@ -752,5 +849,29 @@ mod tests {
         );
         assert_eq!(store.get(7).unwrap().data, b"A");
         assert!(store.placements().next().is_none());
+    }
+
+    #[test]
+    fn cell_pixel_extent_uses_ceiling_and_preserves_aspect_ratio() {
+        assert_eq!(CellPixelSize::new(0, 1), None);
+        assert_eq!(CellPixelSize::new(1, 0), None);
+        let cell = CellPixelSize::new(2, 3).unwrap();
+        assert_eq!(infer_cell_extent(5, 7, None, None, cell), Some((3, 3)));
+        assert_eq!(infer_cell_extent(5, 7, Some(2), None, cell), Some((2, 2)));
+        assert_eq!(infer_cell_extent(5, 7, None, Some(2), cell), Some((3, 2)));
+        assert_eq!(
+            infer_cell_extent(5, 7, Some(4), Some(5), cell),
+            Some((4, 5))
+        );
+        assert_eq!(
+            infer_cell_extent(
+                1,
+                u32::MAX,
+                Some(u32::MAX),
+                None,
+                CellPixelSize::new(u16::MAX, 1).unwrap(),
+            ),
+            None
+        );
     }
 }

@@ -1,3 +1,4 @@
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use nix::{
     errno::Errno,
     fcntl::{FcntlArg, OFlag, fcntl},
@@ -5,7 +6,10 @@ use nix::{
     unistd::Pid,
 };
 use rustmux::{
-    graphics_store::PlacementGeometry, layout::SplitAxis, pane::Pane, pane_set::PaneSet,
+    graphics_store::{CellPixelSize, PlacementGeometry},
+    layout::SplitAxis,
+    pane::Pane,
+    pane_set::PaneSet,
     window::Windows,
 };
 use std::{
@@ -246,6 +250,80 @@ fn kitty_final_chunk_uses_final_cursor_then_clamps_out_of_bounds_motion() {
     assert_eq!(pane.screen().cursor(), (1, 4));
     pane.process_output_with_image_store(b"\x1b_Ga=p,i=7,p=2,c=99,r=99\x1b\\", &mut |_| {});
     assert_eq!(pane.screen().cursor(), (2, 4));
+}
+
+#[test]
+fn kitty_supplied_cell_pixels_infer_raw_extents_and_cursor_motion() {
+    let mut pane = Pane::spawn("/bin/sh", 8, 20).unwrap();
+    let cell = CellPixelSize::new(2, 1).unwrap();
+    let image = format!(
+        "\x1b_Ga=T,f=24,s=4,v=2,i=7,p=1;{}\x1b\\",
+        STANDARD.encode([0; 24])
+    );
+    pane.process_output_with_image_store_sized(image.as_bytes(), &mut |_| {}, cell);
+    assert_eq!(
+        (
+            placement_geometry(&pane, 1).columns,
+            placement_geometry(&pane, 1).rows
+        ),
+        (Some(2), Some(2))
+    );
+    assert_eq!(pane.screen().cursor(), (2, 2));
+
+    pane.process_output_with_image_store_sized(
+        b"\x1b_Ga=p,i=7,p=2,c=4,C=1\x1b\\\x1b_Ga=p,i=7,p=3,r=3\x1b\\",
+        &mut |_| {},
+        cell,
+    );
+    assert_eq!(placement_geometry(&pane, 2).rows, Some(4));
+    assert_eq!(placement_geometry(&pane, 3).columns, Some(3));
+    assert_eq!(pane.screen().cursor(), (5, 5));
+
+    pane.process_output_with_image_store(b"\x1b_Ga=p,i=7,p=4\x1b\\", &mut |_| {});
+    assert_eq!(placement_geometry(&pane, 4).columns, None);
+    assert_eq!(pane.screen().cursor(), (5, 5));
+
+    pane.process_output_with_image_store(b"\x1b_Ga=t,f=24,s=1,v=1,i=8;AAAA\x1b\\", &mut |_| {});
+    pane.process_output_with_image_store_sized(b"\x1b_Ga=p,i=8,p=5\x1b\\", &mut |_| {}, cell);
+    assert_eq!(placement_geometry(&pane, 5).columns, Some(1));
+    assert_eq!(placement_geometry(&pane, 5).rows, Some(1));
+    assert_eq!(pane.screen().cursor(), (6, 6));
+}
+
+#[test]
+fn kitty_sized_png_inference_recovers_after_invalid_image_replacement() {
+    let mut pane = Pane::spawn("/bin/sh", 6, 20).unwrap();
+    let cell = CellPixelSize::new(2, 1).unwrap();
+    pane.process_output_with_image_store_sized(
+        b"\x1b_Ga=T,f=100,i=7,p=1;QQ==\x1b\\",
+        &mut |_| {},
+        cell,
+    );
+    assert_eq!(placement_geometry(&pane, 1).rows, None);
+    assert_eq!(pane.screen().cursor(), (0, 0));
+
+    let mut png_bytes = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut png_bytes, 3, 2);
+        encoder.set_color(png::ColorType::Rgb);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder.write_header().unwrap();
+        writer.write_image_data(&[0; 18]).unwrap();
+    }
+    let image = format!(
+        "\x1b_Ga=T,f=100,i=7,p=2;{}\x1b\\",
+        STANDARD.encode(png_bytes)
+    );
+    pane.process_output_with_image_store_sized(image.as_bytes(), &mut |_| {}, cell);
+    assert_eq!(pane.image_store().placements().count(), 1);
+    assert_eq!(
+        (
+            placement_geometry(&pane, 2).columns,
+            placement_geometry(&pane, 2).rows
+        ),
+        (Some(2), Some(2))
+    );
+    assert_eq!(pane.screen().cursor(), (2, 2));
 }
 
 #[test]

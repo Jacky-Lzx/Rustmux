@@ -2,7 +2,7 @@
 
 use crate::{
     graphics::{GraphicsEvent, GraphicsFramer},
-    graphics_store::{CellAnchor, ImageStore},
+    graphics_store::{CellAnchor, CellPixelSize, ImageStore},
     graphics_transfer::{AssembledDirectTransfer, DirectTransferAssembler},
     parser::Parser,
     pty::PtyShell,
@@ -44,7 +44,7 @@ pub struct Pane {
 enum GraphicsSink<'a> {
     Drop,
     Callback(&'a mut dyn FnMut(AssembledDirectTransfer)),
-    Store,
+    Store(Option<CellPixelSize>),
 }
 
 #[derive(Debug)]
@@ -374,7 +374,18 @@ impl Pane {
     /// Cell anchors, screen clears, vertical row shifts and explicit-cell
     /// cursor motion are modeled; pixel rendering and replies are not.
     pub fn process_output_with_image_store(&mut self, bytes: &[u8], reply: &mut impl FnMut(&[u8])) {
-        self.process_output_inner(bytes, reply, GraphicsSink::Store);
+        self.process_output_inner(bytes, reply, GraphicsSink::Store(None));
+    }
+
+    /// Opt in to image storage with a caller-verified physical cell size.
+    /// Missing placement extents can then be derived from decoded image pixels.
+    pub fn process_output_with_image_store_sized(
+        &mut self,
+        bytes: &[u8],
+        reply: &mut impl FnMut(&[u8]),
+        cell_pixels: CellPixelSize,
+    ) {
+        self.process_output_inner(bytes, reply, GraphicsSink::Store(Some(cell_pixels)));
     }
 
     pub fn image_store(&self) -> &ImageStore {
@@ -405,7 +416,7 @@ impl Pane {
                             handler(transfer);
                         }
                     }
-                    GraphicsSink::Store => {
+                    GraphicsSink::Store(cell_pixels) => {
                         let (row, column) = self.screen.cursor();
                         let anchor = CellAnchor {
                             row,
@@ -414,9 +425,11 @@ impl Pane {
                         };
                         let placed = if let Some(transfer) = self.graphics_transfer.accept(&command)
                         {
-                            self.image_store.insert_for_pane(transfer, anchor)
+                            self.image_store
+                                .insert_for_pane(transfer, anchor, *cell_pixels)
                         } else {
-                            self.image_store.accept_control_for_pane(&command, anchor)
+                            self.image_store
+                                .accept_control_for_pane(&command, anchor, *cell_pixels)
                         };
                         if let Ok(Some(geometry)) = placed
                             && !geometry.cursor_stays
