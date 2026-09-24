@@ -398,6 +398,51 @@ fn kitty_source_crop_controls_inferred_extent_and_cursor_motion() {
 }
 
 #[test]
+fn kitty_cell_pixel_offsets_validate_before_mutation_and_do_not_extend_cells() {
+    let mut pane = Pane::spawn("/bin/sh", 8, 20).unwrap();
+    let cell = CellPixelSize::new(2, 1).unwrap();
+    let image = format!(
+        "\x1b_Ga=T,f=24,s=4,v=2,i=7,p=1,X=1,Y=0,c=2,r=2,C=1;{}\x1b\\",
+        STANDARD.encode([0; 24])
+    );
+    pane.process_output_with_image_store_sized(image.as_bytes(), &mut |_| {}, cell);
+    assert_eq!(placement_geometry(&pane, 1).cell_offset.x, 1);
+    assert_eq!(placement_geometry(&pane, 1).cell_offset.y, 0);
+    assert_eq!(pane.screen().cursor(), (0, 0));
+
+    pane.process_output_with_image_store_sized(
+        b"\x1b_Ga=p,i=7,p=2,X=2,c=1,r=1\x1b\\\x1b_Ga=p,i=7,p=3,Y=1,c=1,r=1\x1b\\\x1b_Ga=p,i=7,p=4,X=bad\x1b\\",
+        &mut |_| {},
+        cell,
+    );
+    assert_eq!(pane.image_store().placements().count(), 1);
+    assert_eq!(pane.screen().cursor(), (0, 0));
+
+    let invalid_replacement = format!(
+        "\x1b_Ga=T,f=24,s=4,v=2,i=7,p=4,X=2;{}\x1b\\",
+        STANDARD.encode([1; 24])
+    );
+    pane.process_output_with_image_store_sized(invalid_replacement.as_bytes(), &mut |_| {}, cell);
+    assert_eq!(pane.image_store().get(7).unwrap().data, [0; 24]);
+    assert_eq!(pane.image_store().placements().count(), 1);
+
+    pane.process_output_with_image_store_sized(
+        b"\x1b_Ga=p,i=7,p=5,X=1,Y=0\x1b\\",
+        &mut |_| {},
+        cell,
+    );
+    assert_eq!(placement_geometry(&pane, 5).cell_offset.x, 1);
+    assert_eq!(placement_geometry(&pane, 5).columns, Some(2));
+    assert_eq!(placement_geometry(&pane, 5).rows, Some(2));
+    assert_eq!(pane.screen().cursor(), (2, 2));
+
+    pane.process_output_with_image_store(b"\x1b_Ga=p,i=7,p=6,X=99,Y=99,C=1\x1b\\", &mut |_| {});
+    assert_eq!(placement_geometry(&pane, 6).cell_offset.x, 99);
+    assert_eq!(placement_geometry(&pane, 6).cell_offset.y, 99);
+    assert_eq!(pane.screen().cursor(), (2, 2));
+}
+
+#[test]
 fn kitty_sized_png_inference_recovers_after_invalid_image_replacement() {
     let mut pane = Pane::spawn("/bin/sh", 6, 20).unwrap();
     let cell = CellPixelSize::new(2, 1).unwrap();

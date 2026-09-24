@@ -60,12 +60,13 @@ but the model does not track visibility or the other delete selectors.
 For the pane opt-in path, cursor-anchored placements now record a zero-based
 cell row and column, plus whether they belong to the alternate screen. A
 chunked `a=T` records the cursor when its final chunk arrives; `a=p` records
-the cursor at that command. Source pixel rectangle keys `x/y/w/h`, explicit
-`c`/`r` cell extents, signed `z` index, and `C=1` no-move request are parsed
-and retained. The source rectangle intersects the decoded image; an omitted
-or zero `w/h` selects the remaining width/height. Missing extents remain
-unknown on the ordinary opt-in path. Virtual and relative placements
-do not get a cursor anchor. This is metadata only: image placement does not yet
+the cursor at that command. Source pixel rectangle keys `x/y/w/h`, first-cell
+pixel offsets `X/Y`, explicit `c`/`r` cell extents, signed `z` index, and
+`C=1` no-move request are parsed and retained. The source rectangle intersects
+the decoded image; an omitted or zero `w/h` selects the remaining width/height.
+Missing extents remain unknown on the ordinary opt-in path. Virtual and
+relative placements do not get a cursor anchor. This is metadata only: image
+placement does not yet
 compose pixels, redraw, or send graphics replies.
 
 In the opt-in pane path, a successful `a=T` or `a=p` placement with both
@@ -83,10 +84,17 @@ It validates and caches each image's decoded dimensions, then derives missing
 `c`/`r` using ceiling cell coverage of the intersected source rectangle and
 its aspect ratio when only one extent is specified. The resolved extent is
 stored with the placement and used for cursor motion and later row-shift
-bookkeeping. When inference is
-needed, invalid image data, an empty source intersection, or an unrepresentable
+bookkeeping. When inference is needed, invalid image data, an empty source
+intersection, or an unrepresentable
 computed extent leaves the original metadata and cursor unchanged. Replacing
 or evicting an image invalidates its dimension cache.
+
+`X/Y` position an image within its first cell; they are not added to `c/r` or
+cursor movement. On a sized opt-in call, either offset must be smaller than
+its cell pixel dimension. An invalid offset rejects the placement before an
+cursor-anchored `a=T` replacement or `a=p` reference can mutate the store.
+Without supplied cell pixels the offsets are retained but cannot yet be
+range-checked.
 
 `CellPixelSize::from_terminal_size` accepts reported terminal rows, columns and
 pixel dimensions only when they describe an exact, nonzero cell grid. The
@@ -147,5 +155,5 @@ references, margin clipping, reverse index, unknown height, and event overflow.
 Cursor tests cover `a=T` and `a=p` ordering, final-chunk anchoring, `C=1`,
 unknown extents, failed placements, and bounded destinations.
 Sized-path tests cover RGB and PNG dimensions, aspect-ratio inference,
-source cropping, invalid PNG recovery, exact terminal-cell validation, and
-the unchanged unsized path.
+source cropping, first-cell pixel offset validation, invalid PNG recovery,
+exact terminal-cell validation, and the unchanged unsized path.

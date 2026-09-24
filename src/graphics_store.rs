@@ -58,6 +58,8 @@ pub struct PlacementGeometry {
     pub row_offset: i64,
     /// Pixel rectangle selected from the source image before cell sizing.
     pub source: SourceRect,
+    /// Pixel offset within the first cell, independent of the cell extent.
+    pub cell_offset: CellPixelOffset,
     /// Explicit cell extent, when requested. Missing values need pixel-cell
     /// geometry before a renderer can infer them.
     pub columns: Option<u32>,
@@ -77,6 +79,12 @@ pub struct SourceRect {
     pub width: Option<u32>,
     /// None selects the remaining source height from `top`.
     pub height: Option<u32>,
+}
+
+#[derive(Debug, Default, Clone, Copy, Eq, PartialEq)]
+pub struct CellPixelOffset {
+    pub x: u32,
+    pub y: u32,
 }
 
 impl SourceRect {
@@ -238,7 +246,7 @@ impl ImageStore {
     /// commands and image-number allocation require a later protocol stage.
     /// Replacement is atomic if the new transfer cannot fit by itself.
     pub fn insert(&mut self, transfer: AssembledDirectTransfer) -> Result<u32, StoreError> {
-        self.insert_inner(transfer, None).map(|(id, _)| id)
+        self.insert_inner(transfer, None, None).map(|(id, _)| id)
     }
 
     /// Pane path: snapshot the cursor at the final chunk of `a=T`.
@@ -247,7 +255,8 @@ impl ImageStore {
         transfer: AssembledDirectTransfer,
         anchor: CellAnchor,
     ) -> Result<u32, StoreError> {
-        self.insert_inner(transfer, Some(anchor)).map(|(id, _)| id)
+        self.insert_inner(transfer, Some(anchor), None)
+            .map(|(id, _)| id)
     }
 
     pub(crate) fn insert_for_pane(
@@ -256,7 +265,7 @@ impl ImageStore {
         anchor: CellAnchor,
         cell_pixels: Option<CellPixelSize>,
     ) -> Result<Option<PlacementGeometry>, StoreError> {
-        let (id, geometry) = self.insert_inner(transfer, Some(anchor))?;
+        let (id, geometry) = self.insert_inner(transfer, Some(anchor), cell_pixels)?;
         Ok(self.resolve_latest_geometry(id, geometry, cell_pixels))
     }
 
@@ -264,6 +273,7 @@ impl ImageStore {
         &mut self,
         transfer: AssembledDirectTransfer,
         anchor: Option<CellAnchor>,
+        cell_pixels: Option<CellPixelSize>,
     ) -> Result<(u32, Option<PlacementGeometry>), StoreError> {
         let display = match transfer.control(b'a') {
             None | Some(b"t") => false,
@@ -280,7 +290,11 @@ impl ImageStore {
             && transfer.control(b'P').is_none()
             && transfer.control(b'Q').is_none()
         {
-            let parsed = parse_geometry(anchor.unwrap_or_default(), |key| transfer.control(key))?;
+            let parsed = parse_geometry(
+                anchor.unwrap_or_default(),
+                |key| transfer.control(key),
+                cell_pixels,
+            )?;
             anchor.map(|_| parsed)
         } else {
             None
@@ -366,7 +380,7 @@ impl ImageStore {
     /// A strict, deliberately small APC G control-command subset: `a=p`
     /// with `i`/`p`, and `a=d,d=i/I` with `i` and optional `p`.
     pub fn accept_control(&mut self, command: &[u8]) -> Result<(), StoreError> {
-        self.accept_control_inner(command, None).map(|_| ())
+        self.accept_control_inner(command, None, None).map(|_| ())
     }
 
     /// Pane path: snapshot the cursor when an `a=p` command arrives.
@@ -375,7 +389,8 @@ impl ImageStore {
         command: &[u8],
         anchor: CellAnchor,
     ) -> Result<(), StoreError> {
-        self.accept_control_inner(command, Some(anchor)).map(|_| ())
+        self.accept_control_inner(command, Some(anchor), None)
+            .map(|_| ())
     }
 
     pub(crate) fn accept_control_for_pane(
@@ -384,7 +399,7 @@ impl ImageStore {
         anchor: CellAnchor,
         cell_pixels: Option<CellPixelSize>,
     ) -> Result<Option<PlacementGeometry>, StoreError> {
-        let geometry = self.accept_control_inner(command, Some(anchor))?;
+        let geometry = self.accept_control_inner(command, Some(anchor), cell_pixels)?;
         let id = self.placements.back().map(|placement| placement.image_id);
         Ok(id.and_then(|id| self.resolve_latest_geometry(id, geometry, cell_pixels)))
     }
@@ -435,19 +450,22 @@ impl ImageStore {
         &mut self,
         command: &[u8],
         anchor: Option<CellAnchor>,
+        cell_pixels: Option<CellPixelSize>,
     ) -> Result<Option<PlacementGeometry>, StoreError> {
         let controls = parse_control_command(command).ok_or(StoreError::UnsupportedAction)?;
         match controls.get(&b'a').map(Vec::as_slice) {
             Some(b"p") => {
-                if !only_keys(&controls, b"aipqcrzCxywh") {
+                if !only_keys(&controls, b"aipqcrzCxywhXY") {
                     return Err(StoreError::UnsupportedAction);
                 }
                 let id = required_id(&controls)?;
                 let placement_id =
                     parse_optional_placement_id(controls.get(&b'p').map(Vec::as_slice))?;
-                let parsed = parse_geometry(anchor.unwrap_or_default(), |key| {
-                    controls.get(&key).map(Vec::as_slice)
-                })?;
+                let parsed = parse_geometry(
+                    anchor.unwrap_or_default(),
+                    |key| controls.get(&key).map(Vec::as_slice),
+                    cell_pixels,
+                )?;
                 let geometry = anchor.map(|_| parsed);
                 self.place_with_geometry(id, placement_id, geometry)?;
                 Ok(geometry)
@@ -616,6 +634,7 @@ fn infer_cell_extent(
 fn parse_geometry<'a>(
     anchor: CellAnchor,
     control: impl Fn(u8) -> Option<&'a [u8]>,
+    cell_pixels: Option<CellPixelSize>,
 ) -> Result<PlacementGeometry, StoreError> {
     let extent = |key| {
         control(key)
@@ -623,6 +642,21 @@ fn parse_geometry<'a>(
             .transpose()
             .map(|value| value.filter(|&number| number != 0))
     };
+    let coordinate = |key| {
+        control(key)
+            .map(|bytes| parse_u32(bytes).ok_or(StoreError::InvalidPlacement))
+            .transpose()
+            .map(|value| value.unwrap_or(0))
+    };
+    let cell_offset = CellPixelOffset {
+        x: coordinate(b'X')?,
+        y: coordinate(b'Y')?,
+    };
+    if cell_pixels.is_some_and(|cell| {
+        cell_offset.x >= u32::from(cell.width) || cell_offset.y >= u32::from(cell.height)
+    }) {
+        return Err(StoreError::InvalidPlacement);
+    }
     let z_index = control(b'z')
         .map(|bytes| {
             std::str::from_utf8(bytes)
@@ -641,17 +675,12 @@ fn parse_geometry<'a>(
         anchor,
         row_offset: 0,
         source: SourceRect {
-            left: control(b'x')
-                .map(|bytes| parse_u32(bytes).ok_or(StoreError::InvalidPlacement))
-                .transpose()?
-                .unwrap_or(0),
-            top: control(b'y')
-                .map(|bytes| parse_u32(bytes).ok_or(StoreError::InvalidPlacement))
-                .transpose()?
-                .unwrap_or(0),
+            left: coordinate(b'x')?,
+            top: coordinate(b'y')?,
             width: extent(b'w')?,
             height: extent(b'h')?,
         },
+        cell_offset,
         columns: extent(b'c')?,
         rows: extent(b'r')?,
         clip_top_rows: 0,
@@ -861,7 +890,7 @@ mod tests {
         };
         store
             .insert_at(
-                transfer(b"\x1b_Ga=T,f=100,i=7,p=9,c=2,r=3,z=-4,C=1;QQ==\x1b\\"),
+                transfer(b"\x1b_Ga=T,f=100,i=7,p=9,c=2,r=3,z=-4,C=1,X=3,Y=4;QQ==\x1b\\"),
                 first,
             )
             .unwrap();
@@ -871,6 +900,7 @@ mod tests {
                 anchor: first,
                 row_offset: 0,
                 source: SourceRect::default(),
+                cell_offset: CellPixelOffset { x: 3, y: 4 },
                 columns: Some(2),
                 rows: Some(3),
                 clip_top_rows: 0,
@@ -885,13 +915,17 @@ mod tests {
             alternate: true,
         };
         store
-            .accept_control_at(b"\x1b_Ga=p,i=7,p=9,c=1,r=2,z=3\x1b\\", second)
+            .accept_control_at(b"\x1b_Ga=p,i=7,p=9,c=1,r=2,z=3,X=1,Y=2\x1b\\", second)
             .unwrap();
         let placements: Vec<_> = store.placements().copied().collect();
         assert_eq!(placements.len(), 1);
         assert_eq!(placements[0].geometry.unwrap().anchor, second);
         assert_eq!(placements[0].geometry.unwrap().columns, Some(1));
         assert_eq!(placements[0].geometry.unwrap().rows, Some(2));
+        assert_eq!(
+            placements[0].geometry.unwrap().cell_offset,
+            CellPixelOffset { x: 1, y: 2 }
+        );
         assert_eq!(placements[0].geometry.unwrap().z_index, 3);
         assert!(!placements[0].geometry.unwrap().cursor_stays);
     }
