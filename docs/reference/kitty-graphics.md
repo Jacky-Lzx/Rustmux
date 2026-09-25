@@ -40,9 +40,12 @@ pane-local `ImageStore`.
 The running multiplexer now uses that bounded store for live, detached and
 temporarily closed/undoable panes; the public `Pane::process_output` method
 still discards graphics unless its caller opts in.
-Replacement and explicit removal update byte accounting; oldest entries are
-evicted at 32 MiB or 256 images per pane. The store rejects query action `a=q`;
-the ordinary store path preserves PNG bytes without decoding them.
+Replacement and explicit removal update byte accounting. At 32 MiB or 256
+images per pane, quota eviction chooses the oldest image without placement
+references first, falling back to the oldest placed image only when necessary.
+References on either screen or in scrollback still count as placements. The
+store rejects query action `a=q`; the ordinary store path preserves PNG bytes
+without decoding them.
 An upload with `I=<nonzero-number>` and no `i` receives the smallest free
 positive image ID, reported as `i=<assigned>,I=<number>` when replies are
 enabled. Repeating a number creates another image rather than replacing its
@@ -397,8 +400,9 @@ EOF recovery. Assembler tests cover chunk inheritance, raw byte counts, bounds,
 unsupported media and recovery. Pane tests cover interleaved text, per-pane
 isolation and command-output filtering. Run `cargo test --lib graphics::tests`,
 `cargo test --lib graphics_transfer::tests` and `cargo test --test panes`.
-Store tests also cover replacement, isolation, eviction, explicit removal,
-named and anonymous references, and soft versus hard deletion.
+Store tests also cover replacement, isolation, unplaced-first quota eviction,
+numbered-image fallback, explicit removal, named and anonymous references,
+and soft versus hard deletion.
 Decoder tests cover raw and PNG formats, palette transparency, corrupted PNGs,
 dimension checks and the output-size bound. Resampling tests cover cropped
 nearest-neighbor enlargement, reduction, alpha preservation, invalid geometry,

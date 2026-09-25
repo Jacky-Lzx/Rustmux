@@ -613,6 +613,26 @@ fn kitty_zlib_png_upload_is_validated_and_bad_replacement_is_atomic() {
 }
 
 #[test]
+fn kitty_pane_quota_preserves_placed_image_before_unplaced_uploads() {
+    let mut pane = Pane::spawn("/bin/sh", 6, 20).unwrap();
+    pane.process_output_with_image_store(
+        b"\x1b_Ga=T,f=32,s=1,v=1,i=1,p=1;AQIDBA==\x1b\\",
+        &mut |_| {},
+    );
+    for id in 2..=rustmux::graphics_store::MAX_PANE_IMAGES as u32 + 1 {
+        let command = format!("\x1b_Ga=t,f=32,s=1,v=1,i={id};AQIDBA==\x1b\\");
+        pane.process_output_with_image_store(command.as_bytes(), &mut |_| {});
+    }
+    assert!(pane.image_store().get(1).is_some());
+    assert!(pane.image_store().get(2).is_none());
+    assert_eq!(pane.image_store().placements().next().unwrap().image_id, 1);
+    assert_eq!(
+        pane.image_store().len(),
+        rustmux::graphics_store::MAX_PANE_IMAGES
+    );
+}
+
+#[test]
 fn kitty_screen_clear_only_removes_active_anchored_placements() {
     let mut pane = Pane::spawn("/bin/sh", 6, 40).unwrap();
     pane.process_output_with_image_store(b"\x1b_Ga=T,f=100,i=7,p=1;QQ==\x1b\\", &mut |_| {});

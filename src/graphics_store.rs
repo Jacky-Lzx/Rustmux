@@ -562,10 +562,27 @@ impl ImageStore {
         };
         let previous_number = self.numbered_images.get(&id).copied();
         self.remove(id);
-        while self.images.len() >= MAX_PANE_IMAGES || self.total_bytes + size > MAX_PANE_IMAGE_BYTES
-        {
-            let oldest = *self.oldest.front().expect("nonempty image store");
-            self.remove(oldest);
+        if self.images.len() >= MAX_PANE_IMAGES || self.total_bytes + size > MAX_PANE_IMAGE_BYTES {
+            // Preserve placed images (including off-screen references) while
+            // an unplaced image can satisfy the quota. Order remains FIFO
+            // within each class; the pane caps bound this search.
+            let referenced: BTreeSet<u32> = self
+                .placements
+                .iter()
+                .map(|placement| placement.image_id)
+                .collect();
+            while self.images.len() >= MAX_PANE_IMAGES
+                || self.total_bytes + size > MAX_PANE_IMAGE_BYTES
+            {
+                let victim = self
+                    .oldest
+                    .iter()
+                    .copied()
+                    .find(|id| !referenced.contains(id))
+                    .or_else(|| self.oldest.front().copied())
+                    .expect("nonempty image store");
+                self.remove(victim);
+            }
         }
         self.total_bytes += size;
         self.oldest.push_back(id);
@@ -1686,6 +1703,85 @@ mod tests {
     }
 
     #[test]
+    fn quota_evicts_oldest_unplaced_image_before_placed_images() {
+        let mut store = ImageStore::new();
+        store
+            .insert(transfer(b"\x1b_Ga=T,f=100,i=1,p=1;QQ==\x1b\\"))
+            .unwrap();
+        for id in 2..=MAX_PANE_IMAGES as u32 {
+            let command = format!("\x1b_Ga=t,f=100,i={id};QQ==\x1b\\");
+            store.insert(transfer(command.as_bytes())).unwrap();
+        }
+        store
+            .insert(transfer(b"\x1b_Ga=t,f=100,i=257;Qg==\x1b\\"))
+            .unwrap();
+        assert!(store.get(1).is_some());
+        assert!(store.get(2).is_none());
+        assert_eq!(store.placements().next().unwrap().image_id, 1);
+
+        store
+            .insert(transfer(b"\x1b_Ga=t,f=100,i=258;Qw==\x1b\\"))
+            .unwrap();
+        assert!(store.get(3).is_none());
+        store.accept_control(b"\x1b_Ga=d,d=i,i=1\x1b\\").unwrap();
+        assert_eq!(store.placements().count(), 0);
+        store
+            .insert(transfer(b"\x1b_Ga=t,f=100,i=259;RA==\x1b\\"))
+            .unwrap();
+        assert!(store.get(1).is_none());
+        assert_eq!(store.len(), MAX_PANE_IMAGES);
+        assert_eq!(store.total_bytes(), MAX_PANE_IMAGES);
+    }
+
+    #[test]
+    fn byte_quota_also_prefers_unplaced_images() {
+        let mut store = ImageStore::new();
+        for id in [1, 2] {
+            store.images.insert(
+                id,
+                StoredImage {
+                    format: ImageFormat::Png,
+                    data: vec![0; MAX_PANE_IMAGE_BYTES / 2],
+                    declared_width: None,
+                    declared_height: None,
+                },
+            );
+            store.oldest.push_back(id);
+        }
+        store.total_bytes = MAX_PANE_IMAGE_BYTES;
+        store.place(1, Some(1)).unwrap();
+        store
+            .insert(transfer(b"\x1b_Ga=t,f=100,i=3;QQ==\x1b\\"))
+            .unwrap();
+        assert!(store.get(1).is_some());
+        assert!(store.get(2).is_none());
+        assert!(store.get(3).is_some());
+        assert_eq!(store.total_bytes(), MAX_PANE_IMAGE_BYTES / 2 + 1);
+        assert_eq!(store.placements().next().unwrap().image_id, 1);
+    }
+
+    #[test]
+    fn evicting_unplaced_numbered_image_reveals_older_placed_image() {
+        let mut store = ImageStore::new();
+        assert_eq!(
+            store.insert(transfer(b"\x1b_Ga=T,f=100,I=13,p=1;QQ==\x1b\\")),
+            Ok(1)
+        );
+        assert_eq!(
+            store.insert(transfer(b"\x1b_Ga=t,f=100,I=13;Qg==\x1b\\")),
+            Ok(2)
+        );
+        for id in 1000..1000 + MAX_PANE_IMAGES as u32 - 1 {
+            let command = format!("\x1b_Ga=t,f=100,i={id};Qw==\x1b\\");
+            store.insert(transfer(command.as_bytes())).unwrap();
+        }
+        assert!(store.get(1).is_some());
+        assert!(store.get(2).is_none());
+        store.accept_control(b"\x1b_Ga=p,I=13,p=2\x1b\\").unwrap();
+        assert_eq!(store.placements().last().unwrap().image_id, 1);
+    }
+
+    #[test]
     fn transmit_and_put_track_anonymous_and_named_references() {
         let mut store = ImageStore::new();
         store
@@ -1919,12 +2015,16 @@ mod tests {
         store
             .insert(transfer(b"\x1b_Ga=T,f=100,i=1;QQ==\x1b\\"))
             .unwrap();
-        for id in 2..=MAX_PANE_IMAGES + 1 {
-            let command = format!("\x1b_Ga=t,f=100,i={id};QQ==\x1b\\");
+        for id in 2..=MAX_PANE_IMAGES {
+            let command = format!("\x1b_Ga=T,f=100,i={id};QQ==\x1b\\");
             store.insert(transfer(command.as_bytes())).unwrap();
         }
+        store
+            .insert(transfer(b"\x1b_Ga=t,f=100,i=257;QQ==\x1b\\"))
+            .unwrap();
         assert!(store.get(1).is_none());
-        assert_eq!(store.placements().count(), 0);
+        assert_eq!(store.placements().count(), MAX_PANE_IMAGES - 1);
+        assert!(store.placements().all(|placement| placement.image_id != 1));
     }
 
     #[test]
