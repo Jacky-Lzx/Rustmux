@@ -874,6 +874,27 @@ mod io_tests {
     }
 
     #[test]
+    fn runtime_anonymous_uploads_display_without_child_replies() {
+        let mut pane = Pane::spawn("/bin/sh", 2, 2).unwrap();
+        let cell = CellPixelSize::new(1, 1).unwrap();
+        let mut replies = Vec::new();
+        pane.process_output_for_runtime(
+            b"\x1b_Ga=T,f=32,s=1,v=1,p=9,C=1;AQIDBA==\x1b\\\x1b_Ga=T,f=32,s=1,v=1,i=0,p=9,C=1;BAIDAg==\x1b\\",
+            &mut |reply| replies.extend_from_slice(reply),
+            Some(cell),
+            true,
+        );
+        assert!(replies.is_empty());
+        assert_eq!(pane.image_store().len(), 2);
+        assert_eq!(pane.image_store().placements().count(), 2);
+        assert!(
+            pane.image_store()
+                .placements()
+                .all(|placement| placement.placement_id.is_none())
+        );
+    }
+
+    #[test]
     fn runtime_numbered_upload_allocates_id_and_replies_after_final_chunk() {
         let mut pane = Pane::spawn("/bin/sh", 4, 4).unwrap();
         let mut replies = Vec::new();

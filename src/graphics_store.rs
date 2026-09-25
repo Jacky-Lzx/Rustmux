@@ -323,6 +323,9 @@ impl CellPixelSize {
 #[derive(Debug, Default)]
 pub struct ImageStore {
     images: BTreeMap<u32, StoredImage>,
+    /// IDs reserved only inside this store for protocol image ID zero. They
+    /// are not addressable by child placement/deletion commands.
+    private_images: BTreeSet<u32>,
     /// Image number and creation order for allocated IDs. Explicit-ID
     /// replacement retains these so older numbered images do not become new.
     numbered_images: BTreeMap<u32, (u32, u128)>,
@@ -344,6 +347,14 @@ impl ImageStore {
 
     pub fn get(&self, id: u32) -> Option<&StoredImage> {
         self.images.get(&id)
+    }
+
+    pub(crate) fn protocol_image_id(&self, id: u32) -> u32 {
+        if self.private_images.contains(&id) {
+            0
+        } else {
+            id
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -373,9 +384,9 @@ impl ImageStore {
         self.placements.iter()
     }
 
-    /// Clear visible, cursor-anchored references on one screen without
-    /// discarding their image data. Unanchored virtual/relative references are
-    /// not classified as visible until their layout is modeled.
+    /// Clear visible, cursor-anchored references on one screen. Named image
+    /// data remains, while anonymous images lose their data with their final
+    /// placement. Unanchored references are not classified as visible.
     pub fn clear_screen_placements(&mut self, alternate: bool) {
         let before = self.placements.len();
         self.placements.retain(|placement| {
@@ -385,6 +396,7 @@ impl ImageStore {
         });
         if self.placements.len() != before {
             self.changed();
+            self.reap_unplaced_private_images();
         }
     }
 
@@ -459,11 +471,13 @@ impl ImageStore {
         });
         if self.placements != before {
             self.changed();
+            self.reap_unplaced_private_images();
         }
     }
 
-    /// Retain a completed transfer with an explicit image ID or allocate one
-    /// for a nonzero image number. Query commands use a separate path.
+    /// Retain a completed transfer with an explicit image ID, allocate one
+    /// for a nonzero image number, or use a private ID for an anonymous `a=T`.
+    /// Query commands use a separate path.
     /// Replacement is atomic if the new transfer cannot fit by itself.
     pub fn insert(&mut self, transfer: AssembledDirectTransfer) -> Result<u32, StoreError> {
         self.insert_inner(transfer, None, None, false)
@@ -514,8 +528,14 @@ impl ImageStore {
         if !supported_controls {
             return Err(StoreError::UnsupportedAction);
         }
+        let anonymous = display
+            && transfer.control(b'I').is_none()
+            && transfer
+                .control(b'i')
+                .is_none_or(|value| parse_u32(value) == Some(0));
         let placement_id = if display {
-            parse_optional_placement_id(transfer.control(b'p'))?
+            let requested = parse_optional_placement_id(transfer.control(b'p'))?;
+            if anonymous { None } else { requested }
         } else {
             None
         };
@@ -533,7 +553,9 @@ impl ImageStore {
             return Err(StoreError::UnsupportedIdentity);
         }
         let image_number = transfer.control(b'I').and_then(parse_positive_u32);
-        let id = if let Some(bytes) = transfer.control(b'i') {
+        let id = if anonymous {
+            self.first_free_private_id()?
+        } else if let Some(bytes) = transfer.control(b'i') {
             parse_positive_u32(bytes).ok_or(StoreError::UnsupportedIdentity)?
         } else if image_number.is_some() {
             self.first_free_image_id()?
@@ -571,6 +593,10 @@ impl ImageStore {
         } else {
             None
         };
+        // A client may use any 32-bit explicit ID, including one currently
+        // occupied by a private anonymous image. Move that private image to
+        // another opaque slot before replacing the client's requested ID.
+        self.relocate_private_image(id)?;
         let previous_number = self.numbered_images.get(&id).copied();
         self.remove(id);
         if self.images.len() >= MAX_PANE_IMAGES || self.total_bytes + size > MAX_PANE_IMAGE_BYTES {
@@ -605,6 +631,9 @@ impl ImageStore {
         self.total_bytes += size;
         self.oldest.push_back(id);
         self.images.insert(id, image);
+        if anonymous {
+            self.private_images.insert(id);
+        }
         if transient {
             self.transient_images.insert(id);
         }
@@ -636,6 +665,60 @@ impl ImageStore {
         Ok(id)
     }
 
+    fn first_free_private_id(&self) -> Result<u32, StoreError> {
+        let mut id = u32::MAX;
+        while self.images.contains_key(&id) {
+            id = id.checked_sub(1).ok_or(StoreError::TooLarge)?;
+        }
+        Ok(id)
+    }
+
+    fn relocate_private_image(&mut self, id: u32) -> Result<(), StoreError> {
+        if !self.private_images.contains(&id) {
+            return Ok(());
+        }
+        let replacement = self.first_free_private_id()?;
+        let image = self.images.remove(&id).expect("private image exists");
+        self.images.insert(replacement, image);
+        self.private_images.remove(&id);
+        self.private_images.insert(replacement);
+        if let Some(dimensions) = self.decoded_dimensions.remove(&id) {
+            self.decoded_dimensions.insert(replacement, dimensions);
+        }
+        if self.transient_images.remove(&id) {
+            self.transient_images.insert(replacement);
+        }
+        for entry in &mut self.oldest {
+            if *entry == id {
+                *entry = replacement;
+            }
+        }
+        for placement in &mut self.placements {
+            if placement.image_id == id {
+                placement.image_id = replacement;
+            }
+        }
+        self.changed();
+        Ok(())
+    }
+
+    fn reap_unplaced_private_images(&mut self) {
+        let unplaced: Vec<u32> = self
+            .private_images
+            .iter()
+            .copied()
+            .filter(|id| {
+                !self
+                    .placements
+                    .iter()
+                    .any(|placement| placement.image_id == *id)
+            })
+            .collect();
+        for id in unplaced {
+            self.remove(id);
+        }
+    }
+
     fn newest_id_for_number(&self, number: u32) -> Option<u32> {
         self.numbered_images
             .iter()
@@ -647,6 +730,9 @@ impl ImageStore {
     /// Record only an explicit-ID placement reference without an anchor.
     /// This low-level method has no screen to move; acknowledgements are absent.
     pub fn place(&mut self, image_id: u32, placement_id: Option<u32>) -> Result<(), StoreError> {
+        if self.private_images.contains(&image_id) {
+            return Err(StoreError::MissingImage);
+        }
         self.place_with_geometry(image_id, placement_id, None)
     }
 
@@ -676,6 +762,7 @@ impl ImageStore {
             geometry,
         });
         self.changed();
+        self.reap_unplaced_private_images();
         Ok(())
     }
 
@@ -779,6 +866,9 @@ impl ImageStore {
                 };
                 let placement_id =
                     parse_optional_placement_id(controls.get(&b'p').map(Vec::as_slice))?;
+                if self.private_images.contains(&id) {
+                    return Err(StoreError::MissingImage);
+                }
                 let parsed = parse_geometry(
                     anchor.unwrap_or_default(),
                     |key| controls.get(&key).map(Vec::as_slice),
@@ -898,6 +988,9 @@ impl ImageStore {
                             return Err(StoreError::UnsupportedAction);
                         }
                         let id = required_id(&controls)?;
+                        if self.private_images.contains(&id) {
+                            return Ok((None, None));
+                        }
                         let placement_id =
                             parse_optional_placement_id(controls.get(&b'p').map(Vec::as_slice))?;
                         self.delete_placements(
@@ -945,7 +1038,8 @@ impl ImageStore {
     }
 
     /// Delete placements whose modeled cell rectangle intersects the selected
-    /// screen region. Hard deletion frees only now-unreferenced images.
+    /// screen region. Hard deletion frees now-unreferenced named images;
+    /// anonymous images are freed after their last placement in either mode.
     fn delete_intersecting_placements(
         &mut self,
         alternate: bool,
@@ -1061,6 +1155,7 @@ impl ImageStore {
                 }
             }
         }
+        self.reap_unplaced_private_images();
     }
 
     fn delete_placements(&mut self, image_id: u32, placement_id: Option<u32>, free_data: bool) {
@@ -1080,6 +1175,7 @@ impl ImageStore {
         {
             self.remove(image_id);
         }
+        self.reap_unplaced_private_images();
     }
 
     /// Image-ID ranges are pane-wide, independent of screen, viewport, or
@@ -1088,14 +1184,17 @@ impl ImageStore {
         if first > last {
             return;
         }
+        let private_images = self.private_images.clone();
         self.delete_matching_placements(false, |placement| {
             (first..=last).contains(&placement.image_id)
+                && !private_images.contains(&placement.image_id)
         });
         if free_data {
             let unreferenced: Vec<u32> = self
                 .images
                 .range(first..=last)
                 .map(|(&id, _)| id)
+                .filter(|id| !self.private_images.contains(id))
                 .filter(|id| {
                     !self
                         .placements
@@ -1112,6 +1211,7 @@ impl ImageStore {
     /// Explicit data removal, including its placement references.
     pub fn remove(&mut self, id: u32) -> Option<StoredImage> {
         let removed = self.images.remove(&id)?;
+        self.private_images.remove(&id);
         self.numbered_images.remove(&id);
         self.transient_images.remove(&id);
         self.decoded_dimensions.remove(&id);
@@ -1125,6 +1225,7 @@ impl ImageStore {
     pub fn clear(&mut self) {
         let changed = !self.images.is_empty() || !self.placements.is_empty();
         self.images.clear();
+        self.private_images.clear();
         self.numbered_images.clear();
         self.transient_images.clear();
         self.next_number_order = 0;
@@ -1708,6 +1809,120 @@ mod tests {
             Err(StoreError::UnsupportedAction)
         );
         assert!(store.is_empty());
+    }
+
+    #[test]
+    fn anonymous_displays_have_distinct_private_images_and_ignore_placement_ids() {
+        let mut store = ImageStore::new();
+        let anchor = CellAnchor::default();
+        let first = store
+            .insert_at(transfer(b"\x1b_Ga=T,f=100,p=9;QQ==\x1b\\"), anchor)
+            .unwrap();
+        let second = store
+            .insert_at(transfer(b"\x1b_Ga=T,f=100,i=0,p=9;Qg==\x1b\\"), anchor)
+            .unwrap();
+        assert_ne!(first, second);
+        assert_eq!(store.protocol_image_id(first), 0);
+        assert_eq!(store.protocol_image_id(second), 0);
+        assert_eq!(store.get(first).unwrap().data, b"A");
+        assert_eq!(store.get(second).unwrap().data, b"B");
+        assert!(
+            store
+                .placements()
+                .all(|placement| placement.placement_id.is_none())
+        );
+        assert_eq!(store.place(first, Some(1)), Err(StoreError::MissingImage));
+        assert_eq!(
+            store.accept_control(format!("\x1b_Ga=p,i={first}\x1b\\").as_bytes()),
+            Err(StoreError::MissingImage)
+        );
+        store
+            .accept_control(format!("\x1b_Ga=d,d=I,i={first}\x1b\\").as_bytes())
+            .unwrap();
+        assert!(store.get(first).is_some());
+        store
+            .accept_control(format!("\x1b_Ga=d,d=R,x={second},y={first}\x1b\\").as_bytes())
+            .unwrap();
+        assert_eq!(store.len(), 2);
+        assert_eq!(store.placements().count(), 2);
+        store.clear_screen_placements(false);
+        assert!(store.is_empty());
+        assert_eq!(store.total_bytes(), 0);
+    }
+
+    #[test]
+    fn explicit_id_collision_relocates_anonymous_image() {
+        let mut store = ImageStore::new();
+        let private_id = store
+            .insert_at(
+                transfer(b"\x1b_Ga=T,f=100;QQ==\x1b\\"),
+                CellAnchor::default(),
+            )
+            .unwrap();
+        assert_eq!(private_id, u32::MAX);
+        assert_eq!(
+            store.insert(transfer(b"\x1b_Ga=t,f=100,i=4294967295;Qg==\x1b\\")),
+            Ok(private_id)
+        );
+        let moved_id = store.placements().next().unwrap().image_id;
+        assert_ne!(moved_id, private_id);
+        assert_eq!(store.protocol_image_id(moved_id), 0);
+        assert_eq!(store.get(moved_id).unwrap().data, b"A");
+        assert_eq!(store.get(private_id).unwrap().data, b"B");
+        store
+            .accept_control(format!("\x1b_Ga=p,i={private_id}\x1b\\").as_bytes())
+            .unwrap();
+        assert_eq!(store.placements().count(), 2);
+        store
+            .accept_control(format!("\x1b_Ga=d,d=R,x={moved_id},y={private_id}\x1b\\").as_bytes())
+            .unwrap();
+        assert!(store.get(private_id).is_none());
+        assert!(store.get(moved_id).is_some());
+        store.clear_screen_placements(false);
+        assert!(store.get(moved_id).is_none());
+    }
+
+    #[test]
+    fn invalid_explicit_collision_leaves_anonymous_image_untouched() {
+        let mut store = ImageStore::new();
+        let anchor = CellAnchor::default();
+        let private_id = store
+            .insert_at(transfer(b"\x1b_Ga=T,f=100;QQ==\x1b\\"), anchor)
+            .unwrap();
+        let revision = store.revision();
+        assert_eq!(
+            store.insert_for_pane(
+                transfer(b"\x1b_Ga=t,f=100,i=4294967295;YQ==\x1b\\"),
+                anchor,
+                None,
+                true,
+            ),
+            Err(StoreError::InvalidData)
+        );
+        assert_eq!(store.revision(), revision);
+        assert_eq!(store.protocol_image_id(private_id), 0);
+        assert_eq!(store.get(private_id).unwrap().data, b"A");
+        assert_eq!(store.placements().count(), 1);
+    }
+
+    #[test]
+    fn soft_screen_delete_reaps_anonymous_but_keeps_named_data() {
+        let mut store = ImageStore::new();
+        let anchor = CellAnchor::default();
+        store
+            .insert_at(transfer(b"\x1b_Ga=T,f=100,i=7,c=1,r=1;QQ==\x1b\\"), anchor)
+            .unwrap();
+        store
+            .insert_at(transfer(b"\x1b_Ga=T,f=100,c=1,r=1;Qg==\x1b\\"), anchor)
+            .unwrap();
+        assert_eq!(store.len(), 2);
+        store
+            .accept_control_for_pane(b"\x1b_Ga=d,d=a\x1b\\", anchor, None, (2, 2))
+            .unwrap();
+        assert_eq!(store.len(), 1);
+        assert_eq!(store.total_bytes(), 1);
+        assert!(store.get(7).is_some());
+        assert_eq!(store.placements().count(), 0);
     }
 
     #[test]

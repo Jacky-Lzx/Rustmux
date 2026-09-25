@@ -222,7 +222,11 @@ fn collect_visible_clips(
                 .checked_add(visible.pixels.len())
                 .filter(|&total| total <= MAX_COMPOSITE_INPUT_BYTES)
                 .ok_or(SnapshotError::Composite(CompositeError::InputLimit))?;
-            clipped.push((placement.image_id, geometry.z_index, visible));
+            clipped.push((
+                store.protocol_image_id(placement.image_id),
+                geometry.z_index,
+                visible,
+            ));
         }
     }
     Ok(clipped)

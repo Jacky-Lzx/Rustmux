@@ -42,6 +42,13 @@ in to complete direct transfers with `Pane::process_output_with_graphics`.
 An additional opt-in path, `Pane::process_output_with_image_store`, retains
 complete transfers with explicit nonzero `i` IDs or numbered `I` uploads in a
 pane-local `ImageStore`.
+An `a=T` upload without `i/I`, or with `i=0`, now creates a distinct anonymous
+display. Its internal store key is never a child-visible image ID: a child
+cannot place or delete it by guessing that key, and an explicit upload with a
+colliding ID moves the anonymous image to another private key. The requested
+`p` is ignored for an anonymous image. When its last placement is removed,
+its data is freed; it receives no child acknowledgement. Data-only `a=t`
+still requires an explicit ID or a nonzero image number.
 The running multiplexer now uses that bounded store for live, detached and
 temporarily closed/undoable panes; the public `Pane::process_output` method
 still discards graphics unless its caller opts in.
@@ -399,9 +406,9 @@ controls return `EINVAL:invalid image`. Transfers exceeding the assembler's
 16 MiB bound never complete, so they receive no reply.
 Unknown display controls are rejected before replacing an existing image, and
 `q=1`/`q=2` retain the same reply suppression rules. Incomplete or malformed
-transfers, anonymous image IDs, and unsupported outer graphics capability
-remain silent. These limits mean a query, upload, or placement response is not
-a claim of full Kitty graphics compatibility.
+transfers, anonymous image acknowledgements, and unsupported outer graphics
+capability remain silent. These limits mean a query, upload, or placement
+response is not a claim of full Kitty graphics compatibility.
 The query/DA ordering follows the
 [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
 

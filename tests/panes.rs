@@ -1648,6 +1648,39 @@ fn kitty_image_snapshot_resolves_unsized_natural_placement_on_demand() {
 }
 
 #[test]
+fn kitty_anonymous_displays_compose_with_protocol_id_zero_and_are_reaped_on_clear() {
+    let mut pane = Pane::spawn("/bin/sh", 2, 3).unwrap();
+    let cell = CellPixelSize::new(1, 1).unwrap();
+    for (controls, pixel) in [
+        ("a=T,f=32,s=1,v=1,i=7,p=1,C=1", [0, 0, 255, 255]),
+        ("a=T,f=32,s=1,v=1,p=9,C=1", [255, 0, 0, 255]),
+        ("a=T,f=32,s=1,v=1,i=0,p=9,C=1", [0, 255, 0, 255]),
+    ] {
+        if pixel[1] == 255 {
+            pane.process_output_with_image_store_sized(b"\x1b[1;2H", &mut |_| {}, cell);
+        }
+        let command = format!("\x1b_G{controls};{}\x1b\\", STANDARD.encode(pixel));
+        pane.process_output_with_image_store_sized(command.as_bytes(), &mut |_| {}, cell);
+    }
+    assert_eq!(pane.image_store().len(), 3);
+    assert_eq!(pane.image_store().placements().count(), 3);
+    assert_eq!(
+        pane.image_store()
+            .placements()
+            .filter(|placement| placement.placement_id.is_none())
+            .count(),
+        2
+    );
+    let snapshot = pane.compose_image_snapshot(cell).unwrap();
+    assert_eq!(&snapshot.pixels[..4], &[0, 0, 255, 255]);
+    assert_eq!(&snapshot.pixels[4..8], &[0, 255, 0, 255]);
+    pane.process_output_with_image_store_sized(b"\x1b[2J", &mut |_| {}, cell);
+    assert_eq!(pane.image_store().len(), 1);
+    assert_eq!(pane.image_store().placements().count(), 0);
+    assert!(pane.image_store().get(7).is_some());
+}
+
+#[test]
 fn kitty_image_snapshot_reports_invalid_data_and_oversized_canvas() {
     let mut pane = Pane::spawn("/bin/sh", 2, 2).unwrap();
     pane.process_output_with_image_store(
