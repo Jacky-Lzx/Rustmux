@@ -192,7 +192,8 @@ before its first rendered frame. It filters only newly received input,
 preserving queued user bytes; it records the result per attachment and resets
 it on reconnect. After 500 ms without a DA barrier, it releases partial input;
 a prior graphics reply remains supported, while silence remains unknown.
-Runtime image display remains off.
+The runtime displays supported images only when the probe confirms support
+and an exact physical cell size is available.
 This ordering follows the
 [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
 
@@ -255,6 +256,23 @@ inexact cell sizes receive no image commands. Scrollback images, unsupported
 actions and transfers remain unimplemented;
 this does not yet claim Yazi preview compatibility.
 
+A child running inside a pane may probe graphics with `a=q`. On a currently
+attached outer terminal whose Kitty graphics probe succeeded and whose physical
+cell size is exact, Rustmux replies to a completed, valid direct-data query
+using the same nonzero image ID. The reply is delivered through the pane's PTY
+before a subsequent primary-DA reply, so a child can detect this supported
+subset. Completed transfers with invalid image data or unsupported controls
+receive a bounded error reply; `q=1` suppresses success and `q=2` suppresses
+all replies. A query never inserts or replaces an image. Without confirmed
+display support, or while detached, Rustmux stays silent on graphics queries;
+a following DA reply still reaches the child. File/shared-memory media,
+compressed or malformed transfers, and image-number allocation remain
+unsupported. Ordinary graphics uploads do not yet receive acknowledgement
+replies. These limits mean a query response is not a claim of full Kitty
+graphics compatibility.
+The query/DA ordering follows the
+[Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
+
 Unit tests cover every two-chunk split of a command, ordinary output ordering,
 non-graphics APCs, UTF-8/C1 ambiguity, oversized and cancelled commands, and
 EOF recovery. Assembler tests cover chunk inheritance, raw byte counts, bounds,
@@ -277,6 +295,8 @@ Plane tests cover the two exact z boundaries, empty/alternate-screen bands,
 within-band blending, and the aggregate output limit.
 Runtime tests cover PTY output storage with known and unknown physical cell
 size, plus cell-size invalidation when a detached client reconnects.
+Query tests cover reply/DA ordering, conditional silence, quiet modes, invalid
+image data, unknown controls, and a child PTY round trip.
 Anchor tests cover interleaved text, final-chunk position, alternate-screen
 identity, explicit layout options, malformed metadata, and named replacement.
 Screen-lifecycle tests cover split `CSI 2 J`, non-clearing text erasures,

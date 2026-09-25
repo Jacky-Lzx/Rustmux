@@ -38,6 +38,7 @@ impl ClosedPane {
                             replies.extend_from_slice(reply);
                         },
                         cell_pixels,
+                        false,
                     );
                     pane.parts_mut().3.to_shell.extend(replies);
                 }

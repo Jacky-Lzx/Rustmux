@@ -1,7 +1,7 @@
 //! Bounded framing of Kitty graphics APC commands in a child output stream.
 //!
-//! This is the protocol-input boundary only. The terminal still does not
-//! display images or advertise graphics support.
+//! This module only frames input; image display and conditional capability
+//! replies are handled by later runtime stages.
 
 /// Kitty limits a direct-data chunk to 4096 encoded bytes. Allow room for
 /// control fields without retaining an unbounded APC from a hostile child.

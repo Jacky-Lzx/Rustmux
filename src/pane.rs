@@ -50,7 +50,10 @@ pub struct Pane {
 enum GraphicsSink<'a> {
     Drop,
     Callback(&'a mut dyn FnMut(AssembledDirectTransfer)),
-    Store(Option<CellPixelSize>),
+    Store {
+        cell_pixels: Option<CellPixelSize>,
+        answer_queries: bool,
+    },
 }
 
 #[derive(Debug)]
@@ -364,20 +367,28 @@ impl Pane {
         self.process_output_inner(bytes, reply, GraphicsSink::Drop);
     }
 
-    /// Runtime path: retain supported graphics commands even before the
-    /// terminal renderer is able to display their image pixels.
+    /// Runtime path: retain graphics commands and answer direct-data queries
+    /// only when this attachment can display their images.
     pub(crate) fn process_output_for_runtime(
         &mut self,
         bytes: &[u8],
         reply: &mut impl FnMut(&[u8]),
         cell_pixels: Option<CellPixelSize>,
+        answer_queries: bool,
     ) {
-        self.process_output_inner(bytes, reply, GraphicsSink::Store(cell_pixels));
+        self.process_output_inner(
+            bytes,
+            reply,
+            GraphicsSink::Store {
+                cell_pixels,
+                answer_queries,
+            },
+        );
     }
 
     /// Opt in to receiving complete direct-data transfers through a callback,
-    /// separately from the runtime's bounded image store. Neither path claims
-    /// display support or sends Kitty graphics capability replies yet.
+    /// separately from the runtime's bounded image store. This opt-in path
+    /// does not send Kitty graphics capability replies.
     pub fn process_output_with_graphics(
         &mut self,
         bytes: &[u8],
@@ -391,7 +402,14 @@ impl Pane {
     /// Cell anchors, screen clears, vertical row shifts and explicit-cell
     /// cursor motion are modeled; pixel rendering and replies are not.
     pub fn process_output_with_image_store(&mut self, bytes: &[u8], reply: &mut impl FnMut(&[u8])) {
-        self.process_output_inner(bytes, reply, GraphicsSink::Store(None));
+        self.process_output_inner(
+            bytes,
+            reply,
+            GraphicsSink::Store {
+                cell_pixels: None,
+                answer_queries: false,
+            },
+        );
     }
 
     /// Opt in to image storage with a caller-verified physical cell size.
@@ -402,7 +420,14 @@ impl Pane {
         reply: &mut impl FnMut(&[u8]),
         cell_pixels: CellPixelSize,
     ) {
-        self.process_output_inner(bytes, reply, GraphicsSink::Store(Some(cell_pixels)));
+        self.process_output_inner(
+            bytes,
+            reply,
+            GraphicsSink::Store {
+                cell_pixels: Some(cell_pixels),
+                answer_queries: false,
+            },
+        );
     }
 
     /// Opt in to image storage using an outer terminal's reported window size.
@@ -419,7 +444,14 @@ impl Pane {
             terminal.ws_xpixel,
             terminal.ws_ypixel,
         );
-        self.process_output_inner(bytes, reply, GraphicsSink::Store(cell_pixels));
+        self.process_output_inner(
+            bytes,
+            reply,
+            GraphicsSink::Store {
+                cell_pixels,
+                answer_queries: false,
+            },
+        );
     }
 
     pub fn image_store(&self) -> &ImageStore {
@@ -520,7 +552,10 @@ impl Pane {
                             handler(transfer);
                         }
                     }
-                    GraphicsSink::Store(cell_pixels) => {
+                    GraphicsSink::Store {
+                        cell_pixels,
+                        answer_queries,
+                    } => {
                         let (row, column) = self.screen.cursor();
                         let anchor = CellAnchor {
                             row,
@@ -529,6 +564,15 @@ impl Pane {
                         };
                         let placed = if let Some(transfer) = self.graphics_transfer.accept(&command)
                         {
+                            if transfer.control(b'a') == Some(b"q".as_slice()) {
+                                if let Some(response) = crate::graphics_query::direct_query_reply(
+                                    transfer,
+                                    *answer_queries,
+                                ) {
+                                    reply(&response);
+                                }
+                                continue;
+                            }
                             self.image_store
                                 .insert_for_pane(transfer, anchor, *cell_pixels)
                         } else {
@@ -644,6 +688,41 @@ mod io_tests {
     use super::*;
     use crate::{parser::MAX_REPLY_BYTES, window::Windows};
     use std::{os::unix::process::ExitStatusExt, time::Duration};
+
+    #[test]
+    fn kitty_child_query_replies_before_da_without_mutating_stored_images() {
+        let mut pane = Pane::spawn("/bin/sh", 2, 2).unwrap();
+        let cell = CellPixelSize::new(1, 1).unwrap();
+        pane.process_output_with_image_store_sized(
+            b"\x1b_Ga=t,f=32,s=1,v=1,i=31;AQIDBA==\x1b\\",
+            &mut |_| {},
+            cell,
+        );
+        let revision = pane.image_store().revision();
+        let mut replies = Vec::new();
+        let query = b"\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\\x1b[c";
+        for part in query.chunks(3) {
+            pane.process_output_for_runtime(
+                part,
+                &mut |reply| replies.extend_from_slice(reply),
+                Some(cell),
+                true,
+            );
+        }
+        assert_eq!(replies, b"\x1b_Gi=31;OK\x1b\\\x1b[?1;0c");
+        assert_eq!(pane.image_store().revision(), revision);
+        assert_eq!(pane.image_store().get(31).unwrap().data, [1, 2, 3, 4]);
+
+        replies.clear();
+        pane.process_output_for_runtime(
+            query,
+            &mut |reply| replies.extend_from_slice(reply),
+            Some(cell),
+            false,
+        );
+        assert_eq!(replies, b"\x1b[?1;0c");
+        assert_eq!(pane.image_store().revision(), revision);
+    }
 
     #[test]
     fn graphics_payload_does_not_enter_semantic_command_output() {

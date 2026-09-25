@@ -335,6 +335,7 @@ impl TerminalSession {
                     requested,
                     ready,
                     self.cell_pixels,
+                    false,
                 )?;
             }
 
@@ -1780,6 +1781,7 @@ fn service_pane(
     requested: PollFlags,
     ready: PollFlags,
     cell_pixels: Option<CellPixelSize>,
+    answer_graphics_queries: bool,
 ) -> io::Result<()> {
     if ready.contains(PollFlags::POLLNVAL) {
         return Err(io::Error::new(
@@ -1801,6 +1803,7 @@ fn service_pane(
                         &bytes[..count],
                         &mut |reply| replies.extend_from_slice(reply),
                         cell_pixels,
+                        answer_graphics_queries,
                     );
                     let state = pane.parts_mut().3;
                     if state.status.is_none() {
@@ -3125,7 +3128,15 @@ fn forward(
                 .get_mut(pane_id)
                 .expect("polled pane exists");
             let bell_was_pending = pane.io().bell_pending;
-            service_pane(pane, inner_events, inner, *cell_pixels)?;
+            service_pane(
+                pane,
+                inner_events,
+                inner,
+                *cell_pixels,
+                connection == ConnectionState::Attached
+                    && *graphics_support == Some(GraphicsSupport::Supported)
+                    && cell_pixels.is_some(),
+            )?;
             let command_bell = pane.take_command_bell();
             bar_dirty |= !bell_was_pending && pane.io().bell_pending;
             if command_bell && connection == ConnectionState::Attached {
@@ -3905,7 +3916,7 @@ mod tests {
         let mut pane = Pane::spawn(shell.as_os_str(), 3, 8).unwrap();
         let deadline = Instant::now() + Duration::from_secs(3);
         while pane.io().prompt_start != Some((0, 0)) {
-            service_pane(&mut pane, PollFlags::POLLIN, PollFlags::POLLIN, None).unwrap();
+            service_pane(&mut pane, PollFlags::POLLIN, PollFlags::POLLIN, None, false).unwrap();
             assert!(Instant::now() < deadline, "prompt marker was not parsed");
             thread::sleep(Duration::from_millis(5));
         }
@@ -3930,7 +3941,14 @@ mod tests {
             let mut pane = Pane::spawn(shell.as_os_str(), 2, 2).unwrap();
             let deadline = Instant::now() + Duration::from_secs(3);
             while pane.image_store().get(7).is_none() {
-                service_pane(&mut pane, PollFlags::POLLIN, PollFlags::POLLIN, cell_pixels).unwrap();
+                service_pane(
+                    &mut pane,
+                    PollFlags::POLLIN,
+                    PollFlags::POLLIN,
+                    cell_pixels,
+                    false,
+                )
+                .unwrap();
                 assert!(Instant::now() < deadline, "Kitty image was not stored");
                 thread::sleep(Duration::from_millis(5));
             }

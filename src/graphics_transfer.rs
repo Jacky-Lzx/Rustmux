@@ -1,8 +1,7 @@
 //! Bounded, pane-local reassembly of Kitty direct-data image transfers.
 //!
 //! This is a data boundary, not an image decoder or a graphics capability
-//! implementation. Callers must not acknowledge or display an assembled blob
-//! until its format and placement have been validated in later stages.
+//! implementation. Callers validate assembled blobs before display or replies.
 
 use crate::graphics::MAX_GRAPHICS_COMMAND_BYTES;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -25,6 +24,14 @@ impl AssembledDirectTransfer {
     /// The first chunk's controls, with a final chunk's optional `q` override.
     pub fn control(&self, key: u8) -> Option<&[u8]> {
         self.controls.get(&key).map(Vec::as_slice)
+    }
+
+    /// Query replies only cover the direct-data controls modeled by this
+    /// assembler. An unrecognized key must not receive a false `OK`.
+    pub(crate) fn supported_query_controls(&self) -> bool {
+        self.controls
+            .keys()
+            .all(|key| matches!(key, b'a' | b'f' | b'i' | b'm' | b'q' | b's' | b't' | b'v'))
     }
 }
 
