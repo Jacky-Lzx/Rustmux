@@ -43,8 +43,12 @@ An upload with `I=<nonzero-number>` and no `i` receives the smallest free
 positive image ID, reported as `i=<assigned>,I=<number>` when replies are
 enabled. Repeating a number creates another image rather than replacing its
 predecessor. Existing explicit IDs are never overwritten by allocation;
-`a=p` and ID-targeted deletes still require `i`, not an `I` reference. Specifying
-both identity keys, or a zero image number, leaves the store unchanged.
+`a=p,I=<number>` now places the newest live image created with that number.
+Older images remain available through their assigned `i` values; removing the
+newest image falls back to the next newest. Replacing an older numbered image
+by its `i` retains its number without changing this creation order. The
+`d=i/I` delete selectors still require `i`; `d=n/N` is not yet implemented.
+Specifying both identity keys, or a zero image number, leaves the store unchanged.
 It is cleared when a stopped foreground job resets its pane or its PTY reaches
 EOF.
 
@@ -65,7 +69,8 @@ assembler. The public opt-in image-store methods retain their earlier
 deferred-decoding behavior for callers that only need the original bytes.
 
 The opt-in store now tracks placement *references* for `a=T` and a strict
-`a=p,i=<id>[,p=<id>]` subset. A named placement replaces the same `(i,p)`
+`a=p` subset with either `i=<id>` or `I=<number>`, and optional `p=<id>`.
+A named placement replaces the same `(i,p)`
 reference; an absent or zero `p` creates an anonymous reference. Re-transmitting
 an image ID drops its old references. The supported ID-delete subset is
 `a=d,d=i/I,i=<id>[,p=<id>]`: lowercase removes matching references but keeps
@@ -343,8 +348,8 @@ receive a bounded error reply; `q=1` suppresses success and `q=2` suppresses
 all replies. A query never inserts or replaces an image. Without confirmed
 display support, or while detached, Rustmux stays silent on graphics queries;
 a following DA reply still reaches the child. File/shared-memory media,
-compressed or malformed transfers, and image-number references in queries,
-placements, or deletes remain unsupported. Under the same attachment and
+compressed or malformed transfers, and image-number references in queries or
+deletes remain unsupported. Under the same attachment and
 sizing conditions, a completed direct-data `a=t` upload with an explicit
 nonzero `i` or a nonzero `I` receives one reply
 after its final chunk: `OK` only after successful storage, otherwise a bounded
@@ -352,11 +357,13 @@ error. Corrupt PNG data and controls outside the data-only subset are rejected
 without replacing an existing image. `q=1` suppresses success and `q=2`
 suppresses all replies; absent display support means no graphics reply.
 Malformed or unsupported transfers that never finish assembly still get no
-reply. A well-formed `a=p,i=<id>` placement with a nonzero image ID now replies
+reply. A well-formed `a=p` placement with a nonzero `i` or `I` now replies
 after the store result under the same attachment and sizing conditions. A
 found image returns `OK`, a missing ID returns `ENOENT`, and an unsupported
-control or invalid placement geometry returns `EINVAL`. Unparseable controls
-cannot be correlated and remain silent. A valid nonzero `p` is echoed in the
+control or invalid placement geometry returns `EINVAL`. Numbered placements
+reply with both the resolved `i` and requested `I`; a missing number returns
+`ENOENT`. Unparseable controls cannot be correlated and remain silent. A valid
+nonzero `p` is echoed in the
 reply; absent or zero `p` stays anonymous. `q=1` suppresses success, and
 `q=2` suppresses all replies. The placement and cursor remain unchanged on
 failure. A completed direct-data `a=T` with nonzero `i` or `I` now receives one
@@ -406,6 +413,9 @@ mutually exclusive identities, final-chunk replies, failed uploads, and a child
 PTY round trip.
 Placement acknowledgement tests cover named and anonymous IDs, missing images,
 invalid geometry, quiet modes, reply/DA ordering, and a child PTY round trip.
+Numbered-placement tests cover newest-image selection, assigned-ID access to
+older images, fallback after deletion, ambiguous identity rejection, replies,
+and a child PTY round trip.
 Transmit-and-place acknowledgement tests cover final-chunk timing, placement
 identity, failed replacement, quiet modes, reply/DA ordering, and a child PTY
 round trip.

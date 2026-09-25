@@ -323,6 +323,10 @@ impl CellPixelSize {
 #[derive(Debug, Default)]
 pub struct ImageStore {
     images: BTreeMap<u32, StoredImage>,
+    /// Image number and creation order for allocated IDs. Explicit-ID
+    /// replacement retains these so older numbered images do not become new.
+    numbered_images: BTreeMap<u32, (u32, u128)>,
+    next_number_order: u128,
     decoded_dimensions: BTreeMap<u32, Option<(u32, u32)>>,
     oldest: VecDeque<u32>,
     placements: VecDeque<Placement>,
@@ -521,13 +525,10 @@ impl ImageStore {
         if transfer.control(b'i').is_some() && transfer.control(b'I').is_some() {
             return Err(StoreError::UnsupportedIdentity);
         }
+        let image_number = transfer.control(b'I').and_then(parse_positive_u32);
         let id = if let Some(bytes) = transfer.control(b'i') {
             parse_positive_u32(bytes).ok_or(StoreError::UnsupportedIdentity)?
-        } else if transfer
-            .control(b'I')
-            .and_then(parse_positive_u32)
-            .is_some()
-        {
+        } else if image_number.is_some() {
             self.first_free_image_id()?
         } else {
             return Err(StoreError::UnsupportedIdentity);
@@ -559,6 +560,7 @@ impl ImageStore {
         } else {
             None
         };
+        let previous_number = self.numbered_images.get(&id).copied();
         self.remove(id);
         while self.images.len() >= MAX_PANE_IMAGES || self.total_bytes + size > MAX_PANE_IMAGE_BYTES
         {
@@ -568,6 +570,13 @@ impl ImageStore {
         self.total_bytes += size;
         self.oldest.push_back(id);
         self.images.insert(id, image);
+        if let Some(number) = image_number {
+            self.next_number_order = self.next_number_order.saturating_add(1);
+            self.numbered_images
+                .insert(id, (number, self.next_number_order));
+        } else if let Some(previous) = previous_number {
+            self.numbered_images.insert(id, previous);
+        }
         if let Some(dimensions) = decoded_dimensions {
             self.decoded_dimensions.insert(id, Some(dimensions));
         }
@@ -587,6 +596,14 @@ impl ImageStore {
             id = id.checked_add(1).ok_or(StoreError::TooLarge)?;
         }
         Ok(id)
+    }
+
+    fn newest_id_for_number(&self, number: u32) -> Option<u32> {
+        self.numbered_images
+            .iter()
+            .filter(|(_, (candidate, _))| *candidate == number)
+            .max_by_key(|(_, (_, order))| *order)
+            .map(|(&id, _)| id)
     }
 
     /// Record only an explicit-ID placement reference without an anchor.
@@ -647,11 +664,11 @@ impl ImageStore {
         anchor: CellAnchor,
         cell_pixels: Option<CellPixelSize>,
         viewport: (usize, usize),
-    ) -> Result<Option<PlacementGeometry>, StoreError> {
-        let geometry =
+    ) -> Result<(Option<u32>, Option<PlacementGeometry>), StoreError> {
+        let (id, geometry) =
             self.accept_control_inner(command, Some(anchor), cell_pixels, Some(viewport))?;
-        let id = self.placements.back().map(|placement| placement.image_id);
-        Ok(id.and_then(|id| self.resolve_latest_geometry(id, geometry, cell_pixels)))
+        let resolved = id.and_then(|id| self.resolve_latest_geometry(id, geometry, cell_pixels));
+        Ok((id, resolved))
     }
 
     fn resolve_latest_geometry(
@@ -702,14 +719,26 @@ impl ImageStore {
         anchor: Option<CellAnchor>,
         cell_pixels: Option<CellPixelSize>,
         viewport: Option<(usize, usize)>,
-    ) -> Result<Option<PlacementGeometry>, StoreError> {
+    ) -> Result<(Option<u32>, Option<PlacementGeometry>), StoreError> {
         let controls = parse_control_command(command).ok_or(StoreError::UnsupportedAction)?;
         match controls.get(&b'a').map(Vec::as_slice) {
             Some(b"p") => {
-                if !only_keys(&controls, b"aipqcrzCxywhXY") {
+                if !only_keys(&controls, b"aiIpqcrzCxywhXY") {
                     return Err(StoreError::UnsupportedAction);
                 }
-                let id = required_id(&controls)?;
+                if controls.contains_key(&b'i') && controls.contains_key(&b'I') {
+                    return Err(StoreError::UnsupportedIdentity);
+                }
+                let id = if controls.contains_key(&b'i') {
+                    required_id(&controls)?
+                } else {
+                    let number = controls
+                        .get(&b'I')
+                        .and_then(|bytes| parse_positive_u32(bytes))
+                        .ok_or(StoreError::UnsupportedIdentity)?;
+                    self.newest_id_for_number(number)
+                        .ok_or(StoreError::MissingImage)?
+                };
                 let placement_id =
                     parse_optional_placement_id(controls.get(&b'p').map(Vec::as_slice))?;
                 let parsed = parse_geometry(
@@ -719,7 +748,7 @@ impl ImageStore {
                 )?;
                 let geometry = anchor.map(|_| parsed);
                 self.place_with_geometry(id, placement_id, geometry)?;
-                Ok(geometry)
+                Ok((Some(id), geometry))
             }
             Some(b"d") => {
                 match controls.get(&b'd').map(Vec::as_slice) {
@@ -853,7 +882,7 @@ impl ImageStore {
                     }
                     _ => return Err(StoreError::UnsupportedAction),
                 }
-                Ok(None)
+                Ok((None, None))
             }
             _ => Err(StoreError::UnsupportedAction),
         }
@@ -1027,6 +1056,7 @@ impl ImageStore {
     /// Explicit data removal, including its placement references.
     pub fn remove(&mut self, id: u32) -> Option<StoredImage> {
         let removed = self.images.remove(&id)?;
+        self.numbered_images.remove(&id);
         self.decoded_dimensions.remove(&id);
         self.total_bytes -= removed.data.len();
         self.oldest.retain(|&entry| entry != id);
@@ -1038,6 +1068,8 @@ impl ImageStore {
     pub fn clear(&mut self) {
         let changed = !self.images.is_empty() || !self.placements.is_empty();
         self.images.clear();
+        self.numbered_images.clear();
+        self.next_number_order = 0;
         self.decoded_dimensions.clear();
         self.oldest.clear();
         self.placements.clear();
@@ -1432,6 +1464,81 @@ mod tests {
             store.insert(transfer(b"\x1b_Ga=t,f=100,I=13;Qw==\x1b\\")),
             Ok(2)
         );
+    }
+
+    #[test]
+    fn numbered_placement_selects_newest_creation_and_falls_back_after_removal() {
+        let mut store = ImageStore::new();
+        assert_eq!(
+            store.insert(transfer(b"\x1b_Ga=t,f=100,I=13;QQ==\x1b\\")),
+            Ok(1)
+        );
+        assert_eq!(
+            store.insert(transfer(b"\x1b_Ga=t,f=100,I=13;Qg==\x1b\\")),
+            Ok(2)
+        );
+        store.accept_control(b"\x1b_Ga=p,I=13,p=1\x1b\\").unwrap();
+        assert_eq!(store.placements().last().unwrap().image_id, 2);
+
+        // Replacing the older image by its assigned ID keeps its number but
+        // must not make it the newest image with that number.
+        store
+            .insert(transfer(b"\x1b_Ga=t,f=100,i=1;Qw==\x1b\\"))
+            .unwrap();
+        store.accept_control(b"\x1b_Ga=p,I=13,p=2\x1b\\").unwrap();
+        assert_eq!(store.placements().last().unwrap().image_id, 2);
+        store.remove(2);
+        store.accept_control(b"\x1b_Ga=p,I=13,p=3\x1b\\").unwrap();
+        assert_eq!(store.placements().last().unwrap().image_id, 1);
+        store.remove(1);
+        let revision = store.revision();
+        assert_eq!(
+            store.accept_control(b"\x1b_Ga=p,I=13,p=4\x1b\\"),
+            Err(StoreError::MissingImage)
+        );
+        assert_eq!(store.revision(), revision);
+    }
+
+    #[test]
+    fn numbered_placement_rejects_ambiguous_or_invalid_identity() {
+        let mut store = ImageStore::new();
+        store
+            .insert(transfer(b"\x1b_Ga=t,f=100,I=13;QQ==\x1b\\"))
+            .unwrap();
+        let revision = store.revision();
+        for command in [
+            b"\x1b_Ga=p,i=1,I=13\x1b\\".as_slice(),
+            b"\x1b_Ga=p,I=0\x1b\\",
+            b"\x1b_Ga=p,I=bad\x1b\\",
+            b"\x1b_Ga=p,I=13,d=i\x1b\\",
+        ] {
+            assert!(store.accept_control(command).is_err());
+            assert_eq!(store.revision(), revision);
+        }
+    }
+
+    #[test]
+    fn evicting_numbered_image_drops_its_number_lookup() {
+        let mut store = ImageStore::new();
+        assert_eq!(
+            store.insert(transfer(b"\x1b_Ga=t,f=100,I=13;QQ==\x1b\\")),
+            Ok(1)
+        );
+        for id in 1000..1000 + MAX_PANE_IMAGES as u32 {
+            let command = format!("\x1b_Ga=t,f=100,i={id};Qg==\x1b\\");
+            store.insert(transfer(command.as_bytes())).unwrap();
+        }
+        assert!(store.get(1).is_none());
+        assert_eq!(
+            store.accept_control(b"\x1b_Ga=p,I=13\x1b\\"),
+            Err(StoreError::MissingImage)
+        );
+        store.clear();
+        assert_eq!(
+            store.insert(transfer(b"\x1b_Ga=t,f=100,I=13;Qw==\x1b\\")),
+            Ok(1)
+        );
+        store.accept_control(b"\x1b_Ga=p,I=13\x1b\\").unwrap();
     }
 
     #[test]

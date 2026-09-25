@@ -620,11 +620,14 @@ impl Pane {
                                 self.screen.dimensions(),
                             );
                             if let Some(response) = placement_reply.and_then(|placement| {
-                                placement.response(placed.as_ref().err().copied())
+                                placement.response(
+                                    placed.as_ref().err().copied(),
+                                    placed.as_ref().ok().and_then(|(id, _)| *id),
+                                )
                             }) {
                                 reply(&response);
                             }
-                            placed
+                            placed.map(|(_, geometry)| geometry)
                         };
                         if let Ok(Some(geometry)) = placed
                             && !geometry.cursor_stays
@@ -875,6 +878,50 @@ mod io_tests {
         );
         assert_eq!(pane.image_store().revision(), revision);
         assert!(pane.image_store().get(4).is_none());
+    }
+
+    #[test]
+    fn runtime_numbered_placement_uses_newest_live_image_and_replies_with_id() {
+        let mut pane = Pane::spawn("/bin/sh", 4, 4).unwrap();
+        let cell = CellPixelSize::new(1, 1).unwrap();
+        let mut replies = Vec::new();
+        pane.process_output_for_runtime(
+            b"\x1b_Ga=t,I=13,f=32,s=1,v=1,q=2;AQIDBA==\x1b\\\x1b_Ga=t,I=13,f=32,s=1,v=1,q=2;AQIDBA==\x1b\\",
+            &mut |reply| replies.extend_from_slice(reply),
+            Some(cell),
+            true,
+        );
+        assert!(replies.is_empty());
+        pane.process_output_for_runtime(
+            b"\x1b_Ga=p,I=13,p=1,C=1\x1b\\\x1b_Ga=p,i=1,p=2,C=1\x1b\\",
+            &mut |reply| replies.extend_from_slice(reply),
+            Some(cell),
+            true,
+        );
+        assert_eq!(
+            replies,
+            b"\x1b_Gi=2,I=13,p=1;OK\x1b\\\x1b_Gi=1,p=2;OK\x1b\\"
+        );
+        assert_eq!(
+            pane.image_store()
+                .placements()
+                .map(|p| p.image_id)
+                .collect::<Vec<_>>(),
+            [2, 1]
+        );
+
+        replies.clear();
+        pane.process_output_for_runtime(
+            b"\x1b_Ga=d,d=I,i=2\x1b\\\x1b_Ga=p,I=13,p=3,C=1\x1b\\\x1b_Ga=d,d=I,i=1\x1b\\\x1b_Ga=p,I=13,p=4,C=1\x1b\\",
+            &mut |reply| replies.extend_from_slice(reply),
+            Some(cell),
+            true,
+        );
+        assert_eq!(
+            replies,
+            b"\x1b_Gi=1,I=13,p=3;OK\x1b\\\x1b_GI=13,p=4;ENOENT:image not found\x1b\\"
+        );
+        assert!(pane.image_store().is_empty());
     }
 
     #[test]
