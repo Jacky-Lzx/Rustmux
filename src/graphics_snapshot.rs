@@ -1,5 +1,5 @@
 //! Explicit image-only snapshot of one pane's stored Kitty placements.
-//! The terminal runtime uses the above-text band when Kitty support is known.
+//! The terminal runtime uses all three stacking bands when Kitty support is known.
 
 use crate::{
     graphics_composite::{
@@ -16,6 +16,35 @@ use crate::{
 /// non-default background. At the boundary they remain above those colors.
 pub const BACKGROUND_Z_BOUNDARY: i32 = i32::MIN / 2;
 pub const MAX_PLANE_CANVAS_BYTES: usize = 64 * 1024 * 1024;
+
+/// One Kitty text/background stacking band. Each band is composited before
+/// transmission so source-image z and ID ordering remains pane-local.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum ImageBand {
+    BehindBackground,
+    BehindText,
+    AboveText,
+}
+
+impl ImageBand {
+    pub const ALL: [Self; 3] = [Self::BehindBackground, Self::BehindText, Self::AboveText];
+
+    pub fn output_z(self) -> i32 {
+        match self {
+            Self::BehindBackground => i32::MIN,
+            Self::BehindText => -1,
+            Self::AboveText => 0,
+        }
+    }
+
+    fn contains(self, z: i32) -> bool {
+        match self {
+            Self::BehindBackground => z < BACKGROUND_Z_BOUNDARY,
+            Self::BehindText => (BACKGROUND_Z_BOUNDARY..0).contains(&z),
+            Self::AboveText => z >= 0,
+        }
+    }
+}
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct ImagePlanes {
@@ -103,16 +132,17 @@ pub fn compose_store_planes(
     })
 }
 
-/// Compose only images above text for the first runtime display path. Other
-/// bands neither consume the canvas budget nor make this band fail decoding.
-pub fn compose_store_above_text(
+/// Compose one band without decoding or allocating the other two. An invalid
+/// placement in a different band does not suppress this band's output.
+pub fn compose_store_band(
     store: &ImageStore,
     alternate: bool,
     viewport: PixelSize,
     cell: CellPixelSize,
+    band: ImageBand,
 ) -> Result<Option<DecodedImage>, SnapshotError> {
     validate_viewport(viewport)?;
-    let clipped = collect_visible_clips(store, alternate, viewport, cell, |z| z >= 0)?;
+    let clipped = collect_visible_clips(store, alternate, viewport, cell, |z| band.contains(z))?;
     let layers: Vec<_> = clipped
         .iter()
         .map(|(image_id, z_index, placement)| ImageLayer {
@@ -122,6 +152,16 @@ pub fn compose_store_above_text(
         })
         .collect();
     compose_nonempty(viewport, &layers)
+}
+
+/// Compatibility helper for callers interested only in images above text.
+pub fn compose_store_above_text(
+    store: &ImageStore,
+    alternate: bool,
+    viewport: PixelSize,
+    cell: CellPixelSize,
+) -> Result<Option<DecodedImage>, SnapshotError> {
+    compose_store_band(store, alternate, viewport, cell, ImageBand::AboveText)
 }
 
 fn compose_nonempty(

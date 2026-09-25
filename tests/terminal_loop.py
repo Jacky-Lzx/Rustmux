@@ -286,8 +286,8 @@ try:
 finally:
     s.close()
 
-# A supported, exactly sized outer terminal receives the visible z >= 0 plane
-# once, then only a targeted delete after the pane removes its placement.
+# A supported, exactly sized outer terminal receives all three Kitty stacking
+# bands, then targeted deletes after the pane clears its placements.
 s = Session(pixels=(80, 24))
 try:
     query = b"\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\\x1b[c"
@@ -297,17 +297,23 @@ try:
         assert time.monotonic() < deadline, bytes(s.output[-1000:])
     s.send(b"\x1b_Gi=31;OK\x1b\\\x1b[?1;2c")
     s.expect(b"RUSTMUX_READY> ")
-    s.send(b"printf '\\033_Ga=T,f=32,s=1,v=1,i=7,p=1,c=1,r=1,C=1;AQIDBA==\\033\\\\'\n")
-    upload = b"\x1b_Ga=T,f=32,s=78,v=20,i=2147483648,z=0,C=1,q=2,m=1;"
+    s.send(
+        b"printf '\\033_Ga=T,f=32,s=1,v=1,i=5,p=1,c=1,r=1,z=-1073741825,C=1;AQIDBA==\\033\\\\"
+        b"\\033_Ga=T,f=32,s=1,v=1,i=6,p=1,c=1,r=1,z=-1,C=1;AQIDBA==\\033\\\\"
+        b"\\033_Ga=T,f=32,s=1,v=1,i=7,p=1,c=1,r=1,z=0,C=1;AQIDBA==\\033\\\\'\n"
+    )
+    header = rb"\x1b_Ga=T,f=32,s=78,v=20,i=([0-9]+),z=(-2147483648|-1|0),C=1,q=2,m=1;"
     deadline = time.monotonic() + 8
-    while upload not in s.output:
+    while len({int(z) for _, z in re.findall(header, s.output)}) != 3:
         s.read()
         assert time.monotonic() < deadline, bytes(s.output[-1000:])
+    uploaded = {int(z): int(image_id) for image_id, z in re.findall(header, s.output)}
     s.output.clear()
-    s.send(b"printf '\\033_Ga=d,d=I,i=7\\033\\\\'\n")
-    delete = b"\x1b_Ga=d,d=I,i=2147483648,q=2\x1b\\"
+    s.send(b"printf '\\033[2J'\n")
+    deletes = [f"\x1b_Ga=d,d=I,i={image_id},q=2\x1b\\".encode()
+               for image_id in uploaded.values()]
     deadline = time.monotonic() + 8
-    while delete not in s.output:
+    while not all(command in s.output for command in deletes):
         s.read()
         assert time.monotonic() < deadline, bytes(s.output[-1000:])
     s.send(b"exit 0\n")

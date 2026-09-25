@@ -4,7 +4,7 @@ use crate::{
     graphics::{GraphicsEvent, GraphicsFramer},
     graphics_decode::DecodedImage,
     graphics_snapshot::{
-        ImagePlanes, SnapshotError, compose_store_above_text, compose_store_planes,
+        ImageBand, ImagePlanes, SnapshotError, compose_store_band, compose_store_planes,
         compose_store_snapshot,
     },
     graphics_store::{CellAnchor, CellPixelSize, ImageStore, PixelSize},
@@ -447,8 +447,7 @@ impl Pane {
     }
 
     /// Return only populated Kitty image stacking bands. This is still an
-    /// image-only result; it does not paint glyphs or cell backgrounds. The
-    /// terminal runtime currently paints only the `above_text` band.
+    /// image-only result; it does not paint glyphs or cell backgrounds.
     pub fn compose_image_planes(
         &self,
         cell_pixels: CellPixelSize,
@@ -462,19 +461,29 @@ impl Pane {
         )
     }
 
-    /// Compose the z >= 0 band without decoding or allocating the two
-    /// negative-z bands that the runtime cannot display yet.
-    pub fn compose_above_text_image(
+    /// Compose one stacking band without decoding or allocating the others.
+    pub fn compose_image_band(
         &self,
         cell_pixels: CellPixelSize,
+        band: ImageBand,
     ) -> Result<Option<DecodedImage>, SnapshotError> {
         let viewport = self.image_viewport(cell_pixels)?;
-        compose_store_above_text(
+        compose_store_band(
             &self.image_store,
             self.screen.is_alternate(),
             viewport,
             cell_pixels,
+            band,
         )
+    }
+
+    /// Compose the z >= 0 band without decoding or allocating the two
+    /// negative-z bands.
+    pub fn compose_above_text_image(
+        &self,
+        cell_pixels: CellPixelSize,
+    ) -> Result<Option<DecodedImage>, SnapshotError> {
+        self.compose_image_band(cell_pixels, ImageBand::AboveText)
     }
 
     fn image_viewport(&self, cell_pixels: CellPixelSize) -> Result<PixelSize, SnapshotError> {

@@ -24,6 +24,7 @@ use crate::{
     chrome::{FooterMode, compose_with_mode, footer_enabled, pane_rows},
     graphics_capability::{GraphicsCapabilityProbe, GraphicsSupport},
     graphics_output::{kitty_rgba_placement_len, write_kitty_rgba_placement_with_limit},
+    graphics_snapshot::ImageBand,
     graphics_store::CellPixelSize,
     layout::{Direction, PaneId, Rect, SplitAxis},
     pane_set::PaneSet,
@@ -587,6 +588,7 @@ impl Write for FrameWriter<'_> {
 struct KittyOverlay {
     window: WindowId,
     pane: PaneId,
+    band: ImageBand,
     revision: u64,
     rect: Rect,
     cell: CellPixelSize,
@@ -597,6 +599,7 @@ struct KittyOverlay {
 struct KittyOverlays {
     entries: Vec<KittyOverlay>,
     next_id: u32,
+    pending_retry: bool,
 }
 
 impl Default for KittyOverlays {
@@ -604,6 +607,7 @@ impl Default for KittyOverlays {
         Self {
             entries: Vec::new(),
             next_id: 0x8000_0000,
+            pending_retry: false,
         }
     }
 }
@@ -618,6 +622,8 @@ impl KittyOverlays {
         cursor: (usize, usize),
         output: &mut VecDeque<u8>,
     ) -> io::Result<()> {
+        let retry_missing = self.pending_retry;
+        self.pending_retry = false;
         let visible = panes.layout().content_geometry().panes;
         let mut moved_cursor = false;
         for old in std::mem::take(&mut self.entries) {
@@ -640,10 +646,11 @@ impl KittyOverlays {
             }
         }
         for (id, rect) in visible {
-            if self
-                .entries
-                .iter()
-                .any(|entry| entry.window == window && entry.pane == id)
+            if !retry_missing
+                && self
+                    .entries
+                    .iter()
+                    .any(|entry| entry.window == window && entry.pane == id)
             {
                 continue;
             }
@@ -651,44 +658,60 @@ impl KittyOverlays {
             if pane.image_store().placements().next().is_none() {
                 continue;
             }
-            // This first runtime increment only paints z >= 0. A malformed or
-            // over-budget snapshot must not take down the terminal session.
-            let Ok(Some(image)) = pane.compose_above_text_image(cell) else {
-                continue;
-            };
-            let image_id = self.next_id;
-            let Some(next_id) = image_id.checked_add(1) else {
-                continue;
-            };
-            let Ok(payload_len) = kitty_rgba_placement_len(&image, image_id, 0) else {
-                continue;
-            };
             let row = usize::from(outer_rows > 1) + usize::from(rect.row) + 1;
             let column = usize::from(rect.column) + 1;
             let position = format!("\x1b[{row};{column}H");
             let restore = format!("\x1b[{};{}H", cursor.0 + 1, cursor.1 + 1);
-            if position.len() + payload_len + restore.len() > MAX_FRAME - output.len() {
-                continue;
+            for band in ImageBand::ALL {
+                if self
+                    .entries
+                    .iter()
+                    .any(|entry| entry.window == window && entry.pane == id && entry.band == band)
+                {
+                    continue;
+                }
+                // A malformed or over-budget band must not suppress the other
+                // two or take down the terminal session.
+                let Ok(Some(image)) = pane.compose_image_band(cell, band) else {
+                    continue;
+                };
+                let image_id = self.next_id;
+                let Some(next_id) = image_id.checked_add(1) else {
+                    continue;
+                };
+                let Ok(payload_len) = kitty_rgba_placement_len(&image, image_id, band.output_z())
+                else {
+                    continue;
+                };
+                let frame_len = position.len() + payload_len + restore.len();
+                if frame_len > MAX_FRAME {
+                    continue;
+                }
+                if frame_len > MAX_FRAME - output.len() {
+                    self.pending_retry = true;
+                    continue;
+                }
+                FrameWriter(output).write_all(position.as_bytes())?;
+                write_kitty_rgba_placement_with_limit(
+                    &image,
+                    image_id,
+                    band.output_z(),
+                    MAX_FRAME - output.len() - restore.len(),
+                    &mut FrameWriter(output),
+                )?;
+                moved_cursor = true;
+                self.next_id = next_id;
+                self.entries.push(KittyOverlay {
+                    window,
+                    pane: id,
+                    band,
+                    revision: pane.image_store().revision(),
+                    rect,
+                    cell,
+                    alternate: pane.screen().is_alternate(),
+                    image_id,
+                });
             }
-            FrameWriter(output).write_all(position.as_bytes())?;
-            write_kitty_rgba_placement_with_limit(
-                &image,
-                image_id,
-                0,
-                MAX_FRAME - output.len() - restore.len(),
-                &mut FrameWriter(output),
-            )?;
-            moved_cursor = true;
-            self.next_id = next_id;
-            self.entries.push(KittyOverlay {
-                window,
-                pane: id,
-                revision: pane.image_store().revision(),
-                rect,
-                cell,
-                alternate: pane.screen().is_alternate(),
-                image_id,
-            });
         }
         if moved_cursor {
             write!(
@@ -702,6 +725,7 @@ impl KittyOverlays {
     }
 
     fn clear(&mut self, output: &mut VecDeque<u8>) -> io::Result<()> {
+        self.pending_retry = false;
         for entry in self.entries.drain(..) {
             write!(
                 FrameWriter(output),
@@ -2266,7 +2290,7 @@ fn forward(
                         }
                     }
                     bar_dirty = false;
-                    force_redraw = false;
+                    force_redraw = kitty_overlays.pending_retry;
                     next_frame = Instant::now() + FRAME_INTERVAL;
                 }
             }
@@ -3289,6 +3313,146 @@ mod tests {
             b"\x1b_Ga=d,d=I,i=2147483648,q=2\x1b\\"
         );
         assert!(cache.entries.is_empty());
+    }
+
+    #[test]
+    fn kitty_overlay_emits_all_stacking_bands_and_cleans_each_id() {
+        let cell = CellPixelSize::new(1, 1).unwrap();
+        let mut windows = Windows::default();
+        let window_id = windows
+            .create(
+                "layers".into(),
+                spawn_window(
+                    OsStr::new("/bin/sh"),
+                    None,
+                    4,
+                    6,
+                    crate::config::Notifications::default(),
+                    crate::config::DEFAULT_SCROLLBACK_LINES,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let panes = windows.active_mut().unwrap().content_mut();
+        for (id, z) in [(1, i32::MIN / 2 - 1), (2, -1), (3, 0)] {
+            let command =
+                format!("\x1b_Ga=T,f=32,s=1,v=1,i={id},p=1,c=1,r=1,z={z},C=1;AQIDBA==\x1b\\");
+            panes.active_mut().process_output_with_image_store_sized(
+                command.as_bytes(),
+                &mut |_| {},
+                cell,
+            );
+        }
+        let mut cache = KittyOverlays::default();
+        let mut output = VecDeque::new();
+        cache
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        let upload: Vec<_> = output.drain(..).collect();
+        let headers = [
+            b"i=2147483648,z=-2147483648,C=1,q=2".as_slice(),
+            b"i=2147483649,z=-1,C=1,q=2",
+            b"i=2147483650,z=0,C=1,q=2",
+        ];
+        let positions: Vec<_> = headers
+            .iter()
+            .map(|header| {
+                upload
+                    .windows(header.len())
+                    .position(|bytes| bytes == *header)
+                    .unwrap()
+            })
+            .collect();
+        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+        assert_eq!(cache.entries.len(), 3);
+        cache
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        assert!(output.is_empty());
+
+        panes.active_mut().image_store_mut().clear();
+        cache
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        let deleted = output.drain(..).collect::<Vec<_>>();
+        for id in 2147483648_u64..=2147483650 {
+            let command = format!("\x1b_Ga=d,d=I,i={id},q=2\x1b\\");
+            assert!(
+                deleted
+                    .windows(command.len())
+                    .any(|bytes| bytes == command.as_bytes())
+            );
+        }
+        assert_eq!(cache.entries.len(), 0);
+    }
+
+    #[test]
+    fn kitty_overlay_retries_only_bands_that_missed_the_frame_budget() {
+        let cell = CellPixelSize::new(1, 1).unwrap();
+        let mut windows = Windows::default();
+        let window_id = windows
+            .create(
+                "budget".into(),
+                spawn_window(
+                    OsStr::new("/bin/sh"),
+                    None,
+                    4,
+                    6,
+                    crate::config::Notifications::default(),
+                    crate::config::DEFAULT_SCROLLBACK_LINES,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let panes = windows.active_mut().unwrap().content_mut();
+        for (id, z) in [(1, i32::MIN), (2, -1), (3, 0)] {
+            let command =
+                format!("\x1b_Ga=T,f=32,s=1,v=1,i={id},p=1,c=1,r=1,z={z},C=1;AQIDBA==\x1b\\");
+            panes.active_mut().process_output_with_image_store_sized(
+                command.as_bytes(),
+                &mut |_| {},
+                cell,
+            );
+        }
+        let first = panes
+            .active()
+            .compose_image_band(cell, ImageBand::BehindBackground)
+            .unwrap()
+            .unwrap();
+        let allowance = b"\x1b[3;2H".len()
+            + kitty_rgba_placement_len(&first, 0x8000_0000, i32::MIN).unwrap()
+            + b"\x1b[4;3H".len();
+        let mut output = VecDeque::from(vec![0; MAX_FRAME - allowance]);
+        let mut cache = KittyOverlays::default();
+        cache
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        assert_eq!(output.len(), MAX_FRAME);
+        assert_eq!(cache.entries.len(), 1);
+        assert!(cache.pending_retry);
+
+        output.clear();
+        cache
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        let retry: Vec<_> = output.drain(..).collect();
+        assert_eq!(cache.entries.len(), 3);
+        assert!(!cache.pending_retry);
+        assert!(
+            !retry
+                .windows(b"i=2147483648,z=".len())
+                .any(|w| w == b"i=2147483648,z=")
+        );
+        assert!(
+            retry
+                .windows(b"i=2147483649,z=-1".len())
+                .any(|w| w == b"i=2147483649,z=-1")
+        );
+        assert!(
+            retry
+                .windows(b"i=2147483650,z=0".len())
+                .any(|w| w == b"i=2147483650,z=0")
+        );
     }
 
     #[test]

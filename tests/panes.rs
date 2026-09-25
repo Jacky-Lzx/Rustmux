@@ -8,7 +8,7 @@ use nix::{
 };
 use rustmux::{
     graphics_composite::{ImageLayer, compose_image_layers},
-    graphics_snapshot::{BACKGROUND_Z_BOUNDARY, SnapshotError, compose_store_snapshot},
+    graphics_snapshot::{BACKGROUND_Z_BOUNDARY, ImageBand, SnapshotError, compose_store_snapshot},
     graphics_store::{
         CellPixelSize, PixelRect, PixelSize, PlacementGeometry, PlacementSizing, SignedPixelPoint,
     },
@@ -834,6 +834,19 @@ fn kitty_image_planes_keep_text_and_background_z_boundaries() {
         pane.process_output_with_image_store_sized(image.as_bytes(), &mut |_| {}, cell);
     }
     let planes = pane.compose_image_planes(cell).unwrap();
+    for (band, expected) in [
+        (ImageBand::BehindBackground, &planes.behind_background),
+        (ImageBand::BehindText, &planes.behind_text),
+        (ImageBand::AboveText, &planes.above_text),
+    ] {
+        assert_eq!(
+            pane.compose_image_band(cell, band).unwrap().as_ref(),
+            expected.as_ref()
+        );
+    }
+    assert_eq!(ImageBand::BehindBackground.output_z(), i32::MIN);
+    assert_eq!(ImageBand::BehindText.output_z(), -1);
+    assert_eq!(ImageBand::AboveText.output_z(), 0);
     for (plane, occupied) in [
         (planes.behind_background.as_ref().unwrap(), 0..2),
         (planes.behind_text.as_ref().unwrap(), 2..4),
