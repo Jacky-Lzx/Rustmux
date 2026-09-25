@@ -155,6 +155,18 @@ canvas budget. No cell colors, glyphs, or outer-terminal graphics commands are
 drawn here, so the normal renderer still does not display the images. The
 bands follow the [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
 
+`write_kitty_rgba_placement` is an opt-in output encoder for a caller that has
+already established outer-terminal Kitty support and positioned its cursor.
+It validates one decoded RGBA image before writing, then streams `a=T,f=32`
+direct-data APCs with a nonzero image ID, requested `z`, `C=1`, and `q=2`.
+Each Base64 chunk is at most 4096 bytes; all continuation APCs carry only
+`m`. The encoder neither manages replacement/deletion nor enters the normal
+redraw path. In particular, the current client frame limit is 16 MiB, smaller
+than the largest decoded image's encoded output, so runtime integration needs
+an output-streaming/backpressure decision. A failed write may leave a partial
+transfer. The chunk format follows the
+[Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
+
 `X/Y` position an image within its first cell; they are not added to `c/r` or
 cursor movement. On a sized opt-in call, either offset must be smaller than
 its cell pixel dimension. An invalid offset rejects the placement before an
