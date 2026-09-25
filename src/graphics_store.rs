@@ -686,11 +686,31 @@ impl ImageStore {
                         let (Some(anchor), Some((rows, columns))) = (anchor, viewport) else {
                             return Err(StoreError::UnsupportedAction);
                         };
-                        self.delete_visible_placements(
+                        self.delete_intersecting_placements(
                             anchor.alternate,
-                            rows,
-                            columns,
+                            0,
+                            rows as i128,
+                            0,
+                            columns as u128,
                             controls.get(&b'd').is_some_and(|value| value == b"A"),
+                        );
+                    }
+                    Some(b"c" | b"C") => {
+                        if !only_keys(&controls, b"adq") {
+                            return Err(StoreError::UnsupportedAction);
+                        }
+                        let Some(anchor) = anchor else {
+                            return Err(StoreError::UnsupportedAction);
+                        };
+                        let row = anchor.row as i128;
+                        let column = anchor.column as u128;
+                        self.delete_intersecting_placements(
+                            anchor.alternate,
+                            row,
+                            row + 1,
+                            column,
+                            column + 1,
+                            controls.get(&b'd').is_some_and(|value| value == b"C"),
                         );
                     }
                     Some(b"i" | b"I") => {
@@ -714,14 +734,15 @@ impl ImageStore {
         }
     }
 
-    /// `d=a/A` touches only placements whose modeled cell rectangle intersects
-    /// the current screen. A placement wholly in scrollback or on the other
-    /// screen is not deleted; hard deletion frees only now-unreferenced images.
-    fn delete_visible_placements(
+    /// Delete placements whose modeled cell rectangle intersects the selected
+    /// screen region. Hard deletion frees only now-unreferenced images.
+    fn delete_intersecting_placements(
         &mut self,
         alternate: bool,
-        rows: usize,
-        columns: usize,
+        region_top: i128,
+        region_bottom: i128,
+        region_left: u128,
+        region_right: u128,
         free_data: bool,
     ) {
         let mut touched_images = BTreeSet::new();
@@ -743,15 +764,16 @@ impl ImageStore {
                     - i128::from(geometry.clip_bottom_rows);
             let left = geometry.anchor.column as u128;
             let right = left + u128::from(width);
-            let visible = top < rows as i128
-                && bottom > 0
+            let intersects = top < region_bottom
+                && bottom > region_top
                 && top < bottom
-                && left < columns as u128
+                && left < region_right
+                && right > region_left
                 && right > left;
-            if visible {
+            if intersects {
                 touched_images.insert(placement.image_id);
             }
-            !visible
+            !intersects
         });
         if !touched_images.is_empty() {
             self.changed();
@@ -1195,6 +1217,34 @@ mod tests {
         store.accept_control(b"\x1b_Ga=d,d=I,i=7\x1b\\").unwrap();
         assert!(store.is_empty());
         assert_eq!(store.total_bytes(), 0);
+    }
+
+    #[test]
+    fn cursor_delete_requires_anchor_and_can_free_unreferenced_data() {
+        let mut store = ImageStore::new();
+        let anchor = CellAnchor::default();
+        store
+            .insert_at(
+                transfer(b"\x1b_Ga=T,f=100,i=7,p=1,c=1,r=1;QQ==\x1b\\"),
+                anchor,
+            )
+            .unwrap();
+        assert_eq!(
+            store.accept_control(b"\x1b_Ga=d,d=c\x1b\\"),
+            Err(StoreError::UnsupportedAction)
+        );
+        store
+            .accept_control_at(b"\x1b_Ga=d,d=c\x1b\\", anchor)
+            .unwrap();
+        assert_eq!(store.placements().count(), 0);
+        assert!(store.get(7).is_some());
+        store
+            .accept_control_at(b"\x1b_Ga=p,i=7,p=2,c=1,r=1\x1b\\", anchor)
+            .unwrap();
+        store
+            .accept_control_at(b"\x1b_Ga=d,d=C\x1b\\", anchor)
+            .unwrap();
+        assert!(store.get(7).is_none());
     }
 
     #[test]

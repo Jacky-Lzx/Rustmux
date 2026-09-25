@@ -71,8 +71,17 @@ The other screen, fully off-screen scrollback placements, and unanchored
 references are untouched. This viewport-dependent selector is unavailable to
 the low-level store APIs that have no screen dimensions. Image eviction drops
 its references. There are at most 1024 references per pane. These rules follow
-the [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/);
-other delete selectors remain unimplemented.
+the [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
+
+The pane path also accepts `a=d,d=c/C` with no image ID. It removes each
+cursor-anchored placement whose modeled cell rectangle covers the current
+cursor cell on the active screen. Lowercase retains image data; uppercase
+releases it only after the image has no remaining references. Neither form
+moves the cursor. Off-screen history, the other screen, and unanchored or
+unresolved-size placements are left untouched. The low-level store API with
+an explicit cursor anchor supports this selector, but the anchorless API does
+not. Other delete selectors remain unimplemented; extra keys for `d=c/C`
+are rejected rather than silently broadening the match.
 
 For the pane opt-in path, cursor-anchored placements now record a zero-based
 cell row and column, plus whether they belong to the alternate screen. A
@@ -344,6 +353,9 @@ round trip.
 Visible-delete tests cover current-screen scoping, off-screen scrollback,
 partial overlap, lowercase/hard data lifetime, malformed selectors, and a
 child PTY round trip.
+Cursor-delete tests cover overlapping and non-overlapping placements,
+current-screen and scrollback scoping, lowercase/hard data lifetime, unchanged
+cursor position, invalid keys, and a child PTY round trip.
 Anchor tests cover interleaved text, final-chunk position, alternate-screen
 identity, explicit layout options, malformed metadata, and named replacement.
 Screen-lifecycle tests cover split `CSI 2 J`, non-clearing text erasures,
