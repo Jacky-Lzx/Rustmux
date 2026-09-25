@@ -604,8 +604,22 @@ impl Pane {
                             }
                             stored
                         } else {
-                            self.image_store
-                                .accept_control_for_pane(&command, anchor, *cell_pixels)
+                            let placement_reply =
+                                crate::graphics_reply::PlacementReply::for_command(
+                                    &command,
+                                    *answer_graphics,
+                                );
+                            let placed = self.image_store.accept_control_for_pane(
+                                &command,
+                                anchor,
+                                *cell_pixels,
+                            );
+                            if let Some(response) = placement_reply.and_then(|placement| {
+                                placement.response(placed.as_ref().err().copied())
+                            }) {
+                                reply(&response);
+                            }
+                            placed
                         };
                         if let Ok(Some(geometry)) = placed
                             && !geometry.cursor_stays
@@ -717,6 +731,78 @@ mod io_tests {
     use crate::{parser::MAX_REPLY_BYTES, window::Windows};
     use base64::{Engine as _, engine::general_purpose::STANDARD};
     use std::{os::unix::process::ExitStatusExt, time::Duration};
+
+    #[test]
+    fn runtime_placement_ack_follows_store_result_and_precedes_da() {
+        let mut pane = Pane::spawn("/bin/sh", 4, 4).unwrap();
+        let cell = CellPixelSize::new(1, 1).unwrap();
+        let mut replies = Vec::new();
+        pane.process_output_for_runtime(
+            b"\x1b_Ga=t,i=51,f=32,s=1,v=1,q=2;AQIDBA==\x1b\\",
+            &mut |reply| replies.extend_from_slice(reply),
+            Some(cell),
+            true,
+        );
+        assert!(replies.is_empty());
+        pane.process_output_for_runtime(
+            b"\x1b_Ga=p,i=51,p=3,c=1,r=1\x1b\\\x1b[c",
+            &mut |reply| replies.extend_from_slice(reply),
+            Some(cell),
+            true,
+        );
+        assert_eq!(replies, b"\x1b_Gi=51,p=3;OK\x1b\\\x1b[?1;0c");
+        assert_eq!(pane.screen().cursor(), (1, 1));
+        let revision = pane.image_store().revision();
+
+        replies.clear();
+        pane.process_output_for_runtime(
+            b"\x1b_Ga=p,i=999,p=8,c=1,r=1\x1b\\",
+            &mut |reply| replies.extend_from_slice(reply),
+            Some(cell),
+            true,
+        );
+        assert_eq!(replies, b"\x1b_Gi=999,p=8;ENOENT:image not found\x1b\\");
+        assert_eq!(pane.image_store().revision(), revision);
+        assert_eq!(pane.screen().cursor(), (1, 1));
+
+        replies.clear();
+        pane.process_output_for_runtime(
+            b"\x1b_Ga=p,i=51,p=4,X=1,c=1,r=1\x1b\\",
+            &mut |reply| replies.extend_from_slice(reply),
+            Some(cell),
+            true,
+        );
+        assert_eq!(replies, b"\x1b_Gi=51,p=4;EINVAL:invalid placement\x1b\\");
+        assert_eq!(pane.image_store().revision(), revision);
+
+        replies.clear();
+        pane.process_output_for_runtime(
+            b"\x1b_Ga=p,i=51,p=4,U=1\x1b\\",
+            &mut |reply| replies.extend_from_slice(reply),
+            Some(cell),
+            true,
+        );
+        assert_eq!(replies, b"\x1b_Gi=51,p=4;EINVAL:invalid placement\x1b\\");
+        assert_eq!(pane.image_store().revision(), revision);
+
+        replies.clear();
+        pane.process_output_for_runtime(
+            b"\x1b_Ga=p,i=51,p=5,C=1,q=1\x1b\\",
+            &mut |reply| replies.extend_from_slice(reply),
+            Some(cell),
+            true,
+        );
+        assert!(replies.is_empty());
+        assert_eq!(pane.image_store().placements().count(), 2);
+
+        pane.process_output_for_runtime(
+            b"\x1b_Ga=p,i=999,p=9,q=2\x1b\\",
+            &mut |reply| replies.extend_from_slice(reply),
+            Some(cell),
+            true,
+        );
+        assert!(replies.is_empty());
+    }
 
     #[test]
     fn runtime_upload_ack_follows_final_chunk_and_does_not_claim_failed_storage() {

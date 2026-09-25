@@ -282,9 +282,16 @@ error. Corrupt PNG data and controls outside the data-only subset are rejected
 without replacing an existing image. `q=1` suppresses success and `q=2`
 suppresses all replies; absent display support means no graphics reply.
 Malformed or unsupported transfers that never finish assembly still get no
-reply. Combined upload-and-placement `a=T` and separate `a=p` placement
-acknowledgements remain unimplemented. These limits mean a query or upload
-response is not a claim of full Kitty graphics compatibility.
+reply. A well-formed `a=p,i=<id>` placement with a nonzero image ID now replies
+after the store result under the same attachment and sizing conditions. A
+found image returns `OK`, a missing ID returns `ENOENT`, and an unsupported
+control or invalid placement geometry returns `EINVAL`. Unparseable controls
+cannot be correlated and remain silent. A valid nonzero `p` is echoed in the
+reply; absent or zero `p` stays anonymous. `q=1` suppresses success, and
+`q=2` suppresses all replies. The placement and cursor remain unchanged on
+failure. Combined upload-and-placement `a=T` acknowledgements remain
+unimplemented. These limits mean a query, upload, or placement response is not
+a claim of full Kitty graphics compatibility.
 The query/DA ordering follows the
 [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
 
@@ -316,6 +323,8 @@ Query tests cover reply/DA ordering, conditional silence, quiet modes, invalid
 image data, unknown controls, and a child PTY round trip.
 Upload acknowledgement tests cover chunk completion, reply/DA ordering,
 rejected replacements, quiet modes, and a child PTY round trip.
+Placement acknowledgement tests cover named and anonymous IDs, missing images,
+invalid geometry, quiet modes, reply/DA ordering, and a child PTY round trip.
 Anchor tests cover interleaved text, final-chunk position, alternate-screen
 identity, explicit layout options, malformed metadata, and named replacement.
 Screen-lifecycle tests cover split `CSI 2 J`, non-clearing text erasures,

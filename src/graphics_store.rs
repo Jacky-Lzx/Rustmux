@@ -734,9 +734,10 @@ impl ImageStore {
     }
 }
 
-type Controls = BTreeMap<u8, Vec<u8>>;
+pub(crate) type Controls = BTreeMap<u8, Vec<u8>>;
 
-fn parse_control_command(command: &[u8]) -> Option<Controls> {
+/// Parse control-only APCs identically for store mutation and child replies.
+pub(crate) fn parse_control_command(command: &[u8]) -> Option<Controls> {
     if command.len() > MAX_GRAPHICS_COMMAND_BYTES {
         return None;
     }

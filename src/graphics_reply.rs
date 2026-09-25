@@ -2,7 +2,7 @@
 //! Query replies do not insert or replace an image.
 
 use crate::{
-    graphics_store::{ImageFormat, StoreError, StoredImage},
+    graphics_store::{ImageFormat, StoreError, StoredImage, parse_control_command},
     graphics_transfer::AssembledDirectTransfer,
 };
 
@@ -48,7 +48,7 @@ pub(crate) fn direct_query_reply(
         return None;
     }
     let message = if valid { "OK" } else { "EINVAL:invalid image" };
-    Some(encode_reply(id, message))
+    Some(encode_reply(id, None, message))
 }
 
 /// Capture the identity of a data-only upload before the transfer is moved
@@ -86,12 +86,58 @@ impl UploadReply {
             Some(StoreError::TooLarge) => "E2BIG:image too large",
             Some(_) => "EINVAL:invalid image",
         };
-        Some(encode_reply(self.id, message))
+        Some(encode_reply(self.id, None, message))
     }
 }
 
-fn encode_reply(id: u32, message: &str) -> Vec<u8> {
-    let response = format!("\x1b_Gi={id};{message}\x1b\\").into_bytes();
+/// Keep the same parsed control fields that the image store will apply. A
+/// reply is emitted only after the store reports the placement's result.
+#[derive(Clone, Copy)]
+pub(crate) struct PlacementReply {
+    id: u32,
+    placement_id: Option<u32>,
+    quiet: u8,
+}
+
+impl PlacementReply {
+    pub(crate) fn for_command(command: &[u8], can_display: bool) -> Option<Self> {
+        if !can_display {
+            return None;
+        }
+        let controls = parse_control_command(command)?;
+        if controls.get(&b'a').map(Vec::as_slice) != Some(b"p") {
+            return None;
+        }
+        Some(Self {
+            id: parse_nonzero(controls.get(&b'i')?)?,
+            placement_id: controls.get(&b'p').and_then(|value| parse_nonzero(value)),
+            quiet: controls
+                .get(&b'q')
+                .and_then(|value| value.first())
+                .copied()
+                .unwrap_or(b'0'),
+        })
+    }
+
+    pub(crate) fn response(self, error: Option<StoreError>) -> Option<Vec<u8>> {
+        if self.quiet == b'2' || (self.quiet == b'1' && error.is_none()) {
+            return None;
+        }
+        let message = match error {
+            None => "OK",
+            Some(StoreError::MissingImage) => "ENOENT:image not found",
+            Some(_) => "EINVAL:invalid placement",
+        };
+        Some(encode_reply(self.id, self.placement_id, message))
+    }
+}
+
+fn encode_reply(id: u32, placement_id: Option<u32>, message: &str) -> Vec<u8> {
+    let response = match placement_id {
+        Some(placement_id) => format!("\x1b_Gi={id},p={placement_id};{message}\x1b\\"),
+        None => format!("\x1b_Gi={id};{message}\x1b\\"),
+    }
+    .into_bytes();
     debug_assert!(response.len() <= crate::parser::MAX_REPLY_BYTES);
     response
 }
@@ -169,5 +215,41 @@ mod tests {
         let ack = UploadReply::for_transfer(&quiet_all, true).unwrap();
         assert!(ack.response(None).is_none());
         assert!(ack.response(Some(StoreError::InvalidData)).is_none());
+    }
+
+    #[test]
+    fn placement_ack_includes_named_id_and_distinguishes_missing_image() {
+        let command = b"\x1b_Ga=p,i=7,p=9,q=0\x1b\\";
+        let ack = PlacementReply::for_command(command, true).unwrap();
+        assert_eq!(ack.response(None).unwrap(), b"\x1b_Gi=7,p=9;OK\x1b\\");
+        assert_eq!(
+            ack.response(Some(StoreError::MissingImage)).unwrap(),
+            b"\x1b_Gi=7,p=9;ENOENT:image not found\x1b\\"
+        );
+        assert!(PlacementReply::for_command(command, false).is_none());
+        assert!(PlacementReply::for_command(b"\x1b_Ga=d,i=7\x1b\\", true).is_none());
+
+        let anonymous = PlacementReply::for_command(b"\x1b_Ga=p,i=7,p=0\x1b\\", true).unwrap();
+        assert_eq!(anonymous.response(None).unwrap(), b"\x1b_Gi=7;OK\x1b\\");
+        let invalid = PlacementReply::for_command(b"\x1b_Ga=p,i=7,p=bad\x1b\\", true).unwrap();
+        assert_eq!(
+            invalid
+                .response(Some(StoreError::InvalidPlacement))
+                .unwrap(),
+            b"\x1b_Gi=7;EINVAL:invalid placement\x1b\\"
+        );
+    }
+
+    #[test]
+    fn placement_ack_respects_quiet_modes() {
+        let quiet_ok = PlacementReply::for_command(b"\x1b_Ga=p,i=7,q=1\x1b\\", true).unwrap();
+        assert!(quiet_ok.response(None).is_none());
+        assert_eq!(
+            quiet_ok.response(Some(StoreError::MissingImage)).unwrap(),
+            b"\x1b_Gi=7;ENOENT:image not found\x1b\\"
+        );
+        let quiet_all = PlacementReply::for_command(b"\x1b_Ga=p,i=7,q=2\x1b\\", true).unwrap();
+        assert!(quiet_all.response(None).is_none());
+        assert!(quiet_all.response(Some(StoreError::MissingImage)).is_none());
     }
 }
