@@ -768,6 +768,20 @@ impl ImageStore {
                             controls.get(&b'd').is_some_and(|value| value == b"Q"),
                         );
                     }
+                    Some(b"x" | b"X") => {
+                        if !only_keys(&controls, b"adqx") {
+                            return Err(StoreError::UnsupportedAction);
+                        }
+                        let (Some(anchor), Some((_, columns))) = (anchor, viewport) else {
+                            return Err(StoreError::UnsupportedAction);
+                        };
+                        let column = required_delete_coordinate(&controls, b'x', columns)?;
+                        self.delete_column_placements(
+                            anchor.alternate,
+                            column as u128,
+                            controls.get(&b'd').is_some_and(|value| value == b"X"),
+                        );
+                    }
                     Some(b"z" | b"Z") => {
                         if !only_keys(&controls, b"adqz") {
                             return Err(StoreError::UnsupportedAction);
@@ -808,19 +822,18 @@ impl ImageStore {
         z_filter: Option<i32>,
         free_data: bool,
     ) {
-        let mut touched_images = BTreeSet::new();
-        self.placements.retain(|placement| {
+        self.delete_matching_placements(free_data, |placement| {
             let Some(geometry) = placement.geometry else {
-                return true;
+                return false;
             };
             if geometry.anchor.alternate != alternate {
-                return true;
+                return false;
             }
             if z_filter.is_some_and(|z| geometry.z_index != z) {
-                return true;
+                return false;
             }
             let (Some(height), Some(width)) = (geometry.rows, geometry.columns) else {
-                return true;
+                return false;
             };
             let top = geometry.anchor.row as i128
                 + i128::from(geometry.row_offset)
@@ -830,45 +843,55 @@ impl ImageStore {
                     - i128::from(geometry.clip_bottom_rows);
             let left = geometry.anchor.column as u128;
             let right = left + u128::from(width);
-            let intersects = top < region.bottom
+            top < region.bottom
                 && bottom > region.top
                 && top < bottom
                 && left < region.right
                 && right > region.left
-                && right > left;
-            if intersects {
-                touched_images.insert(placement.image_id);
-            }
-            !intersects
+                && right > left
         });
-        if !touched_images.is_empty() {
-            self.changed();
-        }
-        if free_data {
-            for id in touched_images {
-                if !self
-                    .placements
-                    .iter()
-                    .any(|placement| placement.image_id == id)
-                {
-                    self.remove(id);
-                }
+    }
+
+    /// A column selector spans all rows on the active screen, including
+    /// scrollback. Only the placement width needs to be known.
+    fn delete_column_placements(&mut self, alternate: bool, column: u128, free_data: bool) {
+        self.delete_matching_placements(free_data, |placement| {
+            let Some(geometry) = placement.geometry else {
+                return false;
+            };
+            if geometry.anchor.alternate != alternate {
+                return false;
             }
-        }
+            let Some(width) = geometry.columns else {
+                return false;
+            };
+            let left = geometry.anchor.column as u128;
+            left <= column && column < left + u128::from(width)
+        });
     }
 
     /// A z-index selector is global to the pane, including the other screen
     /// and scrollback; placements without modeled geometry cannot be matched.
     fn delete_z_placements(&mut self, z_index: i32, free_data: bool) {
+        self.delete_matching_placements(free_data, |placement| {
+            placement
+                .geometry
+                .is_some_and(|geometry| geometry.z_index == z_index)
+        });
+    }
+
+    fn delete_matching_placements(
+        &mut self,
+        free_data: bool,
+        mut matches: impl FnMut(&Placement) -> bool,
+    ) {
         let mut touched_images = BTreeSet::new();
         self.placements.retain(|placement| {
-            let matches = placement
-                .geometry
-                .is_some_and(|geometry| geometry.z_index == z_index);
-            if matches {
+            let remove = matches(placement);
+            if remove {
                 touched_images.insert(placement.image_id);
             }
-            !matches
+            !remove
         });
         if !touched_images.is_empty() {
             self.changed();
@@ -989,19 +1012,24 @@ fn required_delete_cell(
     rows: usize,
     columns: usize,
 ) -> Result<(i128, u128), StoreError> {
-    let coordinate = |key| {
-        controls
-            .get(&key)
-            .and_then(|value| parse_positive_u32(value))
-            .and_then(|value| usize::try_from(value - 1).ok())
-            .ok_or(StoreError::InvalidPlacement)
-    };
-    let column = coordinate(b'x')?;
-    let row = coordinate(b'y')?;
-    if row >= rows || column >= columns {
-        return Err(StoreError::InvalidPlacement);
-    }
+    let column = required_delete_coordinate(controls, b'x', columns)?;
+    let row = required_delete_coordinate(controls, b'y', rows)?;
     Ok((row as i128, column as u128))
+}
+
+fn required_delete_coordinate(
+    controls: &Controls,
+    key: u8,
+    limit: usize,
+) -> Result<usize, StoreError> {
+    let value = controls
+        .get(&key)
+        .and_then(|value| parse_positive_u32(value))
+        .and_then(|value| usize::try_from(value - 1).ok())
+        .ok_or(StoreError::InvalidPlacement)?;
+    (value < limit)
+        .then_some(value)
+        .ok_or(StoreError::InvalidPlacement)
 }
 
 fn required_delete_z_index(controls: &Controls) -> Result<i32, StoreError> {
