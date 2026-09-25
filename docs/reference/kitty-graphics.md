@@ -373,6 +373,9 @@ after its final chunk: `OK` only after successful storage, otherwise a bounded
 error. Corrupt PNG data and controls outside the data-only subset are rejected
 without replacing an existing image. `q=1` suppresses success and `q=2`
 suppresses all replies; absent display support means no graphics reply.
+The same control-subset checks apply to the opt-in image-store APIs, including
+`a=T` uploads: unsupported placement or virtual-placement controls cannot
+silently replace a stored image even when PNG decoding is deferred.
 Malformed or unsupported transfers that never finish assembly still get no
 reply. A well-formed `a=p` placement with a nonzero `i` or `I` now replies
 after the store result under the same attachment and sizing conditions. A

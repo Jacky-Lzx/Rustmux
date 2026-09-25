@@ -7,7 +7,7 @@ use crate::{
         ImageBand, ImagePlanes, SnapshotError, compose_store_band, compose_store_planes,
         compose_store_snapshot,
     },
-    graphics_store::{CellAnchor, CellPixelSize, ImageStore, PixelSize, StoreError},
+    graphics_store::{CellAnchor, CellPixelSize, ImageStore, PixelSize},
     graphics_transfer::{AssembledDirectTransfer, DirectTransferAssembler},
     parser::Parser,
     pty::PtyShell,
@@ -579,26 +579,16 @@ impl Pane {
                                 }
                                 continue;
                             }
-                            let data_only = matches!(transfer.control(b'a'), None | Some(b"t"));
-                            let supported_controls = if data_only {
-                                transfer.supported_data_only_controls()
-                            } else {
-                                transfer.supported_display_controls()
-                            };
                             let transfer_reply = crate::graphics_reply::TransferReply::for_transfer(
                                 &transfer,
                                 *answer_graphics,
                             );
-                            let stored = if *validate_png && !supported_controls {
-                                Err(StoreError::UnsupportedAction)
-                            } else {
-                                self.image_store.insert_for_pane(
-                                    transfer,
-                                    anchor,
-                                    *cell_pixels,
-                                    *validate_png,
-                                )
-                            };
+                            let stored = self.image_store.insert_for_pane(
+                                transfer,
+                                anchor,
+                                *cell_pixels,
+                                *validate_png,
+                            );
                             if let Some(response) = transfer_reply.and_then(|transfer| {
                                 transfer.response(
                                     stored.as_ref().map(|(id, _)| *id).map_err(|error| *error),

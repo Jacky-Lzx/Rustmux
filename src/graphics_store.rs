@@ -506,16 +506,20 @@ impl ImageStore {
             Some(b"T") => true,
             _ => return Err(StoreError::UnsupportedAction),
         };
+        let supported_controls = if display {
+            transfer.supported_display_controls()
+        } else {
+            transfer.supported_data_only_controls()
+        };
+        if !supported_controls {
+            return Err(StoreError::UnsupportedAction);
+        }
         let placement_id = if display {
             parse_optional_placement_id(transfer.control(b'p'))?
         } else {
             None
         };
-        let geometry = if display
-            && transfer.control(b'U') != Some(b"1")
-            && transfer.control(b'P').is_none()
-            && transfer.control(b'Q').is_none()
-        {
+        let geometry = if display {
             let parsed = parse_geometry(
                 anchor.unwrap_or_default(),
                 |key| transfer.control(key),
@@ -1704,6 +1708,30 @@ mod tests {
             Err(StoreError::UnsupportedAction)
         );
         assert!(store.is_empty());
+    }
+
+    #[test]
+    fn unsupported_upload_controls_do_not_replace_existing_image() {
+        let mut store = ImageStore::new();
+        store
+            .insert(transfer(b"\x1b_Ga=T,f=100,i=7,p=1;QQ==\x1b\\"))
+            .unwrap();
+        let revision = store.revision();
+        for command in [
+            b"\x1b_Ga=t,f=100,i=7,p=2;Qg==\x1b\\".as_slice(),
+            b"\x1b_Ga=t,f=100,i=7,U=1;Qg==\x1b\\",
+            b"\x1b_Ga=T,f=100,i=7,U=1;Qg==\x1b\\",
+            b"\x1b_Ga=T,f=100,i=7,P=1;Qg==\x1b\\",
+            b"\x1b_Ga=T,f=100,i=7,N=invalid;Qg==\x1b\\",
+        ] {
+            assert_eq!(
+                store.insert(transfer(command)),
+                Err(StoreError::UnsupportedAction)
+            );
+            assert_eq!(store.revision(), revision);
+            assert_eq!(store.get(7).unwrap().data, b"A");
+            assert_eq!(store.placements().count(), 1);
+        }
     }
 
     #[test]
