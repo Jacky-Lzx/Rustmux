@@ -598,6 +598,13 @@ impl Pane {
                             }
                             stored.map(|(_, geometry)| geometry)
                         } else {
+                            if let Some(response) = crate::graphics_reply::unsupported_medium_reply(
+                                &command,
+                                *answer_graphics,
+                            ) {
+                                reply(&response);
+                                continue;
+                            }
                             let placement_reply =
                                 crate::graphics_reply::PlacementReply::for_command(
                                     &command,
@@ -815,6 +822,55 @@ mod io_tests {
         );
         assert!(replies.is_empty());
         assert!(pane.image_store().get(64).is_some());
+    }
+
+    #[test]
+    fn runtime_rejects_unsupported_media_without_reading_or_mutating() {
+        let mut pane = Pane::spawn("/bin/sh", 4, 4).unwrap();
+        let cell = CellPixelSize::new(1, 1).unwrap();
+        let mut replies = Vec::new();
+        pane.process_output_for_runtime(
+            b"\x1b_Ga=t,i=7,f=32,s=1,v=1,q=2;AQIDBA==\x1b\\",
+            &mut |_| {},
+            Some(cell),
+            true,
+        );
+        let revision = pane.image_store().revision();
+        pane.process_output_for_runtime(
+            b"\x1b_Ga=T,t=f,i=7,p=2,f=100;L3ByaXZhdGUvcGljLnBuZw==\x1b\\\x1b[c",
+            &mut |reply| replies.extend_from_slice(reply),
+            Some(cell),
+            true,
+        );
+        assert_eq!(
+            replies,
+            b"\x1b_Gi=7,p=2;EINVAL:unsupported medium\x1b\\\x1b[?1;0c"
+        );
+        assert_eq!(pane.image_store().revision(), revision);
+        assert_eq!(pane.image_store().get(7).unwrap().data, [1, 2, 3, 4]);
+        assert_eq!(pane.image_store().placements().count(), 0);
+
+        replies.clear();
+        pane.process_output_for_runtime(
+            b"\x1b_Ga=T,t=d,i=7,p=2,f=32,s=1,v=1,C=1;BAIDAg==\x1b\\",
+            &mut |reply| replies.extend_from_slice(reply),
+            Some(cell),
+            true,
+        );
+        assert_eq!(replies, b"\x1b_Gi=7,p=2;OK\x1b\\");
+        assert_eq!(pane.image_store().get(7).unwrap().data, [4, 2, 3, 2]);
+        assert_eq!(pane.image_store().placements().count(), 1);
+        let revision = pane.image_store().revision();
+
+        replies.clear();
+        pane.process_output_for_runtime(
+            b"\x1b_Ga=q,t=s,i=7,f=100;L25hbWU=\x1b\\",
+            &mut |reply| replies.extend_from_slice(reply),
+            Some(cell),
+            false,
+        );
+        assert!(replies.is_empty());
+        assert_eq!(pane.image_store().revision(), revision);
     }
 
     #[test]

@@ -3,8 +3,42 @@
 
 use crate::{
     graphics_store::{ImageFormat, StoreError, StoredImage, parse_control_command},
-    graphics_transfer::AssembledDirectTransfer,
+    graphics_transfer::{AssembledDirectTransfer, unsupported_medium_controls},
 };
+
+/// A recognizable file/temporary-file/shared-memory request can be rejected
+/// promptly so a child may retry using direct data. Never access its path or
+/// disclose whether it exists. Commands without a usable identity stay silent.
+pub(crate) fn unsupported_medium_reply(command: &[u8], can_display: bool) -> Option<Vec<u8>> {
+    if !can_display {
+        return None;
+    }
+    let controls = unsupported_medium_controls(command)?;
+    let action = controls.get(&b'a').map(Vec::as_slice);
+    let id = controls.get(&b'i').and_then(|value| parse_nonzero(value));
+    let image_number = controls.get(&b'I').and_then(|value| parse_nonzero(value));
+    if action == Some(b"q") {
+        if id.is_none() || controls.contains_key(&b'I') {
+            return None;
+        }
+    } else if id.is_none() && image_number.is_none() {
+        return None;
+    }
+    if controls.get(&b'q').is_some_and(|value| value == b"2") {
+        return None;
+    }
+    let placement_id = if action == Some(b"T") {
+        controls.get(&b'p').and_then(|value| parse_nonzero(value))
+    } else {
+        None
+    };
+    Some(encode_reply_with_number(
+        id,
+        image_number,
+        placement_id,
+        "EINVAL:unsupported medium",
+    ))
+}
 
 /// Return a bounded APC reply only when the current outer attachment can
 /// display the supported direct-data format. Silence lets the following
@@ -254,6 +288,39 @@ mod tests {
             direct_query_reply(assembled(ambiguous), true).unwrap(),
             b"\x1b_Gi=7;EINVAL:invalid image\x1b\\"
         );
+    }
+
+    #[test]
+    fn unsupported_media_reply_is_bounded_private_and_quiet_aware() {
+        let query = b"\x1b_Ga=q,t=f,i=31,f=100;L3ByaXZhdGUvcGljLnBuZw==\x1b\\";
+        assert_eq!(
+            unsupported_medium_reply(query, true).unwrap(),
+            b"\x1b_Gi=31;EINVAL:unsupported medium\x1b\\"
+        );
+        assert_eq!(unsupported_medium_reply(query, false), None);
+        let numbered = b"\x1b_Ga=T,t=s,I=13,p=9,f=100,q=1;L25hbWU=\x1b\\";
+        assert_eq!(
+            unsupported_medium_reply(numbered, true).unwrap(),
+            b"\x1b_GI=13,p=9;EINVAL:unsupported medium\x1b\\"
+        );
+        assert_eq!(
+            unsupported_medium_reply(b"\x1b_Ga=t,t=t,i=7,q=2;L3RtcC9pbWc=\x1b\\", true),
+            None
+        );
+    }
+
+    #[test]
+    fn malformed_or_unidentifiable_media_stay_silent() {
+        for command in [
+            b"\x1b_Ga=q,t=f,f=100;L3RtcC9pbWc=\x1b\\".as_slice(),
+            b"\x1b_Ga=q,t=f,I=13,f=100;L3RtcC9pbWc=\x1b\\",
+            b"\x1b_Ga=t,t=f,i=7,m=1;L3RtcC9pbWc=\x1b\\",
+            b"\x1b_Ga=t,t=f,i=7;***\x1b\\",
+            b"\x1b_Ga=t,t=f,i=7,q=3;L3RtcC9pbWc=\x1b\\",
+            b"\x1b_Ga=t,t=f,i=7,f=999;L3RtcC9pbWc=\x1b\\",
+        ] {
+            assert_eq!(unsupported_medium_reply(command, true), None);
+        }
     }
 
     #[test]

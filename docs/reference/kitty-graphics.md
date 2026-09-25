@@ -26,8 +26,13 @@ zlib compression. Both compressed input and decompressed output are bounded
 to 16 MiB; raw RGB/RGBA output must match its dimensions, and compressed PNG
 requires `S=<uncompressed-byte-count>`. Malformed streams, mismatched sizes,
 and trailing compressed bytes are discarded before they can replace an image.
-File, temporary-file and shared-memory media are not read. The chunk and
-continuation rules follow the
+File, temporary-file and shared-memory media are not read. When outer graphics
+support is confirmed, a complete, syntactically recognizable request for one
+of these media with a usable image identity receives a bounded
+`EINVAL:unsupported medium` reply, allowing the child to try direct data.
+The path or shared-memory name is never opened or reflected in the reply;
+`q=2` and unidentifiable, malformed, or incomplete requests stay silent.
+The chunk and continuation rules follow the
 [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
 
 Every pane now passes PTY output through its own framer before the text parser
@@ -364,7 +369,7 @@ subset. Completed transfers with invalid image data or unsupported controls
 receive a bounded error reply; `q=1` suppresses success and `q=2` suppresses
 all replies. A query never inserts or replaces an image. Without confirmed
 display support, or while detached, Rustmux stays silent on graphics queries;
-a following DA reply still reaches the child. File/shared-memory media,
+a following DA reply still reaches the child. File/shared-memory reads,
 malformed transfers and image-number references in queries remain unsupported.
 Numbered deletes use `d=n/N` as described above. Under the same attachment and
 sizing conditions, a completed direct-data `a=t` upload with an explicit
@@ -376,8 +381,8 @@ suppresses all replies; absent display support means no graphics reply.
 The same control-subset checks apply to the opt-in image-store APIs, including
 `a=T` uploads: unsupported placement or virtual-placement controls cannot
 silently replace a stored image even when PNG decoding is deferred.
-Malformed or unsupported transfers that never finish assembly still get no
-reply. A well-formed `a=p` placement with a nonzero `i` or `I` now replies
+Other malformed or unsupported transfers that never finish assembly still get
+no reply. A well-formed `a=p` placement with a nonzero `i` or `I` now replies
 after the store result under the same attachment and sizing conditions. A
 found image returns `OK`, a missing ID returns `ENOENT`, and an unsupported
 control or invalid placement geometry returns `EINVAL`. Numbered placements

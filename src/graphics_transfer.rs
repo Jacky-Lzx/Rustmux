@@ -197,6 +197,33 @@ fn parse_command(command: &[u8]) -> Option<(Controls, &[u8])> {
     Some((controls, encoded))
 }
 
+/// Recognize a complete non-direct transfer for a child-facing error reply.
+/// This validates only framing and metadata; the decoded path/name is never
+/// opened or otherwise inspected. Incomplete chunks and malformed commands
+/// remain silent because they cannot be correlated reliably.
+pub(crate) fn unsupported_medium_controls(command: &[u8]) -> Option<Controls> {
+    let (controls, encoded) = parse_command(command)?;
+    if !matches!(
+        controls.get(&b't').map(Vec::as_slice),
+        Some(b"f" | b"t" | b"s")
+    ) || !matches!(controls.get(&b'm').map(Vec::as_slice), None | Some(b"0"))
+        || !matches!(
+            controls.get(&b'a').map(Vec::as_slice),
+            None | Some(b"t" | b"T" | b"q")
+        )
+        || !matches!(
+            controls.get(&b'f').map(Vec::as_slice),
+            None | Some(b"24" | b"32" | b"100")
+        )
+        || !valid_quiet(&controls)
+        || encoded.is_empty()
+        || STANDARD.decode(encoded).is_err()
+    {
+        return None;
+    }
+    Some(controls)
+}
+
 fn valid_first(controls: &Controls) -> bool {
     matches!(
         controls.get(&b'a').map(Vec::as_slice),
