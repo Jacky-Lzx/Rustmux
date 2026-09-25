@@ -1,9 +1,9 @@
 """Opt-in end-to-end smoke against the installed Yazi image-preview protocol.
 
-Starts Rustmux on a fake Kitty-capable outer PTY, then runs real Yazi on an
-isolated 2x2 PNG. Success means Rustmux emitted a composed Kitty RGBA image
-with the fixture's four pixels in the right order for Yazi's Unicode
-placeholders; it does not require a GUI terminal.
+Starts Rustmux on a fake Kitty-capable outer PTY, then runs real Yazi on two
+isolated 2x2 PNGs. Success means Rustmux displays each preview with the right
+pixels and removes the old outer placement when the selection changes. It
+does not require a GUI terminal.
 """
 
 import base64
@@ -23,16 +23,32 @@ import zlib
 from pathlib import Path
 
 
+FIRST_COLORS = {
+    "red": (255, 0, 0, 255),
+    "green": (0, 255, 0, 255),
+    "blue": (0, 0, 255, 255),
+    "white": (255, 255, 255, 255),
+}
+SECOND_COLORS = {
+    "yellow": (255, 255, 0, 255),
+    "cyan": (0, 255, 255, 255),
+    "magenta": (255, 0, 255, 255),
+    "black": (0, 0, 0, 255),
+}
+
+
 def png_chunk(tag, data):
     payload = tag + data
     return struct.pack(">I", len(data)) + payload + struct.pack(">I", zlib.crc32(payload))
 
 
-def fixture_png(path):
-    # Two rows of RGBA pixels, filter method 0, no external image tool needed.
-    rows = bytes(
-        [0, 255, 0, 0, 255, 0, 255, 0, 255]
-        + [0, 0, 0, 255, 255, 255, 255, 255, 255]
+def fixture_png(path, colors):
+    # Colors are row-major; PNG rows use filter method 0, no image tool needed.
+    pixels = list(colors.values())
+    assert len(pixels) == 4
+    rows = b"".join(
+        b"\0" + b"".join(bytes(color) for color in pixels[index:index + 2])
+        for index in (0, 2)
     )
     path.write_bytes(
         b"\x89PNG\r\n\x1a\n"
@@ -84,20 +100,14 @@ def decode_outer_rgba_overlay(output):
             assert len(payload) == width * height * 4, (
                 "outer RGBA dimensions do not match payload"
             )
-            return width, height, bytes(payload)
+            return image_id, width, height, bytes(payload)
         assert controls.get(b"m") == b"1", "invalid outer Kitty chunk continuation"
     raise AssertionError("no complete Rustmux-owned RGBA overlay found")
 
 
-def assert_fixture_pixels(width, height, pixels):
+def assert_fixture_pixels(width, height, pixels, colors):
     assert width > 0 and height > 0
     assert len(pixels) == width * height * 4
-    colors = {
-        "red": (255, 0, 0, 255),
-        "green": (0, 255, 0, 255),
-        "blue": (0, 0, 255, 255),
-        "white": (255, 255, 255, 255),
-    }
     positions = {name: [] for name in colors}
     for offset in range(0, len(pixels), 4):
         color = tuple(pixels[offset:offset + 4])
@@ -107,18 +117,19 @@ def assert_fixture_pixels(width, height, pixels):
                 positions[name].append((cell % width, cell // width))
     for name, points in positions.items():
         assert points, f"Yazi fixture's {name} pixel is missing from the outer image"
-    assert max(x for x, _ in positions["red"]) < min(
-        x for x, _ in positions["green"]
-    ), "red must be left of green"
-    assert max(x for x, _ in positions["blue"]) < min(
-        x for x, _ in positions["white"]
-    ), "blue must be left of white"
-    assert max(y for _, y in positions["red"]) < min(
-        y for _, y in positions["blue"]
-    ), "red must be above blue"
-    assert max(y for _, y in positions["green"]) < min(
-        y for _, y in positions["white"]
-    ), "green must be above white"
+    upper_left, upper_right, lower_left, lower_right = positions.values()
+    assert max(x for x, _ in upper_left) < min(x for x, _ in upper_right), (
+        "top-row preview colors are out of order"
+    )
+    assert max(x for x, _ in lower_left) < min(x for x, _ in lower_right), (
+        "bottom-row preview colors are out of order"
+    )
+    assert max(y for _, y in upper_left) < min(y for _, y in lower_left), (
+        "left-column preview colors are out of order"
+    )
+    assert max(y for _, y in upper_right) < min(y for _, y in lower_right), (
+        "right-column preview colors are out of order"
+    )
 
 
 def main(binary):
@@ -131,7 +142,8 @@ def main(binary):
         root = Path(temporary)
         images = root / "images"
         images.mkdir()
-        fixture_png(images / "preview.png")
+        fixture_png(images / "a-preview.png", FIRST_COLORS)
+        fixture_png(images / "b-preview.png", SECOND_COLORS)
         config = root / "config"
         config.mkdir()
         master, slave = os.openpty()
@@ -174,10 +186,10 @@ def main(binary):
             # from that range proves that Yazi's upload and placeholders were
             # both accepted and composed, rather than merely appearing in raw
             # child output or in the initial capability query.
-            overlay = re.compile(rb"\x1b_Ga=T,f=32,[^;]*i=214748364[0-9][^;]*;")
+            overlay = re.compile(rb"\x1b_Ga=T,f=32,[^;]*i=([0-9]+)[^;]*;")
             def completed_overlay(data):
                 match = overlay.search(data)
-                if match is None:
+                if match is None or int(match.group(1)) < 0x80000000:
                     return False
                 final = data.find(b"\x1b_Gm=0;", match.end())
                 if final < 0 and b",m=0;" in match.group():
@@ -187,12 +199,25 @@ def main(binary):
             wait_for(master, output, completed_overlay, process, 20,
                      "complete composed Yazi image overlay")
             assert "\U0010eeee".encode() not in output, "child placeholder leaked to outer terminal"
-            assert_fixture_pixels(*decode_outer_rgba_overlay(output))
+            first_id, width, height, pixels = decode_outer_rgba_overlay(output)
+            assert_fixture_pixels(width, height, pixels, FIRST_COLORS)
+
+            output.clear()
+            os.write(master, b"j")
+            wait_for(master, output, completed_overlay, process, 20,
+                     "updated Yazi image overlay")
+            assert "\U0010eeee".encode() not in output, "child placeholder leaked after navigation"
+            second_id, width, height, pixels = decode_outer_rgba_overlay(output)
+            assert second_id != first_id, "preview update reused a live outer image ID"
+            assert_fixture_pixels(width, height, pixels, SECOND_COLORS)
+            deleted = f"\x1b_Ga=d,d=I,i={first_id},q=2\x1b\\".encode()
+            wait_for(master, output, lambda data: deleted in data, process, 5,
+                     "previous preview's outer image deletion")
             version_line = next(
                 (line.strip() for line in version.stdout.splitlines() if "Version:" in line),
                 version.stdout.strip().splitlines()[0] if version.stdout.strip() else "Yazi",
             )
-            print(f"PASS: {version_line}: Yazi preview RGBA pixels match fixture")
+            print(f"PASS: {version_line}: Yazi preview switches pixels and deletes the old image")
         finally:
             # Close the PTY first: on macOS a foreground terminal process can
             # otherwise remain blocked in terminal drain during termination.

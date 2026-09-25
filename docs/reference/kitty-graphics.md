@@ -398,13 +398,14 @@ otherwise it does not invent a pixel-size reply.
 An optional installed-Yazi smoke test exercises the actual preview path. After
 updating Yazi, run `cargo compat`. This alias runs the opt-in tests in
 `tests/compat.rs`, so future compatibility checks can join the same command.
-It starts Rustmux and Yazi in isolated PTYs with a generated PNG, then decodes
-the composed Kitty RGBA upload from Rustmux and checks the fixture's four
-colors and their relative positions. It also checks that child placeholders
-do not leak to the outer terminal. It is excluded from normal `cargo test` and
-CI because Yazi is not a project dependency; when Yazi is absent it reports
-`SKIP`. The smoke passed with Yazi 26.9.1, but only covers this one PNG/Kitty
-preview path, not every Yazi feature or terminal.
+It starts Rustmux and Yazi in isolated PTYs with two generated PNGs, then
+decodes Rustmux's composed Kitty RGBA uploads. It checks both four-color
+previews, their relative pixel positions, and deletion of the previous outer
+image after Yazi moves to the second file. It also checks that child
+placeholders do not leak to the outer terminal. It is excluded from normal
+`cargo test` and CI because Yazi is not a project dependency; when Yazi is
+absent, it reports `SKIP`. The smoke passed with Yazi 26.9.1, but only covers
+this PNG/Kitty preview path, not every Yazi feature or terminal.
 
 A child running inside a pane may probe graphics with `a=q`. On a currently
 attached outer terminal whose Kitty graphics probe succeeded and whose physical
