@@ -181,7 +181,7 @@ pixel offsets `X/Y`, explicit `c`/`r` cell extents, signed `z` index, and
 the decoded image; an omitted or zero `w/h` selects the remaining width/height.
 Missing extents remain unknown on the ordinary opt-in path. `U=1` on `a=T`
 or `a=p` now creates an invisible virtual placement with a nonzero `i` or
-`I`, required nonzero `c/r`, its source crop, pixel offset, and z-index
+`I`, nonzero `c/r` when supplied, its source crop, pixel offset, and z-index
 retained. It has no cursor anchor and never moves the cursor. A named `(i,p)`
 virtual placement can be replaced and deleted by image ID, number, or ID
 range; cell/row/column/z-index selectors do not match it. `U=0` remains an
@@ -197,8 +197,8 @@ new graphics command. Runtime redraw tracks placeholder changes separately
 from image-store revisions, and the child's placeholder glyphs are replaced
 with blank display cells before output to the outer terminal. This is an
 image-only composition path, not full Kitty Unicode-placeholder compatibility;
-Yazi preview has not been verified end-to-end. Relative placements remain
-unsupported. The opt-in store records metadata; runtime composition, redraw,
+the optional Yazi smoke below verifies only its PNG preview path. Relative
+placements remain unsupported. The opt-in store records metadata; runtime composition, redraw,
 and child replies are described below.
 
 In the opt-in pane path, a successful `a=T` or `a=p` placement with both
@@ -414,8 +414,10 @@ updating Yazi, run `cargo compat`. This alias runs the opt-in tests in
 It starts Rustmux and Yazi in isolated PTYs with two generated PNGs, then
 decodes Rustmux's composed Kitty RGBA uploads. It checks both four-color
 previews, their relative pixel positions, and deletion of the previous outer
-image after Yazi moves to the second file. It also checks that child
-placeholders do not leak to the outer terminal. It is excluded from normal
+image after Yazi moves to the second file. A pixel-only cell-width resize with
+the same text grid must replace the outer image and preserve the second preview's
+pixels. The test also checks that child placeholders do not leak to the outer
+terminal. It is excluded from normal
 `cargo test` and CI because Yazi is not a project dependency; when Yazi is
 absent, it reports `SKIP`. The smoke passed with Yazi 26.9.1, but only covers
 this PNG/Kitty preview path, not every Yazi feature or terminal.

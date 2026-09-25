@@ -2,8 +2,9 @@
 
 Starts Rustmux on a fake Kitty-capable outer PTY, then runs real Yazi on two
 isolated 2x2 PNGs. Success means Rustmux displays each preview with the right
-pixels and removes the old outer placement when the selection changes. It
-does not require a GUI terminal.
+pixels, removes the old outer placement when the selection changes, and
+refreshes the current preview after a pixel-only cell resize. It does not
+require a GUI terminal.
 """
 
 import base64
@@ -13,6 +14,7 @@ import re
 import select
 import shlex
 import shutil
+import signal
 import struct
 import subprocess
 import sys
@@ -75,8 +77,8 @@ def wait_for(master, output, predicate, process, timeout, label):
                 raise AssertionError("outer-terminal capture exceeded 20 MiB")
 
 
-def decode_outer_rgba_overlay(output):
-    """Decode the first complete Rustmux-owned Kitty RGBA upload."""
+def decode_outer_rgba_overlay(output, expected_width=None):
+    """Decode the first complete Rustmux-owned Kitty RGBA upload of a width."""
     payload = bytearray()
     dimensions = None
     for command in re.finditer(rb"\x1b_G([^;]*);([A-Za-z0-9+/=]*)\x1b\\", output):
@@ -87,7 +89,8 @@ def decode_outer_rgba_overlay(output):
             image_id = int(controls.get(b"i", b"0"))
             if image_id < 0x80000000:
                 continue
-            dimensions = (int(controls[b"s"]), int(controls[b"v"]))
+            width = int(controls[b"s"])
+            dimensions = (width, int(controls[b"v"])) if expected_width in (None, width) else None
             payload.clear()
         elif dimensions is None or set(controls) != {b"m"}:
             continue
@@ -187,14 +190,24 @@ def main(binary):
             # both accepted and composed, rather than merely appearing in raw
             # child output or in the initial capability query.
             overlay = re.compile(rb"\x1b_Ga=T,f=32,[^;]*i=([0-9]+)[^;]*;")
-            def completed_overlay(data):
-                match = overlay.search(data)
-                if match is None or int(match.group(1)) < 0x80000000:
-                    return False
-                final = data.find(b"\x1b_Gm=0;", match.end())
-                if final < 0 and b",m=0;" in match.group():
-                    final = match.start()
-                return final >= 0 and b"\x1b\\" in data[final:]
+            def completed_overlay(data, expected_width=None):
+                for match in overlay.finditer(data):
+                    if int(match.group(1)) < 0x80000000:
+                        continue
+                    if expected_width is not None:
+                        controls = dict(
+                            part.split(b"=", 1)
+                            for part in match.group().split(b";")[0].split(b",")
+                            if b"=" in part
+                        )
+                        if int(controls.get(b"s", b"0")) != expected_width:
+                            continue
+                    final = data.find(b"\x1b_Gm=0;", match.end())
+                    if final < 0 and b",m=0;" in match.group():
+                        final = match.start()
+                    if final >= 0 and b"\x1b\\" in data[final:]:
+                        return True
+                return False
 
             wait_for(master, output, completed_overlay, process, 20,
                      "complete composed Yazi image overlay")
@@ -213,11 +226,32 @@ def main(binary):
             deleted = f"\x1b_Ga=d,d=I,i={first_id},q=2\x1b\\".encode()
             wait_for(master, output, lambda data: deleted in data, process, 5,
                      "previous preview's outer image deletion")
+
+            # Keep the text grid unchanged while the physical cell width grows.
+            # Rustmux must replace its outer overlay even without a new upload
+            # or placeholder change from Yazi.
+            assert width % 12 == 0, "unexpected initial outer cell width"
+            resized_width = width // 12 * 13
+            output.clear()
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 1040, 480))
+            os.kill(process.pid, signal.SIGWINCH)
+            wait_for(master, output,
+                     lambda data: completed_overlay(data, resized_width), process, 20,
+                     "resized Yazi image overlay")
+            third_id, new_width, new_height, pixels = decode_outer_rgba_overlay(
+                output, resized_width
+            )
+            assert third_id != second_id, "pixel resize reused a live outer image ID"
+            assert (new_width, new_height) == (resized_width, height)
+            assert_fixture_pixels(new_width, new_height, pixels, SECOND_COLORS)
+            deleted = f"\x1b_Ga=d,d=I,i={second_id},q=2\x1b\\".encode()
+            wait_for(master, output, lambda data: deleted in data, process, 5,
+                     "pre-resize outer image deletion")
             version_line = next(
                 (line.strip() for line in version.stdout.splitlines() if "Version:" in line),
                 version.stdout.strip().splitlines()[0] if version.stdout.strip() else "Yazi",
             )
-            print(f"PASS: {version_line}: Yazi preview switches pixels and deletes the old image")
+            print(f"PASS: {version_line}: Yazi previews switch and survive cell-pixel resize")
         finally:
             # Close the PTY first: on macOS a foreground terminal process can
             # otherwise remain blocked in terminal drain during termination.

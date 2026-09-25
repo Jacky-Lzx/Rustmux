@@ -3398,6 +3398,79 @@ mod tests {
     }
 
     #[test]
+    fn kitty_overlay_refreshes_virtual_image_when_only_cell_pixels_change() {
+        use base64::Engine;
+
+        let cell = CellPixelSize::new(1, 1).unwrap();
+        let wider_cell = CellPixelSize::new(2, 1).unwrap();
+        let mut windows = Windows::default();
+        let window_id = windows
+            .create(
+                "virtual resize".into(),
+                spawn_window(
+                    OsStr::new("/bin/sh"),
+                    None,
+                    4,
+                    4,
+                    crate::config::Notifications::default(),
+                    crate::config::DEFAULT_SCROLLBACK_LINES,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let panes = windows.active_mut().unwrap().content_mut();
+        let encoded = base64::engine::general_purpose::STANDARD.encode([255; 16]);
+        let output = format!(
+            "\x1b_Ga=T,f=32,s=2,v=2,i=7,p=1,U=1;{encoded}\x1b\\\x1b[38;5;7m\x1b[58;5;1m\u{10eeee}\u{0305}\u{0305}\u{10eeee}\u{0305}\u{030d}"
+        );
+        panes.active_mut().process_output_with_image_store_sized(
+            output.as_bytes(),
+            &mut |_| {},
+            cell,
+        );
+        let revision = panes.active().image_store().revision();
+        let mut cache = KittyOverlays::default();
+        let mut output = VecDeque::new();
+        cache
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        assert!(
+            output
+                .iter()
+                .copied()
+                .collect::<Vec<_>>()
+                .windows(b"a=T,f=32,s=2,v=2,i=2147483648".len())
+                .any(|bytes| bytes == b"a=T,f=32,s=2,v=2,i=2147483648"),
+            "{}",
+            String::from_utf8_lossy(&output.iter().copied().collect::<Vec<_>>())
+        );
+        output.clear();
+
+        cache
+            .render(window_id, panes, wider_cell, 6, (3, 2), &mut output)
+            .unwrap();
+        let refreshed: Vec<_> = output.drain(..).collect();
+        assert!(refreshed.starts_with(b"\x1b_Ga=d,d=I,i=2147483648,q=2\x1b\\"));
+        assert!(
+            refreshed
+                .windows(b"a=T,f=32,s=4,v=2,i=2147483649".len())
+                .any(|bytes| bytes == b"a=T,f=32,s=4,v=2,i=2147483649")
+        );
+        assert_eq!(cache.entries.len(), 1);
+        assert_eq!(panes.active().image_store().revision(), revision);
+        let image = panes.active().compose_image_snapshot(wider_cell).unwrap();
+        assert_eq!(&image.pixels[0..4], &[255; 4]);
+        assert_eq!(&image.pixels[8..12], &[0; 4]);
+        cache
+            .render(window_id, panes, wider_cell, 6, (3, 2), &mut output)
+            .unwrap();
+        assert!(
+            output.is_empty(),
+            "unchanged resized image must not be resent"
+        );
+    }
+
+    #[test]
     fn kitty_overlay_emits_all_stacking_bands_and_cleans_each_id() {
         let cell = CellPixelSize::new(1, 1).unwrap();
         let mut windows = Windows::default();
