@@ -782,6 +782,20 @@ impl ImageStore {
                             controls.get(&b'd').is_some_and(|value| value == b"X"),
                         );
                     }
+                    Some(b"y" | b"Y") => {
+                        if !only_keys(&controls, b"adqy") {
+                            return Err(StoreError::UnsupportedAction);
+                        }
+                        let (Some(anchor), Some((rows, _))) = (anchor, viewport) else {
+                            return Err(StoreError::UnsupportedAction);
+                        };
+                        let row = required_delete_coordinate(&controls, b'y', rows)?;
+                        self.delete_row_placements(
+                            anchor.alternate,
+                            row as i128,
+                            controls.get(&b'd').is_some_and(|value| value == b"Y"),
+                        );
+                    }
                     Some(b"z" | b"Z") => {
                         if !only_keys(&controls, b"adqz") {
                             return Err(StoreError::UnsupportedAction);
@@ -871,6 +885,29 @@ impl ImageStore {
             };
             let left = geometry.anchor.column as u128;
             left <= column && column < left + u128::from(width)
+        });
+    }
+
+    /// A row selector needs a known height, but not a known width. Scrolled
+    /// placements are matched only where they still intersect the screen row.
+    fn delete_row_placements(&mut self, alternate: bool, row: i128, free_data: bool) {
+        self.delete_matching_placements(free_data, |placement| {
+            let Some(geometry) = placement.geometry else {
+                return false;
+            };
+            if geometry.anchor.alternate != alternate {
+                return false;
+            }
+            let Some(height) = geometry.rows else {
+                return false;
+            };
+            let top = geometry.anchor.row as i128
+                + i128::from(geometry.row_offset)
+                + i128::from(geometry.clip_top_rows);
+            let bottom =
+                geometry.anchor.row as i128 + i128::from(geometry.row_offset) + i128::from(height)
+                    - i128::from(geometry.clip_bottom_rows);
+            top <= row && row < bottom
         });
     }
 

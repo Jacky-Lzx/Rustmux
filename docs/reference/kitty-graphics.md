@@ -113,8 +113,16 @@ extra controls leave the store unchanged. Lowercase keeps image data and
 uppercase releases it only after the final reference disappears. The other
 screen, unanchored references, and placements with unknown width are untouched;
 the row extent need not be known.
-The low-level APIs without a viewport do not accept this selector. Other
-delete selectors remain unimplemented.
+`a=d,d=y/Y,y=<row>` similarly selects a one-based row on the active screen.
+It matches placements whose modeled, scroll-clipped portion intersects that row,
+including placements partly scrolled above the screen. Fully off-screen
+scrollback, the other screen, unanchored references, and placements with
+unknown height are untouched; the column extent need not be known. The row
+must be within the viewport. Lowercase retains image data; uppercase releases
+it only after the last reference disappears. Missing, malformed, out-of-range,
+or extra controls leave the store unchanged. The low-level APIs without a
+viewport accept neither the column nor row selector. Other delete selectors
+remain unimplemented.
 
 For the pane opt-in path, cursor-anchored placements now record a zero-based
 cell row and column, plus whether they belong to the alternate screen. A
@@ -400,6 +408,9 @@ malformed controls, shared-reference lifetime, and a child PTY round trip.
 Column-delete tests cover partial overlap, one-based bounds, data lifetime,
 active-screen and scrollback scoping, malformed controls, and a child PTY round
 trip.
+Row-delete tests cover partial overlap, one-based bounds, data lifetime,
+active-screen and scrollback scoping, unknown width, malformed controls, and a
+child PTY round trip.
 Anchor tests cover interleaved text, final-chunk position, alternate-screen
 identity, explicit layout options, malformed metadata, and named replacement.
 Screen-lifecycle tests cover split `CSI 2 J`, non-clearing text erasures,
