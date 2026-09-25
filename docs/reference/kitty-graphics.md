@@ -97,8 +97,15 @@ only placements at that z-index intersecting the cell are removed. Lowercase
 retains image data; uppercase releases data only when no references remain.
 Invalid or extra controls leave the store and cursor unchanged. The other
 screen, fully off-screen history, and unresolved-size placements are untouched.
-The low-level APIs without a viewport do not accept this selector. Other
-delete selectors remain unimplemented.
+The low-level APIs without a viewport do not accept this selector.
+`a=d,d=z/Z,z=<layer>` removes every modeled placement at the specified signed
+32-bit z-index, regardless of screen or scrollback position. Unlike the
+cell-scoped selectors, it does not require a cursor anchor, viewport, or known
+cell extents; unanchored placements with no recorded z-index are not matched.
+Lowercase retains image data; uppercase releases it only after its last
+reference disappears. A missing, malformed, or out-of-range z-index, or an
+extra control key, leaves the store unchanged. Other delete selectors remain
+unimplemented.
 
 For the pane opt-in path, cursor-anchored placements now record a zero-based
 cell row and column, plus whether they belong to the alternate screen. A
@@ -379,6 +386,8 @@ lowercase/hard data lifetime, and a child PTY round trip.
 Z-filtered cell-delete tests cover overlapping layers, default and negative z,
 signed bounds, malformed controls, screen/scrollback scoping, data lifetime,
 and a child PTY round trip.
+Global z-delete tests cover both screens, scrollback, signed bounds, malformed
+controls, reference lifetime, and a child PTY round trip.
 Anchor tests cover interleaved text, final-chunk position, alternate-screen
 identity, explicit layout options, malformed metadata, and named replacement.
 Screen-lifecycle tests cover split `CSI 2 J`, non-clearing text erasures,

@@ -608,8 +608,8 @@ impl ImageStore {
         Ok(())
     }
 
-    /// A strict, deliberately small APC G control-command subset: `a=p`
-    /// with `i`/`p`, and `a=d,d=i/I` with `i` and optional `p`.
+    /// A strict, deliberately small APC G control-command subset for
+    /// placement and deletion. Screen-dependent selectors require a pane.
     pub fn accept_control(&mut self, command: &[u8]) -> Result<(), StoreError> {
         self.accept_control_inner(command, None, None, None)
             .map(|_| ())
@@ -760,16 +760,22 @@ impl ImageStore {
                             return Err(StoreError::UnsupportedAction);
                         };
                         let (row, column) = required_delete_cell(&controls, rows, columns)?;
-                        let z_index = controls
-                            .get(&b'z')
-                            .and_then(|value| std::str::from_utf8(value).ok())
-                            .and_then(|value| value.parse::<i32>().ok())
-                            .ok_or(StoreError::InvalidPlacement)?;
+                        let z_index = required_delete_z_index(&controls)?;
                         self.delete_intersecting_placements(
                             anchor.alternate,
                             CellRegion::cell(row, column),
                             Some(z_index),
                             controls.get(&b'd').is_some_and(|value| value == b"Q"),
+                        );
+                    }
+                    Some(b"z" | b"Z") => {
+                        if !only_keys(&controls, b"adqz") {
+                            return Err(StoreError::UnsupportedAction);
+                        }
+                        let z_index = required_delete_z_index(&controls)?;
+                        self.delete_z_placements(
+                            z_index,
+                            controls.get(&b'd').is_some_and(|value| value == b"Z"),
                         );
                     }
                     Some(b"i" | b"I") => {
@@ -834,6 +840,35 @@ impl ImageStore {
                 touched_images.insert(placement.image_id);
             }
             !intersects
+        });
+        if !touched_images.is_empty() {
+            self.changed();
+        }
+        if free_data {
+            for id in touched_images {
+                if !self
+                    .placements
+                    .iter()
+                    .any(|placement| placement.image_id == id)
+                {
+                    self.remove(id);
+                }
+            }
+        }
+    }
+
+    /// A z-index selector is global to the pane, including the other screen
+    /// and scrollback; placements without modeled geometry cannot be matched.
+    fn delete_z_placements(&mut self, z_index: i32, free_data: bool) {
+        let mut touched_images = BTreeSet::new();
+        self.placements.retain(|placement| {
+            let matches = placement
+                .geometry
+                .is_some_and(|geometry| geometry.z_index == z_index);
+            if matches {
+                touched_images.insert(placement.image_id);
+            }
+            !matches
         });
         if !touched_images.is_empty() {
             self.changed();
@@ -967,6 +1002,14 @@ fn required_delete_cell(
         return Err(StoreError::InvalidPlacement);
     }
     Ok((row as i128, column as u128))
+}
+
+fn required_delete_z_index(controls: &Controls) -> Result<i32, StoreError> {
+    controls
+        .get(&b'z')
+        .and_then(|value| std::str::from_utf8(value).ok())
+        .and_then(|value| value.parse::<i32>().ok())
+        .ok_or(StoreError::InvalidPlacement)
 }
 
 fn parse_optional_placement_id(value: Option<&[u8]>) -> Result<Option<u32>, StoreError> {
@@ -1299,6 +1342,34 @@ mod tests {
         store.accept_control(b"\x1b_Ga=d,d=I,i=7\x1b\\").unwrap();
         assert!(store.is_empty());
         assert_eq!(store.total_bytes(), 0);
+    }
+
+    #[test]
+    fn z_delete_needs_no_viewport_or_resolved_extent() {
+        let mut store = ImageStore::new();
+        store
+            .insert(transfer(b"\x1b_Ga=t,f=100,i=7;QQ==\x1b\\"))
+            .unwrap();
+        store
+            .accept_control_at(b"\x1b_Ga=p,i=7,p=1,z=-2\x1b\\", CellAnchor::default())
+            .unwrap();
+        store.place(7, Some(2)).unwrap();
+        assert!(
+            store
+                .placements()
+                .next()
+                .unwrap()
+                .geometry
+                .unwrap()
+                .rows
+                .is_none()
+        );
+        store.accept_control(b"\x1b_Ga=d,d=Z,z=-2\x1b\\").unwrap();
+        assert_eq!(store.placements().count(), 1);
+        assert_eq!(store.placements().next().unwrap().placement_id, Some(2));
+        assert!(store.get(7).is_some());
+        store.accept_control(b"\x1b_Ga=d,d=Z,z=0\x1b\\").unwrap();
+        assert_eq!(store.placements().count(), 1);
     }
 
     #[test]
