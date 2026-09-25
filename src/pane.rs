@@ -555,6 +555,12 @@ impl Pane {
         mut graphics: GraphicsSink<'_>,
     ) {
         self.io.dirty = true;
+        let cell_pixels = match &graphics {
+            GraphicsSink::Store { cell_pixels, .. } => *cell_pixels,
+            _ => None,
+        };
+        self.parser
+            .set_cell_pixels(cell_pixels.map(|cell| (cell.width(), cell.height())));
         if matches!(graphics, GraphicsSink::Drop) {
             self.graphics_transfer.reset();
         }
@@ -798,7 +804,7 @@ mod io_tests {
 
         replies.clear();
         pane.process_output_for_runtime(
-            b"\x1b_Ga=T,i=61,p=7,f=32,s=1,v=1,U=1;AQIDBA==\x1b\\",
+            b"\x1b_Ga=T,i=61,p=7,f=32,s=1,v=1,U=1,X=1;AQIDBA==\x1b\\",
             &mut |reply| replies.extend_from_slice(reply),
             Some(cell),
             true,

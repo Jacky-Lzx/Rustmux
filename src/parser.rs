@@ -158,11 +158,17 @@ pub struct Parser {
     /// Screen-local image placements invalidated by terminal controls.
     /// Index 0 is the main screen, index 1 is the alternate screen.
     graphics_clears: [bool; 2],
+    /// Physical cell size reported by the attached terminal, if exact.
+    cell_pixels: Option<(u16, u16)>,
 }
 
 impl Parser {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub(crate) fn set_cell_pixels(&mut self, cell_pixels: Option<(u16, u16)>) {
+        self.cell_pixels = cell_pixels;
     }
 
     /// Parse for display only, discarding terminal replies.
@@ -330,8 +336,10 @@ impl Parser {
                 b'c' => {
                     screen.reset();
                     let bell_received = self.bell_received;
+                    let cell_pixels = self.cell_pixels;
                     *self = Self::new();
                     self.bell_received = bell_received;
+                    self.cell_pixels = cell_pixels;
                     self.graphics_clears = [true, true];
                     State::Ground
                 }
@@ -395,7 +403,14 @@ impl Parser {
                 let parameters = &mut self.parameters;
                 if (0x40..=0x7e).contains(&byte) {
                     if !parameters.invalid {
-                        Self::dispatch(screen, parameters, byte, reply, &mut self.graphics_clears);
+                        Self::dispatch(
+                            screen,
+                            parameters,
+                            byte,
+                            reply,
+                            &mut self.graphics_clears,
+                            self.cell_pixels,
+                        );
                     }
                     State::Ground
                 } else {
@@ -628,6 +643,7 @@ impl Parser {
         command: u8,
         reply: &mut impl FnMut(&[u8]),
         graphics_clears: &mut [bool; 2],
+        cell_pixels: Option<(u16, u16)>,
     ) {
         if command == b'u' && (parameters.private || parameters.keyboard_prefix.is_some()) {
             if parameters.private
@@ -678,7 +694,14 @@ impl Parser {
             return;
         }
         if command == b't' {
-            if parameters.is_plain_single_parameter(18) || parameters.is_plain_single_parameter(19)
+            if parameters.is_plain_single_parameter(16) {
+                if let Some((width, height)) = cell_pixels {
+                    let response = format!("\x1b[6;{height};{width}t");
+                    debug_assert!(response.len() <= MAX_REPLY_BYTES);
+                    reply(response.as_bytes());
+                }
+            } else if parameters.is_plain_single_parameter(18)
+                || parameters.is_plain_single_parameter(19)
             {
                 let (rows, columns) = screen.dimensions();
                 let operation = if parameters.values[0] == Some(18) {
@@ -1153,6 +1176,30 @@ mod tests {
         assert_eq!(screen.kitty_keyboard_flags(), 0);
         parser.advance(&mut screen, b"\x1b[?1049h");
         assert_eq!(screen.kitty_keyboard_flags(), 0);
+    }
+
+    #[test]
+    fn cell_pixel_query_reports_only_exact_known_dimensions() {
+        let mut parser = Parser::new();
+        let mut screen = Screen::new(2, 8).unwrap();
+        let mut replies = Vec::new();
+        parser.advance_with_replies(&mut screen, b"\x1b[16t", &mut |reply| {
+            replies.extend_from_slice(reply)
+        });
+        assert!(replies.is_empty());
+
+        parser.set_cell_pixels(Some((12, 20)));
+        for part in [b"\x1b[1".as_slice(), b"6t\x1bc\x1b[16t".as_slice()] {
+            parser.advance_with_replies(&mut screen, part, &mut |reply| {
+                replies.extend_from_slice(reply)
+            });
+        }
+        assert_eq!(replies, b"\x1b[6;20;12t\x1b[6;20;12t");
+        parser.set_cell_pixels(None);
+        parser.advance_with_replies(&mut screen, b"\x1b[16t", &mut |reply| {
+            replies.extend_from_slice(reply)
+        });
+        assert_eq!(replies, b"\x1b[6;20;12t\x1b[6;20;12t");
     }
 
     #[test]

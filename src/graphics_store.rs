@@ -591,14 +591,14 @@ impl ImageStore {
         } else {
             None
         };
-        let (geometry, virtual_layout) = if display {
+        let (geometry, virtual_geometry) = if display {
             let parsed = parse_geometry(
                 anchor.unwrap_or_default(),
                 |key| transfer.control(key),
                 cell_pixels,
             )?;
             if virtual_display {
-                (None, Some(VirtualPlacement::from_geometry(parsed)?))
+                (None, Some(parsed))
             } else {
                 (anchor.map(|_| parsed), None)
             }
@@ -649,6 +649,22 @@ impl ImageStore {
         } else {
             None
         };
+        let virtual_layout = virtual_geometry
+            .map(|mut geometry| {
+                if geometry.columns.is_none() || geometry.rows.is_none() {
+                    let cell = cell_pixels.ok_or(StoreError::InvalidPlacement)?;
+                    let (width, height) = decoded_dimensions
+                        .or_else(|| declared_width.zip(declared_height))
+                        .ok_or(StoreError::InvalidPlacement)?;
+                    let layout = geometry
+                        .pixel_layout(width, height, cell)
+                        .ok_or(StoreError::InvalidPlacement)?;
+                    geometry.columns = Some(layout.cell_bounds.width / u32::from(cell.width()));
+                    geometry.rows = Some(layout.cell_bounds.height / u32::from(cell.height()));
+                }
+                VirtualPlacement::from_geometry(geometry)
+            })
+            .transpose()?;
         // A client may use any 32-bit explicit ID, including one currently
         // occupied by a private anonymous image. Move that private image to
         // another opaque slot before replacing the client's requested ID.
@@ -2047,6 +2063,33 @@ mod tests {
             .unwrap();
         assert_eq!(store.placements().count(), 0);
         assert!(store.get(7).is_some());
+    }
+
+    #[test]
+    fn virtual_upload_infers_omitted_cell_extent_from_pixels() {
+        // Yazi's Kgp upload supplies s/v and U=1, but omits c/r.
+        let command =
+            b"\x1b_Gq=2,a=T,C=1,U=1,f=32,s=2,v=2,i=39354,m=0;/wAA/wD/AP8AAP///////w==\x1b\\";
+        let mut store = ImageStore::new();
+        assert_eq!(
+            store.insert_for_pane(
+                transfer(command),
+                CellAnchor::default(),
+                Some(CellPixelSize::new(1, 1).unwrap()),
+                false,
+            ),
+            Ok((39354, None))
+        );
+        let placement = store.placements().next().unwrap();
+        assert_eq!(placement.virtual_layout.unwrap().columns, 2);
+        assert_eq!(placement.virtual_layout.unwrap().rows, 2);
+
+        let mut without_pixels = ImageStore::new();
+        assert_eq!(
+            without_pixels.insert_for_pane(transfer(command), CellAnchor::default(), None, false),
+            Err(StoreError::InvalidPlacement)
+        );
+        assert!(without_pixels.is_empty());
     }
 
     #[test]

@@ -389,7 +389,20 @@ Switching windows, moving/resizing panes, deleting placements, or opening an
 overlay removes the runtime-owned images. Unknown/unsupported terminals and
 inexact cell sizes receive no image commands. Scrollback images, unsupported
 actions and transfers remain unimplemented;
-this does not yet claim Yazi preview compatibility.
+this is not a claim of complete Yazi or Kitty graphics compatibility.
+For virtual `U=1` direct-data uploads, omitted `c`/`r` cell extents are inferred
+from the declared image dimensions and exact cell-pixel size. The pane also
+answers `CSI 16t` with `CSI 6;height;width t` when that cell size is known;
+otherwise it does not invent a pixel-size reply.
+
+An optional installed-Yazi smoke test exercises the actual preview path. After
+updating Yazi, run `cargo test --locked --test yazi_compat -- --ignored --nocapture`.
+It starts Rustmux and Yazi in isolated PTYs with a generated PNG, then requires
+a composed Kitty image upload from Rustmux and checks that child placeholders
+do not leak to the outer terminal. It is excluded from normal `cargo test` and
+CI because Yazi is not a project dependency; when Yazi is absent it reports
+`SKIP`. The smoke passed with Yazi 26.9.1, but only covers this one PNG/Kitty
+preview path, not every Yazi feature or terminal.
 
 A child running inside a pane may probe graphics with `a=q`. On a currently
 attached outer terminal whose Kitty graphics probe succeeded and whose physical
