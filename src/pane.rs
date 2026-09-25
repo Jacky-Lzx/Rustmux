@@ -1033,6 +1033,82 @@ mod io_tests {
     }
 
     #[test]
+    fn out_of_bounds_virtual_placeholder_does_not_decode_image() {
+        let mut pane = Pane::spawn("/bin/sh", 2, 2).unwrap();
+        let cell = CellPixelSize::new(1, 1).unwrap();
+        pane.process_output_with_image_store_sized(
+            b"\x1b_Ga=T,f=100,i=7,p=1,U=1,c=1,r=1;AQ==\x1b\\",
+            &mut |_| {},
+            cell,
+        );
+        pane.process_output_with_image_store_sized(
+            "\x1b[38;5;7m\x1b[58;5;1m\u{10eeee}\u{0305}\u{030d}".as_bytes(),
+            &mut |_| {},
+            cell,
+        );
+        assert!(
+            pane.compose_image_snapshot(cell)
+                .unwrap()
+                .pixels
+                .iter()
+                .all(|&pixel| pixel == 0)
+        );
+
+        pane.process_output_with_image_store_sized(
+            "\x1b[1;1H\u{10eeee}\u{0305}\u{0305}".as_bytes(),
+            &mut |_| {},
+            cell,
+        );
+        assert!(pane.compose_image_snapshot(cell).is_err());
+    }
+
+    #[test]
+    fn out_of_bounds_virtual_placeholder_avoids_over_budget_resample() {
+        let mut pane = Pane::spawn("/bin/sh", 2, 2).unwrap();
+        let cell = CellPixelSize::new(3000, 1).unwrap();
+        pane.process_output_with_image_store_sized(
+            b"\x1b_Ga=T,f=32,s=1,v=1,i=7,p=1,U=1,c=1;/////w==\x1b\\",
+            &mut |_| {},
+            cell,
+        );
+        pane.process_output_with_image_store_sized(
+            "\x1b[38;5;7m\x1b[58;5;1m\u{10eeee}\u{0305}\u{030d}".as_bytes(),
+            &mut |_| {},
+            cell,
+        );
+        assert!(
+            pane.compose_image_snapshot(cell)
+                .unwrap()
+                .pixels
+                .iter()
+                .all(|&pixel| pixel == 0)
+        );
+    }
+
+    #[test]
+    fn inferred_virtual_extent_skips_out_of_bounds_cell_before_resampling() {
+        use base64::Engine;
+
+        let mut pane = Pane::spawn("/bin/sh", 2, 2).unwrap();
+        let initial_cell = CellPixelSize::new(1, 1).unwrap();
+        let encoded = base64::engine::general_purpose::STANDARD.encode([255; 16]);
+        let upload = format!("\x1b_Ga=T,f=32,s=2,v=2,i=7,p=1,U=1;{encoded}\x1b\\");
+        pane.process_output_with_image_store_sized(upload.as_bytes(), &mut |_| {}, initial_cell);
+        pane.process_output_with_image_store_sized(
+            "\x1b[38;5;7m\x1b[58;5;1m\u{10eeee}\u{0305}\u{030d}\u{10eeee}\u{0305}\u{0305}"
+                .as_bytes(),
+            &mut |_| {},
+            initial_cell,
+        );
+
+        let resized = pane
+            .compose_image_snapshot(CellPixelSize::new(2, 1).unwrap())
+            .unwrap();
+        assert_eq!(&resized.pixels[0..4], &[0; 4]);
+        assert_eq!(&resized.pixels[8..12], &[255; 4]);
+    }
+
+    #[test]
     fn unicode_placeholders_draw_only_their_own_image_cells_and_follow_text_edits() {
         use base64::Engine;
 

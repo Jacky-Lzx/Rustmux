@@ -89,6 +89,19 @@ impl VirtualPlacement {
         infer_cell_extent(source_width, source_height, explicit.0, explicit.1, cell)
     }
 
+    /// Explicit axes can reject a placeholder without decoding image data.
+    pub(crate) fn may_contain_cell(self, row: u32, column: u32) -> bool {
+        let column_valid = !matches!(
+            self.sizing,
+            PlacementSizing::FitWidth | PlacementSizing::FitBox
+        ) || column < self.columns;
+        let row_valid = !matches!(
+            self.sizing,
+            PlacementSizing::FitHeight | PlacementSizing::FitBox
+        ) || row < self.rows;
+        column_valid && row_valid
+    }
+
     /// A virtual prototype is fitted into its current cell rectangle; its
     /// anchor is supplied by each Unicode placeholder cell at composition time.
     pub fn pixel_layout(

@@ -350,8 +350,8 @@ fn collect_placeholder_clips(
             .or_insert(index);
         by_identity.entry((image_id, None)).or_insert(index);
     }
-    let mut rasters: Vec<Option<(ResampledPlacement, u32, u32)>> =
-        (0..virtuals.len()).map(|_| None).collect();
+    let mut extents = vec![None; virtuals.len()];
+    let mut rasters: Vec<Option<ResampledPlacement>> = (0..virtuals.len()).map(|_| None).collect();
     let mut raster_bytes = 0usize;
     for row in 0..rows {
         for (column, reference) in decode_row(screen.row(row).unwrap()).into_iter().enumerate() {
@@ -364,7 +364,14 @@ fn collect_placeholder_clips(
             };
             let placement = virtuals[index];
             let layout = placement.virtual_layout.unwrap();
-            if !include_z(layout.z_index) {
+            if !include_z(layout.z_index)
+                || !layout.may_contain_cell(reference.row, reference.column)
+            {
+                continue;
+            }
+            if extents[index]
+                .is_some_and(|(columns, rows)| reference.row >= rows || reference.column >= columns)
+            {
                 continue;
             }
             if rasters[index].is_none() {
@@ -378,6 +385,10 @@ fn collect_placeholder_clips(
                     .ok_or(SnapshotError::InvalidLayout)?;
                 let columns = pixel_layout.cell_bounds.width / u32::from(cell.width());
                 let rows = pixel_layout.cell_bounds.height / u32::from(cell.height());
+                extents[index] = Some((columns, rows));
+                if reference.row >= rows || reference.column >= columns {
+                    continue;
+                }
                 let raster = image
                     .resample_placement(pixel_layout)
                     .map_err(SnapshotError::Resample)?;
@@ -385,15 +396,16 @@ fn collect_placeholder_clips(
                     .checked_add(raster.pixels.len())
                     .filter(|&total| total <= MAX_COMPOSITE_INPUT_BYTES)
                     .ok_or(SnapshotError::Composite(CompositeError::InputLimit))?;
-                rasters[index] = Some((raster, columns, rows));
+                rasters[index] = Some(raster);
             }
-            let (raster, columns, rows) = rasters[index].as_ref().unwrap();
-            if reference.row >= *rows || reference.column >= *columns {
-                continue;
-            }
-            if let Some(tile) =
-                clip_virtual_cell(raster, reference.row, reference.column, row, column, cell)?
-            {
+            if let Some(tile) = clip_virtual_cell(
+                rasters[index].as_ref().unwrap(),
+                reference.row,
+                reference.column,
+                row,
+                column,
+                cell,
+            )? {
                 *input_bytes = input_bytes
                     .checked_add(tile.pixels.len())
                     .filter(|&total| total <= MAX_COMPOSITE_INPUT_BYTES)

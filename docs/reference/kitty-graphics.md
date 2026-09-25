@@ -399,7 +399,10 @@ retains which extent axes were explicitly requested: inferred axes are
 recalculated from the source dimensions when the exact cell-pixel size changes,
 while explicit `c`/`r` axes keep their cell counts. Placeholder cells outside
 the current extent no longer contribute image pixels after a resize. The pane
-also answers `CSI 16t` with `CSI 6;height;width t` when that cell size is known;
+rejects out-of-range placeholder cells before resampling the virtual image;
+explicit `c`/`r` bounds can also be checked before image decoding. An in-range
+reference to invalid image data remains a snapshot error on opt-in paths. The
+pane also answers `CSI 16t` with `CSI 6;height;width t` when that cell size is known;
 otherwise it does not invent a pixel-size reply.
 
 An optional installed-Yazi smoke test exercises the actual preview path. After
