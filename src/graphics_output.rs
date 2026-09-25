@@ -10,6 +10,62 @@ use std::io::{self, Write};
 
 // 3072 raw bytes produce exactly the protocol's 4096-byte Base64 limit.
 const RAW_CHUNK_BYTES: usize = 3072;
+const MORE_HEADER: &[u8] = b"\x1b_Gm=1;";
+const FINAL_HEADER: &[u8] = b"\x1b_Gm=0;";
+const APC_END: &[u8] = b"\x1b\\";
+
+/// Exact byte count of the encoded placement, including all APC wrappers.
+/// Rejects the same invalid images and IDs as the writer without allocating
+/// an encoded pixel buffer or writing any output.
+pub fn kitty_rgba_placement_len(
+    image: &DecodedImage,
+    image_id: u32,
+    z_index: i32,
+) -> io::Result<usize> {
+    validate(image, image_id)?;
+    let mut chunks = image.pixels.chunks(RAW_CHUNK_BYTES).peekable();
+    let mut total = 0usize;
+    let mut first = true;
+    while let Some(raw) = chunks.next() {
+        let header_len = if first {
+            first = false;
+            first_header(image, image_id, z_index, chunks.peek().is_some()).len()
+        } else {
+            if chunks.peek().is_some() {
+                MORE_HEADER.len()
+            } else {
+                FINAL_HEADER.len()
+            }
+        };
+        let encoded_len = raw.len().div_ceil(3) * 4;
+        total = total
+            .checked_add(header_len + encoded_len + APC_END.len())
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "Kitty output length overflow")
+            })?;
+    }
+    Ok(total)
+}
+
+/// Write only if the complete encoded placement fits `max_bytes`.
+///
+/// Exceeding the budget returns `InvalidInput` before the first byte is
+/// written. Ordinary writer errors can still leave a partial transfer.
+pub fn write_kitty_rgba_placement_with_limit(
+    image: &DecodedImage,
+    image_id: u32,
+    z_index: i32,
+    max_bytes: usize,
+    output: &mut impl Write,
+) -> io::Result<()> {
+    if kitty_rgba_placement_len(image, image_id, z_index)? > max_bytes {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Kitty placement exceeds output budget",
+        ));
+    }
+    write_kitty_rgba_placement(image, image_id, z_index, output)
+}
 
 /// Write one `a=T` placement at the outer terminal's current cursor.
 ///
@@ -23,6 +79,26 @@ pub fn write_kitty_rgba_placement(
     z_index: i32,
     output: &mut impl Write,
 ) -> io::Result<()> {
+    validate(image, image_id)?;
+
+    let mut chunks = image.pixels.chunks(RAW_CHUNK_BYTES).peekable();
+    let mut first = true;
+    while let Some(raw) = chunks.next() {
+        let more = chunks.peek().is_some();
+        if first {
+            output.write_all(first_header(image, image_id, z_index, more).as_bytes())?;
+            first = false;
+        } else {
+            output.write_all(if more { MORE_HEADER } else { FINAL_HEADER })?;
+        }
+        let encoded = STANDARD.encode(raw);
+        output.write_all(encoded.as_bytes())?;
+        output.write_all(APC_END)?;
+    }
+    Ok(())
+}
+
+fn validate(image: &DecodedImage, image_id: u32) -> io::Result<()> {
     let expected = usize::try_from(image.width)
         .ok()
         .and_then(|width| width.checked_mul(usize::try_from(image.height).ok()?))
@@ -38,30 +114,18 @@ pub fn write_kitty_rgba_placement(
             "invalid Kitty RGBA image or image ID",
         ));
     }
-
-    let mut chunks = image.pixels.chunks(RAW_CHUNK_BYTES).peekable();
-    let mut first = true;
-    while let Some(raw) = chunks.next() {
-        let more = chunks.peek().is_some();
-        if first {
-            write!(
-                output,
-                "\x1b_Ga=T,f=32,s={},v={},i={},z={},C=1,q=2,m={};",
-                image.width,
-                image.height,
-                image_id,
-                z_index,
-                u8::from(more),
-            )?;
-            first = false;
-        } else {
-            write!(output, "\x1b_Gm={};", u8::from(more))?;
-        }
-        let encoded = STANDARD.encode(raw);
-        output.write_all(encoded.as_bytes())?;
-        output.write_all(b"\x1b\\")?;
-    }
     Ok(())
+}
+
+fn first_header(image: &DecodedImage, image_id: u32, z_index: i32, more: bool) -> String {
+    format!(
+        "\x1b_Ga=T,f=32,s={},v={},i={},z={},C=1,q=2,m={};",
+        image.width,
+        image.height,
+        image_id,
+        z_index,
+        u8::from(more),
+    )
 }
 
 #[cfg(test)]
@@ -156,6 +220,51 @@ mod tests {
                 .kind(),
             io::ErrorKind::BrokenPipe
         );
+    }
+
+    #[test]
+    fn preflight_matches_exact_bytes_across_chunk_boundaries() {
+        for raw_len in [4, RAW_CHUNK_BYTES, RAW_CHUNK_BYTES + 4, RAW_CHUNK_BYTES * 2] {
+            let rgba = image(vec![0x7f; raw_len], 1, u32::try_from(raw_len / 4).unwrap());
+            let expected = kitty_rgba_placement_len(&rgba, 1234, i32::MIN).unwrap();
+            let mut unbounded = Vec::new();
+            write_kitty_rgba_placement(&rgba, 1234, i32::MIN, &mut unbounded).unwrap();
+            assert_eq!(expected, unbounded.len());
+
+            let mut bounded = Vec::new();
+            write_kitty_rgba_placement_with_limit(&rgba, 1234, i32::MIN, expected, &mut bounded)
+                .unwrap();
+            assert_eq!(bounded, unbounded);
+
+            let mut rejected = Vec::new();
+            assert_eq!(
+                write_kitty_rgba_placement_with_limit(
+                    &rgba,
+                    1234,
+                    i32::MIN,
+                    expected - 1,
+                    &mut rejected,
+                )
+                .unwrap_err()
+                .kind(),
+                io::ErrorKind::InvalidInput
+            );
+            assert!(rejected.is_empty());
+        }
+    }
+
+    #[test]
+    fn frame_sized_budget_rejects_large_image_without_writing() {
+        let rgba = image(vec![0; 1024 * 3100 * 4], 1024, 3100);
+        let mut output = Vec::new();
+        assert!(kitty_rgba_placement_len(&rgba, 1, 0).unwrap() > 16 * 1024 * 1024);
+        assert_eq!(
+            write_kitty_rgba_placement_with_limit(&rgba, 1, 0, 16 * 1024 * 1024, &mut output)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+        assert!(output.is_empty());
     }
 
     struct FailingWriter;

@@ -173,6 +173,13 @@ an output-streaming/backpressure decision. A failed write may leave a partial
 transfer. The chunk format follows the
 [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
 
+`kitty_rgba_placement_len` now preflights the exact encoded byte count,
+including every APC wrapper, without allocating a Base64 image. The bounded
+`write_kitty_rgba_placement_with_limit` rejects a placement before writing
+when its complete transfer would exceed the caller's remaining output budget.
+This prepares the 16 MiB runtime frame queue for a later graphics integration;
+it does not yet send images during normal redraw.
+
 `GraphicsCapabilityProbe` is a separate opt-in outer-terminal detection
 boundary. It generates a one-pixel, direct-RGB `a=q` query followed by primary
 device attributes. Its bounded incremental filter consumes the matching
