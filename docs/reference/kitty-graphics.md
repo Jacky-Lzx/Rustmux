@@ -132,6 +132,15 @@ is ordered among images, but its relationship to text and cell backgrounds is
 not composed yet. Redraw and the normal runtime are unchanged. The ordering
 follows the [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
 
+`Pane::compose_image_snapshot` now connects those opt-in stages for the current
+screen. Given a verified physical cell size, it derives the pane's pixel
+viewport, decodes each cursor-anchored image, recalculates placement layout,
+resamples and scroll-clips it, then blends the visible layers. Placements on
+the other screen and unanchored references are omitted. Invalid selected-screen
+image data or geometry fails the whole snapshot rather than returning a partial
+image. The returned canvas is transparent where no image is placed; the store
+is unchanged. It remains image-only and is not called by the normal renderer.
+
 `X/Y` position an image within its first cell; they are not added to `c/r` or
 cursor movement. On a sized opt-in call, either offset must be smaller than
 its cell pixel dimension. An invalid offset rejects the placement before an
@@ -196,6 +205,8 @@ negative and disjoint anchors, malformed buffers, and oversized geometry.
 Scroll-clip tests verify top/bottom pixel rows and a pane-driven margin scroll.
 Composition tests cover `z`/image-ID order, straight-alpha blending, offsets,
 malformed layers, and output/work limits.
+Snapshot tests cover the pane-level pipeline, screen selection, invalid image
+data, and oversized viewports.
 Anchor tests cover interleaved text, final-chunk position, alternate-screen
 identity, explicit layout options, malformed metadata, and named replacement.
 Screen-lifecycle tests cover split `CSI 2 J`, non-clearing text erasures,

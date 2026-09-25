@@ -8,6 +8,7 @@ use nix::{
 };
 use rustmux::{
     graphics_composite::{ImageLayer, compose_image_layers},
+    graphics_snapshot::{SnapshotError, compose_store_snapshot},
     graphics_store::{
         CellPixelSize, PixelRect, PixelSize, PlacementGeometry, PlacementSizing, SignedPixelPoint,
     },
@@ -736,6 +737,9 @@ fn kitty_margin_scroll_clip_is_applied_to_visible_pixels() {
         }
     );
     assert_eq!(clipped.pixels, [20, 0, 0, 255]);
+    let snapshot = pane.compose_image_snapshot(cell).unwrap();
+    assert_eq!(&snapshot.pixels[20 * 4..20 * 4 + 4], &[20, 0, 0, 255]);
+    assert!(snapshot.pixels[..20 * 4].iter().all(|&byte| byte == 0));
 }
 
 #[test]
@@ -797,6 +801,78 @@ fn kitty_clipped_placements_compose_in_image_id_order() {
     .unwrap();
     assert_eq!(&canvas.pixels[..4], &[85, 0, 170, 192]);
     assert!(canvas.pixels[4..].iter().all(|&byte| byte == 0));
+    assert_eq!(pane.compose_image_snapshot(cell).unwrap(), canvas);
+}
+
+#[test]
+fn kitty_image_snapshot_selects_current_screen_without_mutating_references() {
+    let mut pane = Pane::spawn("/bin/sh", 2, 2).unwrap();
+    let cell = CellPixelSize::new(1, 1).unwrap();
+    let image = format!(
+        "\x1b_Ga=T,f=32,s=1,v=1,i=7,p=1,c=1,r=1,C=1;{}\x1b\\",
+        STANDARD.encode([255, 0, 0, 255])
+    );
+    pane.process_output_with_image_store_sized(image.as_bytes(), &mut |_| {}, cell);
+    let main = pane.compose_image_snapshot(cell).unwrap();
+    assert_eq!(&main.pixels[..4], &[255, 0, 0, 255]);
+
+    pane.process_output_with_image_store_sized(b"\x1b[?1047h", &mut |_| {}, cell);
+    let alternate = pane.compose_image_snapshot(cell).unwrap();
+    assert!(alternate.pixels.iter().all(|&byte| byte == 0));
+    pane.process_output_with_image_store_sized(b"\x1b[?1047l", &mut |_| {}, cell);
+    assert_eq!(pane.compose_image_snapshot(cell).unwrap(), main);
+    assert_eq!(pane.image_store().placements().count(), 1);
+}
+
+#[test]
+fn kitty_image_snapshot_resolves_unsized_natural_placement_on_demand() {
+    let mut pane = Pane::spawn("/bin/sh", 2, 2).unwrap();
+    let image = format!(
+        "\x1b_Ga=T,f=32,s=1,v=1,i=7,p=1,C=1;{}\x1b\\",
+        STANDARD.encode([3, 4, 5, 255])
+    );
+    pane.process_output_with_image_store(image.as_bytes(), &mut |_| {});
+    let geometry = placement_geometry(&pane, 1);
+    assert_eq!(geometry.columns, None);
+    assert_eq!(geometry.rows, None);
+    let snapshot = pane
+        .compose_image_snapshot(CellPixelSize::new(2, 2).unwrap())
+        .unwrap();
+    assert_eq!(&snapshot.pixels[..4], &[3, 4, 5, 255]);
+    assert!(snapshot.pixels[4..].iter().all(|&byte| byte == 0));
+}
+
+#[test]
+fn kitty_image_snapshot_reports_invalid_data_and_oversized_canvas() {
+    let mut pane = Pane::spawn("/bin/sh", 2, 2).unwrap();
+    pane.process_output_with_image_store(
+        b"\x1b_Ga=T,f=100,i=7,p=1,c=1,r=1,C=1;QQ==\x1b\\",
+        &mut |_| {},
+    );
+    let cell = CellPixelSize::new(1, 1).unwrap();
+    assert!(matches!(
+        pane.compose_image_snapshot(cell),
+        Err(SnapshotError::Decode(_))
+    ));
+    assert_eq!(pane.image_store().placements().count(), 1);
+
+    let huge_cell = CellPixelSize::new(4096, 4096).unwrap();
+    assert_eq!(
+        pane.compose_image_snapshot(huge_cell),
+        Err(SnapshotError::OutputLimit)
+    );
+    assert_eq!(
+        compose_store_snapshot(
+            pane.image_store(),
+            false,
+            PixelSize {
+                width: u32::MAX,
+                height: u32::MAX,
+            },
+            cell,
+        ),
+        Err(SnapshotError::OutputLimit)
+    );
 }
 
 #[test]

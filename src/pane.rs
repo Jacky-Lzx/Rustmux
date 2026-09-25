@@ -2,7 +2,9 @@
 
 use crate::{
     graphics::{GraphicsEvent, GraphicsFramer},
-    graphics_store::{CellAnchor, CellPixelSize, ImageStore},
+    graphics_decode::DecodedImage,
+    graphics_snapshot::{SnapshotError, compose_store_snapshot},
+    graphics_store::{CellAnchor, CellPixelSize, ImageStore, PixelSize},
     graphics_transfer::{AssembledDirectTransfer, DirectTransferAssembler},
     parser::Parser,
     pty::PtyShell,
@@ -412,6 +414,32 @@ impl Pane {
 
     pub fn image_store_mut(&mut self) -> &mut ImageStore {
         &mut self.image_store
+    }
+
+    /// Produce an image-only RGBA snapshot for the current screen when the
+    /// caller knows the physical cell size. Text and backgrounds are omitted;
+    /// the ordinary runtime does not use this opt-in path.
+    pub fn compose_image_snapshot(
+        &self,
+        cell_pixels: CellPixelSize,
+    ) -> Result<DecodedImage, SnapshotError> {
+        let (rows, columns) = self.screen.dimensions();
+        let viewport = PixelSize {
+            width: u32::try_from(columns)
+                .ok()
+                .and_then(|columns| columns.checked_mul(u32::from(cell_pixels.width())))
+                .ok_or(SnapshotError::InvalidViewport)?,
+            height: u32::try_from(rows)
+                .ok()
+                .and_then(|rows| rows.checked_mul(u32::from(cell_pixels.height())))
+                .ok_or(SnapshotError::InvalidViewport)?,
+        };
+        compose_store_snapshot(
+            &self.image_store,
+            self.screen.is_alternate(),
+            viewport,
+            cell_pixels,
+        )
     }
 
     fn process_output_inner(
