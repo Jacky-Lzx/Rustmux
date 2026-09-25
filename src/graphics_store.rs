@@ -52,6 +52,34 @@ pub struct CellAnchor {
     pub alternate: bool,
 }
 
+#[derive(Clone, Copy)]
+struct CellRegion {
+    top: i128,
+    bottom: i128,
+    left: u128,
+    right: u128,
+}
+
+impl CellRegion {
+    fn screen(rows: usize, columns: usize) -> Self {
+        Self {
+            top: 0,
+            bottom: rows as i128,
+            left: 0,
+            right: columns as u128,
+        }
+    }
+
+    fn cell(row: i128, column: u128) -> Self {
+        Self {
+            top: row,
+            bottom: row + 1,
+            left: column,
+            right: column + 1,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct PlacementGeometry {
     pub anchor: CellAnchor,
@@ -688,10 +716,8 @@ impl ImageStore {
                         };
                         self.delete_intersecting_placements(
                             anchor.alternate,
-                            0,
-                            rows as i128,
-                            0,
-                            columns as u128,
+                            CellRegion::screen(rows, columns),
+                            None,
                             controls.get(&b'd').is_some_and(|value| value == b"A"),
                         );
                     }
@@ -706,10 +732,8 @@ impl ImageStore {
                         let column = anchor.column as u128;
                         self.delete_intersecting_placements(
                             anchor.alternate,
-                            row,
-                            row + 1,
-                            column,
-                            column + 1,
+                            CellRegion::cell(row, column),
+                            None,
                             controls.get(&b'd').is_some_and(|value| value == b"C"),
                         );
                     }
@@ -720,28 +744,32 @@ impl ImageStore {
                         let (Some(anchor), Some((rows, columns))) = (anchor, viewport) else {
                             return Err(StoreError::UnsupportedAction);
                         };
-                        let column = controls
-                            .get(&b'x')
-                            .and_then(|value| parse_positive_u32(value))
-                            .and_then(|value| usize::try_from(value - 1).ok())
-                            .ok_or(StoreError::InvalidPlacement)?;
-                        let row = controls
-                            .get(&b'y')
-                            .and_then(|value| parse_positive_u32(value))
-                            .and_then(|value| usize::try_from(value - 1).ok())
-                            .ok_or(StoreError::InvalidPlacement)?;
-                        if row >= rows || column >= columns {
-                            return Err(StoreError::InvalidPlacement);
-                        }
-                        let row = row as i128;
-                        let column = column as u128;
+                        let (row, column) = required_delete_cell(&controls, rows, columns)?;
                         self.delete_intersecting_placements(
                             anchor.alternate,
-                            row,
-                            row + 1,
-                            column,
-                            column + 1,
+                            CellRegion::cell(row, column),
+                            None,
                             controls.get(&b'd').is_some_and(|value| value == b"P"),
+                        );
+                    }
+                    Some(b"q" | b"Q") => {
+                        if !only_keys(&controls, b"adqxyz") {
+                            return Err(StoreError::UnsupportedAction);
+                        }
+                        let (Some(anchor), Some((rows, columns))) = (anchor, viewport) else {
+                            return Err(StoreError::UnsupportedAction);
+                        };
+                        let (row, column) = required_delete_cell(&controls, rows, columns)?;
+                        let z_index = controls
+                            .get(&b'z')
+                            .and_then(|value| std::str::from_utf8(value).ok())
+                            .and_then(|value| value.parse::<i32>().ok())
+                            .ok_or(StoreError::InvalidPlacement)?;
+                        self.delete_intersecting_placements(
+                            anchor.alternate,
+                            CellRegion::cell(row, column),
+                            Some(z_index),
+                            controls.get(&b'd').is_some_and(|value| value == b"Q"),
                         );
                     }
                     Some(b"i" | b"I") => {
@@ -770,10 +798,8 @@ impl ImageStore {
     fn delete_intersecting_placements(
         &mut self,
         alternate: bool,
-        region_top: i128,
-        region_bottom: i128,
-        region_left: u128,
-        region_right: u128,
+        region: CellRegion,
+        z_filter: Option<i32>,
         free_data: bool,
     ) {
         let mut touched_images = BTreeSet::new();
@@ -782,6 +808,9 @@ impl ImageStore {
                 return true;
             };
             if geometry.anchor.alternate != alternate {
+                return true;
+            }
+            if z_filter.is_some_and(|z| geometry.z_index != z) {
                 return true;
             }
             let (Some(height), Some(width)) = (geometry.rows, geometry.columns) else {
@@ -795,11 +824,11 @@ impl ImageStore {
                     - i128::from(geometry.clip_bottom_rows);
             let left = geometry.anchor.column as u128;
             let right = left + u128::from(width);
-            let intersects = top < region_bottom
-                && bottom > region_top
+            let intersects = top < region.bottom
+                && bottom > region.top
                 && top < bottom
-                && left < region_right
-                && right > region_left
+                && left < region.right
+                && right > region.left
                 && right > left;
             if intersects {
                 touched_images.insert(placement.image_id);
@@ -916,6 +945,28 @@ fn required_id(controls: &Controls) -> Result<u32, StoreError> {
         .get(&b'i')
         .and_then(|bytes| parse_positive_u32(bytes))
         .ok_or(StoreError::UnsupportedIdentity)
+}
+
+/// Kitty delete coordinates are one-based screen cells, unlike source pixel
+/// coordinates in placement commands.
+fn required_delete_cell(
+    controls: &Controls,
+    rows: usize,
+    columns: usize,
+) -> Result<(i128, u128), StoreError> {
+    let coordinate = |key| {
+        controls
+            .get(&key)
+            .and_then(|value| parse_positive_u32(value))
+            .and_then(|value| usize::try_from(value - 1).ok())
+            .ok_or(StoreError::InvalidPlacement)
+    };
+    let column = coordinate(b'x')?;
+    let row = coordinate(b'y')?;
+    if row >= rows || column >= columns {
+        return Err(StoreError::InvalidPlacement);
+    }
+    Ok((row as i128, column as u128))
 }
 
 fn parse_optional_placement_id(value: Option<&[u8]>) -> Result<Option<u32>, StoreError> {

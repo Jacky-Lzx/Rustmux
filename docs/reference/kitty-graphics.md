@@ -91,7 +91,14 @@ the current cursor position; lowercase keeps image data and uppercase releases
 it only after the last reference disappears. It does not move the cursor or
 touch another screen, fully off-screen history, or unresolved-size placements.
 The low-level APIs without a viewport do not accept this selector.
-Other delete selectors remain unimplemented.
+The pane path also accepts `a=d,d=q/Q,x=<column>,y=<row>,z=<layer>`.
+It requires the same valid one-based screen cell and a signed 32-bit `z`;
+only placements at that z-index intersecting the cell are removed. Lowercase
+retains image data; uppercase releases data only when no references remain.
+Invalid or extra controls leave the store and cursor unchanged. The other
+screen, fully off-screen history, and unresolved-size placements are untouched.
+The low-level APIs without a viewport do not accept this selector. Other
+delete selectors remain unimplemented.
 
 For the pane opt-in path, cursor-anchored placements now record a zero-based
 cell row and column, plus whether they belong to the alternate screen. A
@@ -369,6 +376,9 @@ cursor position, invalid keys, and a child PTY round trip.
 Coordinate-delete tests cover one-based coordinates, overlapping placements,
 invalid/out-of-range controls, current-screen and scrollback scoping,
 lowercase/hard data lifetime, and a child PTY round trip.
+Z-filtered cell-delete tests cover overlapping layers, default and negative z,
+signed bounds, malformed controls, screen/scrollback scoping, data lifetime,
+and a child PTY round trip.
 Anchor tests cover interleaved text, final-chunk position, alternate-screen
 identity, explicit layout options, malformed metadata, and named replacement.
 Screen-lifecycle tests cover split `CSI 2 J`, non-clearing text erasures,
