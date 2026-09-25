@@ -650,19 +650,12 @@ impl ImageStore {
             None
         };
         let virtual_layout = virtual_geometry
-            .map(|mut geometry| {
-                if geometry.columns.is_none() || geometry.rows.is_none() {
-                    let cell = cell_pixels.ok_or(StoreError::InvalidPlacement)?;
-                    let (width, height) = decoded_dimensions
-                        .or_else(|| declared_width.zip(declared_height))
-                        .ok_or(StoreError::InvalidPlacement)?;
-                    let layout = geometry
-                        .pixel_layout(width, height, cell)
-                        .ok_or(StoreError::InvalidPlacement)?;
-                    geometry.columns = Some(layout.cell_bounds.width / u32::from(cell.width()));
-                    geometry.rows = Some(layout.cell_bounds.height / u32::from(cell.height()));
-                }
-                VirtualPlacement::from_geometry(geometry)
+            .map(|geometry| {
+                resolve_virtual_layout(
+                    geometry,
+                    cell_pixels,
+                    decoded_dimensions.or_else(|| declared_width.zip(declared_height)),
+                )
             })
             .transpose()?;
         // A client may use any 32-bit explicit ID, including one currently
@@ -883,17 +876,7 @@ impl ImageStore {
         if geometry.columns.is_some() && geometry.rows.is_some() {
             return Some(geometry);
         }
-        let dimensions = if let Some(&cached) = self.decoded_dimensions.get(&image_id) {
-            cached
-        } else {
-            let decoded = self
-                .images
-                .get(&image_id)
-                .and_then(|image| image.decode_rgba().ok())
-                .map(|image| (image.width, image.height));
-            self.decoded_dimensions.insert(image_id, decoded);
-            decoded
-        };
+        let dimensions = self.image_dimensions(image_id);
         let Some((width, height)) = dimensions
             .and_then(|(width, height)| geometry.source.intersected_dimensions(width, height))
         else {
@@ -910,6 +893,19 @@ impl ImageStore {
             last.geometry = Some(geometry);
         }
         Some(geometry)
+    }
+
+    fn image_dimensions(&mut self, image_id: u32) -> Option<(u32, u32)> {
+        if let Some(&cached) = self.decoded_dimensions.get(&image_id) {
+            return cached;
+        }
+        let decoded = self
+            .images
+            .get(&image_id)
+            .and_then(|image| image.decode_rgba().ok())
+            .map(|image| (image.width, image.height));
+        self.decoded_dimensions.insert(image_id, decoded);
+        decoded
     }
 
     fn accept_control_inner(
@@ -948,13 +944,24 @@ impl ImageStore {
                 if self.private_images.contains(&id) {
                     return Err(StoreError::MissingImage);
                 }
+                if !self.images.contains_key(&id) {
+                    return Err(StoreError::MissingImage);
+                }
                 let parsed = parse_geometry(
                     anchor.unwrap_or_default(),
                     |key| controls.get(&key).map(Vec::as_slice),
                     cell_pixels,
                 )?;
                 let (geometry, virtual_layout) = if virtual_display {
-                    (None, Some(VirtualPlacement::from_geometry(parsed)?))
+                    let dimensions = if parsed.columns.is_none() || parsed.rows.is_none() {
+                        self.image_dimensions(id)
+                    } else {
+                        None
+                    };
+                    (
+                        None,
+                        Some(resolve_virtual_layout(parsed, cell_pixels, dimensions)?),
+                    )
                 } else {
                     (anchor.map(|_| parsed), None)
                 };
@@ -1436,6 +1443,23 @@ fn parse_u32(bytes: &[u8]) -> Option<u32> {
         return None;
     }
     std::str::from_utf8(bytes).ok()?.parse::<u32>().ok()
+}
+
+fn resolve_virtual_layout(
+    mut geometry: PlacementGeometry,
+    cell_pixels: Option<CellPixelSize>,
+    dimensions: Option<(u32, u32)>,
+) -> Result<VirtualPlacement, StoreError> {
+    if geometry.columns.is_none() || geometry.rows.is_none() {
+        let cell = cell_pixels.ok_or(StoreError::InvalidPlacement)?;
+        let (width, height) = dimensions.ok_or(StoreError::InvalidPlacement)?;
+        let layout = geometry
+            .pixel_layout(width, height, cell)
+            .ok_or(StoreError::InvalidPlacement)?;
+        geometry.columns = Some(layout.cell_bounds.width / u32::from(cell.width()));
+        geometry.rows = Some(layout.cell_bounds.height / u32::from(cell.height()));
+    }
+    VirtualPlacement::from_geometry(geometry)
 }
 
 fn infer_cell_extent(
@@ -2090,6 +2114,69 @@ mod tests {
             Err(StoreError::InvalidPlacement)
         );
         assert!(without_pixels.is_empty());
+    }
+
+    #[test]
+    fn virtual_place_infers_omitted_extent_from_stored_image() {
+        let mut store = ImageStore::new();
+        store
+            .insert(transfer(
+                b"\x1b_Ga=t,f=32,s=2,v=2,i=7;/wAA/wD/AP8AAP///////w==\x1b\\",
+            ))
+            .unwrap();
+        let anchor = CellAnchor::default();
+        let cell = Some(CellPixelSize::new(1, 1).unwrap());
+        assert_eq!(
+            store.accept_control_for_pane(b"\x1b_Ga=p,i=7,p=1,U=1\x1b\\", anchor, cell, (4, 4)),
+            Ok((Some(7), None))
+        );
+        let placement = store.placements().next().unwrap();
+        assert_eq!(placement.geometry, None);
+        assert_eq!(placement.virtual_layout.unwrap().columns, 2);
+        assert_eq!(placement.virtual_layout.unwrap().rows, 2);
+
+        store
+            .accept_control_for_pane(
+                b"\x1b_Ga=p,i=7,p=1,U=1,x=1,w=1,h=2,c=2\x1b\\",
+                anchor,
+                cell,
+                (4, 4),
+            )
+            .unwrap();
+        assert_eq!(store.placements().count(), 1);
+        let layout = store.placements().next().unwrap().virtual_layout.unwrap();
+        assert_eq!(layout.source.left, 1);
+        assert_eq!((layout.columns, layout.rows), (2, 4));
+
+        let revision = store.revision();
+        for (command, pixels, error) in [
+            (
+                b"\x1b_Ga=p,i=7,p=1,U=1\x1b\\".as_slice(),
+                None,
+                StoreError::InvalidPlacement,
+            ),
+            (
+                b"\x1b_Ga=p,i=7,p=1,U=1,x=99\x1b\\",
+                cell,
+                StoreError::InvalidPlacement,
+            ),
+            (
+                b"\x1b_Ga=p,i=99,p=1,U=1\x1b\\",
+                cell,
+                StoreError::MissingImage,
+            ),
+        ] {
+            assert_eq!(
+                store.accept_control_for_pane(command, anchor, pixels, (4, 4)),
+                Err(error)
+            );
+            assert_eq!(store.revision(), revision);
+            assert_eq!(store.placements().count(), 1);
+            assert_eq!(
+                store.placements().next().unwrap().virtual_layout,
+                Some(layout)
+            );
+        }
     }
 
     #[test]

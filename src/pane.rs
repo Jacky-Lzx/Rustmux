@@ -958,6 +958,56 @@ mod io_tests {
     }
 
     #[test]
+    fn runtime_virtual_place_infers_extent_from_previously_uploaded_png() {
+        use base64::Engine;
+
+        let mut png = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut png, 2, 2);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder
+                .write_header()
+                .unwrap()
+                .write_image_data(&[255; 16])
+                .unwrap();
+        }
+        let encoded = base64::engine::general_purpose::STANDARD.encode(png);
+        let mut pane = Pane::spawn("/bin/sh", 3, 3).unwrap();
+        let cell = CellPixelSize::new(1, 1).unwrap();
+        let mut replies = Vec::new();
+        let upload = format!("\x1b[2;2H\x1b_Ga=t,q=2,f=100,i=7;{encoded}\x1b\\");
+        pane.process_output_for_runtime(
+            upload.as_bytes(),
+            &mut |reply| replies.extend_from_slice(reply),
+            Some(cell),
+            true,
+        );
+        assert!(replies.is_empty());
+        pane.process_output_for_runtime(
+            b"\x1b_Ga=p,i=7,p=2,U=1\x1b\\",
+            &mut |reply| replies.extend_from_slice(reply),
+            Some(cell),
+            true,
+        );
+        assert_eq!(replies, b"\x1b_Gi=7,p=2;OK\x1b\\");
+        assert_eq!(pane.screen().cursor(), (1, 1));
+        let placement = pane.image_store().placements().next().unwrap();
+        assert!(placement.geometry.is_none());
+        let layout = placement.virtual_layout.unwrap();
+        assert_eq!((layout.columns, layout.rows), (2, 2));
+
+        pane.process_output_for_runtime(
+            "\x1b[38;5;7m\u{10eeee}\u{0305}\u{0305}".as_bytes(),
+            &mut |_| {},
+            Some(cell),
+            true,
+        );
+        let image = pane.compose_image_snapshot(cell).unwrap();
+        assert_eq!(&image.pixels[(3 + 1) * 4..(3 + 2) * 4], &[255; 4]);
+    }
+
+    #[test]
     fn unicode_placeholders_draw_only_their_own_image_cells_and_follow_text_edits() {
         use base64::Engine;
 
@@ -1197,7 +1247,7 @@ mod io_tests {
 
         replies.clear();
         pane.process_output_for_runtime(
-            b"\x1b_Ga=p,i=51,p=4,U=1\x1b\\",
+            b"\x1b_Ga=p,i=51,p=4,U=1,x=99\x1b\\",
             &mut |reply| replies.extend_from_slice(reply),
             Some(cell),
             true,

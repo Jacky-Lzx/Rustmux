@@ -391,7 +391,10 @@ inexact cell sizes receive no image commands. Scrollback images, unsupported
 actions and transfers remain unimplemented;
 this is not a claim of complete Yazi or Kitty graphics compatibility.
 For virtual `U=1` direct-data uploads, omitted `c`/`r` cell extents are inferred
-from the declared image dimensions and exact cell-pixel size. The pane also
+from the decoded or declared image dimensions and exact cell-pixel size. A later
+`a=p,U=1` placement can infer them from the stored image, including a validated
+PNG and its source crop. Without an exact cell size or valid image dimensions,
+the new placement is rejected without replacing an existing one. The pane also
 answers `CSI 16t` with `CSI 6;height;width t` when that cell size is known;
 otherwise it does not invent a pixel-size reply.
 
