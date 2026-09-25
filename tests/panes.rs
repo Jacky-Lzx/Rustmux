@@ -752,6 +752,76 @@ fn kitty_cursor_delete_respects_screen_identity_and_scrollback() {
 }
 
 #[test]
+fn kitty_coordinate_delete_uses_one_based_cells_not_cursor() {
+    let mut pane = Pane::spawn("/bin/sh", 3, 3).unwrap();
+    let cell = CellPixelSize::new(1, 1).unwrap();
+    pane.process_output_with_image_store_sized(
+        b"\x1b[1;1H\x1b_Ga=T,f=32,s=2,v=2,i=7,p=1,C=1;AQIDBAUGBwgJCgsMDQ4PEA==\x1b\\\x1b[1;2H\x1b_Ga=T,f=32,s=1,v=1,i=8,p=1,C=1;AQIDBA==\x1b\\\x1b[3;3H\x1b_Ga=T,f=32,s=1,v=1,i=9,p=1,C=1;AQIDBA==\x1b\\\x1b_Ga=d,d=p,x=2,y=1\x1b\\",
+        &mut |_| {},
+        cell,
+    );
+    assert_eq!(pane.screen().cursor(), (2, 2));
+    let placements: Vec<_> = pane.image_store().placements().copied().collect();
+    assert_eq!(placements.len(), 1);
+    assert_eq!(placements[0].image_id, 9);
+    assert!(pane.image_store().get(7).is_some());
+    assert!(pane.image_store().get(8).is_some());
+
+    pane.process_output_with_image_store_sized(
+        b"\x1b[1;1H\x1b_Ga=p,i=7,p=2,C=1\x1b\\\x1b[3;3H\x1b_Ga=d,d=P,x=1,y=1\x1b\\",
+        &mut |_| {},
+        cell,
+    );
+    assert_eq!(pane.screen().cursor(), (2, 2));
+    assert!(pane.image_store().get(7).is_none());
+    assert!(pane.image_store().get(8).is_some());
+    assert!(pane.image_store().get(9).is_some());
+
+    let revision = pane.image_store().revision();
+    pane.process_output_with_image_store_sized(
+        b"\x1b_Ga=d,d=P,x=0,y=1\x1b\\\x1b_Ga=d,d=P,x=1,y=0\x1b\\\x1b_Ga=d,d=P,x=4,y=1\x1b\\\x1b_Ga=d,d=P,x=1,y=4\x1b\\\x1b_Ga=d,d=P,x=bad,y=1\x1b\\\x1b_Ga=d,d=P,x=1\x1b\\\x1b_Ga=d,d=P,x=3,y=3,i=9\x1b\\",
+        &mut |_| {},
+        cell,
+    );
+    assert_eq!(pane.image_store().revision(), revision);
+    pane.process_output_with_image_store_sized(b"\x1b_Ga=d,d=P,x=3,y=3\x1b\\", &mut |_| {}, cell);
+    assert!(pane.image_store().get(9).is_none());
+    assert_eq!(pane.image_store().placements().count(), 0);
+}
+
+#[test]
+fn kitty_coordinate_delete_respects_screen_and_scrollback() {
+    let mut pane = Pane::spawn("/bin/sh", 3, 3).unwrap();
+    let cell = CellPixelSize::new(1, 1).unwrap();
+    pane.process_output_with_image_store_sized(
+        b"\x1b_Ga=T,f=32,s=1,v=1,i=7,p=1,C=1;AQIDBA==\x1b\\\x1b[?1049h\x1b_Ga=T,f=32,s=1,v=1,i=8,p=1,C=1;AQIDBA==\x1b\\\x1b_Ga=d,d=p,x=1,y=1\x1b\\",
+        &mut |_| {},
+        cell,
+    );
+    assert_eq!(pane.image_store().placements().count(), 1);
+    assert_eq!(pane.image_store().placements().next().unwrap().image_id, 7);
+    pane.process_output_with_image_store_sized(
+        b"\x1b[?1049l\x1b_Ga=d,d=P,x=1,y=1\x1b\\",
+        &mut |_| {},
+        cell,
+    );
+    assert!(pane.image_store().get(7).is_none());
+    assert!(pane.image_store().get(8).is_some());
+
+    pane.process_output_with_image_store_sized(
+        b"\x1b_Ga=T,f=32,s=1,v=1,i=9,p=1,C=1;AQIDBA==\x1b\\\x1b[3;1H\n\x1b_Ga=d,d=P,x=1,y=1\x1b\\",
+        &mut |_| {},
+        cell,
+    );
+    assert!(pane.image_store().get(9).is_some());
+    assert!(
+        pane.image_store()
+            .placements()
+            .any(|placement| placement.image_id == 9)
+    );
+}
+
+#[test]
 fn kitty_ris_clears_both_screens_but_later_put_in_same_chunk_survives() {
     let mut pane = Pane::spawn("/bin/sh", 6, 40).unwrap();
     pane.process_output_with_image_store(b"\x1b_Ga=T,f=100,i=7,p=1;QQ==\x1b\\", &mut |_| {});

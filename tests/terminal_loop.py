@@ -344,10 +344,20 @@ try:
         assert time.monotonic() < deadline, bytes(s.output[-1000:])
     s.output.clear()
     s.frames.clear()
+    child_cell_delete = shlex.quote(
+        os.path.join(os.path.dirname(__file__), "kitty_child_cell_delete.py")
+    )
+    s.send(f"python3 {child_cell_delete}\n".encode())
+    deadline = time.monotonic() + 8
+    while b"CHILD_CELL_DELETE_OK" not in s.output:
+        s.read()
+        assert time.monotonic() < deadline, bytes(s.output[-1000:])
+    s.output.clear()
+    s.frames.clear()
     s.send(
-        b"printf '\\033_Ga=T,f=32,s=1,v=1,i=5,p=1,c=1,r=1,z=-1073741825,C=1;AQIDBA==\\033\\\\"
-        b"\\033_Ga=T,f=32,s=1,v=1,i=6,p=1,c=1,r=1,z=-1,C=1;AQIDBA==\\033\\\\"
-        b"\\033_Ga=T,f=32,s=1,v=1,i=7,p=1,c=1,r=1,z=0,C=1;AQIDBA==\\033\\\\'\n"
+        b"printf '\\033_Ga=T,f=32,s=1,v=1,i=5,p=1,c=1,r=1,z=-1073741825,C=1,q=2;AQIDBA==\\033\\\\"
+        b"\\033_Ga=T,f=32,s=1,v=1,i=6,p=1,c=1,r=1,z=-1,C=1,q=2;AQIDBA==\\033\\\\"
+        b"\\033_Ga=T,f=32,s=1,v=1,i=7,p=1,c=1,r=1,z=0,C=1,q=2;AQIDBA==\\033\\\\'\n"
     )
     header = rb"\x1b_Ga=T,f=32,s=78,v=20,i=([0-9]+),z=(-2147483648|-1|0),C=1,q=2,m=1;"
     deadline = time.monotonic() + 8

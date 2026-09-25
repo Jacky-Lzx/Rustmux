@@ -713,6 +713,37 @@ impl ImageStore {
                             controls.get(&b'd').is_some_and(|value| value == b"C"),
                         );
                     }
+                    Some(b"p" | b"P") => {
+                        if !only_keys(&controls, b"adqxy") {
+                            return Err(StoreError::UnsupportedAction);
+                        }
+                        let (Some(anchor), Some((rows, columns))) = (anchor, viewport) else {
+                            return Err(StoreError::UnsupportedAction);
+                        };
+                        let column = controls
+                            .get(&b'x')
+                            .and_then(|value| parse_positive_u32(value))
+                            .and_then(|value| usize::try_from(value - 1).ok())
+                            .ok_or(StoreError::InvalidPlacement)?;
+                        let row = controls
+                            .get(&b'y')
+                            .and_then(|value| parse_positive_u32(value))
+                            .and_then(|value| usize::try_from(value - 1).ok())
+                            .ok_or(StoreError::InvalidPlacement)?;
+                        if row >= rows || column >= columns {
+                            return Err(StoreError::InvalidPlacement);
+                        }
+                        let row = row as i128;
+                        let column = column as u128;
+                        self.delete_intersecting_placements(
+                            anchor.alternate,
+                            row,
+                            row + 1,
+                            column,
+                            column + 1,
+                            controls.get(&b'd').is_some_and(|value| value == b"P"),
+                        );
+                    }
                     Some(b"i" | b"I") => {
                         if !only_keys(&controls, b"adipq") {
                             return Err(StoreError::UnsupportedAction);

@@ -80,8 +80,18 @@ releases it only after the image has no remaining references. Neither form
 moves the cursor. Off-screen history, the other screen, and unanchored or
 unresolved-size placements are left untouched. The low-level store API with
 an explicit cursor anchor supports this selector, but the anchorless API does
-not. Other delete selectors remain unimplemented; extra keys for `d=c/C`
-are rejected rather than silently broadening the match.
+not. Extra keys for `d=c/C` are rejected rather than silently broadening the
+match.
+
+The pane path also accepts `a=d,d=p/P,x=<column>,y=<row>`. Both coordinates
+are required, one-based (the top-left cell is `x=1,y=1`), and must lie within
+the active screen. Invalid or extra controls leave the store unchanged. The
+selector removes modeled placements intersecting that cell, independently of
+the current cursor position; lowercase keeps image data and uppercase releases
+it only after the last reference disappears. It does not move the cursor or
+touch another screen, fully off-screen history, or unresolved-size placements.
+The low-level APIs without a viewport do not accept this selector.
+Other delete selectors remain unimplemented.
 
 For the pane opt-in path, cursor-anchored placements now record a zero-based
 cell row and column, plus whether they belong to the alternate screen. A
@@ -356,6 +366,9 @@ child PTY round trip.
 Cursor-delete tests cover overlapping and non-overlapping placements,
 current-screen and scrollback scoping, lowercase/hard data lifetime, unchanged
 cursor position, invalid keys, and a child PTY round trip.
+Coordinate-delete tests cover one-based coordinates, overlapping placements,
+invalid/out-of-range controls, current-screen and scrollback scoping,
+lowercase/hard data lifetime, and a child PTY round trip.
 Anchor tests cover interleaved text, final-chunk position, alternate-screen
 identity, explicit layout options, malformed metadata, and named replacement.
 Screen-lifecycle tests cover split `CSI 2 J`, non-clearing text erasures,
