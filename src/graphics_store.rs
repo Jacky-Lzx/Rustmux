@@ -248,8 +248,8 @@ fn round_scaled(source_other: u32, target: u32, source_axis: u32) -> Option<u32>
     u32::try_from(rounded.max(1)).ok()
 }
 
-/// Caller-supplied physical size of one terminal cell. The ordinary runtime
-/// does not yet propagate this through the detached-session protocol.
+/// Caller-supplied physical size of one terminal cell. The runtime propagates
+/// this through detached-session attachment and resize messages when exact.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct CellPixelSize {
     width: u16,

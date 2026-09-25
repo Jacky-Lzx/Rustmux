@@ -2,7 +2,7 @@
 //!
 //! This is a transport-independent byte filter. The caller sends the query,
 //! feeds terminal input before its normal key parser, and forwards the returned
-//! non-response bytes. No runtime path invokes it yet.
+//! non-response bytes. The terminal runtime probes each new attachment.
 
 use std::num::NonZeroU32;
 

@@ -78,8 +78,8 @@ cells before subsequent text is parsed. `C=1` suppresses the move. The screen
 model clamps an out-of-bounds destination, which the protocol leaves undefined.
 Without supplied pixel-cell geometry, a missing extent leaves the cursor
 unchanged; failed, virtual, or non-placement commands also do not move it.
-The runtime now applies this modeled motion for supported placements, even
-though their pixels are not yet displayed.
+The runtime applies this modeled motion for supported placements; it displays
+only the above-text pixel band described below.
 This follows the [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
 
 `Pane::process_output_with_image_store_sized` is a separate opt-in path for a
@@ -152,24 +152,23 @@ and `z >= 0` is above text. Each populated band is independently composed in
 image z/image-ID order; absent bands allocate no canvas. The three outputs
 share the existing 64 MiB clipped-input budget and a new 64 MiB combined
 canvas budget. No cell colors, glyphs, or outer-terminal graphics commands are
-drawn here, so the normal renderer still does not display the images. The
+drawn by this snapshot function. The runtime now uses its above-text band. The
 bands follow the [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
 
 `ImageStore::revision` now changes when retained image data or placement
 metadata changes, including scroll shifts and screen clears, but not for
 rejected commands or no-op deletions. The value belongs to one store instance;
-it is an invalidation hint for a future outer-terminal graphics renderer, not
-a persistent image identity. The runtime still does not emit image placements.
+it is a runtime invalidation hint, not a persistent image identity. Unchanged
+revisions avoid retransmitting the same above-text placement.
 
 `write_kitty_rgba_placement` is an opt-in output encoder for a caller that has
 already established outer-terminal Kitty support and positioned its cursor.
 It validates one decoded RGBA image before writing, then streams `a=T,f=32`
 direct-data APCs with a nonzero image ID, requested `z`, `C=1`, and `q=2`.
 Each Base64 chunk is at most 4096 bytes; all continuation APCs carry only
-`m`. The encoder neither manages replacement/deletion nor enters the normal
-redraw path. In particular, the current client frame limit is 16 MiB, smaller
-than the largest decoded image's encoded output, so runtime integration needs
-an output-streaming/backpressure decision. A failed write may leave a partial
+`m`. The encoder itself does not manage replacement/deletion; the runtime
+calls it only after preflighting the remaining 16 MiB frame budget. An image
+too large for that frame is skipped. A failed write may leave a partial
 transfer. The chunk format follows the
 [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
 
@@ -177,8 +176,7 @@ transfer. The chunk format follows the
 including every APC wrapper, without allocating a Base64 image. The bounded
 `write_kitty_rgba_placement_with_limit` rejects a placement before writing
 when its complete transfer would exceed the caller's remaining output budget.
-This prepares the 16 MiB runtime frame queue for a later graphics integration;
-it does not yet send images during normal redraw.
+The runtime uses this preflight before each above-text image upload.
 
 `GraphicsCapabilityProbe` is a separate opt-in outer-terminal detection
 boundary. It generates a one-pixel, direct-RGB `a=q` query followed by primary
@@ -242,11 +240,15 @@ scrollback rendering remain out of scope. These choices follow the scrolling
 rules in the
 [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
 
-The normal runtime now assembles and retains supported direct-data images and
-placement references but does not draw them in the terminal or answer graphics
-capability queries. Unsupported actions and transfers remain unimplemented;
-this does not yet claim Yazi preview compatibility. Actual display and query
-handling are later review increments.
+The runtime probes Kitty graphics support separately for each outer-terminal
+attachment. When support and an exact physical cell size are known, it now
+composites and displays the `z >= 0` image band for visible panes. Output is
+bounded by the frame queue; unchanged image revisions are not retransmitted.
+Switching windows, moving/resizing panes, deleting placements, or opening an
+overlay removes the runtime-owned images. Unknown/unsupported terminals and
+inexact cell sizes receive no image commands. The two negative-z bands,
+scrollback images, unsupported actions and transfers remain unimplemented;
+this does not yet claim Yazi preview compatibility.
 
 Unit tests cover every two-chunk split of a command, ordinary output ordering,
 non-graphics APCs, UTF-8/C1 ambiguity, oversized and cancelled commands, and

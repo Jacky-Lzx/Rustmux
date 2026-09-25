@@ -3,7 +3,10 @@
 use crate::{
     graphics::{GraphicsEvent, GraphicsFramer},
     graphics_decode::DecodedImage,
-    graphics_snapshot::{ImagePlanes, SnapshotError, compose_store_planes, compose_store_snapshot},
+    graphics_snapshot::{
+        ImagePlanes, SnapshotError, compose_store_above_text, compose_store_planes,
+        compose_store_snapshot,
+    },
     graphics_store::{CellAnchor, CellPixelSize, ImageStore, PixelSize},
     graphics_transfer::{AssembledDirectTransfer, DirectTransferAssembler},
     parser::Parser,
@@ -429,7 +432,7 @@ impl Pane {
 
     /// Produce an image-only RGBA snapshot for the current screen when the
     /// caller knows the physical cell size. Text and backgrounds are omitted;
-    /// the ordinary runtime does not use this opt-in path.
+    /// the ordinary runtime uses the separate stacking-band path below.
     pub fn compose_image_snapshot(
         &self,
         cell_pixels: CellPixelSize,
@@ -444,13 +447,29 @@ impl Pane {
     }
 
     /// Return only populated Kitty image stacking bands. This is still an
-    /// opt-in image-only result; it does not paint glyphs or cell backgrounds.
+    /// image-only result; it does not paint glyphs or cell backgrounds. The
+    /// terminal runtime currently paints only the `above_text` band.
     pub fn compose_image_planes(
         &self,
         cell_pixels: CellPixelSize,
     ) -> Result<ImagePlanes, SnapshotError> {
         let viewport = self.image_viewport(cell_pixels)?;
         compose_store_planes(
+            &self.image_store,
+            self.screen.is_alternate(),
+            viewport,
+            cell_pixels,
+        )
+    }
+
+    /// Compose the z >= 0 band without decoding or allocating the two
+    /// negative-z bands that the runtime cannot display yet.
+    pub fn compose_above_text_image(
+        &self,
+        cell_pixels: CellPixelSize,
+    ) -> Result<Option<DecodedImage>, SnapshotError> {
+        let viewport = self.image_viewport(cell_pixels)?;
+        compose_store_above_text(
             &self.image_store,
             self.screen.is_alternate(),
             viewport,

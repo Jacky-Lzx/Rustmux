@@ -1,8 +1,8 @@
 //! Opt-in Kitty direct-RGBA output for a caller-controlled outer terminal.
 //!
-//! This module only encodes a placement. It does not negotiate graphics
-//! support, position the cursor, delete old placements, or queue output for
-//! the running multiplexer. The caller must establish those conditions.
+//! This module only encodes a placement. The terminal runtime separately
+//! negotiates support, positions the cursor, deletes old placements, and
+//! queues output for the running multiplexer.
 
 use crate::graphics_decode::{DecodedImage, MAX_DECODED_IMAGE_BYTES};
 use base64::{Engine as _, engine::general_purpose::STANDARD};

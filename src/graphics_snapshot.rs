@@ -1,5 +1,5 @@
 //! Explicit image-only snapshot of one pane's stored Kitty placements.
-//! The normal terminal renderer does not call this path.
+//! The terminal runtime uses the above-text band when Kitty support is known.
 
 use crate::{
     graphics_composite::{
@@ -50,7 +50,7 @@ pub fn compose_store_snapshot(
     cell: CellPixelSize,
 ) -> Result<DecodedImage, SnapshotError> {
     validate_viewport(viewport)?;
-    let clipped = collect_visible_clips(store, alternate, viewport, cell)?;
+    let clipped = collect_visible_clips(store, alternate, viewport, cell, |_| true)?;
     let layers: Vec<_> = clipped
         .iter()
         .map(|(image_id, z_index, placement)| ImageLayer {
@@ -72,7 +72,7 @@ pub fn compose_store_planes(
     cell: CellPixelSize,
 ) -> Result<ImagePlanes, SnapshotError> {
     let canvas_bytes = validate_viewport(viewport)?;
-    let clipped = collect_visible_clips(store, alternate, viewport, cell)?;
+    let clipped = collect_visible_clips(store, alternate, viewport, cell, |_| true)?;
     let mut behind_background = Vec::new();
     let mut behind_text = Vec::new();
     let mut above_text = Vec::new();
@@ -103,6 +103,27 @@ pub fn compose_store_planes(
     })
 }
 
+/// Compose only images above text for the first runtime display path. Other
+/// bands neither consume the canvas budget nor make this band fail decoding.
+pub fn compose_store_above_text(
+    store: &ImageStore,
+    alternate: bool,
+    viewport: PixelSize,
+    cell: CellPixelSize,
+) -> Result<Option<DecodedImage>, SnapshotError> {
+    validate_viewport(viewport)?;
+    let clipped = collect_visible_clips(store, alternate, viewport, cell, |z| z >= 0)?;
+    let layers: Vec<_> = clipped
+        .iter()
+        .map(|(image_id, z_index, placement)| ImageLayer {
+            image_id: *image_id,
+            z_index: *z_index,
+            placement,
+        })
+        .collect();
+    compose_nonempty(viewport, &layers)
+}
+
 fn compose_nonempty(
     viewport: PixelSize,
     layers: &[ImageLayer<'_>],
@@ -131,6 +152,7 @@ fn collect_visible_clips(
     alternate: bool,
     viewport: PixelSize,
     cell: CellPixelSize,
+    include_z: impl Fn(i32) -> bool,
 ) -> Result<Vec<(u32, i32, ClippedPlacement)>, SnapshotError> {
     let mut clipped = Vec::new();
     let mut input_bytes = 0usize;
@@ -138,7 +160,7 @@ fn collect_visible_clips(
         let Some(geometry) = placement.geometry else {
             continue;
         };
-        if geometry.anchor.alternate != alternate {
+        if geometry.anchor.alternate != alternate || !include_z(geometry.z_index) {
             continue;
         }
         let image = store

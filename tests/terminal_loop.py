@@ -40,9 +40,9 @@ BINARY = sys.argv[1]
 DEFAULT_CONFIG_DIR = tempfile.TemporaryDirectory(prefix="rustmux-test-default-config-")
 
 class Session:
-    def __init__(self, shell="/bin/sh", extra_env=None, arguments=()):
+    def __init__(self, shell="/bin/sh", extra_env=None, arguments=(), pixels=(0, 0)):
         self.master, self.slave = os.openpty()
-        fcntl.ioctl(self.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+        fcntl.ioctl(self.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, *pixels))
         self.original = termios.tcgetattr(self.slave)
         env = dict(os.environ, RUSTMUX_SHELL=shell, PS1="RUSTMUX_READY> ", ENV="", BASH_ENV="",
                    XDG_CONFIG_HOME=DEFAULT_CONFIG_DIR.name)
@@ -283,6 +283,35 @@ try:
     assert b"LAST_OUTPUT" in s.last_rows, s.last_rows
     assert b"\x1b]112\x1b\\" in s.output
     assert b"\x1b[?1049l" in s.output
+finally:
+    s.close()
+
+# A supported, exactly sized outer terminal receives the visible z >= 0 plane
+# once, then only a targeted delete after the pane removes its placement.
+s = Session(pixels=(80, 24))
+try:
+    query = b"\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\\x1b[c"
+    deadline = time.monotonic() + 8
+    while query not in s.output:
+        s.read()
+        assert time.monotonic() < deadline, bytes(s.output[-1000:])
+    s.send(b"\x1b_Gi=31;OK\x1b\\\x1b[?1;2c")
+    s.expect(b"RUSTMUX_READY> ")
+    s.send(b"printf '\\033_Ga=T,f=32,s=1,v=1,i=7,p=1,c=1,r=1,C=1;AQIDBA==\\033\\\\'\n")
+    upload = b"\x1b_Ga=T,f=32,s=78,v=20,i=2147483648,z=0,C=1,q=2,m=1;"
+    deadline = time.monotonic() + 8
+    while upload not in s.output:
+        s.read()
+        assert time.monotonic() < deadline, bytes(s.output[-1000:])
+    s.output.clear()
+    s.send(b"printf '\\033_Ga=d,d=I,i=7\\033\\\\'\n")
+    delete = b"\x1b_Ga=d,d=I,i=2147483648,q=2\x1b\\"
+    deadline = time.monotonic() + 8
+    while delete not in s.output:
+        s.read()
+        assert time.monotonic() < deadline, bytes(s.output[-1000:])
+    s.send(b"exit 0\n")
+    s.finish(0)
 finally:
     s.close()
 

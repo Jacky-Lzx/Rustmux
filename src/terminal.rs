@@ -23,6 +23,7 @@ use crate::pane::{INPUT_LIMIT as LIMIT, MAX_CELLS, Pane};
 use crate::{
     chrome::{FooterMode, compose_with_mode, footer_enabled, pane_rows},
     graphics_capability::{GraphicsCapabilityProbe, GraphicsSupport},
+    graphics_output::{kitty_rgba_placement_len, write_kitty_rgba_placement_with_limit},
     graphics_store::CellPixelSize,
     layout::{Direction, PaneId, Rect, SplitAxis},
     pane_set::PaneSet,
@@ -576,6 +577,138 @@ impl Write for FrameWriter<'_> {
         Ok(bytes.len())
     }
     fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+// The outer alternate screen belongs to this attachment. Only delete IDs we
+// allocated here; deleting all images could erase another client's graphics.
+#[derive(Clone, Copy)]
+struct KittyOverlay {
+    window: WindowId,
+    pane: PaneId,
+    revision: u64,
+    rect: Rect,
+    cell: CellPixelSize,
+    alternate: bool,
+    image_id: u32,
+}
+
+struct KittyOverlays {
+    entries: Vec<KittyOverlay>,
+    next_id: u32,
+}
+
+impl Default for KittyOverlays {
+    fn default() -> Self {
+        Self {
+            entries: Vec::new(),
+            next_id: 0x8000_0000,
+        }
+    }
+}
+
+impl KittyOverlays {
+    fn render(
+        &mut self,
+        window: WindowId,
+        panes: &PaneSet<Pane>,
+        cell: CellPixelSize,
+        outer_rows: u16,
+        cursor: (usize, usize),
+        output: &mut VecDeque<u8>,
+    ) -> io::Result<()> {
+        let visible = panes.layout().content_geometry().panes;
+        let mut moved_cursor = false;
+        for old in std::mem::take(&mut self.entries) {
+            let current = visible.iter().find(|(id, _)| *id == old.pane);
+            let unchanged = old.window == window
+                && current.is_some_and(|(_, rect)| *rect == old.rect)
+                && panes.get(old.pane).is_some_and(|pane| {
+                    pane.image_store().revision() == old.revision
+                        && pane.screen().is_alternate() == old.alternate
+                })
+                && old.cell == cell;
+            if unchanged {
+                self.entries.push(old);
+            } else {
+                write!(
+                    FrameWriter(output),
+                    "\x1b_Ga=d,d=I,i={},q=2\x1b\\",
+                    old.image_id
+                )?;
+            }
+        }
+        for (id, rect) in visible {
+            if self
+                .entries
+                .iter()
+                .any(|entry| entry.window == window && entry.pane == id)
+            {
+                continue;
+            }
+            let pane = panes.get(id).expect("visible pane has content");
+            if pane.image_store().placements().next().is_none() {
+                continue;
+            }
+            // This first runtime increment only paints z >= 0. A malformed or
+            // over-budget snapshot must not take down the terminal session.
+            let Ok(Some(image)) = pane.compose_above_text_image(cell) else {
+                continue;
+            };
+            let image_id = self.next_id;
+            let Some(next_id) = image_id.checked_add(1) else {
+                continue;
+            };
+            let Ok(payload_len) = kitty_rgba_placement_len(&image, image_id, 0) else {
+                continue;
+            };
+            let row = usize::from(outer_rows > 1) + usize::from(rect.row) + 1;
+            let column = usize::from(rect.column) + 1;
+            let position = format!("\x1b[{row};{column}H");
+            let restore = format!("\x1b[{};{}H", cursor.0 + 1, cursor.1 + 1);
+            if position.len() + payload_len + restore.len() > MAX_FRAME - output.len() {
+                continue;
+            }
+            FrameWriter(output).write_all(position.as_bytes())?;
+            write_kitty_rgba_placement_with_limit(
+                &image,
+                image_id,
+                0,
+                MAX_FRAME - output.len() - restore.len(),
+                &mut FrameWriter(output),
+            )?;
+            moved_cursor = true;
+            self.next_id = next_id;
+            self.entries.push(KittyOverlay {
+                window,
+                pane: id,
+                revision: pane.image_store().revision(),
+                rect,
+                cell,
+                alternate: pane.screen().is_alternate(),
+                image_id,
+            });
+        }
+        if moved_cursor {
+            write!(
+                FrameWriter(output),
+                "\x1b[{};{}H",
+                cursor.0 + 1,
+                cursor.1 + 1
+            )?;
+        }
+        Ok(())
+    }
+
+    fn clear(&mut self, output: &mut VecDeque<u8>) -> io::Result<()> {
+        for entry in self.entries.drain(..) {
+            write!(
+                FrameWriter(output),
+                "\x1b_Ga=d,d=I,i={},q=2\x1b\\",
+                entry.image_id
+            )?;
+        }
         Ok(())
     }
 }
@@ -1694,6 +1827,8 @@ fn forward(
         shortcuts,
     } = context;
     let mut renderer = Renderer::default();
+    let mut kitty_overlays = KittyOverlays::default();
+    let mut graphics_ready = false;
     let mut to_terminal = VecDeque::new();
     let probe = GraphicsCapabilityProbe::new(GRAPHICS_PROBE_IMAGE_ID);
     to_terminal.extend(probe.request_bytes());
@@ -1736,6 +1871,10 @@ fn forward(
             old_input_len,
             graphics_support,
         );
+        if !graphics_ready && *graphics_support == Some(GraphicsSupport::Supported) {
+            graphics_ready = true;
+            force_redraw = true;
+        }
         if connection != ConnectionState::Attached {
             // No peer can consume an old physical frame. Dropping it also lets
             // history-mode input that preceded Detach continue in order.
@@ -2104,6 +2243,22 @@ fn forward(
                             .render(&help.overlay(&view), &mut FrameWriter(&mut to_terminal))?;
                     } else {
                         renderer.render(&view, &mut FrameWriter(&mut to_terminal))?;
+                    }
+                    if graphics_ready && prompt.is_none() && help.is_none() && history.is_none() {
+                        if let Some(cell) = *cell_pixels {
+                            kitty_overlays.render(
+                                id,
+                                panes,
+                                cell,
+                                *outer_rows,
+                                view.cursor(),
+                                &mut to_terminal,
+                            )?;
+                        } else {
+                            kitty_overlays.clear(&mut to_terminal)?;
+                        }
+                    } else {
+                        kitty_overlays.clear(&mut to_terminal)?;
                     }
                     for (pane_id, pane) in panes.iter_mut() {
                         if !zoomed || pane_id == focused {
@@ -3081,6 +3236,59 @@ mod tests {
         filter_graphics_probe_input(&mut probe, &mut input, old_len, &mut support);
         assert_eq!(input, b"queuedkey".to_vec());
         assert_eq!(support, Some(GraphicsSupport::Supported));
+    }
+
+    #[test]
+    fn kitty_overlay_uploads_once_and_deletes_only_its_own_image() {
+        let cell = CellPixelSize::new(1, 1).unwrap();
+        let mut windows = Windows::default();
+        let window_id = windows
+            .create(
+                "image".into(),
+                spawn_window(
+                    OsStr::new("/bin/sh"),
+                    None,
+                    4,
+                    4,
+                    crate::config::Notifications::default(),
+                    crate::config::DEFAULT_SCROLLBACK_LINES,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let panes = windows.active_mut().unwrap().content_mut();
+        panes.active_mut().process_output_with_image_store_sized(
+            b"\x1b_Ga=T,f=32,s=1,v=1,i=7,p=1,c=1,r=1,C=1;AQIDBA==\x1b\\",
+            &mut |_| {},
+            cell,
+        );
+        let mut cache = KittyOverlays::default();
+        let mut output = VecDeque::new();
+        cache
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        let upload: Vec<_> = output.drain(..).collect();
+        assert!(
+            upload.starts_with(b"\x1b[3;2H\x1b_Ga=T,f=32,s=2,v=2,i=2147483648,z=0,C=1,q=2,m=0;")
+        );
+        assert!(upload.ends_with(b"\x1b[4;3H"));
+        cache
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        assert!(
+            output.is_empty(),
+            "unchanged image must not be retransmitted"
+        );
+
+        panes.active_mut().image_store_mut().clear();
+        cache
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        assert_eq!(
+            output.drain(..).collect::<Vec<_>>(),
+            b"\x1b_Ga=d,d=I,i=2147483648,q=2\x1b\\"
+        );
+        assert!(cache.entries.is_empty());
     }
 
     #[test]
