@@ -5,7 +5,7 @@ use crate::{
     graphics::MAX_GRAPHICS_COMMAND_BYTES, graphics_transfer::AssembledDirectTransfer,
     screen::ScrollEvent,
 };
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 pub const MAX_PANE_IMAGE_BYTES: usize = 32 * 1024 * 1024;
 pub const MAX_PANE_IMAGES: usize = 256;
@@ -583,7 +583,8 @@ impl ImageStore {
     /// A strict, deliberately small APC G control-command subset: `a=p`
     /// with `i`/`p`, and `a=d,d=i/I` with `i` and optional `p`.
     pub fn accept_control(&mut self, command: &[u8]) -> Result<(), StoreError> {
-        self.accept_control_inner(command, None, None).map(|_| ())
+        self.accept_control_inner(command, None, None, None)
+            .map(|_| ())
     }
 
     /// Pane path: snapshot the cursor when an `a=p` command arrives.
@@ -592,7 +593,7 @@ impl ImageStore {
         command: &[u8],
         anchor: CellAnchor,
     ) -> Result<(), StoreError> {
-        self.accept_control_inner(command, Some(anchor), None)
+        self.accept_control_inner(command, Some(anchor), None, None)
             .map(|_| ())
     }
 
@@ -601,8 +602,10 @@ impl ImageStore {
         command: &[u8],
         anchor: CellAnchor,
         cell_pixels: Option<CellPixelSize>,
+        viewport: (usize, usize),
     ) -> Result<Option<PlacementGeometry>, StoreError> {
-        let geometry = self.accept_control_inner(command, Some(anchor), cell_pixels)?;
+        let geometry =
+            self.accept_control_inner(command, Some(anchor), cell_pixels, Some(viewport))?;
         let id = self.placements.back().map(|placement| placement.image_id);
         Ok(id.and_then(|id| self.resolve_latest_geometry(id, geometry, cell_pixels)))
     }
@@ -654,6 +657,7 @@ impl ImageStore {
         command: &[u8],
         anchor: Option<CellAnchor>,
         cell_pixels: Option<CellPixelSize>,
+        viewport: Option<(usize, usize)>,
     ) -> Result<Option<PlacementGeometry>, StoreError> {
         let controls = parse_control_command(command).ok_or(StoreError::UnsupportedAction)?;
         match controls.get(&b'a').map(Vec::as_slice) {
@@ -674,20 +678,94 @@ impl ImageStore {
                 Ok(geometry)
             }
             Some(b"d") => {
-                if !only_keys(&controls, b"adipq") {
-                    return Err(StoreError::UnsupportedAction);
-                }
-                let id = required_id(&controls)?;
-                let placement_id =
-                    parse_optional_placement_id(controls.get(&b'p').map(Vec::as_slice))?;
                 match controls.get(&b'd').map(Vec::as_slice) {
-                    Some(b"i") => self.delete_placements(id, placement_id, false),
-                    Some(b"I") => self.delete_placements(id, placement_id, true),
+                    None | Some(b"a" | b"A") => {
+                        if !only_keys(&controls, b"adq") {
+                            return Err(StoreError::UnsupportedAction);
+                        }
+                        let (Some(anchor), Some((rows, columns))) = (anchor, viewport) else {
+                            return Err(StoreError::UnsupportedAction);
+                        };
+                        self.delete_visible_placements(
+                            anchor.alternate,
+                            rows,
+                            columns,
+                            controls.get(&b'd').is_some_and(|value| value == b"A"),
+                        );
+                    }
+                    Some(b"i" | b"I") => {
+                        if !only_keys(&controls, b"adipq") {
+                            return Err(StoreError::UnsupportedAction);
+                        }
+                        let id = required_id(&controls)?;
+                        let placement_id =
+                            parse_optional_placement_id(controls.get(&b'p').map(Vec::as_slice))?;
+                        self.delete_placements(
+                            id,
+                            placement_id,
+                            controls.get(&b'd').is_some_and(|value| value == b"I"),
+                        );
+                    }
                     _ => return Err(StoreError::UnsupportedAction),
                 }
                 Ok(None)
             }
             _ => Err(StoreError::UnsupportedAction),
+        }
+    }
+
+    /// `d=a/A` touches only placements whose modeled cell rectangle intersects
+    /// the current screen. A placement wholly in scrollback or on the other
+    /// screen is not deleted; hard deletion frees only now-unreferenced images.
+    fn delete_visible_placements(
+        &mut self,
+        alternate: bool,
+        rows: usize,
+        columns: usize,
+        free_data: bool,
+    ) {
+        let mut touched_images = BTreeSet::new();
+        self.placements.retain(|placement| {
+            let Some(geometry) = placement.geometry else {
+                return true;
+            };
+            if geometry.anchor.alternate != alternate {
+                return true;
+            }
+            let (Some(height), Some(width)) = (geometry.rows, geometry.columns) else {
+                return true;
+            };
+            let top = geometry.anchor.row as i128
+                + i128::from(geometry.row_offset)
+                + i128::from(geometry.clip_top_rows);
+            let bottom =
+                geometry.anchor.row as i128 + i128::from(geometry.row_offset) + i128::from(height)
+                    - i128::from(geometry.clip_bottom_rows);
+            let left = geometry.anchor.column as u128;
+            let right = left + u128::from(width);
+            let visible = top < rows as i128
+                && bottom > 0
+                && top < bottom
+                && left < columns as u128
+                && right > left;
+            if visible {
+                touched_images.insert(placement.image_id);
+            }
+            !visible
+        });
+        if !touched_images.is_empty() {
+            self.changed();
+        }
+        if free_data {
+            for id in touched_images {
+                if !self
+                    .placements
+                    .iter()
+                    .any(|placement| placement.image_id == id)
+                {
+                    self.remove(id);
+                }
+            }
         }
     }
 

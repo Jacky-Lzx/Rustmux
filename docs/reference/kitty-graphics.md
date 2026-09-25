@@ -61,12 +61,18 @@ deferred-decoding behavior for callers that only need the original bytes.
 The opt-in store now tracks placement *references* for `a=T` and a strict
 `a=p,i=<id>[,p=<id>]` subset. A named placement replaces the same `(i,p)`
 reference; an absent or zero `p` creates an anonymous reference. Re-transmitting
-an image ID drops its old references. The supported delete subset is
+an image ID drops its old references. The supported ID-delete subset is
 `a=d,d=i/I,i=<id>[,p=<id>]`: lowercase removes matching references but keeps
-data, while uppercase also releases data once no references remain. Image
-eviction drops its references. There are at most 1024 references per pane.
-These rules follow the [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/),
-but the model does not track visibility or the other delete selectors.
+data, while uppercase also releases data once no references remain. The pane
+path also accepts `a=d` (default `d=a`) and explicit `d=a/A` with no ID: these
+remove modeled placement rectangles intersecting the current screen. Lowercase
+retains data; uppercase frees data only for images with no remaining references.
+The other screen, fully off-screen scrollback placements, and unanchored
+references are untouched. This viewport-dependent selector is unavailable to
+the low-level store APIs that have no screen dimensions. Image eviction drops
+its references. There are at most 1024 references per pane. These rules follow
+the [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/);
+other delete selectors remain unimplemented.
 
 For the pane opt-in path, cursor-anchored placements now record a zero-based
 cell row and column, plus whether they belong to the alternate screen. A
@@ -76,9 +82,8 @@ pixel offsets `X/Y`, explicit `c`/`r` cell extents, signed `z` index, and
 `C=1` no-move request are parsed and retained. The source rectangle intersects
 the decoded image; an omitted or zero `w/h` selects the remaining width/height.
 Missing extents remain unknown on the ordinary opt-in path. Virtual and
-relative placements do not get a cursor anchor. This is metadata only: image
-placement does not yet
-compose pixels, redraw, or send graphics replies.
+relative placements do not get a cursor anchor. The opt-in store records
+metadata; runtime composition, redraw, and child replies are described below.
 
 In the opt-in pane path, a successful `a=T` or `a=p` placement with both
 resolved `c` and `r` moves the cursor right by `c` cells and down by `r`
@@ -336,6 +341,9 @@ invalid geometry, quiet modes, reply/DA ordering, and a child PTY round trip.
 Transmit-and-place acknowledgement tests cover final-chunk timing, placement
 identity, failed replacement, quiet modes, reply/DA ordering, and a child PTY
 round trip.
+Visible-delete tests cover current-screen scoping, off-screen scrollback,
+partial overlap, lowercase/hard data lifetime, malformed selectors, and a
+child PTY round trip.
 Anchor tests cover interleaved text, final-chunk position, alternate-screen
 identity, explicit layout options, malformed metadata, and named replacement.
 Screen-lifecycle tests cover split `CSI 2 J`, non-clearing text erasures,

@@ -620,6 +620,69 @@ fn kitty_alternate_screen_clears_do_not_remove_main_placements() {
 }
 
 #[test]
+fn kitty_visible_delete_scopes_current_screen_and_hard_delete_frees_orphans() {
+    let mut pane = Pane::spawn("/bin/sh", 3, 3).unwrap();
+    let cell = CellPixelSize::new(1, 1).unwrap();
+    pane.process_output_with_image_store_sized(
+        b"\x1b_Ga=T,f=32,s=1,v=1,i=7,p=1,C=1;AQIDBA==\x1b\\\x1b[?1049h\x1b_Ga=p,i=7,p=2,C=1\x1b\\",
+        &mut |_| {},
+        cell,
+    );
+    assert_eq!(pane.image_store().placements().count(), 2);
+    pane.process_output_with_image_store_sized(b"\x1b_Ga=d\x1b\\", &mut |_| {}, cell);
+    assert_eq!(pane.image_store().placements().count(), 1);
+    assert_eq!(
+        pane.image_store().placements().next().unwrap().placement_id,
+        Some(1)
+    );
+    assert!(pane.image_store().get(7).is_some());
+
+    pane.process_output_with_image_store_sized(
+        b"\x1b_Ga=p,i=7,p=3,C=1\x1b\\\x1b_Ga=d,d=A\x1b\\",
+        &mut |_| {},
+        cell,
+    );
+    assert_eq!(pane.image_store().placements().count(), 1);
+    assert!(pane.image_store().get(7).is_some());
+    pane.process_output_with_image_store_sized(
+        b"\x1b[?1049l\x1b_Ga=d,d=A\x1b\\",
+        &mut |_| {},
+        cell,
+    );
+    assert_eq!(pane.image_store().placements().count(), 0);
+    assert!(pane.image_store().get(7).is_none());
+}
+
+#[test]
+fn kitty_visible_delete_keeps_scrollback_but_removes_partial_overlap() {
+    let mut pane = Pane::spawn("/bin/sh", 3, 3).unwrap();
+    let cell = CellPixelSize::new(1, 1).unwrap();
+    pane.process_output_with_image_store_sized(
+        b"\x1b_Ga=T,f=32,s=1,v=1,i=7,p=1,C=1;AQIDBA==\x1b\\\x1b_Ga=T,f=32,s=1,v=2,i=8,p=1,C=1;AQIDBAUGBwg=\x1b\\\x1b[3;1H\n",
+        &mut |_| {},
+        cell,
+    );
+    assert_eq!(placement_geometry(&pane, 1).row_offset, -1);
+    assert_eq!(pane.image_store().placements().count(), 2);
+    pane.process_output_with_image_store_sized(b"\x1b_Ga=d,d=a\x1b\\", &mut |_| {}, cell);
+    let placements: Vec<_> = pane.image_store().placements().copied().collect();
+    assert_eq!(placements.len(), 1);
+    assert_eq!(placements[0].image_id, 7);
+    assert!(pane.image_store().get(8).is_some());
+
+    let revision = pane.image_store().revision();
+    pane.process_output_with_image_store_sized(
+        b"\x1b_Ga=d,d=A,i=7\x1b\\\x1b_Ga=d,d=a,p=1\x1b\\",
+        &mut |_| {},
+        cell,
+    );
+    assert_eq!(pane.image_store().revision(), revision);
+    pane.process_output_with_image_store_sized(b"\x1b_Ga=d,d=A\x1b\\", &mut |_| {}, cell);
+    assert!(pane.image_store().get(7).is_some());
+    assert_eq!(pane.image_store().placements().count(), 1);
+}
+
+#[test]
 fn kitty_ris_clears_both_screens_but_later_put_in_same_chunk_survives() {
     let mut pane = Pane::spawn("/bin/sh", 6, 40).unwrap();
     pane.process_output_with_image_store(b"\x1b_Ga=T,f=100,i=7,p=1;QQ==\x1b\\", &mut |_| {});

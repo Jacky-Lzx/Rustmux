@@ -615,6 +615,7 @@ impl Pane {
                                 &command,
                                 anchor,
                                 *cell_pixels,
+                                self.screen.dimensions(),
                             );
                             if let Some(response) = placement_reply.and_then(|placement| {
                                 placement.response(placed.as_ref().err().copied())
