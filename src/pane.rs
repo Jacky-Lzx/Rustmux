@@ -600,11 +600,13 @@ impl Pane {
                                 )
                             };
                             if let Some(response) = transfer_reply.and_then(|transfer| {
-                                transfer.response(stored.as_ref().err().copied())
+                                transfer.response(
+                                    stored.as_ref().map(|(id, _)| *id).map_err(|error| *error),
+                                )
                             }) {
                                 reply(&response);
                             }
-                            stored
+                            stored.map(|(_, geometry)| geometry)
                         } else {
                             let placement_reply =
                                 crate::graphics_reply::PlacementReply::for_command(
@@ -820,6 +822,59 @@ mod io_tests {
         );
         assert!(replies.is_empty());
         assert!(pane.image_store().get(64).is_some());
+    }
+
+    #[test]
+    fn runtime_numbered_upload_allocates_id_and_replies_after_final_chunk() {
+        let mut pane = Pane::spawn("/bin/sh", 4, 4).unwrap();
+        let mut replies = Vec::new();
+        pane.process_output_for_runtime(
+            b"\x1b_Ga=t,i=1,f=32,s=1,v=1,q=2;AQIDBA==\x1b\\",
+            &mut |reply| replies.extend_from_slice(reply),
+            None,
+            true,
+        );
+        pane.process_output_for_runtime(
+            b"\x1b_Ga=T,I=13,p=9,f=32,s=1,v=1,C=1,m=1;AQID\x1b\\",
+            &mut |reply| replies.extend_from_slice(reply),
+            None,
+            true,
+        );
+        assert!(replies.is_empty());
+        pane.process_output_for_runtime(
+            b"\x1b_Gm=0;BA==\x1b\\",
+            &mut |reply| replies.extend_from_slice(reply),
+            None,
+            true,
+        );
+        assert_eq!(replies, b"\x1b_Gi=2,I=13,p=9;OK\x1b\\");
+        assert_eq!(pane.image_store().get(2).unwrap().data, [1, 2, 3, 4]);
+        assert_eq!(pane.image_store().placements().next().unwrap().image_id, 2);
+
+        replies.clear();
+        pane.process_output_for_runtime(
+            b"\x1b_Ga=t,I=13,f=32,s=1,v=1;AQIDBA==\x1b\\",
+            &mut |reply| replies.extend_from_slice(reply),
+            None,
+            true,
+        );
+        assert_eq!(replies, b"\x1b_Gi=3,I=13;OK\x1b\\");
+        assert!(pane.image_store().get(2).is_some());
+
+        replies.clear();
+        let revision = pane.image_store().revision();
+        pane.process_output_for_runtime(
+            b"\x1b_Ga=t,I=14,f=100;YQ==\x1b\\\x1b_Ga=t,i=4,I=14,f=32,s=1,v=1;AQIDBA==\x1b\\\x1b_Ga=t,I=0,f=32,s=1,v=1;AQIDBA==\x1b\\",
+            &mut |reply| replies.extend_from_slice(reply),
+            None,
+            true,
+        );
+        assert_eq!(
+            replies,
+            b"\x1b_GI=14;EINVAL:invalid image\x1b\\\x1b_Gi=4,I=14;EINVAL:invalid image\x1b\\\x1b_GI=0;EINVAL:invalid image\x1b\\"
+        );
+        assert_eq!(pane.image_store().revision(), revision);
+        assert!(pane.image_store().get(4).is_none());
     }
 
     #[test]

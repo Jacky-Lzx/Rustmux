@@ -404,6 +404,16 @@ try:
         assert time.monotonic() < deadline, bytes(s.output[-1000:])
     s.output.clear()
     s.frames.clear()
+    child_image_number_upload = shlex.quote(
+        os.path.join(os.path.dirname(__file__), "kitty_child_image_number_upload.py")
+    )
+    s.send(f"python3 {child_image_number_upload}\n".encode())
+    deadline = time.monotonic() + 8
+    while b"NUMBERED_UPLOAD_OK" not in s.output:
+        s.read()
+        assert time.monotonic() < deadline, bytes(s.output[-1000:])
+    s.output.clear()
+    s.frames.clear()
     s.send(
         b"printf '\\033_Ga=T,f=32,s=1,v=1,i=5,p=1,c=1,r=1,z=-1073741825,C=1,q=2;AQIDBA==\\033\\\\"
         b"\\033_Ga=T,f=32,s=1,v=1,i=6,p=1,c=1,r=1,z=-1,C=1,q=2;AQIDBA==\\033\\\\"

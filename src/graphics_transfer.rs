@@ -32,7 +32,7 @@ impl AssembledDirectTransfer {
         self.controls.keys().all(|key| {
             matches!(
                 key,
-                b'a' | b'f' | b'i' | b'm' | b'q' | b's' | b't' | b'v' | b'N'
+                b'a' | b'f' | b'i' | b'I' | b'm' | b'q' | b's' | b't' | b'v' | b'N'
             )
         }) && self
             .control(b'N')
@@ -47,6 +47,7 @@ impl AssembledDirectTransfer {
                 key,
                 b'a' | b'f'
                     | b'i'
+                    | b'I'
                     | b'm'
                     | b'q'
                     | b's'
@@ -209,6 +210,9 @@ fn valid_first(controls: &Controls) -> bool {
         })
         && controls
             .get(&b'i')
+            .is_none_or(|value| parse_decimal(value).is_some())
+        && controls
+            .get(&b'I')
             .is_none_or(|value| parse_decimal(value).is_some())
 }
 

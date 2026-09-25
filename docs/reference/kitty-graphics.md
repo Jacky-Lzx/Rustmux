@@ -31,14 +31,20 @@ and OSC observer. Graphics bytes cannot appear as screen text or shell-command
 output; the hidden close/undo path uses the same pane pipeline. Callers can opt
 in to complete direct transfers with `Pane::process_output_with_graphics`.
 An additional opt-in path, `Pane::process_output_with_image_store`, retains
-complete transfers with explicit nonzero `i` IDs in a pane-local `ImageStore`.
+complete transfers with explicit nonzero `i` IDs or numbered `I` uploads in a
+pane-local `ImageStore`.
 The running multiplexer now uses that bounded store for live, detached and
 temporarily closed/undoable panes; the public `Pane::process_output` method
 still discards graphics unless its caller opts in.
 Replacement and explicit removal update byte accounting; oldest entries are
-evicted at 32 MiB or 256 images per pane. The store rejects query action `a=q`
-and image-number allocation `I`; the ordinary store path preserves PNG bytes
-without decoding them.
+evicted at 32 MiB or 256 images per pane. The store rejects query action `a=q`;
+the ordinary store path preserves PNG bytes without decoding them.
+An upload with `I=<nonzero-number>` and no `i` receives the smallest free
+positive image ID, reported as `i=<assigned>,I=<number>` when replies are
+enabled. Repeating a number creates another image rather than replacing its
+predecessor. Existing explicit IDs are never overwritten by allocation;
+`a=p` and ID-targeted deletes still require `i`, not an `I` reference. Specifying
+both identity keys, or a zero image number, leaves the store unchanged.
 It is cleared when a stopped foreground job resets its pane or its PTY reaches
 EOF.
 
@@ -337,9 +343,10 @@ receive a bounded error reply; `q=1` suppresses success and `q=2` suppresses
 all replies. A query never inserts or replaces an image. Without confirmed
 display support, or while detached, Rustmux stays silent on graphics queries;
 a following DA reply still reaches the child. File/shared-memory media,
-compressed or malformed transfers, and image-number allocation remain
-unsupported. Under the same attachment and sizing conditions, a completed
-direct-data `a=t` upload with an explicit nonzero `i` now receives one reply
+compressed or malformed transfers, and image-number references in queries,
+placements, or deletes remain unsupported. Under the same attachment and
+sizing conditions, a completed direct-data `a=t` upload with an explicit
+nonzero `i` or a nonzero `I` receives one reply
 after its final chunk: `OK` only after successful storage, otherwise a bounded
 error. Corrupt PNG data and controls outside the data-only subset are rejected
 without replacing an existing image. `q=1` suppresses success and `q=2`
@@ -352,7 +359,7 @@ control or invalid placement geometry returns `EINVAL`. Unparseable controls
 cannot be correlated and remain silent. A valid nonzero `p` is echoed in the
 reply; absent or zero `p` stays anonymous. `q=1` suppresses success, and
 `q=2` suppresses all replies. The placement and cursor remain unchanged on
-failure. A completed direct-data `a=T` with nonzero `i` now receives one
+failure. A completed direct-data `a=T` with nonzero `i` or `I` now receives one
 reply after its final chunk and the store result. Successful storage and
 placement return `OK`, with a valid nonzero `p` echoed; invalid geometry
 returns `EINVAL:invalid placement`, while rejected image data or unsupported
@@ -394,6 +401,9 @@ Query tests cover reply/DA ordering, conditional silence, quiet modes, invalid
 image data, unknown controls, and a child PTY round trip.
 Upload acknowledgement tests cover chunk completion, reply/DA ordering,
 rejected replacements, quiet modes, and a child PTY round trip.
+Image-number upload tests cover smallest-free-ID allocation, repeated numbers,
+mutually exclusive identities, final-chunk replies, failed uploads, and a child
+PTY round trip.
 Placement acknowledgement tests cover named and anonymous IDs, missing images,
 invalid geometry, quiet modes, reply/DA ordering, and a child PTY round trip.
 Transmit-and-place acknowledgement tests cover final-chunk timing, placement

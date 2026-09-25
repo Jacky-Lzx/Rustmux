@@ -455,8 +455,8 @@ impl ImageStore {
         }
     }
 
-    /// Retain a completed transfer with an explicit nonzero image ID. Query
-    /// commands and image-number allocation require a later protocol stage.
+    /// Retain a completed transfer with an explicit image ID or allocate one
+    /// for a nonzero image number. Query commands use a separate path.
     /// Replacement is atomic if the new transfer cannot fit by itself.
     pub fn insert(&mut self, transfer: AssembledDirectTransfer) -> Result<u32, StoreError> {
         self.insert_inner(transfer, None, None, false)
@@ -481,10 +481,10 @@ impl ImageStore {
         anchor: CellAnchor,
         cell_pixels: Option<CellPixelSize>,
         validate_png: bool,
-    ) -> Result<Option<PlacementGeometry>, StoreError> {
+    ) -> Result<(u32, Option<PlacementGeometry>), StoreError> {
         let (id, geometry) =
             self.insert_inner(transfer, Some(anchor), cell_pixels, validate_png)?;
-        Ok(self.resolve_latest_geometry(id, geometry, cell_pixels))
+        Ok((id, self.resolve_latest_geometry(id, geometry, cell_pixels)))
     }
 
     fn insert_inner(
@@ -518,15 +518,20 @@ impl ImageStore {
         } else {
             None
         };
-        if transfer.control(b'I').is_some() {
+        if transfer.control(b'i').is_some() && transfer.control(b'I').is_some() {
             return Err(StoreError::UnsupportedIdentity);
         }
-        let id = transfer
-            .control(b'i')
-            .and_then(|bytes| std::str::from_utf8(bytes).ok())
-            .and_then(|value| value.parse::<u32>().ok())
-            .filter(|&id| id != 0)
-            .ok_or(StoreError::UnsupportedIdentity)?;
+        let id = if let Some(bytes) = transfer.control(b'i') {
+            parse_positive_u32(bytes).ok_or(StoreError::UnsupportedIdentity)?
+        } else if transfer
+            .control(b'I')
+            .and_then(parse_positive_u32)
+            .is_some()
+        {
+            self.first_free_image_id()?
+        } else {
+            return Err(StoreError::UnsupportedIdentity);
+        };
         let format = match transfer.control(b'f') {
             None | Some(b"32") => ImageFormat::Rgba,
             Some(b"24") => ImageFormat::Rgb,
@@ -571,6 +576,17 @@ impl ImageStore {
             self.place_with_geometry(id, placement_id, geometry)?;
         }
         Ok((id, geometry))
+    }
+
+    /// Match Kitty's smallest-free-ID allocation without replacing any live
+    /// explicit or previously allocated image. The pane image cap makes this
+    /// scan bounded independently of the 32-bit ID space.
+    fn first_free_image_id(&self) -> Result<u32, StoreError> {
+        let mut id = 1u32;
+        while self.images.contains_key(&id) {
+            id = id.checked_add(1).ok_or(StoreError::TooLarge)?;
+        }
+        Ok(id)
     }
 
     /// Record only an explicit-ID placement reference without an anchor.
@@ -1367,6 +1383,55 @@ mod tests {
         assert_eq!(store.remove(7).unwrap().data, b"D");
         assert!(store.is_empty());
         assert_eq!(store.total_bytes(), 0);
+    }
+
+    #[test]
+    fn numbered_uploads_allocate_distinct_free_ids_and_keep_explicit_images() {
+        let mut store = ImageStore::new();
+        store
+            .insert(transfer(b"\x1b_Ga=t,f=100,i=1;QQ==\x1b\\"))
+            .unwrap();
+        store
+            .insert(transfer(b"\x1b_Ga=t,f=100,i=3;Qg==\x1b\\"))
+            .unwrap();
+        assert_eq!(
+            store.insert(transfer(b"\x1b_Ga=t,f=100,I=13;Qw==\x1b\\")),
+            Ok(2)
+        );
+        assert_eq!(
+            store.insert(transfer(b"\x1b_Ga=T,f=100,I=13,p=1;RA==\x1b\\")),
+            Ok(4)
+        );
+        assert_eq!(store.get(1).unwrap().data, b"A");
+        assert_eq!(store.get(2).unwrap().data, b"C");
+        assert_eq!(store.get(3).unwrap().data, b"B");
+        assert_eq!(store.get(4).unwrap().data, b"D");
+        assert_eq!(store.placements().next().unwrap().image_id, 4);
+        store.accept_control(b"\x1b_Ga=p,i=2,p=2\x1b\\").unwrap();
+        assert_eq!(store.placements().last().unwrap().image_id, 2);
+    }
+
+    #[test]
+    fn invalid_numbered_upload_does_not_replace_or_allocate() {
+        let mut store = ImageStore::new();
+        store
+            .insert(transfer(b"\x1b_Ga=t,f=100,i=1;QQ==\x1b\\"))
+            .unwrap();
+        let original = store.revision();
+        for command in [
+            b"\x1b_Ga=t,f=100,I=0;Qg==\x1b\\".as_slice(),
+            b"\x1b_Ga=t,f=100,i=1,I=13;Qg==\x1b\\",
+        ] {
+            assert_eq!(
+                store.insert(transfer(command)),
+                Err(StoreError::UnsupportedIdentity)
+            );
+            assert_eq!(store.revision(), original);
+        }
+        assert_eq!(
+            store.insert(transfer(b"\x1b_Ga=t,f=100,I=13;Qw==\x1b\\")),
+            Ok(2)
+        );
     }
 
     #[test]
