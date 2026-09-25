@@ -394,8 +394,12 @@ For virtual `U=1` direct-data uploads, omitted `c`/`r` cell extents are inferred
 from the decoded or declared image dimensions and exact cell-pixel size. A later
 `a=p,U=1` placement can infer them from the stored image, including a validated
 PNG and its source crop. Without an exact cell size or valid image dimensions,
-the new placement is rejected without replacing an existing one. The pane also
-answers `CSI 16t` with `CSI 6;height;width t` when that cell size is known;
+the new placement is rejected without replacing an existing one. The pane
+retains which extent axes were explicitly requested: inferred axes are
+recalculated from the source dimensions when the exact cell-pixel size changes,
+while explicit `c`/`r` axes keep their cell counts. Placeholder cells outside
+the current extent no longer contribute image pixels after a resize. The pane
+also answers `CSI 16t` with `CSI 6;height;width t` when that cell size is known;
 otherwise it does not invent a pixel-size reply.
 
 An optional installed-Yazi smoke test exercises the actual preview path. After

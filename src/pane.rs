@@ -1008,6 +1008,31 @@ mod io_tests {
     }
 
     #[test]
+    fn virtual_place_placeholder_extent_follows_current_cell_pixels() {
+        use base64::Engine;
+
+        let mut pane = Pane::spawn("/bin/sh", 3, 3).unwrap();
+        let original_cell = CellPixelSize::new(1, 1).unwrap();
+        let encoded = base64::engine::general_purpose::STANDARD.encode([255; 16]);
+        let upload = format!("\x1b_Ga=T,f=32,s=2,v=2,i=7,p=1,U=1;{encoded}\x1b\\");
+        pane.process_output_with_image_store_sized(upload.as_bytes(), &mut |_| {}, original_cell);
+        pane.process_output_with_image_store_sized(
+            "\x1b[38;5;7m\x1b[58;5;1m\x1b[1;1H\u{10eeee}\u{0305}\u{0305}\u{10eeee}\u{0305}\u{030d}"
+                .as_bytes(),
+            &mut |_| {},
+            original_cell,
+        );
+
+        let original = pane.compose_image_snapshot(original_cell).unwrap();
+        assert_eq!(&original.pixels[4..8], &[255; 4]);
+
+        let wider_cell = CellPixelSize::new(2, 1).unwrap();
+        let resized = pane.compose_image_snapshot(wider_cell).unwrap();
+        assert_eq!(&resized.pixels[0..4], &[255; 4]);
+        assert_eq!(&resized.pixels[8..12], &[0; 4]);
+    }
+
+    #[test]
     fn unicode_placeholders_draw_only_their_own_image_cells_and_follow_text_edits() {
         use base64::Engine;
 

@@ -54,6 +54,8 @@ pub struct VirtualPlacement {
     pub cell_offset: CellPixelOffset,
     pub columns: u32,
     pub rows: u32,
+    /// Which axes were explicit before missing cell extents were inferred.
+    pub sizing: PlacementSizing,
     pub z_index: i32,
 }
 
@@ -64,11 +66,30 @@ impl VirtualPlacement {
             cell_offset: geometry.cell_offset,
             columns: geometry.columns.ok_or(StoreError::InvalidPlacement)?,
             rows: geometry.rows.ok_or(StoreError::InvalidPlacement)?,
+            sizing: geometry.sizing,
             z_index: geometry.z_index,
         })
     }
 
-    /// A virtual prototype is fitted into its declared cell rectangle; its
+    fn cell_extent(
+        self,
+        image_width: u32,
+        image_height: u32,
+        cell: CellPixelSize,
+    ) -> Option<(u32, u32)> {
+        let (source_width, source_height) = self
+            .source
+            .intersected_dimensions(image_width, image_height)?;
+        let explicit = match self.sizing {
+            PlacementSizing::Natural => (None, None),
+            PlacementSizing::FitWidth => (Some(self.columns), None),
+            PlacementSizing::FitHeight => (None, Some(self.rows)),
+            PlacementSizing::FitBox => (Some(self.columns), Some(self.rows)),
+        };
+        infer_cell_extent(source_width, source_height, explicit.0, explicit.1, cell)
+    }
+
+    /// A virtual prototype is fitted into its current cell rectangle; its
     /// anchor is supplied by each Unicode placeholder cell at composition time.
     pub fn pixel_layout(
         self,
@@ -76,13 +97,14 @@ impl VirtualPlacement {
         image_height: u32,
         cell: CellPixelSize,
     ) -> Option<PlacementPixelLayout> {
+        let (columns, rows) = self.cell_extent(image_width, image_height, cell)?;
         PlacementGeometry {
             anchor: CellAnchor::default(),
             row_offset: 0,
             source: self.source,
             cell_offset: self.cell_offset,
-            columns: Some(self.columns),
-            rows: Some(self.rows),
+            columns: Some(columns),
+            rows: Some(rows),
             sizing: PlacementSizing::FitBox,
             clip_top_rows: 0,
             clip_bottom_rows: 0,
@@ -2061,6 +2083,7 @@ mod tests {
                 cell_offset: CellPixelOffset::default(),
                 columns: 2,
                 rows: 3,
+                sizing: PlacementSizing::FitBox,
                 z_index: -1,
             })
         );
@@ -2114,6 +2137,50 @@ mod tests {
             Err(StoreError::InvalidPlacement)
         );
         assert!(without_pixels.is_empty());
+    }
+
+    #[test]
+    fn virtual_extent_recomputes_only_axes_not_explicitly_requested() {
+        let layout = VirtualPlacement {
+            source: SourceRect::default(),
+            cell_offset: CellPixelOffset::default(),
+            columns: 2,
+            rows: 2,
+            sizing: PlacementSizing::Natural,
+            z_index: 0,
+        };
+        let original_cell = CellPixelSize::new(1, 1).unwrap();
+        let wider_cell = CellPixelSize::new(2, 1).unwrap();
+        assert_eq!(layout.cell_extent(2, 2, original_cell), Some((2, 2)));
+        assert_eq!(layout.cell_extent(2, 2, wider_cell), Some((1, 2)));
+        assert_eq!(
+            layout.pixel_layout(2, 2, wider_cell).unwrap().cell_bounds,
+            PixelSize {
+                width: 2,
+                height: 2,
+            }
+        );
+
+        let width_only = VirtualPlacement {
+            sizing: PlacementSizing::FitWidth,
+            ..layout
+        };
+        assert_eq!(width_only.cell_extent(2, 2, wider_cell), Some((2, 4)));
+
+        let height_only = VirtualPlacement {
+            sizing: PlacementSizing::FitHeight,
+            ..layout
+        };
+        assert_eq!(
+            height_only.cell_extent(2, 2, CellPixelSize::new(1, 2).unwrap()),
+            Some((4, 2))
+        );
+
+        let explicit_box = VirtualPlacement {
+            sizing: PlacementSizing::FitBox,
+            ..layout
+        };
+        assert_eq!(explicit_box.cell_extent(2, 2, wider_cell), Some((2, 2)));
     }
 
     #[test]
