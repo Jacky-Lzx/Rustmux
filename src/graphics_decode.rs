@@ -2,7 +2,8 @@
 //! Decoding does not place or render an image in a terminal.
 
 use crate::graphics_store::{
-    ImageFormat, PixelRect, PixelSize, PlacementPixelLayout, SignedPixelPoint, StoredImage,
+    CellPixelSize, ImageFormat, PixelRect, PixelSize, PlacementGeometry, PlacementPixelLayout,
+    SignedPixelPoint, StoredImage,
 };
 use png::{BitDepth, ColorType, Decoder, Limits, Transformations};
 use std::io::Cursor;
@@ -39,6 +40,7 @@ pub struct ClippedPlacement {
 pub enum ClipError {
     InvalidPixels,
     InvalidDestination,
+    InvalidGeometry,
     OutputLimit,
 }
 
@@ -134,6 +136,53 @@ impl ResampledPlacement {
         anchor: SignedPixelPoint,
         viewport: PixelSize,
     ) -> Result<Option<ClippedPlacement>, ClipError> {
+        self.clip_between_rows(anchor, viewport, i128::MIN, i128::MAX)
+    }
+
+    /// Apply permanent top/bottom cell-row clips accumulated while scrolling,
+    /// then intersect with the pane viewport. Unclipped edges remain unbounded
+    /// so an `X/Y` offset is not mistaken for an extra placement row.
+    pub fn clip_to_viewport_with_scroll_clip(
+        &self,
+        geometry: PlacementGeometry,
+        cell: CellPixelSize,
+        viewport: PixelSize,
+    ) -> Result<Option<ClippedPlacement>, ClipError> {
+        let anchor = geometry
+            .pixel_anchor(cell)
+            .ok_or(ClipError::InvalidGeometry)?;
+        if geometry.clip_top_rows == 0 && geometry.clip_bottom_rows == 0 {
+            return self.clip_to_viewport(anchor, viewport);
+        }
+        let rows = geometry.rows.ok_or(ClipError::InvalidGeometry)?;
+        if geometry
+            .clip_top_rows
+            .saturating_add(geometry.clip_bottom_rows)
+            >= rows
+        {
+            return self.clip_between_rows(anchor, viewport, 0, 0);
+        }
+        let row_height = i128::from(cell.height());
+        let top = if geometry.clip_top_rows == 0 {
+            i128::MIN
+        } else {
+            i128::from(anchor.y) + i128::from(geometry.clip_top_rows) * row_height
+        };
+        let bottom = if geometry.clip_bottom_rows == 0 {
+            i128::MAX
+        } else {
+            i128::from(anchor.y) + i128::from(rows - geometry.clip_bottom_rows) * row_height
+        };
+        self.clip_between_rows(anchor, viewport, top, bottom)
+    }
+
+    fn clip_between_rows(
+        &self,
+        anchor: SignedPixelPoint,
+        viewport: PixelSize,
+        clip_top: i128,
+        clip_bottom: i128,
+    ) -> Result<Option<ClippedPlacement>, ClipError> {
         let source = self.destination;
         let source_size =
             decoded_size(source.width, source.height).map_err(|error| match error {
@@ -156,9 +205,9 @@ impl ResampledPlacement {
         let right = left + i128::from(source.width);
         let bottom = top + i128::from(source.height);
         let visible_left = left.max(0);
-        let visible_top = top.max(0);
+        let visible_top = top.max(0).max(clip_top);
         let visible_right = right.min(i128::from(viewport.width));
-        let visible_bottom = bottom.min(i128::from(viewport.height));
+        let visible_bottom = bottom.min(i128::from(viewport.height)).min(clip_bottom);
         if visible_left >= visible_right || visible_top >= visible_bottom {
             return Ok(None);
         }
@@ -320,7 +369,7 @@ fn decode_png(image: &StoredImage) -> Result<DecodedImage, DecodeError> {
 mod tests {
     use super::*;
     use crate::{
-        graphics_store::{ImageStore, PixelSize},
+        graphics_store::{CellAnchor, CellPixelOffset, ImageStore, PlacementSizing, SourceRect},
         graphics_transfer::DirectTransferAssembler,
     };
     use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -767,6 +816,185 @@ mod tests {
             }
             .clip_to_viewport(SignedPixelPoint { x: 0, y: 0 }, viewport),
             Err(ClipError::OutputLimit)
+        );
+    }
+
+    #[test]
+    fn scroll_clip_removes_only_the_recorded_pixel_rows() {
+        let placement = ResampledPlacement {
+            destination: PixelRect {
+                x: 0,
+                y: 0,
+                width: 1,
+                height: 6,
+            },
+            pixels: (1..=6).flat_map(|value| [value, 0, 0, 255]).collect(),
+        };
+        let geometry = PlacementGeometry {
+            anchor: CellAnchor::default(),
+            row_offset: 0,
+            source: SourceRect::default(),
+            cell_offset: CellPixelOffset::default(),
+            columns: Some(1),
+            rows: Some(3),
+            sizing: PlacementSizing::FitBox,
+            clip_top_rows: 1,
+            clip_bottom_rows: 1,
+            z_index: 0,
+            cursor_stays: false,
+        };
+        let cell = CellPixelSize::new(1, 2).unwrap();
+        let viewport = PixelSize {
+            width: 1,
+            height: 8,
+        };
+        let values = |clipped: ClippedPlacement| {
+            clipped
+                .pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|rgba| rgba[0])
+                .collect::<Vec<_>>()
+        };
+        let both = placement
+            .clip_to_viewport_with_scroll_clip(geometry, cell, viewport)
+            .unwrap()
+            .unwrap();
+        assert_eq!(both.destination.y, 2);
+        assert_eq!(both.destination.height, 2);
+        assert_eq!(values(both), [3, 4]);
+        let top_only = placement
+            .clip_to_viewport_with_scroll_clip(
+                PlacementGeometry {
+                    clip_bottom_rows: 0,
+                    ..geometry
+                },
+                cell,
+                viewport,
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(values(top_only), [3, 4, 5, 6]);
+        let bottom_only = placement
+            .clip_to_viewport_with_scroll_clip(
+                PlacementGeometry {
+                    clip_top_rows: 0,
+                    ..geometry
+                },
+                cell,
+                viewport,
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(values(bottom_only), [1, 2, 3, 4]);
+
+        // With no bottom clip, a start-cell Y offset may still protrude past
+        // the nominal placement rows without being cut off.
+        let shifted = ResampledPlacement {
+            destination: PixelRect {
+                y: 1,
+                ..placement.destination
+            },
+            pixels: placement.pixels.clone(),
+        };
+        let top_only = shifted
+            .clip_to_viewport_with_scroll_clip(
+                PlacementGeometry {
+                    clip_bottom_rows: 0,
+                    ..geometry
+                },
+                cell,
+                viewport,
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(top_only.destination.y, 2);
+        assert_eq!(values(top_only), [2, 3, 4, 5, 6]);
+    }
+
+    #[test]
+    fn scroll_clip_rejects_unknown_geometry_and_full_clips() {
+        let placement = ResampledPlacement {
+            destination: PixelRect {
+                x: 0,
+                y: 0,
+                width: 1,
+                height: 1,
+            },
+            pixels: vec![1, 2, 3, 4],
+        };
+        let geometry = PlacementGeometry {
+            anchor: CellAnchor::default(),
+            row_offset: 0,
+            source: SourceRect::default(),
+            cell_offset: CellPixelOffset::default(),
+            columns: None,
+            rows: None,
+            sizing: PlacementSizing::Natural,
+            clip_top_rows: 1,
+            clip_bottom_rows: 0,
+            z_index: 0,
+            cursor_stays: false,
+        };
+        let cell = CellPixelSize::new(1, 1).unwrap();
+        let viewport = PixelSize {
+            width: 1,
+            height: 1,
+        };
+        assert_eq!(
+            placement.clip_to_viewport_with_scroll_clip(geometry, cell, viewport),
+            Err(ClipError::InvalidGeometry)
+        );
+        assert_eq!(
+            placement.clip_to_viewport_with_scroll_clip(
+                PlacementGeometry {
+                    rows: Some(1),
+                    ..geometry
+                },
+                cell,
+                viewport,
+            ),
+            Ok(None)
+        );
+        assert_eq!(
+            ResampledPlacement {
+                pixels: vec![1, 2, 3],
+                ..placement
+            }
+            .clip_to_viewport_with_scroll_clip(
+                PlacementGeometry {
+                    rows: Some(1),
+                    ..geometry
+                },
+                cell,
+                viewport,
+            ),
+            Err(ClipError::InvalidPixels)
+        );
+        assert_eq!(
+            placement.clip_to_viewport_with_scroll_clip(
+                PlacementGeometry {
+                    clip_top_rows: 0,
+                    row_offset: i64::MAX,
+                    ..geometry
+                },
+                cell,
+                viewport,
+            ),
+            Ok(None)
+        );
+        assert_eq!(
+            placement.clip_to_viewport_with_scroll_clip(
+                PlacementGeometry {
+                    clip_top_rows: 0,
+                    row_offset: i64::MAX,
+                    ..geometry
+                },
+                CellPixelSize::new(1, 2).unwrap(),
+                viewport,
+            ),
+            Err(ClipError::InvalidGeometry)
         );
     }
 }

@@ -692,6 +692,52 @@ fn kitty_margin_scroll_clips_known_height_and_leaves_unknown_extent_alone() {
 }
 
 #[test]
+fn kitty_margin_scroll_clip_is_applied_to_visible_pixels() {
+    let mut pane = Pane::spawn("/bin/sh", 5, 20).unwrap();
+    let cell = CellPixelSize::new(1, 1).unwrap();
+    let image = format!(
+        "\x1b_Ga=t,f=32,s=1,v=2,i=7;{}\x1b\\",
+        STANDARD.encode([10, 0, 0, 255, 20, 0, 0, 255])
+    );
+    pane.process_output_with_image_store_sized(image.as_bytes(), &mut |_| {}, cell);
+    pane.process_output_with_image_store_sized(
+        b"\x1b[2;1H\x1b_Ga=p,i=7,p=1,c=1,r=2,C=1\x1b\\",
+        &mut |_| {},
+        cell,
+    );
+    pane.process_output_with_image_store_sized(b"\x1b[2;4r\x1b[4;1H\n", &mut |_| {}, cell);
+    let geometry = placement_geometry(&pane, 1);
+    assert_eq!(geometry.row_offset, -1);
+    assert_eq!(geometry.clip_top_rows, 1);
+    let decoded = pane.image_store().get(7).unwrap().decode_rgba().unwrap();
+    let layout = geometry
+        .pixel_layout(decoded.width, decoded.height, cell)
+        .unwrap();
+    let pixels = decoded.resample_placement(layout).unwrap();
+    let clipped = pixels
+        .clip_to_viewport_with_scroll_clip(
+            geometry,
+            cell,
+            PixelSize {
+                width: 20,
+                height: 5,
+            },
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        clipped.destination,
+        PixelRect {
+            x: 0,
+            y: 1,
+            width: 1,
+            height: 1
+        }
+    );
+    assert_eq!(clipped.pixels, [20, 0, 0, 255]);
+}
+
+#[test]
 fn kitty_reverse_index_and_large_event_batches_keep_positions_bounded() {
     let mut pane = Pane::spawn("/bin/sh", 3, 20).unwrap();
     pane.process_output_with_image_store(

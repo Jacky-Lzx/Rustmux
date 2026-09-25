@@ -67,7 +67,7 @@ pub struct PlacementGeometry {
     /// Whether the original command requested scaling, before missing extents
     /// are inferred from the image and physical cell dimensions.
     pub sizing: PlacementSizing,
-    /// Permanently clipped source rows after a placement crosses a scroll margin.
+    /// Permanently clipped placement cell rows after crossing a scroll margin.
     pub clip_top_rows: u32,
     pub clip_bottom_rows: u32,
     pub z_index: i32,
@@ -259,6 +259,14 @@ pub struct CellPixelSize {
 impl CellPixelSize {
     pub fn new(width: u16, height: u16) -> Option<Self> {
         (width != 0 && height != 0).then_some(Self { width, height })
+    }
+
+    pub fn width(self) -> u16 {
+        self.width
+    }
+
+    pub fn height(self) -> u16 {
+        self.height
     }
 
     /// Derive a cell size only when the reported terminal pixel dimensions

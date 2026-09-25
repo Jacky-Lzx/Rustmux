@@ -119,9 +119,12 @@ accepts a signed anchor-cell pixel position and pane viewport dimensions.
 tracked row displacement, and verified physical cell size. Clipping returns
 only the visible RGBA rows and columns in viewport coordinates.
 Negative positions after scrolling and fully off-screen placements are handled
-without unsigned wraparound. This remains an opt-in data path: applying the
-stored scroll-margin clip, z-order blending, redraw, and the normal runtime
-are unchanged.
+without unsigned wraparound. The opt-in
+`clip_to_viewport_with_scroll_clip` path also applies the stored permanent
+top/bottom cell-row clips before extracting visible pixels. It limits only
+edges that were actually clipped, so an `X/Y` offset is not mistaken for an
+extra placement row. Z-order blending, redraw, and the normal runtime are
+unchanged.
 
 `X/Y` position an image within its first cell; they are not added to `c/r` or
 cursor movement. On a sized opt-in call, either offset must be smaller than
@@ -161,8 +164,8 @@ retains references as they enter scrollback, until their known row extent falls
 out of retained history. If height is unknown, only full-screen shifts move its
 anchor; its visibility and expiry cannot yet be determined. An overflowing
 event batch safely drops anchored references but keeps image data. Horizontal
-shifts, resize/reflow relocation, applying permanent margin clips to pixels,
-and scrollback rendering remain out of scope. These choices follow the scrolling
+shifts, resize/reflow relocation, automatic on-screen composition, and
+scrollback rendering remain out of scope. These choices follow the scrolling
 rules in the
 [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
 
@@ -184,6 +187,7 @@ dimension checks and the output-size bound. Resampling tests cover cropped
 nearest-neighbor enlargement, reduction, alpha preservation, invalid geometry,
 and the raster output limit. Viewport tests cover all four clipped edges,
 negative and disjoint anchors, malformed buffers, and oversized geometry.
+Scroll-clip tests verify top/bottom pixel rows and a pane-driven margin scroll.
 Anchor tests cover interleaved text, final-chunk position, alternate-screen
 identity, explicit layout options, malformed metadata, and named replacement.
 Screen-lifecycle tests cover split `CSI 2 J`, non-clearing text erasures,
