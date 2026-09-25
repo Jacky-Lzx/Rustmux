@@ -155,6 +155,12 @@ canvas budget. No cell colors, glyphs, or outer-terminal graphics commands are
 drawn here, so the normal renderer still does not display the images. The
 bands follow the [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
 
+`ImageStore::revision` now changes when retained image data or placement
+metadata changes, including scroll shifts and screen clears, but not for
+rejected commands or no-op deletions. The value belongs to one store instance;
+it is an invalidation hint for a future outer-terminal graphics renderer, not
+a persistent image identity. The runtime still does not emit image placements.
+
 `write_kitty_rgba_placement` is an opt-in output encoder for a caller that has
 already established outer-terminal Kitty support and positioned its cursor.
 It validates one decoded RGBA image before writing, then streams `a=T,f=32`

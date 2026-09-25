@@ -298,6 +298,7 @@ pub struct ImageStore {
     oldest: VecDeque<u32>,
     placements: VecDeque<Placement>,
     total_bytes: usize,
+    revision: u64,
 }
 
 impl ImageStore {
@@ -321,6 +322,17 @@ impl ImageStore {
         self.total_bytes
     }
 
+    /// Changes whenever retained image data or placement state changes.
+    /// Multiple internal mutations in one command may advance it more than
+    /// once. Equality is only meaningful while the same store instance lives.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    fn changed(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
+    }
+
     pub fn placements(&self) -> impl Iterator<Item = &Placement> {
         self.placements.iter()
     }
@@ -329,17 +341,29 @@ impl ImageStore {
     /// discarding their image data. Unanchored virtual/relative references are
     /// not classified as visible until their layout is modeled.
     pub fn clear_screen_placements(&mut self, alternate: bool) {
+        let before = self.placements.len();
         self.placements.retain(|placement| {
             placement
                 .geometry
                 .is_none_or(|geometry| geometry.anchor.alternate != alternate)
         });
+        if self.placements.len() != before {
+            self.changed();
+        }
     }
 
     /// Follow a physical text-row shift. Explicit-height placements can be
     /// clipped at margins; unknown-height placements only move when their
     /// anchor is in a full-screen shift, so their extent is never guessed.
     pub(crate) fn scroll_placements(&mut self, event: ScrollEvent, history_len: usize) {
+        if !self.placements.iter().any(|placement| {
+            placement
+                .geometry
+                .is_some_and(|geometry| geometry.anchor.alternate == event.alternate)
+        }) {
+            return;
+        }
+        let before = self.placements.clone();
         let top = event.top as i64;
         let bottom = event.bottom as i64 + 1;
         let lines = event.lines as i64;
@@ -397,6 +421,9 @@ impl ImageStore {
                 .saturating_add(geometry.clip_bottom_rows)
                 < rows
         });
+        if self.placements != before {
+            self.changed();
+        }
     }
 
     /// Retain a completed transfer with an explicit nonzero image ID. Query
@@ -494,6 +521,7 @@ impl ImageStore {
                 declared_height,
             },
         );
+        self.changed();
         if display {
             self.place_with_geometry(id, placement_id, geometry)?;
         }
@@ -531,6 +559,7 @@ impl ImageStore {
             placement_id,
             geometry,
         });
+        self.changed();
         Ok(())
     }
 
@@ -646,10 +675,14 @@ impl ImageStore {
     }
 
     fn delete_placements(&mut self, image_id: u32, placement_id: Option<u32>, free_data: bool) {
+        let before = self.placements.len();
         self.placements.retain(|placement| {
             placement.image_id != image_id
                 || placement_id.is_some_and(|id| placement.placement_id != Some(id))
         });
+        if self.placements.len() != before {
+            self.changed();
+        }
         if free_data
             && !self
                 .placements
@@ -667,15 +700,20 @@ impl ImageStore {
         self.total_bytes -= removed.data.len();
         self.oldest.retain(|&entry| entry != id);
         self.placements.retain(|placement| placement.image_id != id);
+        self.changed();
         Some(removed)
     }
 
     pub fn clear(&mut self) {
+        let changed = !self.images.is_empty() || !self.placements.is_empty();
         self.images.clear();
         self.decoded_dimensions.clear();
         self.oldest.clear();
         self.placements.clear();
         self.total_bytes = 0;
+        if changed {
+            self.changed();
+        }
     }
 }
 
@@ -863,6 +901,94 @@ mod tests {
 
     fn transfer(command: &[u8]) -> AssembledDirectTransfer {
         DirectTransferAssembler::new().accept(command).unwrap()
+    }
+
+    #[test]
+    fn revision_tracks_data_and_placement_changes_but_not_noops() {
+        let mut store = ImageStore::new();
+        assert_eq!(store.revision(), 0);
+        assert_eq!(
+            store.insert(transfer(b"\x1b_Ga=t,f=100;QQ==\x1b\\")),
+            Err(StoreError::UnsupportedIdentity)
+        );
+        assert_eq!(store.revision(), 0);
+        store.clear();
+        assert_eq!(store.revision(), 0);
+
+        let anchor = CellAnchor {
+            row: 2,
+            column: 1,
+            alternate: false,
+        };
+        store
+            .insert_at(transfer(b"\x1b_Ga=T,f=100,i=7,r=1;QQ==\x1b\\"), anchor)
+            .unwrap();
+        let inserted = store.revision();
+        assert_ne!(inserted, 0);
+        store.accept_control(b"\x1b_Ga=d,d=i,i=99\x1b\\").unwrap();
+        assert_eq!(store.revision(), inserted);
+        store
+            .accept_control_at(b"\x1b_Ga=p,i=7,p=1,r=1\x1b\\", anchor)
+            .unwrap();
+        let placed = store.revision();
+        assert_ne!(placed, inserted);
+        store
+            .accept_control(b"\x1b_Ga=d,d=i,i=7,p=1\x1b\\")
+            .unwrap();
+        let deleted = store.revision();
+        assert_ne!(deleted, placed);
+        store
+            .accept_control(b"\x1b_Ga=d,d=i,i=7,p=1\x1b\\")
+            .unwrap();
+        assert_eq!(store.revision(), deleted);
+        assert!(store.remove(7).is_some());
+        let removed = store.revision();
+        assert_ne!(removed, deleted);
+        assert!(store.remove(7).is_none());
+        store.clear();
+        assert_eq!(store.revision(), removed);
+    }
+
+    #[test]
+    fn revision_tracks_scroll_and_screen_clear_only_when_placements_change() {
+        let mut store = ImageStore::new();
+        let anchor = CellAnchor {
+            row: 2,
+            column: 1,
+            alternate: false,
+        };
+        store
+            .insert_at(transfer(b"\x1b_Ga=T,f=100,i=7,r=1;QQ==\x1b\\"), anchor)
+            .unwrap();
+        let event = ScrollEvent {
+            top: 0,
+            bottom: 4,
+            lines: 1,
+            down: false,
+            alternate: true,
+            archive: false,
+            full_screen: true,
+        };
+        let before = store.revision();
+        store.scroll_placements(event, 0);
+        store.clear_screen_placements(true);
+        assert_eq!(store.revision(), before);
+        store.scroll_placements(
+            ScrollEvent {
+                alternate: false,
+                ..event
+            },
+            0,
+        );
+        let shifted = store.revision();
+        assert_ne!(shifted, before);
+        store.clear_screen_placements(false);
+        let cleared = store.revision();
+        assert_ne!(cleared, shifted);
+        store.clear_screen_placements(false);
+        assert_eq!(store.revision(), cleared);
+        store.clear();
+        assert_ne!(store.revision(), cleared);
     }
 
     #[test]
