@@ -179,9 +179,17 @@ the cursor at that command. Source pixel rectangle keys `x/y/w/h`, first-cell
 pixel offsets `X/Y`, explicit `c`/`r` cell extents, signed `z` index, and
 `C=1` no-move request are parsed and retained. The source rectangle intersects
 the decoded image; an omitted or zero `w/h` selects the remaining width/height.
-Missing extents remain unknown on the ordinary opt-in path. Virtual and
-relative placements do not get a cursor anchor. The opt-in store records
-metadata; runtime composition, redraw, and child replies are described below.
+Missing extents remain unknown on the ordinary opt-in path. `U=1` on `a=T`
+or `a=p` now creates an invisible virtual placement with a nonzero `i` or
+`I`, required nonzero `c/r`, its source crop, pixel offset, and z-index
+retained. It has no cursor anchor and never moves the cursor. A named `(i,p)`
+virtual placement can be
+replaced and deleted by image ID, number, or ID range; cell/row/column/z-index
+selectors do not match it. `U=0` remains an ordinary placement. Placeholder
+characters are not yet interpreted, so virtual placements do not draw pixels
+and Yazi's Unicode-placeholder preview is not yet supported. Relative
+placements remain unsupported. The opt-in store records metadata; runtime
+composition, redraw, and child replies are described below.
 
 In the opt-in pane path, a successful `a=T` or `a=p` placement with both
 resolved `c` and `r` moves the cursor right by `c` cells and down by `r`
@@ -386,8 +394,8 @@ error. Corrupt PNG data and controls outside the data-only subset are rejected
 without replacing an existing image. `q=1` suppresses success and `q=2`
 suppresses all replies; absent display support means no graphics reply.
 The same control-subset checks apply to the opt-in image-store APIs, including
-`a=T` uploads: unsupported placement or virtual-placement controls cannot
-silently replace a stored image even when PNG decoding is deferred.
+`a=T` uploads: unsupported placement controls or malformed virtual placements
+cannot silently replace a stored image even when PNG decoding is deferred.
 Other malformed or unsupported transfers that never finish assembly still get
 no reply. A well-formed `a=p` placement with a nonzero `i` or `I` now replies
 after the store result under the same attachment and sizing conditions. A

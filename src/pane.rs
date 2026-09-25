@@ -792,7 +792,7 @@ mod io_tests {
             Some(cell),
             true,
         );
-        assert_eq!(replies, b"\x1b_Gi=61,p=7;EINVAL:invalid image\x1b\\");
+        assert_eq!(replies, b"\x1b_Gi=61,p=7;EINVAL:invalid placement\x1b\\");
         assert_eq!(pane.image_store().revision(), revision);
 
         replies.clear();
@@ -891,6 +891,52 @@ mod io_tests {
             pane.image_store()
                 .placements()
                 .all(|placement| placement.placement_id.is_none())
+        );
+    }
+
+    #[test]
+    fn runtime_virtual_placements_ack_without_moving_cursor_or_drawing_pixels() {
+        let mut pane = Pane::spawn("/bin/sh", 3, 3).unwrap();
+        let cell = CellPixelSize::new(1, 1).unwrap();
+        let mut replies = Vec::new();
+        pane.process_output_for_runtime(
+            b"\x1b[2;2H\x1b_Ga=T,f=32,s=1,v=1,i=7,p=2,U=1,c=1,r=1;AQIDBA==\x1b\\",
+            &mut |reply| replies.extend_from_slice(reply),
+            Some(cell),
+            true,
+        );
+        assert_eq!(replies, b"\x1b_Gi=7,p=2;OK\x1b\\");
+        assert_eq!(pane.screen().cursor(), (1, 1));
+        let placement = pane.image_store().placements().next().unwrap();
+        assert!(placement.geometry.is_none());
+        assert!(placement.virtual_layout.is_some());
+        assert!(
+            pane.compose_image_snapshot(cell)
+                .unwrap()
+                .pixels
+                .iter()
+                .all(|&byte| byte == 0)
+        );
+
+        replies.clear();
+        pane.process_output_for_runtime(
+            b"\x1b_Ga=p,i=7,p=2,U=1,c=2,r=2\x1b\\",
+            &mut |reply| replies.extend_from_slice(reply),
+            Some(cell),
+            true,
+        );
+        assert_eq!(replies, b"\x1b_Gi=7,p=2;OK\x1b\\");
+        assert_eq!(pane.screen().cursor(), (1, 1));
+        assert_eq!(pane.image_store().placements().count(), 1);
+        assert_eq!(
+            pane.image_store()
+                .placements()
+                .next()
+                .unwrap()
+                .virtual_layout
+                .unwrap()
+                .columns,
+            2
         );
     }
 

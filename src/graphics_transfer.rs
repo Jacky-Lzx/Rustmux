@@ -68,11 +68,13 @@ impl AssembledDirectTransfer {
                     | b'h'
                     | b'X'
                     | b'Y'
+                    | b'U'
                     | b'S'
             )
         }) && self
             .control(b'N')
             .is_none_or(|value| parse_decimal(value).is_some())
+            && matches!(self.control(b'U'), None | Some(b"0" | b"1"))
     }
 }
 

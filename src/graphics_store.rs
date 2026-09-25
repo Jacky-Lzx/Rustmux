@@ -43,6 +43,30 @@ pub struct Placement {
     pub placement_id: Option<u32>,
     /// Only pane-local, cursor-anchored placements have geometry so far.
     pub geometry: Option<PlacementGeometry>,
+    /// An invisible prototype for Unicode image placeholders. It has no
+    /// cursor anchor and never participates in ordinary image snapshots.
+    pub virtual_layout: Option<VirtualPlacement>,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct VirtualPlacement {
+    pub source: SourceRect,
+    pub cell_offset: CellPixelOffset,
+    pub columns: u32,
+    pub rows: u32,
+    pub z_index: i32,
+}
+
+impl VirtualPlacement {
+    fn from_geometry(geometry: PlacementGeometry) -> Result<Self, StoreError> {
+        Ok(Self {
+            source: geometry.source,
+            cell_offset: geometry.cell_offset,
+            columns: geometry.columns.ok_or(StoreError::InvalidPlacement)?,
+            rows: geometry.rows.ok_or(StoreError::InvalidPlacement)?,
+            z_index: geometry.z_index,
+        })
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy, Eq, PartialEq)]
@@ -533,21 +557,29 @@ impl ImageStore {
             && transfer
                 .control(b'i')
                 .is_none_or(|value| parse_u32(value) == Some(0));
+        let virtual_display = display && transfer.control(b'U') == Some(b"1");
+        if virtual_display && anonymous {
+            return Err(StoreError::UnsupportedIdentity);
+        }
         let placement_id = if display {
             let requested = parse_optional_placement_id(transfer.control(b'p'))?;
             if anonymous { None } else { requested }
         } else {
             None
         };
-        let geometry = if display {
+        let (geometry, virtual_layout) = if display {
             let parsed = parse_geometry(
                 anchor.unwrap_or_default(),
                 |key| transfer.control(key),
                 cell_pixels,
             )?;
-            anchor.map(|_| parsed)
+            if virtual_display {
+                (None, Some(VirtualPlacement::from_geometry(parsed)?))
+            } else {
+                (anchor.map(|_| parsed), None)
+            }
         } else {
-            None
+            (None, None)
         };
         if transfer.control(b'i').is_some() && transfer.control(b'I').is_some() {
             return Err(StoreError::UnsupportedIdentity);
@@ -649,7 +681,7 @@ impl ImageStore {
         }
         self.changed();
         if display {
-            self.place_with_geometry(id, placement_id, geometry)?;
+            self.place_with_geometry(id, placement_id, geometry, virtual_layout)?;
         }
         Ok((id, geometry))
     }
@@ -733,7 +765,7 @@ impl ImageStore {
         if self.private_images.contains(&image_id) {
             return Err(StoreError::MissingImage);
         }
-        self.place_with_geometry(image_id, placement_id, None)
+        self.place_with_geometry(image_id, placement_id, None, None)
     }
 
     fn place_with_geometry(
@@ -741,6 +773,7 @@ impl ImageStore {
         image_id: u32,
         placement_id: Option<u32>,
         geometry: Option<PlacementGeometry>,
+        virtual_layout: Option<VirtualPlacement>,
     ) -> Result<(), StoreError> {
         if placement_id == Some(0) {
             return Err(StoreError::InvalidPlacement);
@@ -760,6 +793,7 @@ impl ImageStore {
             image_id,
             placement_id,
             geometry,
+            virtual_layout,
         });
         self.changed();
         self.reap_unplaced_private_images();
@@ -848,9 +882,14 @@ impl ImageStore {
         let controls = parse_control_command(command).ok_or(StoreError::UnsupportedAction)?;
         match controls.get(&b'a').map(Vec::as_slice) {
             Some(b"p") => {
-                if !only_keys(&controls, b"aiIpqcrzCxywhXY") {
+                if !only_keys(&controls, b"aiIpqcrzCxywhXYU") {
                     return Err(StoreError::UnsupportedAction);
                 }
+                let virtual_display = match controls.get(&b'U').map(Vec::as_slice) {
+                    None | Some(b"0") => false,
+                    Some(b"1") => true,
+                    _ => return Err(StoreError::InvalidPlacement),
+                };
                 if controls.contains_key(&b'i') && controls.contains_key(&b'I') {
                     return Err(StoreError::UnsupportedIdentity);
                 }
@@ -874,8 +913,12 @@ impl ImageStore {
                     |key| controls.get(&key).map(Vec::as_slice),
                     cell_pixels,
                 )?;
-                let geometry = anchor.map(|_| parsed);
-                self.place_with_geometry(id, placement_id, geometry)?;
+                let (geometry, virtual_layout) = if virtual_display {
+                    (None, Some(VirtualPlacement::from_geometry(parsed)?))
+                } else {
+                    (anchor.map(|_| parsed), None)
+                };
+                self.place_with_geometry(id, placement_id, geometry, virtual_layout)?;
                 Ok((Some(id), geometry))
             }
             Some(b"d") => {
@@ -1926,23 +1969,128 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_upload_controls_do_not_replace_existing_image() {
+    fn virtual_placements_keep_layout_without_a_screen_anchor() {
+        let mut store = ImageStore::new();
+        let anchor = CellAnchor {
+            row: 2,
+            column: 3,
+            alternate: false,
+        };
+        store
+            .insert_at(
+                transfer(b"\x1b_Ga=T,f=100,i=7,p=2,U=1,c=2,r=3,x=4,y=5,z=-1;QQ==\x1b\\"),
+                anchor,
+            )
+            .unwrap();
+        let placement = store.placements().next().unwrap();
+        assert_eq!(placement.geometry, None);
+        assert_eq!(placement.placement_id, Some(2));
+        assert_eq!(
+            placement.virtual_layout,
+            Some(VirtualPlacement {
+                source: SourceRect {
+                    left: 4,
+                    top: 5,
+                    width: None,
+                    height: None,
+                },
+                cell_offset: CellPixelOffset::default(),
+                columns: 2,
+                rows: 3,
+                z_index: -1,
+            })
+        );
+        store
+            .accept_control_at(b"\x1b_Ga=p,i=7,p=2,U=1,c=4,r=5\x1b\\", anchor)
+            .unwrap();
+        assert_eq!(store.placements().count(), 1);
+        assert_eq!(
+            store
+                .placements()
+                .next()
+                .unwrap()
+                .virtual_layout
+                .unwrap()
+                .columns,
+            4
+        );
+        store
+            .accept_control_for_pane(b"\x1b_Ga=d,d=a\x1b\\", anchor, None, (6, 8))
+            .unwrap();
+        assert_eq!(store.placements().count(), 1);
+        store
+            .accept_control(b"\x1b_Ga=d,d=i,i=7,p=2\x1b\\")
+            .unwrap();
+        assert_eq!(store.placements().count(), 0);
+        assert!(store.get(7).is_some());
+    }
+
+    #[test]
+    fn invalid_virtual_placement_cannot_replace_existing_image() {
         let mut store = ImageStore::new();
         store
             .insert(transfer(b"\x1b_Ga=T,f=100,i=7,p=1;QQ==\x1b\\"))
             .unwrap();
         let revision = store.revision();
         for command in [
-            b"\x1b_Ga=t,f=100,i=7,p=2;Qg==\x1b\\".as_slice(),
-            b"\x1b_Ga=t,f=100,i=7,U=1;Qg==\x1b\\",
-            b"\x1b_Ga=T,f=100,i=7,U=1;Qg==\x1b\\",
-            b"\x1b_Ga=T,f=100,i=7,P=1;Qg==\x1b\\",
-            b"\x1b_Ga=T,f=100,i=7,N=invalid;Qg==\x1b\\",
+            b"\x1b_Ga=T,f=100,i=7,p=2,U=1,c=2;Qg==\x1b\\".as_slice(),
+            b"\x1b_Ga=T,f=100,i=7,p=2,U=2,c=2,r=3;Qg==\x1b\\",
+            b"\x1b_Ga=T,f=100,p=2,U=1,c=2,r=3;Qg==\x1b\\",
         ] {
-            assert_eq!(
-                store.insert(transfer(command)),
-                Err(StoreError::UnsupportedAction)
-            );
+            assert!(store.insert(transfer(command)).is_err());
+            assert_eq!(store.revision(), revision);
+            assert_eq!(store.get(7).unwrap().data, b"A");
+            assert_eq!(store.placements().count(), 1);
+        }
+        assert_eq!(
+            store.accept_control(b"\x1b_Ga=p,i=7,p=2,U=1,c=2\x1b\\"),
+            Err(StoreError::InvalidPlacement)
+        );
+        assert_eq!(
+            store.accept_control(b"\x1b_Ga=p,i=7,p=2,U=2,c=2,r=3\x1b\\"),
+            Err(StoreError::InvalidPlacement)
+        );
+        assert_eq!(store.revision(), revision);
+        store
+            .accept_control_at(
+                b"\x1b_Ga=p,i=7,p=2,U=0,c=1,r=1\x1b\\",
+                CellAnchor::default(),
+            )
+            .unwrap();
+        assert!(store.placements().last().unwrap().geometry.is_some());
+        assert!(store.placements().last().unwrap().virtual_layout.is_none());
+    }
+
+    #[test]
+    fn unsupported_upload_controls_do_not_replace_existing_image() {
+        let mut store = ImageStore::new();
+        store
+            .insert(transfer(b"\x1b_Ga=T,f=100,i=7,p=1;QQ==\x1b\\"))
+            .unwrap();
+        let revision = store.revision();
+        for (command, error) in [
+            (
+                b"\x1b_Ga=t,f=100,i=7,p=2;Qg==\x1b\\".as_slice(),
+                StoreError::UnsupportedAction,
+            ),
+            (
+                b"\x1b_Ga=t,f=100,i=7,U=1;Qg==\x1b\\",
+                StoreError::UnsupportedAction,
+            ),
+            (
+                b"\x1b_Ga=T,f=100,i=7,U=1;Qg==\x1b\\",
+                StoreError::InvalidPlacement,
+            ),
+            (
+                b"\x1b_Ga=T,f=100,i=7,P=1;Qg==\x1b\\",
+                StoreError::UnsupportedAction,
+            ),
+            (
+                b"\x1b_Ga=T,f=100,i=7,N=invalid;Qg==\x1b\\",
+                StoreError::UnsupportedAction,
+            ),
+        ] {
+            assert_eq!(store.insert(transfer(command)), Err(error));
             assert_eq!(store.revision(), revision);
             assert_eq!(store.get(7).unwrap().data, b"A");
             assert_eq!(store.placements().count(), 1);
@@ -2125,6 +2273,7 @@ mod tests {
                 image_id: 7,
                 placement_id: Some(9),
                 geometry: None,
+                virtual_layout: None,
             }]
         );
         store.accept_control(b"\x1b_Ga=p,i=7,p=9\x1b\\").unwrap();
