@@ -51,24 +51,33 @@ pub(crate) fn direct_query_reply(
     Some(encode_reply(id, None, message))
 }
 
-/// Capture the identity of a data-only upload before the transfer is moved
-/// into the image store. Only a completed transfer gets one reply.
+/// Capture a completed transfer's identity before it is moved into the image
+/// store. An `a=T` response also identifies the placement it creates.
 #[derive(Clone, Copy)]
-pub(crate) struct UploadReply {
+pub(crate) struct TransferReply {
     id: u32,
+    placement_id: Option<u32>,
+    display: bool,
     quiet: u8,
 }
 
-impl UploadReply {
+impl TransferReply {
     pub(crate) fn for_transfer(
         transfer: &AssembledDirectTransfer,
         can_display: bool,
     ) -> Option<Self> {
-        if !can_display || !matches!(transfer.control(b'a'), None | Some(b"t")) {
+        if !can_display || !matches!(transfer.control(b'a'), None | Some(b"t" | b"T")) {
             return None;
         }
+        let display = transfer.control(b'a') == Some(b"T");
         Some(Self {
             id: parse_nonzero(transfer.control(b'i')?)?,
+            placement_id: if display {
+                transfer.control(b'p').and_then(parse_nonzero)
+            } else {
+                None
+            },
+            display,
             quiet: transfer
                 .control(b'q')
                 .and_then(|value| value.first())
@@ -84,9 +93,10 @@ impl UploadReply {
         let message = match error {
             None => "OK",
             Some(StoreError::TooLarge) => "E2BIG:image too large",
+            Some(StoreError::InvalidPlacement) if self.display => "EINVAL:invalid placement",
             Some(_) => "EINVAL:invalid image",
         };
-        Some(encode_reply(self.id, None, message))
+        Some(encode_reply(self.id, self.placement_id, message))
     }
 }
 
@@ -197,14 +207,14 @@ mod tests {
     #[test]
     fn upload_ack_uses_id_and_respects_quiet_modes() {
         let regular = assembled(b"\x1b_Ga=t,i=7,f=24,s=1,v=1;AQID\x1b\\");
-        let ack = UploadReply::for_transfer(&regular, true).unwrap();
+        let ack = TransferReply::for_transfer(&regular, true).unwrap();
         assert_eq!(ack.response(None).unwrap(), b"\x1b_Gi=7;OK\x1b\\");
-        assert!(UploadReply::for_transfer(&regular, false).is_none());
+        assert!(TransferReply::for_transfer(&regular, false).is_none());
         let upload_and_place = assembled(b"\x1b_Ga=T,i=7,f=24,s=1,v=1;AQID\x1b\\");
-        assert!(UploadReply::for_transfer(&upload_and_place, true).is_none());
+        assert!(TransferReply::for_transfer(&upload_and_place, true).is_some());
 
         let quiet_ok = assembled(b"\x1b_Ga=t,i=7,f=24,s=1,v=1,q=1;AQID\x1b\\");
-        let ack = UploadReply::for_transfer(&quiet_ok, true).unwrap();
+        let ack = TransferReply::for_transfer(&quiet_ok, true).unwrap();
         assert!(ack.response(None).is_none());
         assert_eq!(
             ack.response(Some(StoreError::InvalidData)).unwrap(),
@@ -212,7 +222,47 @@ mod tests {
         );
 
         let quiet_all = assembled(b"\x1b_Ga=t,i=7,f=24,s=1,v=1,q=2;AQID\x1b\\");
-        let ack = UploadReply::for_transfer(&quiet_all, true).unwrap();
+        let ack = TransferReply::for_transfer(&quiet_all, true).unwrap();
+        assert!(ack.response(None).is_none());
+        assert!(ack.response(Some(StoreError::InvalidData)).is_none());
+    }
+
+    #[test]
+    fn transmit_and_place_ack_echoes_placement_and_maps_store_errors() {
+        let placed = assembled(b"\x1b_Ga=T,i=7,p=9,f=24,s=1,v=1;AQID\x1b\\");
+        let ack = TransferReply::for_transfer(&placed, true).unwrap();
+        assert_eq!(ack.response(None).unwrap(), b"\x1b_Gi=7,p=9;OK\x1b\\");
+        assert_eq!(
+            ack.response(Some(StoreError::InvalidPlacement)).unwrap(),
+            b"\x1b_Gi=7,p=9;EINVAL:invalid placement\x1b\\"
+        );
+        assert_eq!(
+            ack.response(Some(StoreError::InvalidData)).unwrap(),
+            b"\x1b_Gi=7,p=9;EINVAL:invalid image\x1b\\"
+        );
+        assert_eq!(
+            ack.response(Some(StoreError::TooLarge)).unwrap(),
+            b"\x1b_Gi=7,p=9;E2BIG:image too large\x1b\\"
+        );
+        assert!(TransferReply::for_transfer(&placed, false).is_none());
+        let anonymous = assembled(b"\x1b_Ga=T,i=7,p=0,f=24,s=1,v=1;AQID\x1b\\");
+        assert_eq!(
+            TransferReply::for_transfer(&anonymous, true)
+                .unwrap()
+                .response(None)
+                .unwrap(),
+            b"\x1b_Gi=7;OK\x1b\\"
+        );
+    }
+
+    #[test]
+    fn transmit_and_place_ack_respects_quiet_modes() {
+        let quiet_ok = assembled(b"\x1b_Ga=T,i=7,p=9,q=1,f=24,s=1,v=1;AQID\x1b\\");
+        let ack = TransferReply::for_transfer(&quiet_ok, true).unwrap();
+        assert!(ack.response(None).is_none());
+        assert!(ack.response(Some(StoreError::InvalidData)).is_some());
+        let quiet_all = assembled(b"\x1b_Ga=T,i=7,p=9,q=2,f=24,s=1,v=1;AQID\x1b\\");
+        let ack = TransferReply::for_transfer(&quiet_all, true).unwrap();
         assert!(ack.response(None).is_none());
         assert!(ack.response(Some(StoreError::InvalidData)).is_none());
     }

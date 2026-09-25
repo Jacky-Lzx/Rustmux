@@ -289,8 +289,16 @@ control or invalid placement geometry returns `EINVAL`. Unparseable controls
 cannot be correlated and remain silent. A valid nonzero `p` is echoed in the
 reply; absent or zero `p` stays anonymous. `q=1` suppresses success, and
 `q=2` suppresses all replies. The placement and cursor remain unchanged on
-failure. Combined upload-and-placement `a=T` acknowledgements remain
-unimplemented. These limits mean a query, upload, or placement response is not
+failure. A completed direct-data `a=T` with nonzero `i` now receives one
+reply after its final chunk and the store result. Successful storage and
+placement return `OK`, with a valid nonzero `p` echoed; invalid geometry
+returns `EINVAL:invalid placement`, while rejected image data or unsupported
+controls return `EINVAL:invalid image`. Transfers exceeding the assembler's
+16 MiB bound never complete, so they receive no reply.
+Unknown display controls are rejected before replacing an existing image, and
+`q=1`/`q=2` retain the same reply suppression rules. Incomplete or malformed
+transfers, anonymous image IDs, and unsupported outer graphics capability
+remain silent. These limits mean a query, upload, or placement response is not
 a claim of full Kitty graphics compatibility.
 The query/DA ordering follows the
 [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
@@ -325,6 +333,9 @@ Upload acknowledgement tests cover chunk completion, reply/DA ordering,
 rejected replacements, quiet modes, and a child PTY round trip.
 Placement acknowledgement tests cover named and anonymous IDs, missing images,
 invalid geometry, quiet modes, reply/DA ordering, and a child PTY round trip.
+Transmit-and-place acknowledgement tests cover final-chunk timing, placement
+identity, failed replacement, quiet modes, reply/DA ordering, and a child PTY
+round trip.
 Anchor tests cover interleaved text, final-chunk position, alternate-screen
 identity, explicit layout options, malformed metadata, and named replacement.
 Screen-lifecycle tests cover split `CSI 2 J`, non-clearing text erasures,

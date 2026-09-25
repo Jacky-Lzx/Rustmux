@@ -38,6 +38,37 @@ impl AssembledDirectTransfer {
             .control(b'N')
             .is_none_or(|value| parse_decimal(value).is_some())
     }
+
+    /// `a=T` accepts the data keys plus only the placement geometry this
+    /// store actually implements. Reject unknown keys before any mutation.
+    pub(crate) fn supported_display_controls(&self) -> bool {
+        self.controls.keys().all(|key| {
+            matches!(
+                key,
+                b'a' | b'f'
+                    | b'i'
+                    | b'm'
+                    | b'q'
+                    | b's'
+                    | b't'
+                    | b'v'
+                    | b'N'
+                    | b'p'
+                    | b'c'
+                    | b'r'
+                    | b'z'
+                    | b'C'
+                    | b'x'
+                    | b'y'
+                    | b'w'
+                    | b'h'
+                    | b'X'
+                    | b'Y'
+            )
+        }) && self
+            .control(b'N')
+            .is_none_or(|value| parse_decimal(value).is_some())
+    }
 }
 
 #[derive(Debug)]
