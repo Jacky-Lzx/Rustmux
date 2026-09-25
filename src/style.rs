@@ -2,7 +2,7 @@
 
 use std::io::{self, Write};
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Color {
     #[default]
     Default,

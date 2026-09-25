@@ -67,6 +67,30 @@ impl VirtualPlacement {
             z_index: geometry.z_index,
         })
     }
+
+    /// A virtual prototype is fitted into its declared cell rectangle; its
+    /// anchor is supplied by each Unicode placeholder cell at composition time.
+    pub fn pixel_layout(
+        self,
+        image_width: u32,
+        image_height: u32,
+        cell: CellPixelSize,
+    ) -> Option<PlacementPixelLayout> {
+        PlacementGeometry {
+            anchor: CellAnchor::default(),
+            row_offset: 0,
+            source: self.source,
+            cell_offset: self.cell_offset,
+            columns: Some(self.columns),
+            rows: Some(self.rows),
+            sizing: PlacementSizing::FitBox,
+            clip_top_rows: 0,
+            clip_bottom_rows: 0,
+            z_index: self.z_index,
+            cursor_stays: true,
+        }
+        .pixel_layout(image_width, image_height, cell)
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy, Eq, PartialEq)]

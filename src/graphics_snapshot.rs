@@ -1,15 +1,19 @@
 //! Explicit image-only snapshot of one pane's stored Kitty placements.
 //! The terminal runtime uses all three stacking bands when Kitty support is known.
 
+use std::collections::BTreeMap;
+
 use crate::{
     graphics_composite::{
         CompositeError, ImageLayer, MAX_COMPOSITE_INPUT_BYTES, compose_image_layers,
     },
     graphics_decode::{
         ClipError, ClippedPlacement, DecodeError, DecodedImage, MAX_DECODED_IMAGE_BYTES,
-        ResampleError,
+        ResampleError, ResampledPlacement,
     },
-    graphics_store::{CellPixelSize, ImageStore, PixelSize},
+    graphics_placeholder::decode_row,
+    graphics_store::{CellPixelSize, ImageStore, PixelRect, PixelSize},
+    screen::Screen,
 };
 
 /// Kitty's special boundary below which images are also behind cells with a
@@ -78,8 +82,28 @@ pub fn compose_store_snapshot(
     viewport: PixelSize,
     cell: CellPixelSize,
 ) -> Result<DecodedImage, SnapshotError> {
+    compose_snapshot(store, None, alternate, viewport, cell)
+}
+
+/// Include visible Unicode placeholder cells from the active pane screen.
+pub(crate) fn compose_pane_snapshot(
+    store: &ImageStore,
+    screen: &Screen,
+    viewport: PixelSize,
+    cell: CellPixelSize,
+) -> Result<DecodedImage, SnapshotError> {
+    compose_snapshot(store, Some(screen), screen.is_alternate(), viewport, cell)
+}
+
+fn compose_snapshot(
+    store: &ImageStore,
+    screen: Option<&Screen>,
+    alternate: bool,
+    viewport: PixelSize,
+    cell: CellPixelSize,
+) -> Result<DecodedImage, SnapshotError> {
     validate_viewport(viewport)?;
-    let clipped = collect_visible_clips(store, alternate, viewport, cell, |_| true)?;
+    let clipped = collect_visible_clips(store, screen, alternate, viewport, cell, |_| true)?;
     let layers: Vec<_> = clipped
         .iter()
         .map(|(image_id, z_index, placement)| ImageLayer {
@@ -100,8 +124,27 @@ pub fn compose_store_planes(
     viewport: PixelSize,
     cell: CellPixelSize,
 ) -> Result<ImagePlanes, SnapshotError> {
+    compose_planes(store, None, alternate, viewport, cell)
+}
+
+pub(crate) fn compose_pane_planes(
+    store: &ImageStore,
+    screen: &Screen,
+    viewport: PixelSize,
+    cell: CellPixelSize,
+) -> Result<ImagePlanes, SnapshotError> {
+    compose_planes(store, Some(screen), screen.is_alternate(), viewport, cell)
+}
+
+fn compose_planes(
+    store: &ImageStore,
+    screen: Option<&Screen>,
+    alternate: bool,
+    viewport: PixelSize,
+    cell: CellPixelSize,
+) -> Result<ImagePlanes, SnapshotError> {
     let canvas_bytes = validate_viewport(viewport)?;
-    let clipped = collect_visible_clips(store, alternate, viewport, cell, |_| true)?;
+    let clipped = collect_visible_clips(store, screen, alternate, viewport, cell, |_| true)?;
     let mut behind_background = Vec::new();
     let mut behind_text = Vec::new();
     let mut above_text = Vec::new();
@@ -141,8 +184,38 @@ pub fn compose_store_band(
     cell: CellPixelSize,
     band: ImageBand,
 ) -> Result<Option<DecodedImage>, SnapshotError> {
+    compose_band(store, None, alternate, viewport, cell, band)
+}
+
+pub(crate) fn compose_pane_band(
+    store: &ImageStore,
+    screen: &Screen,
+    viewport: PixelSize,
+    cell: CellPixelSize,
+    band: ImageBand,
+) -> Result<Option<DecodedImage>, SnapshotError> {
+    compose_band(
+        store,
+        Some(screen),
+        screen.is_alternate(),
+        viewport,
+        cell,
+        band,
+    )
+}
+
+fn compose_band(
+    store: &ImageStore,
+    screen: Option<&Screen>,
+    alternate: bool,
+    viewport: PixelSize,
+    cell: CellPixelSize,
+    band: ImageBand,
+) -> Result<Option<DecodedImage>, SnapshotError> {
     validate_viewport(viewport)?;
-    let clipped = collect_visible_clips(store, alternate, viewport, cell, |z| band.contains(z))?;
+    let clipped = collect_visible_clips(store, screen, alternate, viewport, cell, |z| {
+        band.contains(z)
+    })?;
     let layers: Vec<_> = clipped
         .iter()
         .map(|(image_id, z_index, placement)| ImageLayer {
@@ -189,6 +262,7 @@ fn validate_viewport(viewport: PixelSize) -> Result<usize, SnapshotError> {
 
 fn collect_visible_clips(
     store: &ImageStore,
+    screen: Option<&Screen>,
     alternate: bool,
     viewport: PixelSize,
     cell: CellPixelSize,
@@ -229,5 +303,225 @@ fn collect_visible_clips(
             ));
         }
     }
+    if let Some(screen) = screen {
+        collect_placeholder_clips(
+            store,
+            screen,
+            viewport,
+            cell,
+            &include_z,
+            &mut clipped,
+            &mut input_bytes,
+        )?;
+    }
     Ok(clipped)
+}
+
+fn collect_placeholder_clips(
+    store: &ImageStore,
+    screen: &Screen,
+    viewport: PixelSize,
+    cell: CellPixelSize,
+    include_z: &impl Fn(i32) -> bool,
+    clipped: &mut Vec<(u32, i32, ClippedPlacement)>,
+    input_bytes: &mut usize,
+) -> Result<(), SnapshotError> {
+    let (rows, columns) = screen.dimensions();
+    if (rows as u128) * u128::from(cell.height()) != u128::from(viewport.height)
+        || (columns as u128) * u128::from(cell.width()) != u128::from(viewport.width)
+    {
+        return Err(SnapshotError::InvalidViewport);
+    }
+    let virtuals: Vec<_> = store
+        .placements()
+        .filter(|placement| placement.virtual_layout.is_some())
+        .collect();
+    if virtuals.is_empty() {
+        return Ok(());
+    }
+    let mut by_identity = BTreeMap::new();
+    for (index, placement) in virtuals.iter().enumerate() {
+        let image_id = store.protocol_image_id(placement.image_id);
+        if image_id == 0 {
+            continue;
+        }
+        by_identity
+            .entry((image_id, placement.placement_id))
+            .or_insert(index);
+        by_identity.entry((image_id, None)).or_insert(index);
+    }
+    let mut rasters: Vec<Option<ResampledPlacement>> = (0..virtuals.len()).map(|_| None).collect();
+    let mut raster_bytes = 0usize;
+    for row in 0..rows {
+        for (column, reference) in decode_row(screen.row(row).unwrap()).into_iter().enumerate() {
+            let Some(reference) = reference else {
+                continue;
+            };
+            let Some(&index) = by_identity.get(&(reference.image_id, reference.placement_id))
+            else {
+                continue;
+            };
+            let placement = virtuals[index];
+            let layout = placement.virtual_layout.unwrap();
+            if reference.row >= layout.rows
+                || reference.column >= layout.columns
+                || !include_z(layout.z_index)
+            {
+                continue;
+            }
+            if rasters[index].is_none() {
+                let image = store
+                    .get(placement.image_id)
+                    .ok_or(SnapshotError::MissingImage)?
+                    .decode_rgba()
+                    .map_err(SnapshotError::Decode)?;
+                let pixel_layout = layout
+                    .pixel_layout(image.width, image.height, cell)
+                    .ok_or(SnapshotError::InvalidLayout)?;
+                let raster = image
+                    .resample_placement(pixel_layout)
+                    .map_err(SnapshotError::Resample)?;
+                raster_bytes = raster_bytes
+                    .checked_add(raster.pixels.len())
+                    .filter(|&total| total <= MAX_COMPOSITE_INPUT_BYTES)
+                    .ok_or(SnapshotError::Composite(CompositeError::InputLimit))?;
+                rasters[index] = Some(raster);
+            }
+            if let Some(tile) = clip_virtual_cell(
+                rasters[index].as_ref().unwrap(),
+                reference.row,
+                reference.column,
+                row,
+                column,
+                cell,
+            )? {
+                *input_bytes = input_bytes
+                    .checked_add(tile.pixels.len())
+                    .filter(|&total| total <= MAX_COMPOSITE_INPUT_BYTES)
+                    .ok_or(SnapshotError::Composite(CompositeError::InputLimit))?;
+                clipped.push((reference.image_id, layout.z_index, tile));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn clip_virtual_cell(
+    raster: &ResampledPlacement,
+    source_row: u32,
+    source_column: u32,
+    screen_row: usize,
+    screen_column: usize,
+    cell: CellPixelSize,
+) -> Result<Option<ClippedPlacement>, SnapshotError> {
+    let invalid = || SnapshotError::InvalidLayout;
+    let cell_width = u32::from(cell.width());
+    let cell_height = u32::from(cell.height());
+    let source_left = source_column.checked_mul(cell_width).ok_or_else(invalid)?;
+    let source_top = source_row.checked_mul(cell_height).ok_or_else(invalid)?;
+    let content = raster.destination;
+    let left = source_left.max(content.x);
+    let top = source_top.max(content.y);
+    let right = source_left
+        .checked_add(cell_width)
+        .ok_or_else(invalid)?
+        .min(content.x.checked_add(content.width).ok_or_else(invalid)?);
+    let bottom = source_top
+        .checked_add(cell_height)
+        .ok_or_else(invalid)?
+        .min(content.y.checked_add(content.height).ok_or_else(invalid)?);
+    if left >= right || top >= bottom {
+        return Ok(None);
+    }
+    let width = right - left;
+    let height = bottom - top;
+    let x = u32::try_from(screen_column)
+        .ok()
+        .and_then(|column| column.checked_mul(cell_width))
+        .and_then(|x| x.checked_add(left - source_left))
+        .ok_or_else(invalid)?;
+    let y = u32::try_from(screen_row)
+        .ok()
+        .and_then(|row| row.checked_mul(cell_height))
+        .and_then(|y| y.checked_add(top - source_top))
+        .ok_or_else(invalid)?;
+    let source_width = usize::try_from(content.width).map_err(|_| invalid())?;
+    let copy_width = usize::try_from(width).map_err(|_| invalid())?;
+    let start_x = usize::try_from(left - content.x).map_err(|_| invalid())?;
+    let start_y = usize::try_from(top - content.y).map_err(|_| invalid())?;
+    let mut pixels = Vec::with_capacity(
+        copy_width
+            .checked_mul(usize::try_from(height).map_err(|_| invalid())?)
+            .and_then(|count| count.checked_mul(4))
+            .ok_or_else(invalid)?,
+    );
+    for offset_y in 0..usize::try_from(height).map_err(|_| invalid())? {
+        let start = (start_y + offset_y)
+            .checked_mul(source_width)
+            .and_then(|index| index.checked_add(start_x))
+            .and_then(|index| index.checked_mul(4))
+            .ok_or_else(invalid)?;
+        let end = start.checked_add(copy_width * 4).ok_or_else(invalid)?;
+        pixels.extend_from_slice(raster.pixels.get(start..end).ok_or_else(invalid)?);
+    }
+    Ok(Some(ClippedPlacement {
+        destination: PixelRect {
+            x,
+            y,
+            width,
+            height,
+        },
+        pixels,
+    }))
+}
+
+#[cfg(test)]
+mod placeholder_tests {
+    use super::*;
+
+    #[test]
+    fn each_placeholder_clips_only_its_letterboxed_source_cell() {
+        let raster = ResampledPlacement {
+            destination: PixelRect {
+                x: 1,
+                y: 0,
+                width: 2,
+                height: 2,
+            },
+            pixels: vec![1, 0, 0, 255, 2, 0, 0, 255, 3, 0, 0, 255, 4, 0, 0, 255],
+        };
+        let cell = CellPixelSize::new(2, 2).unwrap();
+        let left = clip_virtual_cell(&raster, 0, 0, 1, 0, cell)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            left.destination,
+            PixelRect {
+                x: 1,
+                y: 2,
+                width: 1,
+                height: 2,
+            }
+        );
+        assert_eq!(left.pixels, [1, 0, 0, 255, 3, 0, 0, 255]);
+
+        let right = clip_virtual_cell(&raster, 0, 1, 2, 3, cell)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            right.destination,
+            PixelRect {
+                x: 6,
+                y: 4,
+                width: 1,
+                height: 2,
+            }
+        );
+        assert_eq!(right.pixels, [2, 0, 0, 255, 4, 0, 0, 255]);
+        assert!(
+            clip_virtual_cell(&raster, 1, 0, 0, 0, cell)
+                .unwrap()
+                .is_none()
+        );
+    }
 }

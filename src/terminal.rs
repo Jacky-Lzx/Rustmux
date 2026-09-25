@@ -591,6 +591,7 @@ struct KittyOverlay {
     pane: PaneId,
     band: ImageBand,
     revision: u64,
+    placeholder_revision: u64,
     rect: Rect,
     cell: CellPixelSize,
     alternate: bool,
@@ -633,6 +634,7 @@ impl KittyOverlays {
                 && current.is_some_and(|(_, rect)| *rect == old.rect)
                 && panes.get(old.pane).is_some_and(|pane| {
                     pane.image_store().revision() == old.revision
+                        && pane.virtual_placeholder_revision() == old.placeholder_revision
                         && pane.screen().is_alternate() == old.alternate
                 })
                 && old.cell == cell;
@@ -707,6 +709,7 @@ impl KittyOverlays {
                     pane: id,
                     band,
                     revision: pane.image_store().revision(),
+                    placeholder_revision: pane.virtual_placeholder_revision(),
                     rect,
                     cell,
                     alternate: pane.screen().is_alternate(),
@@ -3324,6 +3327,74 @@ mod tests {
             b"\x1b_Ga=d,d=I,i=2147483648,q=2\x1b\\"
         );
         assert!(cache.entries.is_empty());
+    }
+
+    #[test]
+    fn kitty_overlay_follows_virtual_placeholder_appearance_and_erasure() {
+        let cell = CellPixelSize::new(1, 1).unwrap();
+        let mut windows = Windows::default();
+        let window_id = windows
+            .create(
+                "virtual".into(),
+                spawn_window(
+                    OsStr::new("/bin/sh"),
+                    None,
+                    4,
+                    4,
+                    crate::config::Notifications::default(),
+                    crate::config::DEFAULT_SCROLLBACK_LINES,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let panes = windows.active_mut().unwrap().content_mut();
+        panes.active_mut().process_output_with_image_store_sized(
+            "\x1b_Ga=T,f=32,s=1,v=1,i=7,p=1,U=1,c=1,r=1;AQIDBA==\x1b\\\x1b[38;5;7m\u{10eeee}\u{0305}\u{0305}"
+                .as_bytes(),
+            &mut |_| {},
+            cell,
+        );
+        let mut cache = KittyOverlays::default();
+        let mut output = VecDeque::new();
+        cache
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        assert_eq!(cache.entries.len(), 1);
+        output.clear();
+        cache
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        assert!(output.is_empty());
+
+        panes
+            .active_mut()
+            .process_output_with_image_store_sized(b"\x1b[1;1H ", &mut |_| {}, cell);
+        cache
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        assert_eq!(
+            output.drain(..).collect::<Vec<_>>(),
+            b"\x1b_Ga=d,d=I,i=2147483648,q=2\x1b\\"
+        );
+        assert!(cache.entries.is_empty());
+
+        panes.active_mut().process_output_with_image_store_sized(
+            "\x1b[2;2H\u{10eeee}\u{0305}\u{0305}".as_bytes(),
+            &mut |_| {},
+            cell,
+        );
+        cache
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        assert_eq!(cache.entries.len(), 1);
+        assert!(
+            output
+                .iter()
+                .copied()
+                .collect::<Vec<_>>()
+                .windows(b"i=2147483649".len())
+                .any(|bytes| bytes == b"i=2147483649")
+        );
     }
 
     #[test]

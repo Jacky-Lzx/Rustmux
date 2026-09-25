@@ -4,9 +4,11 @@
 use crate::{
     graphics_decode::{ClippedPlacement, DecodedImage, MAX_DECODED_IMAGE_BYTES},
     graphics_store::{MAX_PANE_PLACEMENTS, PixelSize},
+    pane::MAX_CELLS,
 };
 
 pub const MAX_COMPOSITE_INPUT_BYTES: usize = 64 * 1024 * 1024;
+pub const MAX_COMPOSITE_LAYERS: usize = MAX_PANE_PLACEMENTS + MAX_CELLS;
 
 #[derive(Debug, Clone, Copy)]
 pub struct ImageLayer<'a> {
@@ -37,7 +39,7 @@ pub fn compose_image_layers(
     let canvas_bytes = rgba_bytes(viewport.width, viewport.height)
         .filter(|&bytes| bytes <= MAX_DECODED_IMAGE_BYTES)
         .ok_or(CompositeError::OutputLimit)?;
-    if layers.len() > MAX_PANE_PLACEMENTS {
+    if layers.len() > MAX_COMPOSITE_LAYERS {
         return Err(CompositeError::TooManyLayers);
     }
     let mut input_bytes = 0usize;
@@ -289,7 +291,7 @@ mod tests {
             Err(CompositeError::OutputLimit)
         );
         assert_eq!(
-            compose_image_layers(viewport, &vec![layer; MAX_PANE_PLACEMENTS + 1]),
+            compose_image_layers(viewport, &vec![layer; MAX_COMPOSITE_LAYERS + 1]),
             Err(CompositeError::TooManyLayers)
         );
         let misplaced = pixel(1, 0, [1, 2, 3, 4]);

@@ -2,6 +2,7 @@
 
 use crate::{
     chrome::pane_border_style,
+    graphics_placeholder::PLACEHOLDER_CHAR,
     layout::{Layout, PaneId, Rect},
     pane::MAX_CELLS,
     screen::Screen,
@@ -77,6 +78,23 @@ pub(crate) fn compose_with_titles(
     frame.resize_display(usize::from(rows), usize::from(columns))?;
     for (_, rect, source) in &visible {
         frame.copy_display_cells(source, usize::from(rect.row), usize::from(rect.column));
+        // Child placeholders refer to pane-local image IDs. Never forward them
+        // to the outer terminal, where they could display unrelated images.
+        for source_row in 0..usize::from(rect.rows) {
+            for (source_column, cell) in source.row(source_row).unwrap().iter().enumerate() {
+                if cell.character == PLACEHOLDER_CHAR {
+                    let display_row = usize::from(rect.row) + source_row;
+                    let display_column = usize::from(rect.column) + source_column;
+                    let mut blank = Cell::default();
+                    // copy_display_cells has already resolved pane-local
+                    // palette colors for this display cell.
+                    blank.style.background = frame.row(display_row).unwrap()[display_column]
+                        .style
+                        .background;
+                    frame.set_display_cell(display_row, display_column, blank);
+                }
+            }
+        }
     }
     // Each pane owns all four sides of its frame. A split reserves two cells so
     // adjacent panes remain visually distinct instead of sharing one separator.
@@ -283,6 +301,21 @@ mod tests {
     use super::*;
     use crate::layout::SplitAxis;
     use crate::theme::{DEFAULT_BACKGROUND, DEFAULT_FOREGROUND};
+
+    #[test]
+    fn child_image_placeholder_is_not_forwarded_to_the_outer_terminal() {
+        let layout = Layout::new(5, 5).unwrap();
+        let (id, rect) = layout.content_geometry().panes[0];
+        let mut screen = Screen::new(rect.rows.into(), rect.columns.into()).unwrap();
+        screen.print(PLACEHOLDER_CHAR);
+        screen.print('\u{0305}');
+        assert_eq!(screen.row(0).unwrap()[0].character, PLACEHOLDER_CHAR);
+
+        let frame = compose(&layout, &[(id, &screen)]).unwrap();
+        let displayed = &frame.row(usize::from(rect.row)).unwrap()[usize::from(rect.column)];
+        assert_eq!(displayed.character, ' ');
+        assert!(displayed.combining.is_empty());
+    }
 
     #[test]
     fn active_and_history_highlights_follow_only_the_selected_pane_border() {

@@ -4,8 +4,8 @@ use crate::{
     graphics::{GraphicsEvent, GraphicsFramer},
     graphics_decode::DecodedImage,
     graphics_snapshot::{
-        ImageBand, ImagePlanes, SnapshotError, compose_store_band, compose_store_planes,
-        compose_store_snapshot,
+        ImageBand, ImagePlanes, SnapshotError, compose_pane_band, compose_pane_planes,
+        compose_pane_snapshot,
     },
     graphics_store::{CellAnchor, CellPixelSize, ImageStore, PixelSize},
     graphics_transfer::{AssembledDirectTransfer, DirectTransferAssembler},
@@ -16,6 +16,7 @@ use crate::{
 };
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use nix::pty::Winsize;
+use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::{
@@ -467,6 +468,32 @@ impl Pane {
         &mut self.image_store
     }
 
+    /// Only placeholder cells affect virtual image overlays. Ordinary text
+    /// changes do not require resending an unchanged image plane.
+    pub(crate) fn virtual_placeholder_revision(&self) -> u64 {
+        if !self
+            .image_store
+            .placements()
+            .any(|placement| placement.virtual_layout.is_some())
+        {
+            return 0;
+        }
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        self.screen.dimensions().hash(&mut hash);
+        self.screen.is_alternate().hash(&mut hash);
+        for row in 0..self.screen.dimensions().0 {
+            for (column, cell) in self.screen.row(row).unwrap().iter().enumerate() {
+                if cell.character == crate::graphics_placeholder::PLACEHOLDER_CHAR {
+                    (row, column).hash(&mut hash);
+                    cell.combining.hash(&mut hash);
+                    cell.style.foreground.hash(&mut hash);
+                    cell.style.underline_color.hash(&mut hash);
+                }
+            }
+        }
+        hash.finish()
+    }
+
     /// Produce an image-only RGBA snapshot for the current screen when the
     /// caller knows the physical cell size. Text and backgrounds are omitted;
     /// the ordinary runtime uses the separate stacking-band path below.
@@ -475,12 +502,7 @@ impl Pane {
         cell_pixels: CellPixelSize,
     ) -> Result<DecodedImage, SnapshotError> {
         let viewport = self.image_viewport(cell_pixels)?;
-        compose_store_snapshot(
-            &self.image_store,
-            self.screen.is_alternate(),
-            viewport,
-            cell_pixels,
-        )
+        compose_pane_snapshot(&self.image_store, &self.screen, viewport, cell_pixels)
     }
 
     /// Return only populated Kitty image stacking bands. This is still an
@@ -490,12 +512,7 @@ impl Pane {
         cell_pixels: CellPixelSize,
     ) -> Result<ImagePlanes, SnapshotError> {
         let viewport = self.image_viewport(cell_pixels)?;
-        compose_store_planes(
-            &self.image_store,
-            self.screen.is_alternate(),
-            viewport,
-            cell_pixels,
-        )
+        compose_pane_planes(&self.image_store, &self.screen, viewport, cell_pixels)
     }
 
     /// Compose one stacking band without decoding or allocating the others.
@@ -505,13 +522,7 @@ impl Pane {
         band: ImageBand,
     ) -> Result<Option<DecodedImage>, SnapshotError> {
         let viewport = self.image_viewport(cell_pixels)?;
-        compose_store_band(
-            &self.image_store,
-            self.screen.is_alternate(),
-            viewport,
-            cell_pixels,
-            band,
-        )
+        compose_pane_band(&self.image_store, &self.screen, viewport, cell_pixels, band)
     }
 
     /// Compose the z >= 0 band without decoding or allocating the two
@@ -937,6 +948,104 @@ mod io_tests {
                 .unwrap()
                 .columns,
             2
+        );
+    }
+
+    #[test]
+    fn unicode_placeholders_draw_only_their_own_image_cells_and_follow_text_edits() {
+        use base64::Engine;
+
+        let mut pane = Pane::spawn("/bin/sh", 4, 4).unwrap();
+        let cell = CellPixelSize::new(1, 1).unwrap();
+        let source = [
+            255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+        ];
+        let encoded = base64::engine::general_purpose::STANDARD.encode(source);
+        let upload = format!("\x1b_Ga=T,f=32,s=2,v=2,i=42,p=1,U=1,c=2,r=2,z=0;{encoded}\x1b\\");
+        pane.process_output_with_image_store_sized(upload.as_bytes(), &mut |_| {}, cell);
+        pane.process_output_with_image_store_sized(
+            "\x1b[38;5;42m\x1b[58;5;1m\x1b[1;1H\u{10eeee}\u{0305}\u{0305}\u{10eeee}\u{0305}\u{030d}\x1b[2;1H\u{10eeee}\u{030d}\u{0305}\u{10eeee}\u{030d}\u{030d}"
+                .as_bytes(),
+            &mut |_| {},
+            cell,
+        );
+        let snapshot = pane.compose_image_snapshot(cell).unwrap();
+        let at = |row: usize, column: usize| {
+            &snapshot.pixels[(row * 4 + column) * 4..(row * 4 + column + 1) * 4]
+        };
+        assert_eq!(at(0, 0), [255, 0, 0, 255]);
+        assert_eq!(at(0, 1), [0, 255, 0, 255]);
+        assert_eq!(at(1, 0), [0, 0, 255, 255]);
+        assert_eq!(at(1, 1), [255, 255, 255, 255]);
+        assert_eq!(at(2, 2), [0, 0, 0, 0]);
+
+        let revision = pane.virtual_placeholder_revision();
+        pane.process_output_with_image_store_sized(
+            "\x1b[1;2H \x1b[3;3H\u{10eeee}\u{0305}\u{030d}".as_bytes(),
+            &mut |_| {},
+            cell,
+        );
+        assert_ne!(pane.virtual_placeholder_revision(), revision);
+        let moved = pane.compose_image_snapshot(cell).unwrap();
+        assert_eq!(&moved.pixels[4..8], [0, 0, 0, 0]);
+        assert_eq!(
+            &moved.pixels[(2 * 4 + 2) * 4..(2 * 4 + 3) * 4],
+            [0, 255, 0, 255]
+        );
+
+        pane.process_output_with_image_store_sized(
+            b"\x1b_Ga=d,d=i,i=42,p=1\x1b\\",
+            &mut |_| {},
+            cell,
+        );
+        assert!(
+            pane.compose_image_snapshot(cell)
+                .unwrap()
+                .pixels
+                .iter()
+                .all(|&p| p == 0)
+        );
+    }
+
+    #[test]
+    fn placeholder_underline_color_selects_a_named_virtual_placement() {
+        let mut pane = Pane::spawn("/bin/sh", 2, 2).unwrap();
+        let cell = CellPixelSize::new(1, 1).unwrap();
+        pane.process_output_with_image_store_sized(
+            b"\x1b_Ga=t,f=32,s=1,v=1,i=7;AQIDBA==\x1b\\\x1b_Ga=p,i=7,p=1,U=1,c=1,r=1,z=-1\x1b\\\x1b_Ga=p,i=7,p=2,U=1,c=1,r=1,z=0\x1b\\",
+            &mut |_| {},
+            cell,
+        );
+        pane.process_output_with_image_store_sized(
+            "\x1b[38;5;7m\x1b[58;5;2m\u{10eeee}\u{0305}\u{0305}".as_bytes(),
+            &mut |_| {},
+            cell,
+        );
+        assert!(
+            pane.compose_image_band(cell, ImageBand::AboveText)
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            pane.compose_image_band(cell, ImageBand::BehindText)
+                .unwrap()
+                .is_none()
+        );
+
+        pane.process_output_with_image_store_sized(
+            "\x1b[1;1H\x1b[58;5;1m\u{10eeee}\u{0305}\u{0305}".as_bytes(),
+            &mut |_| {},
+            cell,
+        );
+        assert!(
+            pane.compose_image_band(cell, ImageBand::AboveText)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            pane.compose_image_band(cell, ImageBand::BehindText)
+                .unwrap()
+                .is_some()
         );
     }
 

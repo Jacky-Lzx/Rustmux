@@ -183,17 +183,23 @@ Missing extents remain unknown on the ordinary opt-in path. `U=1` on `a=T`
 or `a=p` now creates an invisible virtual placement with a nonzero `i` or
 `I`, required nonzero `c/r`, its source crop, pixel offset, and z-index
 retained. It has no cursor anchor and never moves the cursor. A named `(i,p)`
-virtual placement can be
-replaced and deleted by image ID, number, or ID range; cell/row/column/z-index
-selectors do not match it. `U=0` remains an ordinary placement. Placeholder
+virtual placement can be replaced and deleted by image ID, number, or ID
+range; cell/row/column/z-index selectors do not match it. `U=0` remains an
+ordinary placement. Placeholder
 cells can now be decoded from `U+10EEEE`, the complete row/column diacritic
 table, foreground image ID, and optional underline-color placement ID;
 omitted coordinates inherit from the adjacent placeholder when the protocol's
-color and row conditions hold. This decoder does not yet feed image snapshots
-or runtime rendering, so virtual placements still do not draw pixels and
-Yazi's Unicode-placeholder preview is not yet supported. Relative
-placements remain unsupported. The opt-in store records metadata; runtime
-composition, redraw, and child replies are described below.
+color and row conditions hold. The pane snapshot now fits a virtual prototype
+once, clips its pixels to each matching placeholder cell, and places those
+cells wherever the current text grid contains them. Overwriting, erasing,
+scrolling, or moving the placeholder updates the displayed image without a
+new graphics command. Runtime redraw tracks placeholder changes separately
+from image-store revisions, and the child's placeholder glyphs are replaced
+with blank display cells before output to the outer terminal. This is an
+image-only composition path, not full Kitty Unicode-placeholder compatibility;
+Yazi preview has not been verified end-to-end. Relative placements remain
+unsupported. The opt-in store records metadata; runtime composition, redraw,
+and child replies are described below.
 
 In the opt-in pane path, a successful `a=T` or `a=p` placement with both
 resolved `c` and `r` moves the cursor right by `c` cells and down by `r`
@@ -254,19 +260,23 @@ extra placement row. `compose_image_layers` can now blend these clipped RGBA
 images onto a transparent pane-sized canvas. It orders by `z`, then image ID
 (lower values underneath), with stable input order for the protocol's undefined
 equal-key tie. The output is capped at 32 MiB, cumulative layer input at
-64 MiB, and the layer count at the pane's 1024-placement limit. Negative `z`
-is ordered among images, but its relationship to text and cell backgrounds is
-not composed yet. The compositor is not called by normal redraw. The ordering
+64 MiB, and the layer count at 1024 placements plus 65536 placeholder cells.
+Negative `z` is ordered among images; text and cell backgrounds are handled
+by the runtime's separate stacking bands, not by this image-only compositor.
+The runtime calls the compositor during graphics redraw. The ordering
 follows the [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
 
-`Pane::compose_image_snapshot` now connects those opt-in stages for the current
+`Pane::compose_image_snapshot` connects those opt-in stages for the current
 screen. Given a verified physical cell size, it derives the pane's pixel
 viewport, decodes each cursor-anchored image, recalculates placement layout,
-resamples and scroll-clips it, then blends the visible layers. Placements on
-the other screen and unanchored references are omitted. Invalid selected-screen
-image data or geometry fails the whole snapshot rather than returning a partial
-image. The returned canvas is transparent where no image is placed; the store
-is unchanged. It remains image-only and is not called by the normal renderer.
+resamples and scroll-clips it, then blends the visible layers. It also decodes
+current-screen Unicode placeholders and draws only the matching virtual
+placement's referenced cell pixels; the prototype itself remains invisible.
+Placements on the other screen are omitted. Invalid selected-screen image data
+or geometry fails the whole snapshot rather than returning a partial image.
+The returned canvas is transparent where no image is placed; the store is
+unchanged. It remains image-only; normal runtime rendering uses the separate
+stacking-band path.
 
 `Pane::compose_image_planes` provides an alternate opt-in snapshot that keeps
 Kitty's three stacking bands separate: `z < -1073741824` is behind non-default
@@ -348,7 +358,9 @@ The opt-in pane path now removes cursor-anchored placement references when
 alternate screen is cleared by mode 1049 entry/exit or mode 1047 exit.
 Mode 47 preserves its alternate placements on exit; other text erasures do
 not clear graphics. Stored image data remains available for a later `a=p`.
-Unanchored virtual/relative references are not classified as visible. These
+Virtual prototypes survive these clears, but their displayed images vanish
+when the placeholder text cells are cleared. Relative references remain
+unsupported. These
 clear rules follow the [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
 
 Cursor-anchored placements now follow physical vertical row shifts caused by
