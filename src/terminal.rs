@@ -1781,7 +1781,7 @@ fn service_pane(
     requested: PollFlags,
     ready: PollFlags,
     cell_pixels: Option<CellPixelSize>,
-    answer_graphics_queries: bool,
+    answer_graphics: bool,
 ) -> io::Result<()> {
     if ready.contains(PollFlags::POLLNVAL) {
         return Err(io::Error::new(
@@ -1803,7 +1803,7 @@ fn service_pane(
                         &bytes[..count],
                         &mut |reply| replies.extend_from_slice(reply),
                         cell_pixels,
-                        answer_graphics_queries,
+                        answer_graphics,
                     );
                     let state = pane.parts_mut().3;
                     if state.status.is_none() {

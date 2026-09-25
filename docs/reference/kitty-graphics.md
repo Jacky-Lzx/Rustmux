@@ -275,9 +275,16 @@ all replies. A query never inserts or replaces an image. Without confirmed
 display support, or while detached, Rustmux stays silent on graphics queries;
 a following DA reply still reaches the child. File/shared-memory media,
 compressed or malformed transfers, and image-number allocation remain
-unsupported. Ordinary graphics uploads do not yet receive acknowledgement
-replies. These limits mean a query response is not a claim of full Kitty
-graphics compatibility.
+unsupported. Under the same attachment and sizing conditions, a completed
+direct-data `a=t` upload with an explicit nonzero `i` now receives one reply
+after its final chunk: `OK` only after successful storage, otherwise a bounded
+error. Corrupt PNG data and controls outside the data-only subset are rejected
+without replacing an existing image. `q=1` suppresses success and `q=2`
+suppresses all replies; absent display support means no graphics reply.
+Malformed or unsupported transfers that never finish assembly still get no
+reply. Combined upload-and-placement `a=T` and separate `a=p` placement
+acknowledgements remain unimplemented. These limits mean a query or upload
+response is not a claim of full Kitty graphics compatibility.
 The query/DA ordering follows the
 [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
 
@@ -307,6 +314,8 @@ Runtime tests cover PTY output storage with known and unknown physical cell
 size, plus cell-size invalidation when a detached client reconnects.
 Query tests cover reply/DA ordering, conditional silence, quiet modes, invalid
 image data, unknown controls, and a child PTY round trip.
+Upload acknowledgement tests cover chunk completion, reply/DA ordering,
+rejected replacements, quiet modes, and a child PTY round trip.
 Anchor tests cover interleaved text, final-chunk position, alternate-screen
 identity, explicit layout options, malformed metadata, and named replacement.
 Screen-lifecycle tests cover split `CSI 2 J`, non-clearing text erasures,

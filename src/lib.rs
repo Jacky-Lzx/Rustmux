@@ -9,7 +9,7 @@ pub mod graphics_capability;
 pub mod graphics_composite;
 pub mod graphics_decode;
 pub mod graphics_output;
-mod graphics_query;
+mod graphics_reply;
 pub mod graphics_snapshot;
 pub mod graphics_store;
 pub mod graphics_transfer;

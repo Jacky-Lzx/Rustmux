@@ -301,6 +301,9 @@ try:
     s.send(f"python3 {child_query}\n".encode())
     expected_replies = b"\x1b_Gi=41;OK\x1b\\\x1b[?1;0c"
     s.expect(b"CHILD_GRAPHICS_REPLY:" + expected_replies.hex().encode())
+    child_upload = shlex.quote(os.path.join(os.path.dirname(__file__), "kitty_child_upload.py"))
+    s.send(f"python3 {child_upload}\n".encode())
+    s.expect(b"CHILD_UPLOAD_REPLIES_OK")
     s.send(
         b"printf '\\033_Ga=T,f=32,s=1,v=1,i=5,p=1,c=1,r=1,z=-1073741825,C=1;AQIDBA==\\033\\\\"
         b"\\033_Ga=T,f=32,s=1,v=1,i=6,p=1,c=1,r=1,z=-1,C=1;AQIDBA==\\033\\\\"

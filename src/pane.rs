@@ -7,7 +7,7 @@ use crate::{
         ImageBand, ImagePlanes, SnapshotError, compose_store_band, compose_store_planes,
         compose_store_snapshot,
     },
-    graphics_store::{CellAnchor, CellPixelSize, ImageStore, PixelSize},
+    graphics_store::{CellAnchor, CellPixelSize, ImageStore, PixelSize, StoreError},
     graphics_transfer::{AssembledDirectTransfer, DirectTransferAssembler},
     parser::Parser,
     pty::PtyShell,
@@ -52,7 +52,7 @@ enum GraphicsSink<'a> {
     Callback(&'a mut dyn FnMut(AssembledDirectTransfer)),
     Store {
         cell_pixels: Option<CellPixelSize>,
-        answer_queries: bool,
+        answer_graphics: bool,
         validate_png: bool,
     },
 }
@@ -368,21 +368,21 @@ impl Pane {
         self.process_output_inner(bytes, reply, GraphicsSink::Drop);
     }
 
-    /// Runtime path: retain graphics commands and answer direct-data queries
-    /// only when this attachment can display their images.
+    /// Runtime path: retain graphics commands and answer supported direct-data
+    /// queries and uploads only when this attachment can display their images.
     pub(crate) fn process_output_for_runtime(
         &mut self,
         bytes: &[u8],
         reply: &mut impl FnMut(&[u8]),
         cell_pixels: Option<CellPixelSize>,
-        answer_queries: bool,
+        answer_graphics: bool,
     ) {
         self.process_output_inner(
             bytes,
             reply,
             GraphicsSink::Store {
                 cell_pixels,
-                answer_queries,
+                answer_graphics,
                 validate_png: true,
             },
         );
@@ -409,7 +409,7 @@ impl Pane {
             reply,
             GraphicsSink::Store {
                 cell_pixels: None,
-                answer_queries: false,
+                answer_graphics: false,
                 validate_png: false,
             },
         );
@@ -428,7 +428,7 @@ impl Pane {
             reply,
             GraphicsSink::Store {
                 cell_pixels: Some(cell_pixels),
-                answer_queries: false,
+                answer_graphics: false,
                 validate_png: false,
             },
         );
@@ -453,7 +453,7 @@ impl Pane {
             reply,
             GraphicsSink::Store {
                 cell_pixels,
-                answer_queries: false,
+                answer_graphics: false,
                 validate_png: false,
             },
         );
@@ -559,7 +559,7 @@ impl Pane {
                     }
                     GraphicsSink::Store {
                         cell_pixels,
-                        answer_queries,
+                        answer_graphics,
                         validate_png,
                     } => {
                         let (row, column) = self.screen.cursor();
@@ -571,20 +571,38 @@ impl Pane {
                         let placed = if let Some(transfer) = self.graphics_transfer.accept(&command)
                         {
                             if transfer.control(b'a') == Some(b"q".as_slice()) {
-                                if let Some(response) = crate::graphics_query::direct_query_reply(
+                                if let Some(response) = crate::graphics_reply::direct_query_reply(
                                     transfer,
-                                    *answer_queries,
+                                    *answer_graphics,
                                 ) {
                                     reply(&response);
                                 }
                                 continue;
                             }
-                            self.image_store.insert_for_pane(
-                                transfer,
-                                anchor,
-                                *cell_pixels,
-                                *validate_png,
-                            )
+                            let data_only = matches!(transfer.control(b'a'), None | Some(b"t"));
+                            let upload_reply = crate::graphics_reply::UploadReply::for_transfer(
+                                &transfer,
+                                *answer_graphics,
+                            );
+                            let stored = if *validate_png
+                                && data_only
+                                && !transfer.supported_data_only_controls()
+                            {
+                                Err(StoreError::UnsupportedAction)
+                            } else {
+                                self.image_store.insert_for_pane(
+                                    transfer,
+                                    anchor,
+                                    *cell_pixels,
+                                    *validate_png,
+                                )
+                            };
+                            if let Some(response) = upload_reply
+                                .and_then(|upload| upload.response(stored.as_ref().err().copied()))
+                            {
+                                reply(&response);
+                            }
+                            stored
                         } else {
                             self.image_store
                                 .accept_control_for_pane(&command, anchor, *cell_pixels)
@@ -699,6 +717,70 @@ mod io_tests {
     use crate::{parser::MAX_REPLY_BYTES, window::Windows};
     use base64::{Engine as _, engine::general_purpose::STANDARD};
     use std::{os::unix::process::ExitStatusExt, time::Duration};
+
+    #[test]
+    fn runtime_upload_ack_follows_final_chunk_and_does_not_claim_failed_storage() {
+        let mut pane = Pane::spawn("/bin/sh", 3, 3).unwrap();
+        let cell = CellPixelSize::new(1, 1).unwrap();
+        let mut replies = Vec::new();
+        pane.process_output_for_runtime(
+            b"\x1b_Ga=t,f=32,s=1,v=1,i=44,m=1,q=1;AQID\x1b\\",
+            &mut |reply| replies.extend_from_slice(reply),
+            Some(cell),
+            true,
+        );
+        assert!(replies.is_empty());
+        assert!(pane.image_store().get(44).is_none());
+        pane.process_output_for_runtime(
+            b"\x1b_Gm=0,q=0;BA==\x1b\\\x1b[c",
+            &mut |reply| replies.extend_from_slice(reply),
+            Some(cell),
+            true,
+        );
+        assert_eq!(replies, b"\x1b_Gi=44;OK\x1b\\\x1b[?1;0c");
+        assert_eq!(pane.image_store().get(44).unwrap().data, [1, 2, 3, 4]);
+        let revision = pane.image_store().revision();
+
+        replies.clear();
+        pane.process_output_for_runtime(
+            b"\x1b_Ga=t,f=100,i=44,q=1;YQ==\x1b\\",
+            &mut |reply| replies.extend_from_slice(reply),
+            Some(cell),
+            true,
+        );
+        assert_eq!(replies, b"\x1b_Gi=44;EINVAL:invalid image\x1b\\");
+        assert_eq!(pane.image_store().revision(), revision);
+        assert_eq!(pane.image_store().get(44).unwrap().data, [1, 2, 3, 4]);
+
+        replies.clear();
+        pane.process_output_for_runtime(
+            b"\x1b_Ga=t,f=32,s=1,v=1,i=44,p=1;AAAAAA==\x1b\\",
+            &mut |reply| replies.extend_from_slice(reply),
+            Some(cell),
+            true,
+        );
+        assert_eq!(replies, b"\x1b_Gi=44;EINVAL:invalid image\x1b\\");
+        assert_eq!(pane.image_store().revision(), revision);
+
+        replies.clear();
+        pane.process_output_for_runtime(
+            b"\x1b_Ga=t,f=100,i=44,q=2;YQ==\x1b\\",
+            &mut |reply| replies.extend_from_slice(reply),
+            Some(cell),
+            true,
+        );
+        assert!(replies.is_empty());
+        assert_eq!(pane.image_store().revision(), revision);
+
+        pane.process_output_for_runtime(
+            b"\x1b_Ga=t,f=32,s=1,v=1,i=45;AAAAAA==\x1b\\",
+            &mut |reply| replies.extend_from_slice(reply),
+            Some(cell),
+            false,
+        );
+        assert!(replies.is_empty());
+        assert!(pane.image_store().get(45).is_some());
+    }
 
     #[test]
     fn runtime_rejects_invalid_png_without_replacing_image_or_moving_cursor() {

@@ -26,12 +26,17 @@ impl AssembledDirectTransfer {
         self.controls.get(&key).map(Vec::as_slice)
     }
 
-    /// Query replies only cover the direct-data controls modeled by this
-    /// assembler. An unrecognized key must not receive a false `OK`.
-    pub(crate) fn supported_query_controls(&self) -> bool {
-        self.controls
-            .keys()
-            .all(|key| matches!(key, b'a' | b'f' | b'i' | b'm' | b'q' | b's' | b't' | b'v'))
+    /// Replies for queries and data-only uploads cover only these direct-data
+    /// controls. An unrecognized key must not receive a false `OK`.
+    pub(crate) fn supported_data_only_controls(&self) -> bool {
+        self.controls.keys().all(|key| {
+            matches!(
+                key,
+                b'a' | b'f' | b'i' | b'm' | b'q' | b's' | b't' | b'v' | b'N'
+            )
+        }) && self
+            .control(b'N')
+            .is_none_or(|value| parse_decimal(value).is_some())
     }
 }
 
