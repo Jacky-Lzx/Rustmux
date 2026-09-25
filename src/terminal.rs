@@ -22,6 +22,7 @@ use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGWINCH};
 use crate::pane::{INPUT_LIMIT as LIMIT, MAX_CELLS, Pane};
 use crate::{
     chrome::{FooterMode, compose_with_mode, footer_enabled, pane_rows},
+    graphics_capability::{GraphicsCapabilityProbe, GraphicsSupport},
     graphics_store::CellPixelSize,
     layout::{Direction, PaneId, Rect, SplitAxis},
     pane_set::PaneSet,
@@ -46,6 +47,8 @@ const MAX_FRAME: usize = 16 * 1024 * 1024;
 const SYNC_TIMEOUT: Duration = Duration::from_secs(1);
 const FRAME_INTERVAL: Duration = Duration::from_millis(6);
 const PANE_DRAG_RESIZE_INTERVAL: Duration = Duration::from_millis(33);
+const GRAPHICS_PROBE_TIMEOUT: Duration = Duration::from_millis(500);
+const GRAPHICS_PROBE_IMAGE_ID: std::num::NonZeroU32 = std::num::NonZeroU32::new(31).unwrap();
 
 /// Run on the controlling terminal during single-threaded program startup.
 /// Returns the shell exit code, or 128 + signal for termination by signal.
@@ -152,6 +155,7 @@ struct TerminalSession {
     windows: Windows<PaneSet<Pane>>,
     outer_rows: u16,
     cell_pixels: Option<CellPixelSize>,
+    graphics_support: Option<GraphicsSupport>,
     notifications: crate::config::Notifications,
     scrollback_lines: usize,
     shortcuts: crate::config::Shortcuts,
@@ -165,6 +169,11 @@ struct SessionContext<'a> {
     notifications: crate::config::Notifications,
     scrollback_lines: usize,
     shortcuts: crate::config::Shortcuts,
+}
+
+struct AttachmentCapabilities<'a> {
+    cell_pixels: &'a mut Option<CellPixelSize>,
+    graphics_support: &'a mut Option<GraphicsSupport>,
 }
 
 impl TerminalSession {
@@ -196,6 +205,7 @@ impl TerminalSession {
             windows,
             outer_rows: rows,
             cell_pixels: None,
+            graphics_support: None,
             notifications,
             scrollback_lines,
             shortcuts,
@@ -211,6 +221,7 @@ impl TerminalSession {
         // A reconnecting frontend may have a different physical cell size.
         // Its initial resize will replace this before active panes are read.
         self.cell_pixels = None;
+        self.graphics_support = None;
         forward(
             frontend,
             &mut self.windows,
@@ -223,7 +234,10 @@ impl TerminalSession {
                 shortcuts: self.shortcuts,
             },
             &mut self.outer_rows,
-            &mut self.cell_pixels,
+            AttachmentCapabilities {
+                cell_pixels: &mut self.cell_pixels,
+                graphics_support: &mut self.graphics_support,
+            },
             &mut self.closed,
         )
     }
@@ -1665,9 +1679,13 @@ fn forward(
     signals: &Signals,
     context: SessionContext<'_>,
     outer_rows: &mut u16,
-    cell_pixels: &mut Option<CellPixelSize>,
+    capabilities: AttachmentCapabilities<'_>,
     closed: &mut Option<crate::closed_pane::ClosedPane>,
 ) -> io::Result<ForwardExit> {
+    let AttachmentCapabilities {
+        cell_pixels,
+        graphics_support,
+    } = capabilities;
     let SessionContext {
         shell_path,
         session_name,
@@ -1677,6 +1695,10 @@ fn forward(
     } = context;
     let mut renderer = Renderer::default();
     let mut to_terminal = VecDeque::new();
+    let probe = GraphicsCapabilityProbe::new(GRAPHICS_PROBE_IMAGE_ID);
+    to_terminal.extend(probe.request_bytes());
+    let mut graphics_probe = Some(probe);
+    let mut graphics_probe_deadline = None;
     let mut input = VecDeque::new();
     let mut keys = WindowInput {
         shortcuts,
@@ -1696,7 +1718,24 @@ fn forward(
     let mut pane_resize_pending: Option<(WindowId, Instant)> = None;
     let mut pending_outer_resize = None;
     loop {
+        if graphics_probe_deadline.is_none() && to_terminal.is_empty() {
+            graphics_probe_deadline = Some(Instant::now() + GRAPHICS_PROBE_TIMEOUT);
+        }
+        if graphics_probe_deadline.is_some_and(|deadline| Instant::now() >= deadline)
+            && let Some(mut probe) = graphics_probe.take()
+        {
+            let mut released = Vec::new();
+            *graphics_support = probe.finish(&mut released);
+            input.extend(released);
+        }
+        let old_input_len = input.len();
         frontend.drain_input(&mut input);
+        filter_graphics_probe_input(
+            &mut graphics_probe,
+            &mut input,
+            old_input_len,
+            graphics_support,
+        );
         if connection != ConnectionState::Attached {
             // No peer can consume an old physical frame. Dropping it also lets
             // history-mode input that preceded Detach continue in order.
@@ -2877,7 +2916,14 @@ fn forward(
         if connection == ConnectionState::Attached
             && outer.intersects(PollFlags::POLLIN | PollFlags::POLLHUP | PollFlags::POLLERR)
         {
+            let old_input_len = input.len();
             connection = frontend.receive(&mut input)?;
+            filter_graphics_probe_input(
+                &mut graphics_probe,
+                &mut input,
+                old_input_len,
+                graphics_support,
+            );
         }
         if connection == ConnectionState::Attached && outer.contains(PollFlags::POLLOUT) {
             frontend.send(&mut to_terminal)?;
@@ -2908,6 +2954,26 @@ fn forward(
             }
         }
     }
+}
+
+fn filter_graphics_probe_input(
+    probe: &mut Option<GraphicsCapabilityProbe>,
+    input: &mut VecDeque<u8>,
+    old_len: usize,
+    support: &mut Option<GraphicsSupport>,
+) {
+    let Some(probe) = probe.as_mut() else {
+        return;
+    };
+    if input.len() == old_len {
+        return;
+    }
+    let raw: Vec<u8> = input.drain(old_len..).collect();
+    let mut forwarded = Vec::with_capacity(raw.len());
+    if let Some(decision) = probe.advance(&raw, &mut forwarded) {
+        *support = Some(decision);
+    }
+    input.extend(forwarded);
 }
 
 fn receive(reader: &mut impl Read, pending: &mut VecDeque<u8>) -> io::Result<bool> {
@@ -2997,6 +3063,24 @@ mod tests {
             resize: Arc::new(AtomicBool::new(false)),
             ids: Vec::new(),
         }
+    }
+
+    #[test]
+    fn graphics_probe_filters_only_new_input_and_preserves_queued_bytes() {
+        let mut probe = Some(GraphicsCapabilityProbe::new(GRAPHICS_PROBE_IMAGE_ID));
+        let mut support = None;
+        let mut input = VecDeque::from(b"queued".to_vec());
+        let old_len = input.len();
+        input.extend(b"\x1b_Gi=31;O");
+        filter_graphics_probe_input(&mut probe, &mut input, old_len, &mut support);
+        assert_eq!(input, b"queued".to_vec());
+        assert_eq!(support, None);
+
+        let old_len = input.len();
+        input.extend(b"K\x1b\\\x1b[?1;2ckey");
+        filter_graphics_probe_input(&mut probe, &mut input, old_len, &mut support);
+        assert_eq!(input, b"queuedkey".to_vec());
+        assert_eq!(support, Some(GraphicsSupport::Supported));
     }
 
     #[test]
@@ -3152,6 +3236,7 @@ mod tests {
         send_client_messages(
             &mut first_client,
             &[
+                ClientMessage::Input(b"\x1b_Gi=31;OK\x1b\\\x1b[?1;2c".to_vec()),
                 ClientMessage::Input(b"RUSTMUX_ATTACH_TEST=kept\n".to_vec()),
                 ClientMessage::Detach,
             ],
@@ -3162,6 +3247,7 @@ mod tests {
         );
         assert_eq!(session.windows.iter().len(), 1);
         assert_eq!(session.cell_pixels, CellPixelSize::new(10, 20));
+        assert_eq!(session.graphics_support, Some(GraphicsSupport::Supported));
 
         let (mut second_client, mut second_frontend) =
             socket_frontend_with_size(nix::pty::Winsize {
@@ -3210,6 +3296,7 @@ mod tests {
         drain.join().unwrap();
         assert_eq!(session.outer_rows, 30);
         assert_eq!(session.cell_pixels, None);
+        assert_eq!(session.graphics_support, None);
     }
 
     #[test]

@@ -175,8 +175,12 @@ A matching graphics reply (including an error) before DA means supported; DA
 first means unsupported. Timeout or disconnect before either reply is
 inconclusive, and `finish` releases any unfinished input candidate. The caller
 must reserve the query image ID and avoid a concurrent primary-DA request.
-The probe is not yet
-wired into either local or attached-client input; runtime display remains off.
+The server now queues this query once per local run or client attachment,
+before its first rendered frame. It filters only newly received input,
+preserving queued user bytes; it records the result per attachment and resets
+it on reconnect. After 500 ms without a DA barrier, it releases partial input;
+a prior graphics reply remains supported, while silence remains unknown.
+Runtime image display remains off.
 This ordering follows the
 [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
 

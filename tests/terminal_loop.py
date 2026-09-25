@@ -226,7 +226,17 @@ class Session:
 
 s = Session()
 try:
+    query = b"\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\\x1b[c"
+    deadline = time.monotonic() + 8
+    while query not in s.output:
+        s.read()
+        assert time.monotonic() < deadline, (bytes(s.output[-1000:]), s.child.poll())
+    # A real outer-terminal reply must be consumed before the child shell sees
+    # the next command. No image is displayed by this capability query.
+    s.send(b"\x1b_Gi=31;OK\x1b\\\x1b[?1;2c")
     s.expect(b"RUSTMUX_READY> ")
+    s.send(b"printf '\\nPROBE_READY\\n'\n")
+    s.expect(b"\r\nPROBE_READY\r\n")
     raw = termios.tcgetattr(s.slave)
     assert not raw[3] & (termios.ECHO | termios.ICANON | termios.ISIG)
     # Pane children carry an environment marker. Interactive nested entry fails
