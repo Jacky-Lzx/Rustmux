@@ -50,6 +50,14 @@ declared dimensions, rejects animation, and caps each decoded pixel buffer at
 cache the decoded pixels or render them; callers must opt in to decoding.
 Color-profile conversion is not yet implemented.
 
+The running multiplexer validates PNG data before replacing a pane image.
+Corrupt, unsupported, oversized-decoded, or dimension-mismatched PNG transfers
+leave the existing image, placements, revision, and cursor unchanged. Successful
+PNG dimensions are cached for sized placement inference, avoiding a second
+decode at insertion time. Raw transfers were already byte-count checked by the
+assembler. The public opt-in image-store methods retain their earlier
+deferred-decoding behavior for callers that only need the original bytes.
+
 The opt-in store now tracks placement *references* for `a=T` and a strict
 `a=p,i=<id>[,p=<id>]` subset. A named placement replaces the same `(i,p)`
 reference; an absent or zero `p` creates an anonymous reference. Re-transmitting
@@ -286,6 +294,8 @@ dimension checks and the output-size bound. Resampling tests cover cropped
 nearest-neighbor enlargement, reduction, alpha preservation, invalid geometry,
 and the raster output limit. Viewport tests cover all four clipped edges,
 negative and disjoint anchors, malformed buffers, and oversized geometry.
+Runtime upload tests cover atomic rejection of corrupt PNG replacements and
+acceptance of valid PNG with inferred placement extent.
 Scroll-clip tests verify top/bottom pixel rows and a pane-driven margin scroll.
 Composition tests cover `z`/image-ID order, straight-alpha blending, offsets,
 malformed layers, and output/work limits.

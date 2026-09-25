@@ -53,6 +53,7 @@ enum GraphicsSink<'a> {
     Store {
         cell_pixels: Option<CellPixelSize>,
         answer_queries: bool,
+        validate_png: bool,
     },
 }
 
@@ -382,6 +383,7 @@ impl Pane {
             GraphicsSink::Store {
                 cell_pixels,
                 answer_queries,
+                validate_png: true,
             },
         );
     }
@@ -408,6 +410,7 @@ impl Pane {
             GraphicsSink::Store {
                 cell_pixels: None,
                 answer_queries: false,
+                validate_png: false,
             },
         );
     }
@@ -426,6 +429,7 @@ impl Pane {
             GraphicsSink::Store {
                 cell_pixels: Some(cell_pixels),
                 answer_queries: false,
+                validate_png: false,
             },
         );
     }
@@ -450,6 +454,7 @@ impl Pane {
             GraphicsSink::Store {
                 cell_pixels,
                 answer_queries: false,
+                validate_png: false,
             },
         );
     }
@@ -555,6 +560,7 @@ impl Pane {
                     GraphicsSink::Store {
                         cell_pixels,
                         answer_queries,
+                        validate_png,
                     } => {
                         let (row, column) = self.screen.cursor();
                         let anchor = CellAnchor {
@@ -573,8 +579,12 @@ impl Pane {
                                 }
                                 continue;
                             }
-                            self.image_store
-                                .insert_for_pane(transfer, anchor, *cell_pixels)
+                            self.image_store.insert_for_pane(
+                                transfer,
+                                anchor,
+                                *cell_pixels,
+                                *validate_png,
+                            )
                         } else {
                             self.image_store
                                 .accept_control_for_pane(&command, anchor, *cell_pixels)
@@ -687,7 +697,52 @@ impl Pane {
 mod io_tests {
     use super::*;
     use crate::{parser::MAX_REPLY_BYTES, window::Windows};
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
     use std::{os::unix::process::ExitStatusExt, time::Duration};
+
+    #[test]
+    fn runtime_rejects_invalid_png_without_replacing_image_or_moving_cursor() {
+        let mut pane = Pane::spawn("/bin/sh", 4, 4).unwrap();
+        let cell = CellPixelSize::new(1, 1).unwrap();
+        pane.process_output_for_runtime(
+            b"\x1b_Ga=T,f=32,s=1,v=1,i=7,p=1,c=1,r=1;AQIDBA==\x1b\\",
+            &mut |_| {},
+            Some(cell),
+            false,
+        );
+        let revision = pane.image_store().revision();
+        let cursor = pane.screen().cursor();
+        pane.process_output_for_runtime(
+            b"\x1b_Ga=T,f=100,i=7,p=2,c=1,r=1;QQ==\x1b\\",
+            &mut |_| {},
+            Some(cell),
+            false,
+        );
+        assert_eq!(pane.image_store().revision(), revision);
+        assert_eq!(pane.image_store().get(7).unwrap().data, [1, 2, 3, 4]);
+        assert_eq!(pane.image_store().placements().count(), 1);
+        assert_eq!(pane.screen().cursor(), cursor);
+
+        let mut png = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut png, 2, 1);
+            encoder.set_color(png::ColorType::Rgb);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder
+                .write_header()
+                .unwrap()
+                .write_image_data(&[0; 6])
+                .unwrap();
+        }
+        let valid = format!("\x1b_Ga=T,f=100,i=7,p=3;{}\x1b\\", STANDARD.encode(png));
+        pane.process_output_for_runtime(valid.as_bytes(), &mut |_| {}, Some(cell), false);
+        assert_ne!(pane.image_store().revision(), revision);
+        let placements: Vec<_> = pane.image_store().placements().collect();
+        assert_eq!(placements.len(), 1);
+        assert_eq!(placements[0].placement_id, Some(3));
+        assert_eq!(placements[0].geometry.unwrap().columns, Some(2));
+        assert_eq!(placements[0].geometry.unwrap().rows, Some(1));
+    }
 
     #[test]
     fn kitty_child_query_replies_before_da_without_mutating_stored_images() {

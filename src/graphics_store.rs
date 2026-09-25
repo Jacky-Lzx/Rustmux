@@ -31,6 +31,7 @@ pub enum StoreError {
     UnsupportedIdentity,
     UnsupportedAction,
     InvalidPlacement,
+    InvalidData,
     MissingImage,
     TooLarge,
 }
@@ -430,7 +431,8 @@ impl ImageStore {
     /// commands and image-number allocation require a later protocol stage.
     /// Replacement is atomic if the new transfer cannot fit by itself.
     pub fn insert(&mut self, transfer: AssembledDirectTransfer) -> Result<u32, StoreError> {
-        self.insert_inner(transfer, None, None).map(|(id, _)| id)
+        self.insert_inner(transfer, None, None, false)
+            .map(|(id, _)| id)
     }
 
     /// Pane path: snapshot the cursor at the final chunk of `a=T`.
@@ -439,17 +441,21 @@ impl ImageStore {
         transfer: AssembledDirectTransfer,
         anchor: CellAnchor,
     ) -> Result<u32, StoreError> {
-        self.insert_inner(transfer, Some(anchor), None)
+        self.insert_inner(transfer, Some(anchor), None, false)
             .map(|(id, _)| id)
     }
 
+    /// The running terminal prevalidates PNG before mutating the store; public
+    /// opt-in pane APIs keep their deferred-decoding behavior.
     pub(crate) fn insert_for_pane(
         &mut self,
         transfer: AssembledDirectTransfer,
         anchor: CellAnchor,
         cell_pixels: Option<CellPixelSize>,
+        validate_png: bool,
     ) -> Result<Option<PlacementGeometry>, StoreError> {
-        let (id, geometry) = self.insert_inner(transfer, Some(anchor), cell_pixels)?;
+        let (id, geometry) =
+            self.insert_inner(transfer, Some(anchor), cell_pixels, validate_png)?;
         Ok(self.resolve_latest_geometry(id, geometry, cell_pixels))
     }
 
@@ -458,6 +464,7 @@ impl ImageStore {
         transfer: AssembledDirectTransfer,
         anchor: Option<CellAnchor>,
         cell_pixels: Option<CellPixelSize>,
+        validate_png: bool,
     ) -> Result<(u32, Option<PlacementGeometry>), StoreError> {
         let display = match transfer.control(b'a') {
             None | Some(b"t") => false,
@@ -504,6 +511,21 @@ impl ImageStore {
         if size > MAX_PANE_IMAGE_BYTES {
             return Err(StoreError::TooLarge);
         }
+        let image = StoredImage {
+            format,
+            data: transfer.data,
+            declared_width,
+            declared_height,
+        };
+        // The runtime must not replace a displayable image with corrupt or
+        // unsupported PNG bytes. Raw lengths were checked by the assembler.
+        // Cache successful dimensions so sized placement does not decode twice.
+        let decoded_dimensions = if validate_png && format == ImageFormat::Png {
+            let decoded = image.decode_rgba().map_err(|_| StoreError::InvalidData)?;
+            Some((decoded.width, decoded.height))
+        } else {
+            None
+        };
         self.remove(id);
         while self.images.len() >= MAX_PANE_IMAGES || self.total_bytes + size > MAX_PANE_IMAGE_BYTES
         {
@@ -512,15 +534,10 @@ impl ImageStore {
         }
         self.total_bytes += size;
         self.oldest.push_back(id);
-        self.images.insert(
-            id,
-            StoredImage {
-                format,
-                data: transfer.data,
-                declared_width,
-                declared_height,
-            },
-        );
+        self.images.insert(id, image);
+        if let Some(dimensions) = decoded_dimensions {
+            self.decoded_dimensions.insert(id, Some(dimensions));
+        }
         self.changed();
         if display {
             self.place_with_geometry(id, placement_id, geometry)?;
