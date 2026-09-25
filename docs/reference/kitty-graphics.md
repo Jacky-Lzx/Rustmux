@@ -43,6 +43,9 @@ still discards graphics unless its caller opts in.
 Replacement and explicit removal update byte accounting. At 32 MiB or 256
 images per pane, quota eviction chooses the oldest image without placement
 references first, falling back to the oldest placed image only when necessary.
+Among unplaced images, uploads with the `N=1` transient bit are evicted first;
+each class retains first-in-first-out order. The hint has no effect while an
+image still has a placement, and retransmission replaces the previous hint.
 References on either screen or in scrollback still count as placements. The
 store rejects query action `a=q`; the ordinary store path preserves PNG bytes
 without decoding them.
@@ -400,7 +403,7 @@ EOF recovery. Assembler tests cover chunk inheritance, raw byte counts, bounds,
 unsupported media and recovery. Pane tests cover interleaved text, per-pane
 isolation and command-output filtering. Run `cargo test --lib graphics::tests`,
 `cargo test --lib graphics_transfer::tests` and `cargo test --test panes`.
-Store tests also cover replacement, isolation, unplaced-first quota eviction,
+Store tests also cover replacement, isolation, transient/unplaced quota eviction,
 numbered-image fallback, explicit removal, named and anonymous references,
 and soft versus hard deletion.
 Decoder tests cover raw and PNG formats, palette transparency, corrupted PNGs,

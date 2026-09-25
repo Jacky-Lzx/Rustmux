@@ -326,6 +326,9 @@ pub struct ImageStore {
     /// Image number and creation order for allocated IDs. Explicit-ID
     /// replacement retains these so older numbered images do not become new.
     numbered_images: BTreeMap<u32, (u32, u128)>,
+    /// Upload-time `N=1` hint. It only affects quota eviction after the
+    /// image has no placement references.
+    transient_images: BTreeSet<u32>,
     next_number_order: u128,
     decoded_dimensions: BTreeMap<u32, Option<(u32, u32)>>,
     oldest: VecDeque<u32>,
@@ -539,6 +542,10 @@ impl ImageStore {
             Some(b"100") => ImageFormat::Png,
             _ => return Err(StoreError::UnsupportedAction),
         };
+        let transient = match transfer.control(b'N') {
+            None => false,
+            Some(value) => parse_u32(value).ok_or(StoreError::UnsupportedAction)? & 1 != 0,
+        };
         let size = transfer.data.len();
         let declared_width = transfer.control(b's').and_then(parse_positive_u32);
         let declared_height = transfer.control(b'v').and_then(parse_positive_u32);
@@ -564,8 +571,9 @@ impl ImageStore {
         self.remove(id);
         if self.images.len() >= MAX_PANE_IMAGES || self.total_bytes + size > MAX_PANE_IMAGE_BYTES {
             // Preserve placed images (including off-screen references) while
-            // an unplaced image can satisfy the quota. Order remains FIFO
-            // within each class; the pane caps bound this search.
+            // an unplaced image can satisfy the quota. Among unplaced images,
+            // transient uploads go first. Order remains FIFO within each
+            // class; the pane caps bound this search.
             let referenced: BTreeSet<u32> = self
                 .placements
                 .iter()
@@ -578,7 +586,13 @@ impl ImageStore {
                     .oldest
                     .iter()
                     .copied()
-                    .find(|id| !referenced.contains(id))
+                    .find(|id| !referenced.contains(id) && self.transient_images.contains(id))
+                    .or_else(|| {
+                        self.oldest
+                            .iter()
+                            .copied()
+                            .find(|id| !referenced.contains(id))
+                    })
                     .or_else(|| self.oldest.front().copied())
                     .expect("nonempty image store");
                 self.remove(victim);
@@ -587,6 +601,9 @@ impl ImageStore {
         self.total_bytes += size;
         self.oldest.push_back(id);
         self.images.insert(id, image);
+        if transient {
+            self.transient_images.insert(id);
+        }
         if let Some(number) = image_number {
             self.next_number_order = self.next_number_order.saturating_add(1);
             self.numbered_images
@@ -1092,6 +1109,7 @@ impl ImageStore {
     pub fn remove(&mut self, id: u32) -> Option<StoredImage> {
         let removed = self.images.remove(&id)?;
         self.numbered_images.remove(&id);
+        self.transient_images.remove(&id);
         self.decoded_dimensions.remove(&id);
         self.total_bytes -= removed.data.len();
         self.oldest.retain(|&entry| entry != id);
@@ -1104,6 +1122,7 @@ impl ImageStore {
         let changed = !self.images.is_empty() || !self.placements.is_empty();
         self.images.clear();
         self.numbered_images.clear();
+        self.transient_images.clear();
         self.next_number_order = 0;
         self.decoded_dimensions.clear();
         self.oldest.clear();
@@ -1731,6 +1750,76 @@ mod tests {
         assert!(store.get(1).is_none());
         assert_eq!(store.len(), MAX_PANE_IMAGES);
         assert_eq!(store.total_bytes(), MAX_PANE_IMAGES);
+    }
+
+    #[test]
+    fn quota_prefers_transient_unplaced_images_but_keeps_placed_ones() {
+        let mut store = ImageStore::new();
+        store
+            .insert(transfer(b"\x1b_Ga=t,f=100,i=1;QQ==\x1b\\"))
+            .unwrap();
+        store
+            .insert(transfer(b"\x1b_Ga=t,f=100,i=2,N=1;Qg==\x1b\\"))
+            .unwrap();
+        store
+            .insert(transfer(b"\x1b_Ga=T,f=100,i=3,N=3,p=1;Qw==\x1b\\"))
+            .unwrap();
+        for id in 4..=MAX_PANE_IMAGES as u32 {
+            let command = format!("\x1b_Ga=t,f=100,i={id};RA==\x1b\\");
+            store.insert(transfer(command.as_bytes())).unwrap();
+        }
+        store
+            .insert(transfer(b"\x1b_Ga=t,f=100,i=257;RQ==\x1b\\"))
+            .unwrap();
+        assert!(store.get(1).is_some());
+        assert!(store.get(2).is_none());
+        assert!(store.get(3).is_some());
+        assert!(!store.transient_images.contains(&2));
+        assert_eq!(store.placements().next().unwrap().image_id, 3);
+
+        store.accept_control(b"\x1b_Ga=d,d=i,i=3\x1b\\").unwrap();
+        store
+            .insert(transfer(b"\x1b_Ga=t,f=100,i=258;Rg==\x1b\\"))
+            .unwrap();
+        assert!(store.get(3).is_none());
+        assert!(store.get(1).is_some());
+    }
+
+    #[test]
+    fn transient_hint_is_replaced_and_invalid_values_do_not_mutate_store() {
+        let mut store = ImageStore::new();
+        store
+            .insert(transfer(b"\x1b_Ga=t,f=100,i=7,N=1;QQ==\x1b\\"))
+            .unwrap();
+        assert!(store.transient_images.contains(&7));
+        let revision = store.revision();
+        for command in [
+            b"\x1b_Ga=t,f=100,i=7,N=bad;Qg==\x1b\\".as_slice(),
+            b"\x1b_Ga=t,f=100,i=7,N=4294967296;Qg==\x1b\\",
+        ] {
+            assert_eq!(
+                store.insert(transfer(command)),
+                Err(StoreError::UnsupportedAction)
+            );
+            assert_eq!(store.revision(), revision);
+            assert_eq!(store.get(7).unwrap().data, b"A");
+            assert!(store.transient_images.contains(&7));
+        }
+        store
+            .insert(transfer(b"\x1b_Ga=t,f=100,i=7;Qg==\x1b\\"))
+            .unwrap();
+        assert!(!store.transient_images.contains(&7));
+        store
+            .insert(transfer(b"\x1b_Ga=t,f=100,i=7,N=3;Qw==\x1b\\"))
+            .unwrap();
+        assert!(store.transient_images.contains(&7));
+        store.remove(7);
+        assert!(!store.transient_images.contains(&7));
+        store
+            .insert(transfer(b"\x1b_Ga=t,f=100,i=8,N=1;RA==\x1b\\"))
+            .unwrap();
+        store.clear();
+        assert!(store.transient_images.is_empty());
     }
 
     #[test]
