@@ -943,6 +943,17 @@ impl ImageStore {
         decoded
     }
 
+    /// Dimensions usable for a read-only layout preflight. Raw transfer sizes
+    /// were checked by the assembler; PNG dimensions are trusted only after a
+    /// successful decode, never merely because the upload declared `s`/`v`.
+    pub(crate) fn known_image_dimensions(&self, image_id: u32) -> Option<(u32, u32)> {
+        let image = self.images.get(&image_id)?;
+        match image.format {
+            ImageFormat::Png => self.decoded_dimensions.get(&image_id).copied().flatten(),
+            ImageFormat::Rgb | ImageFormat::Rgba => image.declared_width.zip(image.declared_height),
+        }
+    }
+
     fn accept_control_inner(
         &mut self,
         command: &[u8],
@@ -2150,6 +2161,45 @@ mod tests {
             Err(StoreError::InvalidPlacement)
         );
         assert!(without_pixels.is_empty());
+    }
+
+    #[test]
+    fn known_dimensions_trust_raw_sizes_but_not_unvalidated_png() {
+        use base64::Engine;
+
+        let mut store = ImageStore::new();
+        store
+            .insert(transfer(b"\x1b_Ga=t,f=32,s=1,v=1,i=1;AQIDBA==\x1b\\"))
+            .unwrap();
+        assert_eq!(store.known_image_dimensions(1), Some((1, 1)));
+
+        store
+            .insert(transfer(b"\x1b_Ga=t,f=100,s=1,v=1,i=2;AQ==\x1b\\"))
+            .unwrap();
+        assert_eq!(store.known_image_dimensions(2), None);
+
+        let mut png = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut png, 1, 1);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder
+                .write_header()
+                .unwrap()
+                .write_image_data(&[1, 2, 3, 4])
+                .unwrap();
+        }
+        let encoded = base64::engine::general_purpose::STANDARD.encode(png);
+        let command = format!("\x1b_Ga=t,f=100,i=2;{encoded}\x1b\\");
+        store
+            .insert_for_pane(
+                transfer(command.as_bytes()),
+                CellAnchor::default(),
+                None,
+                true,
+            )
+            .unwrap();
+        assert_eq!(store.known_image_dimensions(2), Some((1, 1)));
     }
 
     #[test]

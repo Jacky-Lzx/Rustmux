@@ -369,6 +369,17 @@ fn collect_placeholder_clips(
             {
                 continue;
             }
+            if extents[index].is_none()
+                && let Some((width, height)) = store.known_image_dimensions(placement.image_id)
+            {
+                let pixel_layout = layout
+                    .pixel_layout(width, height, cell)
+                    .ok_or(SnapshotError::InvalidLayout)?;
+                extents[index] = Some((
+                    pixel_layout.cell_bounds.width / u32::from(cell.width()),
+                    pixel_layout.cell_bounds.height / u32::from(cell.height()),
+                ));
+            }
             if extents[index]
                 .is_some_and(|(columns, rows)| reference.row >= rows || reference.column >= columns)
             {

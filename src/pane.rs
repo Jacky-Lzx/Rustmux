@@ -1063,6 +1063,24 @@ mod io_tests {
     }
 
     #[test]
+    fn inferred_bounds_do_not_trust_unvalidated_png_dimensions() {
+        let mut pane = Pane::spawn("/bin/sh", 2, 2).unwrap();
+        let cell = CellPixelSize::new(1, 1).unwrap();
+        pane.process_output_with_image_store_sized(
+            b"\x1b_Ga=T,f=100,s=1,v=1,i=7,p=1,U=1;AQ==\x1b\\",
+            &mut |_| {},
+            cell,
+        );
+        pane.process_output_with_image_store_sized(
+            "\x1b[38;5;7m\x1b[58;5;1m\u{10eeee}\u{0305}\u{030d}".as_bytes(),
+            &mut |_| {},
+            cell,
+        );
+        assert_eq!(pane.image_store().placements().count(), 1);
+        assert!(pane.compose_image_snapshot(cell).is_err());
+    }
+
+    #[test]
     fn out_of_bounds_virtual_placeholder_avoids_over_budget_resample() {
         let mut pane = Pane::spawn("/bin/sh", 2, 2).unwrap();
         let cell = CellPixelSize::new(3000, 1).unwrap();
