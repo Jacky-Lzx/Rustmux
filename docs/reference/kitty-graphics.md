@@ -396,7 +396,8 @@ answers `CSI 16t` with `CSI 6;height;width t` when that cell size is known;
 otherwise it does not invent a pixel-size reply.
 
 An optional installed-Yazi smoke test exercises the actual preview path. After
-updating Yazi, run `cargo test --locked --test yazi_compat -- --ignored --nocapture`.
+updating Yazi, run `cargo compat`. This alias runs the opt-in tests in
+`tests/compat.rs`, so future compatibility checks can join the same command.
 It starts Rustmux and Yazi in isolated PTYs with a generated PNG, then requires
 a composed Kitty image upload from Rustmux and checks that child placeholders
 do not leak to the outer terminal. It is excluded from normal `cargo test` and

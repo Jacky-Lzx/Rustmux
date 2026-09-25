@@ -1,7 +1,12 @@
-/// Optional installed-Yazi compatibility smoke. It is intentionally excluded
-/// from regular CI because Yazi is not a project dependency.
+//! Optional installed-application compatibility tests.
+//!
+//! Keep new opt-in compatibility checks in this test target so `cargo compat`
+//! runs all of them without changing its alias. Each test must use `#[ignore]`
+//! to stay out of the regular test suite.
+
+/// Installed-Yazi preview smoke, excluded from regular CI.
 #[test]
-#[ignore = "requires an installed Yazi; run with cargo test --test yazi_compat -- --ignored"]
+#[ignore = "requires an installed Yazi; run with cargo compat"]
 fn installed_yazi_previews_png_through_rustmux() {
     let output = std::process::Command::new("python3")
         .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/yazi_compat.py"))

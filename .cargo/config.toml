@@ -1,0 +1,2 @@
+[alias]
+compat = ["test", "--locked", "--test", "compat", "--", "--ignored", "--nocapture", "--test-threads=1"]
