@@ -1228,6 +1228,20 @@ fn kitty_row_delete_matches_partially_scrolled_placement() {
 }
 
 #[test]
+fn kitty_image_range_delete_spans_main_and_alternate_screens() {
+    let mut pane = Pane::spawn("/bin/sh", 3, 3).unwrap();
+    pane.process_output_with_image_store(
+        b"\x1b_Ga=T,f=100,i=7,p=1;QQ==\x1b\\\x1b[?1049h\x1b_Ga=T,f=100,i=8,p=1;Qg==\x1b\\\x1b_Ga=d,d=r,x=7,y=8\x1b\\",
+        &mut |_| {},
+    );
+    assert_eq!(pane.image_store().placements().count(), 0);
+    assert!(pane.image_store().get(7).is_some());
+    assert!(pane.image_store().get(8).is_some());
+    pane.process_output_with_image_store(b"\x1b_Ga=d,d=R,x=7,y=8\x1b\\", &mut |_| {});
+    assert!(pane.image_store().is_empty());
+}
+
+#[test]
 fn kitty_ris_clears_both_screens_but_later_put_in_same_chunk_survives() {
     let mut pane = Pane::spawn("/bin/sh", 6, 40).unwrap();
     pane.process_output_with_image_store(b"\x1b_Ga=T,f=100,i=7,p=1;QQ==\x1b\\", &mut |_| {});

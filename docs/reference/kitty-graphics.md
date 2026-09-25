@@ -63,8 +63,16 @@ The opt-in store now tracks placement *references* for `a=T` and a strict
 reference; an absent or zero `p` creates an anonymous reference. Re-transmitting
 an image ID drops its old references. The supported ID-delete subset is
 `a=d,d=i/I,i=<id>[,p=<id>]`: lowercase removes matching references but keeps
-data, while uppercase also releases data once no references remain. The pane
-path also accepts `a=d` (default `d=a`) and explicit `d=a/A` with no ID: these
+data, while uppercase also releases data once no references remain.
+The pane and low-level store paths also accept
+`a=d,d=r/R,x=<first-id>,y=<last-id>`.
+This selects the inclusive image-ID range across both screens and scrollback,
+regardless of placement geometry; it needs no cursor or viewport. Lowercase
+removes references but retains data. Uppercase also releases every matching
+unreferenced image, including data-only uploads. Bounds are unsigned 32-bit
+values (`x=0` is valid); a reversed range is a no-op. Missing, malformed,
+overflowing, or extra controls leave the store unchanged.
+The pane path also accepts `a=d` (default `d=a`) and explicit `d=a/A` with no ID: these
 remove modeled placement rectangles intersecting the current screen. Lowercase
 retains data; uppercase frees data only for images with no remaining references.
 The other screen, fully off-screen scrollback placements, and unanchored
@@ -411,6 +419,8 @@ trip.
 Row-delete tests cover partial overlap, one-based bounds, data lifetime,
 active-screen and scrollback scoping, unknown width, malformed controls, and a
 child PTY round trip.
+Image-ID range-delete tests cover inclusive and reversed bounds, 32-bit limits,
+data-only uploads, malformed controls, both screens, and a child PTY round trip.
 Anchor tests cover interleaved text, final-chunk position, alternate-screen
 identity, explicit layout options, malformed metadata, and named replacement.
 Screen-lifecycle tests cover split `CSI 2 J`, non-clearing text erasures,

@@ -823,6 +823,18 @@ impl ImageStore {
                             controls.get(&b'd').is_some_and(|value| value == b"I"),
                         );
                     }
+                    Some(b"r" | b"R") => {
+                        if !only_keys(&controls, b"adqxy") {
+                            return Err(StoreError::UnsupportedAction);
+                        }
+                        let first = required_delete_image_bound(&controls, b'x')?;
+                        let last = required_delete_image_bound(&controls, b'y')?;
+                        self.delete_image_range(
+                            first,
+                            last,
+                            controls.get(&b'd').is_some_and(|value| value == b"R"),
+                        );
+                    }
                     _ => return Err(StoreError::UnsupportedAction),
                 }
                 Ok(None)
@@ -969,6 +981,33 @@ impl ImageStore {
         }
     }
 
+    /// Image-ID ranges are pane-wide, independent of screen, viewport, or
+    /// placement geometry. Hard deletion also frees data-only images.
+    fn delete_image_range(&mut self, first: u32, last: u32, free_data: bool) {
+        if first > last {
+            return;
+        }
+        self.delete_matching_placements(false, |placement| {
+            (first..=last).contains(&placement.image_id)
+        });
+        if free_data {
+            let unreferenced: Vec<u32> = self
+                .images
+                .range(first..=last)
+                .map(|(&id, _)| id)
+                .filter(|id| {
+                    !self
+                        .placements
+                        .iter()
+                        .any(|placement| placement.image_id == *id)
+                })
+                .collect();
+            for id in unreferenced {
+                self.remove(id);
+            }
+        }
+    }
+
     /// Explicit data removal, including its placement references.
     pub fn remove(&mut self, id: u32) -> Option<StoredImage> {
         let removed = self.images.remove(&id)?;
@@ -1043,6 +1082,13 @@ fn required_id(controls: &Controls) -> Result<u32, StoreError> {
     controls
         .get(&b'i')
         .and_then(|bytes| parse_positive_u32(bytes))
+        .ok_or(StoreError::UnsupportedIdentity)
+}
+
+fn required_delete_image_bound(controls: &Controls, key: u8) -> Result<u32, StoreError> {
+    controls
+        .get(&key)
+        .and_then(|bytes| parse_u32(bytes))
         .ok_or(StoreError::UnsupportedIdentity)
 }
 
@@ -1411,6 +1457,65 @@ mod tests {
         store.accept_control(b"\x1b_Ga=d,d=I,i=7\x1b\\").unwrap();
         assert!(store.is_empty());
         assert_eq!(store.total_bytes(), 0);
+    }
+
+    #[test]
+    fn image_range_delete_is_inclusive_and_frees_data_only_images() {
+        let mut store = ImageStore::new();
+        for id in [7, 8, 9, u32::MAX] {
+            let command = format!("\x1b_Ga=T,f=100,i={id},p=1;QQ==\x1b\\");
+            store.insert(transfer(command.as_bytes())).unwrap();
+        }
+        store
+            .accept_control(b"\x1b_Ga=d,d=r,x=7,y=8\x1b\\")
+            .unwrap();
+        assert_eq!(
+            store.placements().map(|p| p.image_id).collect::<Vec<_>>(),
+            [9, u32::MAX]
+        );
+        assert!(store.get(7).is_some());
+        assert!(store.get(8).is_some());
+
+        store.accept_control(b"\x1b_Ga=p,i=7,p=2\x1b\\").unwrap();
+        store
+            .accept_control(b"\x1b_Ga=d,d=R,x=7,y=8\x1b\\")
+            .unwrap();
+        assert!(store.get(7).is_none());
+        assert!(store.get(8).is_none());
+        assert!(store.get(9).is_some());
+        assert!(store.get(u32::MAX).is_some());
+        store
+            .accept_control(b"\x1b_Ga=d,d=R,x=4294967295,y=4294967295\x1b\\")
+            .unwrap();
+        assert!(store.get(u32::MAX).is_none());
+        assert_eq!(store.total_bytes(), 1);
+    }
+
+    #[test]
+    fn image_range_delete_rejects_bad_controls_without_mutation() {
+        let mut store = ImageStore::new();
+        store
+            .insert(transfer(b"\x1b_Ga=T,f=100,i=7,p=1;QQ==\x1b\\"))
+            .unwrap();
+        let original = store.revision();
+        for command in [
+            b"\x1b_Ga=d,d=R,x=7\x1b\\".as_slice(),
+            b"\x1b_Ga=d,d=R,y=7\x1b\\",
+            b"\x1b_Ga=d,d=R,x=bad,y=7\x1b\\",
+            b"\x1b_Ga=d,d=R,x=7,y=4294967296\x1b\\",
+            b"\x1b_Ga=d,d=R,x=7,y=7,i=7\x1b\\",
+        ] {
+            assert!(store.accept_control(command).is_err());
+            assert_eq!(store.revision(), original);
+        }
+        store
+            .accept_control(b"\x1b_Ga=d,d=R,x=8,y=7\x1b\\")
+            .unwrap();
+        assert_eq!(store.revision(), original);
+        store
+            .accept_control(b"\x1b_Ga=d,d=R,x=0,y=7\x1b\\")
+            .unwrap();
+        assert!(store.is_empty());
     }
 
     #[test]
