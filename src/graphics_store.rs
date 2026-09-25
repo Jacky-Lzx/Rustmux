@@ -786,8 +786,12 @@ impl ImageStore {
                         if !only_keys(&controls, b"adqz") {
                             return Err(StoreError::UnsupportedAction);
                         }
+                        let Some(anchor) = anchor else {
+                            return Err(StoreError::UnsupportedAction);
+                        };
                         let z_index = required_delete_z_index(&controls)?;
                         self.delete_z_placements(
+                            anchor.alternate,
                             z_index,
                             controls.get(&b'd').is_some_and(|value| value == b"Z"),
                         );
@@ -870,13 +874,13 @@ impl ImageStore {
         });
     }
 
-    /// A z-index selector is global to the pane, including the other screen
-    /// and scrollback; placements without modeled geometry cannot be matched.
-    fn delete_z_placements(&mut self, z_index: i32, free_data: bool) {
+    /// A z-index selector spans the active screen and its scrollback, but not
+    /// the other screen. Placements without geometry cannot be matched.
+    fn delete_z_placements(&mut self, alternate: bool, z_index: i32, free_data: bool) {
         self.delete_matching_placements(free_data, |placement| {
-            placement
-                .geometry
-                .is_some_and(|geometry| geometry.z_index == z_index)
+            placement.geometry.is_some_and(|geometry| {
+                geometry.anchor.alternate == alternate && geometry.z_index == z_index
+            })
         });
     }
 
@@ -1373,15 +1377,23 @@ mod tests {
     }
 
     #[test]
-    fn z_delete_needs_no_viewport_or_resolved_extent() {
+    fn z_delete_needs_screen_identity_but_no_viewport_or_resolved_extent() {
         let mut store = ImageStore::new();
         store
             .insert(transfer(b"\x1b_Ga=t,f=100,i=7;QQ==\x1b\\"))
             .unwrap();
+        let main = CellAnchor::default();
+        let alternate = CellAnchor {
+            alternate: true,
+            ..main
+        };
         store
-            .accept_control_at(b"\x1b_Ga=p,i=7,p=1,z=-2\x1b\\", CellAnchor::default())
+            .accept_control_at(b"\x1b_Ga=p,i=7,p=1,z=-2\x1b\\", main)
             .unwrap();
-        store.place(7, Some(2)).unwrap();
+        store
+            .accept_control_at(b"\x1b_Ga=p,i=7,p=2,z=-2\x1b\\", alternate)
+            .unwrap();
+        store.place(7, Some(3)).unwrap();
         assert!(
             store
                 .placements()
@@ -1392,11 +1404,26 @@ mod tests {
                 .rows
                 .is_none()
         );
-        store.accept_control(b"\x1b_Ga=d,d=Z,z=-2\x1b\\").unwrap();
-        assert_eq!(store.placements().count(), 1);
-        assert_eq!(store.placements().next().unwrap().placement_id, Some(2));
+        let revision = store.revision();
+        assert_eq!(
+            store.accept_control(b"\x1b_Ga=d,d=Z,z=-2\x1b\\"),
+            Err(StoreError::UnsupportedAction)
+        );
+        assert_eq!(store.revision(), revision);
+        store
+            .accept_control_at(b"\x1b_Ga=d,d=Z,z=-2\x1b\\", alternate)
+            .unwrap();
+        let ids: Vec<_> = store.placements().map(|p| p.placement_id).collect();
+        assert_eq!(ids, [Some(1), Some(3)]);
         assert!(store.get(7).is_some());
-        store.accept_control(b"\x1b_Ga=d,d=Z,z=0\x1b\\").unwrap();
+        store
+            .accept_control_at(b"\x1b_Ga=d,d=Z,z=-2\x1b\\", main)
+            .unwrap();
+        assert_eq!(store.placements().next().unwrap().placement_id, Some(3));
+        assert!(store.get(7).is_some());
+        store
+            .accept_control_at(b"\x1b_Ga=d,d=Z,z=0\x1b\\", main)
+            .unwrap();
         assert_eq!(store.placements().count(), 1);
     }
 

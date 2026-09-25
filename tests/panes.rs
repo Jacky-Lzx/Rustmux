@@ -940,7 +940,7 @@ fn kitty_z_delete_matches_entire_layer_and_preserves_referenced_data() {
 }
 
 #[test]
-fn kitty_z_delete_crosses_screens_and_scrollback() {
+fn kitty_z_delete_scopes_to_active_screen_and_includes_scrollback() {
     let mut pane = Pane::spawn("/bin/sh", 3, 3).unwrap();
     let cell = CellPixelSize::new(1, 1).unwrap();
     pane.process_output_with_image_store_sized(
@@ -948,12 +948,22 @@ fn kitty_z_delete_crosses_screens_and_scrollback() {
         &mut |_| {},
         cell,
     );
+    assert!(
+        pane.image_store()
+            .placements()
+            .find(|placement| placement.image_id == 12)
+            .unwrap()
+            .geometry
+            .unwrap()
+            .row_offset
+            < 0
+    );
     let ids: Vec<_> = pane
         .image_store()
         .placements()
         .map(|p| p.image_id)
         .collect();
-    assert_eq!(ids, [12]);
+    assert_eq!(ids, [12, 10]);
     assert!(pane.image_store().get(10).is_some());
     assert!(pane.image_store().get(11).is_some());
     pane.process_output_with_image_store_sized(
@@ -961,8 +971,44 @@ fn kitty_z_delete_crosses_screens_and_scrollback() {
         &mut |_| {},
         cell,
     );
+    assert!(pane.image_store().get(12).is_some());
+    pane.process_output_with_image_store_sized(
+        b"\x1b[?1049l\x1b_Ga=d,d=Z,z=2147483647\x1b\\",
+        &mut |_| {},
+        cell,
+    );
     assert!(pane.image_store().get(12).is_none());
+    assert!(pane.image_store().get(10).is_some());
+    pane.process_output_with_image_store_sized(
+        b"\x1b_Ga=d,d=Z,z=-2147483648\x1b\\",
+        &mut |_| {},
+        cell,
+    );
+    assert!(pane.image_store().get(10).is_none());
+    assert!(pane.image_store().get(11).is_some());
     assert_eq!(pane.image_store().placements().count(), 0);
+}
+
+#[test]
+fn kitty_z_hard_delete_keeps_data_referenced_on_other_screen() {
+    let mut pane = Pane::spawn("/bin/sh", 3, 3).unwrap();
+    let cell = CellPixelSize::new(1, 1).unwrap();
+    pane.process_output_with_image_store_sized(
+        b"\x1b_Ga=T,f=32,s=1,v=1,i=7,p=1,z=5,C=1;AQIDBA==\x1b\\\x1b[?1049h\x1b_Ga=p,i=7,p=2,z=5,C=1\x1b\\\x1b_Ga=d,d=Z,z=5\x1b\\",
+        &mut |_| {},
+        cell,
+    );
+    assert!(pane.image_store().get(7).is_some());
+    let placements: Vec<_> = pane.image_store().placements().copied().collect();
+    assert_eq!(placements.len(), 1);
+    assert_eq!(placements[0].placement_id, Some(1));
+    assert!(!placements[0].geometry.unwrap().anchor.alternate);
+    pane.process_output_with_image_store_sized(
+        b"\x1b[?1049l\x1b_Ga=d,d=Z,z=5\x1b\\",
+        &mut |_| {},
+        cell,
+    );
+    assert!(pane.image_store().get(7).is_none());
 }
 
 #[test]

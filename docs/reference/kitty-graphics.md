@@ -99,9 +99,10 @@ Invalid or extra controls leave the store and cursor unchanged. The other
 screen, fully off-screen history, and unresolved-size placements are untouched.
 The low-level APIs without a viewport do not accept this selector.
 `a=d,d=z/Z,z=<layer>` removes every modeled placement at the specified signed
-32-bit z-index, regardless of screen or scrollback position. Unlike the
-cell-scoped selectors, it does not require a cursor anchor, viewport, or known
-cell extents; unanchored placements with no recorded z-index are not matched.
+32-bit z-index on the active screen, including its scrollback, but not the other
+screen. Unlike the cell-scoped selectors, it requires a screen identity but no
+viewport or known cell extents; unanchored placements with no recorded z-index
+are not matched. The anchorless low-level API does not accept this selector.
 Lowercase retains image data; uppercase releases it only after its last
 reference disappears. A missing, malformed, or out-of-range z-index, or an
 extra control key, leaves the store unchanged.
@@ -394,8 +395,8 @@ lowercase/hard data lifetime, and a child PTY round trip.
 Z-filtered cell-delete tests cover overlapping layers, default and negative z,
 signed bounds, malformed controls, screen/scrollback scoping, data lifetime,
 and a child PTY round trip.
-Global z-delete tests cover both screens, scrollback, signed bounds, malformed
-controls, reference lifetime, and a child PTY round trip.
+Z-delete tests cover active/other-screen isolation, scrollback, signed bounds,
+malformed controls, shared-reference lifetime, and a child PTY round trip.
 Column-delete tests cover partial overlap, one-based bounds, data lifetime,
 active-screen and scrollback scoping, malformed controls, and a child PTY round
 trip.
