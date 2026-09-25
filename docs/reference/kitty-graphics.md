@@ -167,6 +167,19 @@ an output-streaming/backpressure decision. A failed write may leave a partial
 transfer. The chunk format follows the
 [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
 
+`GraphicsCapabilityProbe` is a separate opt-in outer-terminal detection
+boundary. It generates a one-pixel, direct-RGB `a=q` query followed by primary
+device attributes. Its bounded incremental filter consumes the matching
+graphics reply and DA reply while forwarding unrelated input unchanged.
+A matching graphics reply (including an error) before DA means supported; DA
+first means unsupported. Timeout or disconnect before either reply is
+inconclusive, and `finish` releases any unfinished input candidate. The caller
+must reserve the query image ID and avoid a concurrent primary-DA request.
+The probe is not yet
+wired into either local or attached-client input; runtime display remains off.
+This ordering follows the
+[Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
+
 `X/Y` position an image within its first cell; they are not added to `c/r` or
 cursor movement. On a sized opt-in call, either offset must be smaller than
 its cell pixel dimension. An invalid offset rejects the placement before an
