@@ -186,8 +186,12 @@ retained. It has no cursor anchor and never moves the cursor. A named `(i,p)`
 virtual placement can be
 replaced and deleted by image ID, number, or ID range; cell/row/column/z-index
 selectors do not match it. `U=0` remains an ordinary placement. Placeholder
-characters are not yet interpreted, so virtual placements do not draw pixels
-and Yazi's Unicode-placeholder preview is not yet supported. Relative
+cells can now be decoded from `U+10EEEE`, the complete row/column diacritic
+table, foreground image ID, and optional underline-color placement ID;
+omitted coordinates inherit from the adjacent placeholder when the protocol's
+color and row conditions hold. This decoder does not yet feed image snapshots
+or runtime rendering, so virtual placements still do not draw pixels and
+Yazi's Unicode-placeholder preview is not yet supported. Relative
 placements remain unsupported. The opt-in store records metadata; runtime
 composition, redraw, and child replies are described below.
 
