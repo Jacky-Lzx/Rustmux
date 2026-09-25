@@ -47,7 +47,12 @@ predecessor. Existing explicit IDs are never overwritten by allocation;
 Older images remain available through their assigned `i` values; removing the
 newest image falls back to the next newest. Replacing an older numbered image
 by its `i` retains its number without changing this creation order. The
-`d=i/I` delete selectors still require `i`; `d=n/N` is not yet implemented.
+`d=i/I` delete selectors still require `i`. The `d=n/N` selectors instead
+require `I=<number>` and target only the newest live image with that number.
+An optional `p=<id>` limits deletion to one placement; lowercase `n` keeps
+image data, while uppercase `N` frees it once no placements refer to it,
+including for a data-only image. Deleting that image makes the next newest
+image with the number available again.
 Specifying both identity keys, or a zero image number, leaves the store unchanged.
 It is cleared when a stopped foreground job resets its pane or its PTY reaches
 EOF.
@@ -75,6 +80,8 @@ reference; an absent or zero `p` creates an anonymous reference. Re-transmitting
 an image ID drops its old references. The supported ID-delete subset is
 `a=d,d=i/I,i=<id>[,p=<id>]`: lowercase removes matching references but keeps
 data, while uppercase also releases data once no references remain.
+The numbered equivalent is `a=d,d=n/N,I=<number>[,p=<id>]` with the same
+reference and data lifetime rules, scoped to the newest image with that number.
 The pane and low-level store paths also accept
 `a=d,d=r/R,x=<first-id>,y=<last-id>`.
 This selects the inclusive image-ID range across both screens and scrollback,

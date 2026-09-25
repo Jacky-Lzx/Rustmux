@@ -868,6 +868,24 @@ impl ImageStore {
                             controls.get(&b'd').is_some_and(|value| value == b"I"),
                         );
                     }
+                    Some(b"n" | b"N") => {
+                        if !only_keys(&controls, b"adIpq") {
+                            return Err(StoreError::UnsupportedAction);
+                        }
+                        let number = controls
+                            .get(&b'I')
+                            .and_then(|bytes| parse_positive_u32(bytes))
+                            .ok_or(StoreError::UnsupportedIdentity)?;
+                        let placement_id =
+                            parse_optional_placement_id(controls.get(&b'p').map(Vec::as_slice))?;
+                        if let Some(id) = self.newest_id_for_number(number) {
+                            self.delete_placements(
+                                id,
+                                placement_id,
+                                controls.get(&b'd').is_some_and(|value| value == b"N"),
+                            );
+                        }
+                    }
                     Some(b"r" | b"R") => {
                         if !only_keys(&controls, b"adqxy") {
                             return Err(StoreError::UnsupportedAction);
@@ -1515,6 +1533,97 @@ mod tests {
             assert!(store.accept_control(command).is_err());
             assert_eq!(store.revision(), revision);
         }
+    }
+
+    #[test]
+    fn numbered_delete_targets_only_newest_and_falls_back_after_hard_delete() {
+        let mut store = ImageStore::new();
+        assert_eq!(
+            store.insert(transfer(b"\x1b_Ga=t,f=100,I=13;QQ==\x1b\\")),
+            Ok(1)
+        );
+        assert_eq!(
+            store.insert(transfer(b"\x1b_Ga=t,f=100,I=13;Qg==\x1b\\")),
+            Ok(2)
+        );
+        assert_eq!(
+            store.insert(transfer(b"\x1b_Ga=t,f=100,I=14;Qw==\x1b\\")),
+            Ok(3)
+        );
+        store.accept_control(b"\x1b_Ga=p,i=1,p=1\x1b\\").unwrap();
+        store.accept_control(b"\x1b_Ga=p,I=13,p=2\x1b\\").unwrap();
+        store.accept_control(b"\x1b_Ga=p,I=13,p=3\x1b\\").unwrap();
+        store.accept_control(b"\x1b_Ga=p,I=13,p=5\x1b\\").unwrap();
+
+        store
+            .accept_control(b"\x1b_Ga=d,d=n,I=13,p=2\x1b\\")
+            .unwrap();
+        assert_eq!(
+            store.placements().map(|p| p.image_id).collect::<Vec<_>>(),
+            [1, 2, 2]
+        );
+        assert!(store.get(2).is_some());
+
+        store
+            .accept_control(b"\x1b_Ga=d,d=N,I=13,p=3\x1b\\")
+            .unwrap();
+        assert!(store.get(2).is_some());
+        store
+            .accept_control(b"\x1b_Ga=d,d=N,I=13,p=5\x1b\\")
+            .unwrap();
+        assert!(store.get(2).is_none());
+        assert!(store.get(1).is_some());
+        assert!(store.get(3).is_some());
+        store.accept_control(b"\x1b_Ga=p,I=13,p=4\x1b\\").unwrap();
+        assert_eq!(store.placements().last().unwrap().image_id, 1);
+
+        store.accept_control(b"\x1b_Ga=d,d=n,I=13\x1b\\").unwrap();
+        assert!(store.get(1).is_some());
+        assert_eq!(store.placements().count(), 0);
+        store.accept_control(b"\x1b_Ga=d,d=N,I=13\x1b\\").unwrap();
+        assert!(store.get(1).is_none());
+        assert!(store.get(3).is_some());
+        assert_eq!(store.total_bytes(), 1);
+    }
+
+    #[test]
+    fn numbered_hard_delete_frees_data_only_newest_image() {
+        let mut store = ImageStore::new();
+        store
+            .insert(transfer(b"\x1b_Ga=t,f=100,I=13;QQ==\x1b\\"))
+            .unwrap();
+        store
+            .insert(transfer(b"\x1b_Ga=t,f=100,I=13;Qg==\x1b\\"))
+            .unwrap();
+        store.accept_control(b"\x1b_Ga=d,d=N,I=13\x1b\\").unwrap();
+        assert!(store.get(2).is_none());
+        store.accept_control(b"\x1b_Ga=p,I=13,p=1\x1b\\").unwrap();
+        assert_eq!(store.placements().last().unwrap().image_id, 1);
+    }
+
+    #[test]
+    fn numbered_delete_rejects_bad_controls_without_mutation() {
+        let mut store = ImageStore::new();
+        store
+            .insert(transfer(b"\x1b_Ga=T,f=100,I=13,p=1;QQ==\x1b\\"))
+            .unwrap();
+        let revision = store.revision();
+        for command in [
+            b"\x1b_Ga=d,d=n\x1b\\".as_slice(),
+            b"\x1b_Ga=d,d=n,I=0\x1b\\",
+            b"\x1b_Ga=d,d=N,I=bad\x1b\\",
+            b"\x1b_Ga=d,d=N,I=4294967296\x1b\\",
+            b"\x1b_Ga=d,d=N,I=13,i=1\x1b\\",
+            b"\x1b_Ga=d,d=N,I=13,p=bad\x1b\\",
+            b"\x1b_Ga=d,d=N,I=13,x=1\x1b\\",
+        ] {
+            assert!(store.accept_control(command).is_err());
+            assert_eq!(store.revision(), revision);
+        }
+        store.accept_control(b"\x1b_Ga=d,d=N,I=99\x1b\\").unwrap();
+        assert_eq!(store.revision(), revision);
+        assert!(store.get(1).is_some());
+        assert_eq!(store.placements().count(), 1);
     }
 
     #[test]
