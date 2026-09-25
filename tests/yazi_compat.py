@@ -2,9 +2,11 @@
 
 Starts Rustmux on a fake Kitty-capable outer PTY, then runs real Yazi on an
 isolated 2x2 PNG. Success means Rustmux emitted a composed Kitty RGBA image
-for Yazi's Unicode placeholders; it does not require a GUI terminal.
+with the fixture's four pixels in the right order for Yazi's Unicode
+placeholders; it does not require a GUI terminal.
 """
 
+import base64
 import fcntl
 import os
 import re
@@ -55,6 +57,68 @@ def wait_for(master, output, predicate, process, timeout, label):
                 pass
             if len(output) > 20 * 1024 * 1024:
                 raise AssertionError("outer-terminal capture exceeded 20 MiB")
+
+
+def decode_outer_rgba_overlay(output):
+    """Decode the first complete Rustmux-owned Kitty RGBA upload."""
+    payload = bytearray()
+    dimensions = None
+    for command in re.finditer(rb"\x1b_G([^;]*);([A-Za-z0-9+/=]*)\x1b\\", output):
+        controls = dict(
+            part.split(b"=", 1) for part in command.group(1).split(b",") if b"=" in part
+        )
+        if controls.get(b"a") == b"T" and controls.get(b"f") == b"32":
+            image_id = int(controls.get(b"i", b"0"))
+            if image_id < 0x80000000:
+                continue
+            dimensions = (int(controls[b"s"]), int(controls[b"v"]))
+            payload.clear()
+        elif dimensions is None or set(controls) != {b"m"}:
+            continue
+
+        encoded = command.group(2)
+        assert len(encoded) <= 4096, "outer Kitty chunk exceeds the protocol limit"
+        payload.extend(base64.b64decode(encoded, validate=True))
+        if controls.get(b"m") == b"0":
+            width, height = dimensions
+            assert len(payload) == width * height * 4, (
+                "outer RGBA dimensions do not match payload"
+            )
+            return width, height, bytes(payload)
+        assert controls.get(b"m") == b"1", "invalid outer Kitty chunk continuation"
+    raise AssertionError("no complete Rustmux-owned RGBA overlay found")
+
+
+def assert_fixture_pixels(width, height, pixels):
+    assert width > 0 and height > 0
+    assert len(pixels) == width * height * 4
+    colors = {
+        "red": (255, 0, 0, 255),
+        "green": (0, 255, 0, 255),
+        "blue": (0, 0, 255, 255),
+        "white": (255, 255, 255, 255),
+    }
+    positions = {name: [] for name in colors}
+    for offset in range(0, len(pixels), 4):
+        color = tuple(pixels[offset:offset + 4])
+        for name, expected in colors.items():
+            if color == expected:
+                cell = offset // 4
+                positions[name].append((cell % width, cell // width))
+    for name, points in positions.items():
+        assert points, f"Yazi fixture's {name} pixel is missing from the outer image"
+    assert max(x for x, _ in positions["red"]) < min(
+        x for x, _ in positions["green"]
+    ), "red must be left of green"
+    assert max(x for x, _ in positions["blue"]) < min(
+        x for x, _ in positions["white"]
+    ), "blue must be left of white"
+    assert max(y for _, y in positions["red"]) < min(
+        y for _, y in positions["blue"]
+    ), "red must be above blue"
+    assert max(y for _, y in positions["green"]) < min(
+        y for _, y in positions["white"]
+    ), "green must be above white"
 
 
 def main(binary):
@@ -123,11 +187,12 @@ def main(binary):
             wait_for(master, output, completed_overlay, process, 20,
                      "complete composed Yazi image overlay")
             assert "\U0010eeee".encode() not in output, "child placeholder leaked to outer terminal"
+            assert_fixture_pixels(*decode_outer_rgba_overlay(output))
             version_line = next(
                 (line.strip() for line in version.stdout.splitlines() if "Version:" in line),
                 version.stdout.strip().splitlines()[0] if version.stdout.strip() else "Yazi",
             )
-            print(f"PASS: {version_line} generated a Rustmux Kitty image overlay")
+            print(f"PASS: {version_line}: Yazi preview RGBA pixels match fixture")
         finally:
             # Close the PTY first: on macOS a foreground terminal process can
             # otherwise remain blocked in terminal drain during termination.
