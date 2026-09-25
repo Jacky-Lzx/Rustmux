@@ -361,9 +361,20 @@ impl Pane {
         self.process_output_inner(bytes, reply, GraphicsSink::Drop);
     }
 
-    /// Opt in to receiving complete direct-data transfers. The ordinary
-    /// runtime path discards graphics commands until image display is ready,
-    /// so it cannot claim graphics support or buffer unrendered images.
+    /// Runtime path: retain supported graphics commands even before the
+    /// terminal renderer is able to display their image pixels.
+    pub(crate) fn process_output_for_runtime(
+        &mut self,
+        bytes: &[u8],
+        reply: &mut impl FnMut(&[u8]),
+        cell_pixels: Option<CellPixelSize>,
+    ) {
+        self.process_output_inner(bytes, reply, GraphicsSink::Store(cell_pixels));
+    }
+
+    /// Opt in to receiving complete direct-data transfers through a callback,
+    /// separately from the runtime's bounded image store. Neither path claims
+    /// display support or sends Kitty graphics capability replies yet.
     pub fn process_output_with_graphics(
         &mut self,
         bytes: &[u8],

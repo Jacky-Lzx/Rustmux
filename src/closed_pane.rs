@@ -1,5 +1,6 @@
 //! One hidden live shell retained for close undo, with no user input routing.
 use crate::{
+    graphics_store::CellPixelSize,
     layout::{Layout, PaneId},
     pane::{MAX_REPLY_DRAIN_BYTES, Pane},
     pane_set::PaneSet,
@@ -19,7 +20,7 @@ pub(crate) struct ClosedPane {
 impl ClosedPane {
     // Nonblocking bounded maintenance. Hidden PTY readiness wakes the event loop,
     // so output and terminal queries drain without scheduling redraws.
-    pub fn service(&mut self) -> io::Result<bool> {
+    pub fn service(&mut self, cell_pixels: Option<CellPixelSize>) -> io::Result<bool> {
         let pane = self.pane.as_mut().unwrap();
         if pane.shell_mut().try_wait()?.is_some() {
             return Ok(false);
@@ -31,9 +32,13 @@ impl ClosedPane {
                 Ok(0) => return Ok(false),
                 Ok(count) => {
                     let mut replies = Vec::new();
-                    pane.process_output(&bytes[..count], &mut |reply| {
-                        replies.extend_from_slice(reply);
-                    });
+                    pane.process_output_for_runtime(
+                        &bytes[..count],
+                        &mut |reply| {
+                            replies.extend_from_slice(reply);
+                        },
+                        cell_pixels,
+                    );
                     pane.parts_mut().3.to_shell.extend(replies);
                 }
                 Err(error)

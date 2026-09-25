@@ -22,6 +22,7 @@ use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGWINCH};
 use crate::pane::{INPUT_LIMIT as LIMIT, MAX_CELLS, Pane};
 use crate::{
     chrome::{FooterMode, compose_with_mode, footer_enabled, pane_rows},
+    graphics_store::CellPixelSize,
     layout::{Direction, PaneId, Rect, SplitAxis},
     pane_set::PaneSet,
     pane_view,
@@ -150,6 +151,7 @@ struct TerminalSession {
     session_name: Option<String>,
     windows: Windows<PaneSet<Pane>>,
     outer_rows: u16,
+    cell_pixels: Option<CellPixelSize>,
     notifications: crate::config::Notifications,
     scrollback_lines: usize,
     shortcuts: crate::config::Shortcuts,
@@ -193,6 +195,7 @@ impl TerminalSession {
             session_name: session_name.map(str::to_owned),
             windows,
             outer_rows: rows,
+            cell_pixels: None,
             notifications,
             scrollback_lines,
             shortcuts,
@@ -205,6 +208,9 @@ impl TerminalSession {
         frontend: &mut impl Frontend,
         signals: &Signals,
     ) -> io::Result<ForwardExit> {
+        // A reconnecting frontend may have a different physical cell size.
+        // Its initial resize will replace this before active panes are read.
+        self.cell_pixels = None;
         forward(
             frontend,
             &mut self.windows,
@@ -217,6 +223,7 @@ impl TerminalSession {
                 shortcuts: self.shortcuts,
             },
             &mut self.outer_rows,
+            &mut self.cell_pixels,
             &mut self.closed,
         )
     }
@@ -233,7 +240,7 @@ impl TerminalSession {
                 return Ok(DetachedEvent::Process((128 + received) as u8));
             }
             if let Some(saved) = self.closed.as_mut()
-                && !saved.service()?
+                && !saved.service(self.cell_pixels)?
             {
                 self.closed = None;
             }
@@ -311,6 +318,7 @@ impl TerminalSession {
                         .expect("polled pane exists"),
                     requested,
                     ready,
+                    self.cell_pixels,
                 )?;
             }
 
@@ -1596,7 +1604,12 @@ fn window_names(windows: &Windows<PaneSet<Pane>>) -> Vec<String> {
         .collect()
 }
 
-fn service_pane(pane: &mut Pane, requested: PollFlags, ready: PollFlags) -> io::Result<()> {
+fn service_pane(
+    pane: &mut Pane,
+    requested: PollFlags,
+    ready: PollFlags,
+    cell_pixels: Option<CellPixelSize>,
+) -> io::Result<()> {
     if ready.contains(PollFlags::POLLNVAL) {
         return Err(io::Error::new(
             io::ErrorKind::BrokenPipe,
@@ -1613,9 +1626,11 @@ fn service_pane(pane: &mut Pane, requested: PollFlags, ready: PollFlags) -> io::
                 Ok(0) => pane.parts_mut().3.eof = true,
                 Ok(count) => {
                     let mut replies = Vec::new();
-                    pane.process_output(&bytes[..count], &mut |reply| {
-                        replies.extend_from_slice(reply);
-                    });
+                    pane.process_output_for_runtime(
+                        &bytes[..count],
+                        &mut |reply| replies.extend_from_slice(reply),
+                        cell_pixels,
+                    );
                     let state = pane.parts_mut().3;
                     if state.status.is_none() {
                         state.to_shell.extend(replies);
@@ -1650,6 +1665,7 @@ fn forward(
     signals: &Signals,
     context: SessionContext<'_>,
     outer_rows: &mut u16,
+    cell_pixels: &mut Option<CellPixelSize>,
     closed: &mut Option<crate::closed_pane::ClosedPane>,
 ) -> io::Result<ForwardExit> {
     let SessionContext {
@@ -1678,6 +1694,7 @@ fn forward(
     let mut session_manager_requested = false;
     let mut detach_requested = false;
     let mut pane_resize_pending: Option<(WindowId, Instant)> = None;
+    let mut pending_outer_resize = None;
     loop {
         frontend.drain_input(&mut input);
         if connection != ConnectionState::Attached {
@@ -1691,11 +1708,6 @@ fn forward(
         let received = signals.pending.load(Ordering::Relaxed);
         if received != 0 {
             return Ok(ForwardExit::Process((128 + received) as u8));
-        }
-        if let Some(saved) = closed.as_mut()
-            && !saved.service()?
-        {
-            *closed = None;
         }
         if close_requested.is_some() && to_terminal.is_empty() {
             let (id, pane_id) = close_requested.take().unwrap();
@@ -1806,9 +1818,16 @@ fn forward(
             force_redraw = true;
         }
         let active = windows.active().expect("at least one window").id();
-        let resize = if let Some(size) = frontend.take_resize()? {
+        let staged_resize = pending_outer_resize.take();
+        let resize = if let Some(size) = frontend.take_resize()?.or(staged_resize) {
             check_size(size.ws_row, size.ws_col)?;
             *outer_rows = size.ws_row;
+            *cell_pixels = CellPixelSize::from_terminal_size(
+                size.ws_row,
+                size.ws_col,
+                size.ws_xpixel,
+                size.ws_ypixel,
+            );
             if history.take().is_some() {
                 input.clear();
                 keys = WindowInput::default();
@@ -1859,6 +1878,13 @@ fn forward(
                 resize.commit()?;
             }
             pane_resize_pending = None;
+        }
+        // Service the hidden undo pane after consuming an outer resize, so it
+        // never interprets new graphics output using stale physical cells.
+        if let Some(saved) = closed.as_mut()
+            && !saved.service(*cell_pixels)?
+        {
+            *closed = None;
         }
         if pane_resize_pending.is_some_and(|(_, due)| Instant::now() >= due) {
             let (id, _) = pane_resize_pending.take().unwrap();
@@ -2856,6 +2882,14 @@ fn forward(
         if connection == ConnectionState::Attached && outer.contains(PollFlags::POLLOUT) {
             frontend.send(&mut to_terminal)?;
         }
+        // A resize may have arrived in the same poll as pane output. Defer
+        // those pane reads until the new grid is applied on the next turn;
+        // never size an image using cells from the previous frontend frame.
+        if let Some(size) = frontend.take_resize()? {
+            pending_outer_resize = Some(size);
+            *cell_pixels = None;
+            continue;
+        }
         // One bounded read/write per pane per iteration prevents a busy background
         // process from starving the other panes, keyboard or signal handling.
         for ((id, pane_id, inner_events), inner) in interests.into_iter().zip(events) {
@@ -2866,7 +2900,7 @@ fn forward(
                 .get_mut(pane_id)
                 .expect("polled pane exists");
             let bell_was_pending = pane.io().bell_pending;
-            service_pane(pane, inner_events, inner)?;
+            service_pane(pane, inner_events, inner, *cell_pixels)?;
             let command_bell = pane.take_command_bell();
             bar_dirty |= !bell_was_pending && pane.io().bell_pending;
             if command_bell && connection == ConnectionState::Attached {
@@ -2940,6 +2974,13 @@ mod tests {
     fn socket_frontend(rows: u16, columns: u16) -> (ClientPeer, ServerFrontend) {
         let (client, server) = socket_peers(rows, columns);
         (client, ServerFrontend::new(server))
+    }
+
+    fn socket_frontend_with_size(size: nix::pty::Winsize) -> (ClientPeer, ServerFrontend) {
+        let (client_stream, server_stream) = UnixStream::pair().unwrap();
+        let server = thread::spawn(move || handshake::server(server_stream).unwrap());
+        let client = handshake::client_with_size(client_stream, size).unwrap();
+        (client, ServerFrontend::new(server.join().unwrap()))
     }
 
     fn send_client_messages(client: &mut ClientPeer, messages: &[ClientMessage]) {
@@ -3102,7 +3143,12 @@ mod tests {
         )
         .unwrap();
         let signals = test_signals();
-        let (mut first_client, mut first_frontend) = socket_frontend(24, 80);
+        let (mut first_client, mut first_frontend) = socket_frontend_with_size(nix::pty::Winsize {
+            ws_row: 24,
+            ws_col: 80,
+            ws_xpixel: 800,
+            ws_ypixel: 480,
+        });
         send_client_messages(
             &mut first_client,
             &[
@@ -3115,19 +3161,55 @@ mod tests {
             ForwardExit::Detached
         );
         assert_eq!(session.windows.iter().len(), 1);
+        assert_eq!(session.cell_pixels, CellPixelSize::new(10, 20));
 
-        let (mut second_client, mut second_frontend) = socket_frontend(30, 90);
+        let (mut second_client, mut second_frontend) =
+            socket_frontend_with_size(nix::pty::Winsize {
+                ws_row: 30,
+                ws_col: 90,
+                ws_xpixel: 900,
+                ws_ypixel: 600,
+            });
         send_client_messages(
             &mut second_client,
-            &[ClientMessage::Input(
-                b"test \"$RUSTMUX_ATTACH_TEST\" = kept; exit $?\n".to_vec(),
-            )],
+            &[
+                ClientMessage::Resize {
+                    rows: 30,
+                    columns: 90,
+                    pixel_width: 901,
+                    pixel_height: 600,
+                },
+                ClientMessage::Input(b"test \"$RUSTMUX_ATTACH_TEST\" = kept; exit $?\n".to_vec()),
+            ],
         );
+        // A real client drains redraws while sending a resize. Without this,
+        // the socket fills before the server can finish the shell command.
+        let drain = thread::spawn(move || {
+            let mut bytes = [0; 8192];
+            loop {
+                match second_client.stream_mut().read(&mut bytes) {
+                    Ok(0) => return,
+                    Ok(_) => {}
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                        ) =>
+                    {
+                        thread::sleep(Duration::from_millis(1));
+                    }
+                    Err(error) => panic!("client output drain failed: {error}"),
+                }
+            }
+        });
         assert_eq!(
             session.attach(&mut second_frontend, &signals).unwrap(),
             ForwardExit::Process(0)
         );
+        drop(second_frontend);
+        drain.join().unwrap();
         assert_eq!(session.outer_rows, 30);
+        assert_eq!(session.cell_pixels, None);
     }
 
     #[test]
@@ -3364,12 +3446,50 @@ mod tests {
         let mut pane = Pane::spawn(shell.as_os_str(), 3, 8).unwrap();
         let deadline = Instant::now() + Duration::from_secs(3);
         while pane.io().prompt_start != Some((0, 0)) {
-            service_pane(&mut pane, PollFlags::POLLIN, PollFlags::POLLIN).unwrap();
+            service_pane(&mut pane, PollFlags::POLLIN, PollFlags::POLLIN, None).unwrap();
             assert!(Instant::now() < deadline, "prompt marker was not parsed");
             thread::sleep(Duration::from_millis(5));
         }
         assert_eq!(pane.screen().cursor(), (2, 2));
         pane.shell_mut().terminate().unwrap();
+    }
+
+    #[test]
+    fn pane_service_retains_kitty_images_with_or_without_cell_pixels() {
+        let mut shell = tempfile::NamedTempFile::new().unwrap();
+        shell
+            .write_all(
+                b"#!/bin/sh\nprintf '\\033_Ga=T,f=32,s=1,v=1,i=7,p=1,C=1;AQIDBA==\\033\\\\'\nsleep 5\n",
+            )
+            .unwrap();
+        let mut permissions = shell.as_file().metadata().unwrap().permissions();
+        permissions.set_mode(0o700);
+        shell.as_file().set_permissions(permissions).unwrap();
+        let shell = shell.into_temp_path();
+
+        for cell_pixels in [None, CellPixelSize::new(1, 1)] {
+            let mut pane = Pane::spawn(shell.as_os_str(), 2, 2).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while pane.image_store().get(7).is_none() {
+                service_pane(&mut pane, PollFlags::POLLIN, PollFlags::POLLIN, cell_pixels).unwrap();
+                assert!(Instant::now() < deadline, "Kitty image was not stored");
+                thread::sleep(Duration::from_millis(5));
+            }
+            let geometry = pane
+                .image_store()
+                .placements()
+                .next()
+                .unwrap()
+                .geometry
+                .unwrap();
+            assert_eq!(geometry.columns, cell_pixels.map(|_| 1));
+            assert_eq!(geometry.rows, cell_pixels.map(|_| 1));
+            let snapshot = pane
+                .compose_image_snapshot(CellPixelSize::new(1, 1).unwrap())
+                .unwrap();
+            assert_eq!(&snapshot.pixels[..4], &[1, 2, 3, 4]);
+            pane.shell_mut().terminate().unwrap();
+        }
     }
 }
 

@@ -32,6 +32,9 @@ output; the hidden close/undo path uses the same pane pipeline. Callers can opt
 in to complete direct transfers with `Pane::process_output_with_graphics`.
 An additional opt-in path, `Pane::process_output_with_image_store`, retains
 complete transfers with explicit nonzero `i` IDs in a pane-local `ImageStore`.
+The running multiplexer now uses that bounded store for live, detached and
+temporarily closed/undoable panes; the public `Pane::process_output` method
+still discards graphics unless its caller opts in.
 Replacement and explicit removal update byte accounting; oldest entries are
 evicted at 32 MiB or 256 images per pane. The store rejects query action `a=q`
 and image-number allocation `I`; the ordinary store path preserves PNG bytes
@@ -75,7 +78,8 @@ cells before subsequent text is parsed. `C=1` suppresses the move. The screen
 model clamps an out-of-bounds destination, which the protocol leaves undefined.
 Without supplied pixel-cell geometry, a missing extent leaves the cursor
 unchanged; failed, virtual, or non-placement commands also do not move it.
-The normal runtime still discards these commands and leaves its cursor alone.
+The runtime now applies this modeled motion for supported placements, even
+though their pixels are not yet displayed.
 This follows the [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
 
 `Pane::process_output_with_image_store_sized` is a separate opt-in path for a
@@ -129,7 +133,7 @@ images onto a transparent pane-sized canvas. It orders by `z`, then image ID
 equal-key tie. The output is capped at 32 MiB, cumulative layer input at
 64 MiB, and the layer count at the pane's 1024-placement limit. Negative `z`
 is ordered among images, but its relationship to text and cell backgrounds is
-not composed yet. Redraw and the normal runtime are unchanged. The ordering
+not composed yet. The compositor is not called by normal redraw. The ordering
 follows the [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
 
 `Pane::compose_image_snapshot` now connects those opt-in stages for the current
@@ -155,11 +159,13 @@ zero or non-divisible pixel dimensions fall back to the unsized store behavior
 without guessing through window padding. The supplied size describes the
 outer terminal, not one split pane.
 
-The local/detached runtime does not yet propagate trustworthy pixel cell size
-to panes, so it does not use this path automatically. The detached client now
-transports reported terminal pixel dimensions to the server frontend, but pane
-cell sizes are not derived from them yet; no size is guessed from row/column
-counts alone. This follows the sizing rules in the
+At initial attach and each resize, the local or detached runtime accepts a
+physical cell size only if the reported outer terminal pixels form an exact
+grid. It uses that size for subsequent pane output, including while detached
+or temporarily closed. A new attachment invalidates the old cell size until
+its first resize is processed. Missing or inexact pixel reports use the
+unsized store path; no size is guessed from row/column counts alone. This
+follows the sizing rules in the
 [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
 
 The opt-in pane path now removes cursor-anchored placement references when
@@ -184,10 +190,11 @@ scrollback rendering remain out of scope. These choices follow the scrolling
 rules in the
 [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
 
-The normal runtime still discards graphics commands without assembling or
-retaining image data. It does not place, redraw or delete visible images,
-answer graphics capability queries, or claim Yazi preview compatibility.
-Those are later review increments.
+The normal runtime now assembles and retains supported direct-data images and
+placement references but does not draw them in the terminal or answer graphics
+capability queries. Unsupported actions and transfers remain unimplemented;
+this does not yet claim Yazi preview compatibility. Actual display and query
+handling are later review increments.
 
 Unit tests cover every two-chunk split of a command, ordinary output ordering,
 non-graphics APCs, UTF-8/C1 ambiguity, oversized and cancelled commands, and
@@ -207,6 +214,8 @@ Composition tests cover `z`/image-ID order, straight-alpha blending, offsets,
 malformed layers, and output/work limits.
 Snapshot tests cover the pane-level pipeline, screen selection, invalid image
 data, and oversized viewports.
+Runtime tests cover PTY output storage with known and unknown physical cell
+size, plus cell-size invalidation when a detached client reconnects.
 Anchor tests cover interleaved text, final-chunk position, alternate-screen
 identity, explicit layout options, malformed metadata, and named replacement.
 Screen-lifecycle tests cover split `CSI 2 J`, non-clearing text erasures,
