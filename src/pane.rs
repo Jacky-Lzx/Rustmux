@@ -3,7 +3,7 @@
 use crate::{
     graphics::{GraphicsEvent, GraphicsFramer},
     graphics_decode::DecodedImage,
-    graphics_snapshot::{SnapshotError, compose_store_snapshot},
+    graphics_snapshot::{ImagePlanes, SnapshotError, compose_store_planes, compose_store_snapshot},
     graphics_store::{CellAnchor, CellPixelSize, ImageStore, PixelSize},
     graphics_transfer::{AssembledDirectTransfer, DirectTransferAssembler},
     parser::Parser,
@@ -434,8 +434,33 @@ impl Pane {
         &self,
         cell_pixels: CellPixelSize,
     ) -> Result<DecodedImage, SnapshotError> {
+        let viewport = self.image_viewport(cell_pixels)?;
+        compose_store_snapshot(
+            &self.image_store,
+            self.screen.is_alternate(),
+            viewport,
+            cell_pixels,
+        )
+    }
+
+    /// Return only populated Kitty image stacking bands. This is still an
+    /// opt-in image-only result; it does not paint glyphs or cell backgrounds.
+    pub fn compose_image_planes(
+        &self,
+        cell_pixels: CellPixelSize,
+    ) -> Result<ImagePlanes, SnapshotError> {
+        let viewport = self.image_viewport(cell_pixels)?;
+        compose_store_planes(
+            &self.image_store,
+            self.screen.is_alternate(),
+            viewport,
+            cell_pixels,
+        )
+    }
+
+    fn image_viewport(&self, cell_pixels: CellPixelSize) -> Result<PixelSize, SnapshotError> {
         let (rows, columns) = self.screen.dimensions();
-        let viewport = PixelSize {
+        Ok(PixelSize {
             width: u32::try_from(columns)
                 .ok()
                 .and_then(|columns| columns.checked_mul(u32::from(cell_pixels.width())))
@@ -444,13 +469,7 @@ impl Pane {
                 .ok()
                 .and_then(|rows| rows.checked_mul(u32::from(cell_pixels.height())))
                 .ok_or(SnapshotError::InvalidViewport)?,
-        };
-        compose_store_snapshot(
-            &self.image_store,
-            self.screen.is_alternate(),
-            viewport,
-            cell_pixels,
-        )
+        })
     }
 
     fn process_output_inner(

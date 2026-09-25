@@ -6,10 +6,26 @@ use crate::{
         CompositeError, ImageLayer, MAX_COMPOSITE_INPUT_BYTES, compose_image_layers,
     },
     graphics_decode::{
-        ClipError, DecodeError, DecodedImage, MAX_DECODED_IMAGE_BYTES, ResampleError,
+        ClipError, ClippedPlacement, DecodeError, DecodedImage, MAX_DECODED_IMAGE_BYTES,
+        ResampleError,
     },
     graphics_store::{CellPixelSize, ImageStore, PixelSize},
 };
+
+/// Kitty's special boundary below which images are also behind cells with a
+/// non-default background. At the boundary they remain above those colors.
+pub const BACKGROUND_Z_BOUNDARY: i32 = i32::MIN / 2;
+pub const MAX_PLANE_CANVAS_BYTES: usize = 64 * 1024 * 1024;
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct ImagePlanes {
+    /// `z < BACKGROUND_Z_BOUNDARY`: behind non-default cell backgrounds.
+    pub behind_background: Option<DecodedImage>,
+    /// `BACKGROUND_Z_BOUNDARY <= z < 0`: behind glyphs but above backgrounds.
+    pub behind_text: Option<DecodedImage>,
+    /// `z >= 0`: above text.
+    pub above_text: Option<DecodedImage>,
+}
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum SnapshotError {
@@ -33,6 +49,73 @@ pub fn compose_store_snapshot(
     viewport: PixelSize,
     cell: CellPixelSize,
 ) -> Result<DecodedImage, SnapshotError> {
+    validate_viewport(viewport)?;
+    let clipped = collect_visible_clips(store, alternate, viewport, cell)?;
+    let layers: Vec<_> = clipped
+        .iter()
+        .map(|(image_id, z_index, placement)| ImageLayer {
+            image_id: *image_id,
+            z_index: *z_index,
+            placement,
+        })
+        .collect();
+    compose_image_layers(viewport, &layers).map_err(SnapshotError::Composite)
+}
+
+/// Preserve the three Kitty image/text stacking bands without combining them
+/// with cell colors or glyphs. An absent band allocates no canvas. Up to two
+/// full-size canvases fit the aggregate output limit; a third is rejected.
+pub fn compose_store_planes(
+    store: &ImageStore,
+    alternate: bool,
+    viewport: PixelSize,
+    cell: CellPixelSize,
+) -> Result<ImagePlanes, SnapshotError> {
+    let canvas_bytes = validate_viewport(viewport)?;
+    let clipped = collect_visible_clips(store, alternate, viewport, cell)?;
+    let mut behind_background = Vec::new();
+    let mut behind_text = Vec::new();
+    let mut above_text = Vec::new();
+    for (image_id, z_index, placement) in &clipped {
+        let layer = ImageLayer {
+            image_id: *image_id,
+            z_index: *z_index,
+            placement,
+        };
+        if *z_index < BACKGROUND_Z_BOUNDARY {
+            behind_background.push(layer);
+        } else if *z_index < 0 {
+            behind_text.push(layer);
+        } else {
+            above_text.push(layer);
+        }
+    }
+    let populated = usize::from(!behind_background.is_empty())
+        + usize::from(!behind_text.is_empty())
+        + usize::from(!above_text.is_empty());
+    if canvas_bytes * populated > MAX_PLANE_CANVAS_BYTES {
+        return Err(SnapshotError::OutputLimit);
+    }
+    Ok(ImagePlanes {
+        behind_background: compose_nonempty(viewport, &behind_background)?,
+        behind_text: compose_nonempty(viewport, &behind_text)?,
+        above_text: compose_nonempty(viewport, &above_text)?,
+    })
+}
+
+fn compose_nonempty(
+    viewport: PixelSize,
+    layers: &[ImageLayer<'_>],
+) -> Result<Option<DecodedImage>, SnapshotError> {
+    if layers.is_empty() {
+        return Ok(None);
+    }
+    compose_image_layers(viewport, layers)
+        .map(Some)
+        .map_err(SnapshotError::Composite)
+}
+
+fn validate_viewport(viewport: PixelSize) -> Result<usize, SnapshotError> {
     if viewport.width == 0 || viewport.height == 0 {
         return Err(SnapshotError::InvalidViewport);
     }
@@ -40,7 +123,15 @@ pub fn compose_store_snapshot(
     if canvas_bytes > MAX_DECODED_IMAGE_BYTES as u128 {
         return Err(SnapshotError::OutputLimit);
     }
+    Ok(usize::try_from(canvas_bytes).unwrap())
+}
 
+fn collect_visible_clips(
+    store: &ImageStore,
+    alternate: bool,
+    viewport: PixelSize,
+    cell: CellPixelSize,
+) -> Result<Vec<(u32, i32, ClippedPlacement)>, SnapshotError> {
     let mut clipped = Vec::new();
     let mut input_bytes = 0usize;
     for placement in store.placements() {
@@ -72,13 +163,5 @@ pub fn compose_store_snapshot(
             clipped.push((placement.image_id, geometry.z_index, visible));
         }
     }
-    let layers: Vec<_> = clipped
-        .iter()
-        .map(|(image_id, z_index, placement)| ImageLayer {
-            image_id: *image_id,
-            z_index: *z_index,
-            placement,
-        })
-        .collect();
-    compose_image_layers(viewport, &layers).map_err(SnapshotError::Composite)
+    Ok(clipped)
 }

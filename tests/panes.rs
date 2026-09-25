@@ -8,7 +8,7 @@ use nix::{
 };
 use rustmux::{
     graphics_composite::{ImageLayer, compose_image_layers},
-    graphics_snapshot::{SnapshotError, compose_store_snapshot},
+    graphics_snapshot::{BACKGROUND_Z_BOUNDARY, SnapshotError, compose_store_snapshot},
     graphics_store::{
         CellPixelSize, PixelRect, PixelSize, PlacementGeometry, PlacementSizing, SignedPixelPoint,
     },
@@ -802,6 +802,74 @@ fn kitty_clipped_placements_compose_in_image_id_order() {
     assert_eq!(&canvas.pixels[..4], &[85, 0, 170, 192]);
     assert!(canvas.pixels[4..].iter().all(|&byte| byte == 0));
     assert_eq!(pane.compose_image_snapshot(cell).unwrap(), canvas);
+    let planes = pane.compose_image_planes(cell).unwrap();
+    assert_eq!(planes.above_text, Some(canvas));
+    assert_eq!(planes.behind_text, None);
+    assert_eq!(planes.behind_background, None);
+}
+
+#[test]
+fn kitty_image_planes_keep_text_and_background_z_boundaries() {
+    let mut pane = Pane::spawn("/bin/sh", 1, 6).unwrap();
+    let cell = CellPixelSize::new(1, 1).unwrap();
+    let empty = pane.compose_image_planes(cell).unwrap();
+    assert_eq!(empty.behind_background, None);
+    assert_eq!(empty.behind_text, None);
+    assert_eq!(empty.above_text, None);
+    let layers = [
+        i32::MIN,
+        BACKGROUND_Z_BOUNDARY - 1,
+        BACKGROUND_Z_BOUNDARY,
+        -1,
+        0,
+        i32::MAX,
+    ];
+    for (column, z) in layers.into_iter().enumerate() {
+        let id = column + 1;
+        let image = format!(
+            "\x1b[1;{}H\x1b_Ga=T,f=32,s=1,v=1,i={id},p=1,c=1,r=1,z={z},C=1;{}\x1b\\",
+            column + 1,
+            STANDARD.encode([id as u8, 0, 0, 255])
+        );
+        pane.process_output_with_image_store_sized(image.as_bytes(), &mut |_| {}, cell);
+    }
+    let planes = pane.compose_image_planes(cell).unwrap();
+    for (plane, occupied) in [
+        (planes.behind_background.as_ref().unwrap(), 0..2),
+        (planes.behind_text.as_ref().unwrap(), 2..4),
+        (planes.above_text.as_ref().unwrap(), 4..6),
+    ] {
+        for column in 0..6 {
+            let pixel = &plane.pixels[column * 4..column * 4 + 4];
+            if occupied.contains(&column) {
+                assert_eq!(pixel, &[(column + 1) as u8, 0, 0, 255]);
+            } else {
+                assert_eq!(pixel, &[0, 0, 0, 0]);
+            }
+        }
+    }
+    pane.process_output_with_image_store_sized(b"\x1b[?1047h", &mut |_| {}, cell);
+    let alternate = pane.compose_image_planes(cell).unwrap();
+    assert_eq!(alternate.behind_background, None);
+    assert_eq!(alternate.behind_text, None);
+    assert_eq!(alternate.above_text, None);
+}
+
+#[test]
+fn kitty_image_planes_reject_three_full_size_canvases_before_allocating_them() {
+    let mut pane = Pane::spawn("/bin/sh", 1, 2).unwrap();
+    let cell = CellPixelSize::new(2048, 2048).unwrap();
+    for (id, z) in [(1, i32::MIN), (2, -1), (3, 0)] {
+        let image = format!(
+            "\x1b_Ga=T,f=32,s=1,v=1,i={id},p=1,c=1,r=1,z={z},C=1;{}\x1b\\",
+            STANDARD.encode([id as u8, 0, 0, 255])
+        );
+        pane.process_output_with_image_store_sized(image.as_bytes(), &mut |_| {}, cell);
+    }
+    assert_eq!(
+        pane.compose_image_planes(cell),
+        Err(SnapshotError::OutputLimit)
+    );
 }
 
 #[test]
@@ -852,6 +920,10 @@ fn kitty_image_snapshot_reports_invalid_data_and_oversized_canvas() {
     let cell = CellPixelSize::new(1, 1).unwrap();
     assert!(matches!(
         pane.compose_image_snapshot(cell),
+        Err(SnapshotError::Decode(_))
+    ));
+    assert!(matches!(
+        pane.compose_image_planes(cell),
         Err(SnapshotError::Decode(_))
     ));
     assert_eq!(pane.image_store().placements().count(), 1);

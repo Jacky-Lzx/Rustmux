@@ -145,6 +145,16 @@ image data or geometry fails the whole snapshot rather than returning a partial
 image. The returned canvas is transparent where no image is placed; the store
 is unchanged. It remains image-only and is not called by the normal renderer.
 
+`Pane::compose_image_planes` provides an alternate opt-in snapshot that keeps
+Kitty's three stacking bands separate: `z < -1073741824` is behind non-default
+cell backgrounds, `-1073741824 <= z < 0` is behind text but above backgrounds,
+and `z >= 0` is above text. Each populated band is independently composed in
+image z/image-ID order; absent bands allocate no canvas. The three outputs
+share the existing 64 MiB clipped-input budget and a new 64 MiB combined
+canvas budget. No cell colors, glyphs, or outer-terminal graphics commands are
+drawn here, so the normal renderer still does not display the images. The
+bands follow the [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
+
 `X/Y` position an image within its first cell; they are not added to `c/r` or
 cursor movement. On a sized opt-in call, either offset must be smaller than
 its cell pixel dimension. An invalid offset rejects the placement before an
@@ -214,6 +224,8 @@ Composition tests cover `z`/image-ID order, straight-alpha blending, offsets,
 malformed layers, and output/work limits.
 Snapshot tests cover the pane-level pipeline, screen selection, invalid image
 data, and oversized viewports.
+Plane tests cover the two exact z boundaries, empty/alternate-screen bands,
+within-band blending, and the aggregate output limit.
 Runtime tests cover PTY output storage with known and unknown physical cell
 size, plus cell-size invalidation when a detached client reconnects.
 Anchor tests cover interleaved text, final-chunk position, alternate-screen
