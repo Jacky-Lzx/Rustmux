@@ -21,10 +21,14 @@ chunk's optional `q` override. It checks the byte count for raw RGB/RGBA data;
 PNG bytes remain opaque until a later image decoder validates them.
 
 One encoded chunk is limited to 4096 bytes and one assembled transfer to
-16 MiB. Only uncompressed direct data (`t=d`, `a=t/T/q`) is accepted by this
-assembler. File, temporary-file and shared-memory media are not read, and
-compressed data is not decompressed. The chunk and continuation rules follow
-the [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
+16 MiB. Direct data (`t=d`, `a=t/T/q`) may be uncompressed or use `o=z`
+zlib compression. Both compressed input and decompressed output are bounded
+to 16 MiB; raw RGB/RGBA output must match its dimensions, and compressed PNG
+requires `S=<uncompressed-byte-count>`. Malformed streams, mismatched sizes,
+and trailing compressed bytes are discarded before they can replace an image.
+File, temporary-file and shared-memory media are not read. The chunk and
+continuation rules follow the
+[Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
 
 Every pane now passes PTY output through its own framer before the text parser
 and OSC observer. Graphics bytes cannot appear as screen text or shell-command
@@ -355,8 +359,8 @@ receive a bounded error reply; `q=1` suppresses success and `q=2` suppresses
 all replies. A query never inserts or replaces an image. Without confirmed
 display support, or while detached, Rustmux stays silent on graphics queries;
 a following DA reply still reaches the child. File/shared-memory media,
-compressed or malformed transfers, and image-number references in queries or
-deletes remain unsupported. Under the same attachment and
+malformed transfers and image-number references in queries remain unsupported.
+Numbered deletes use `d=n/N` as described above. Under the same attachment and
 sizing conditions, a completed direct-data `a=t` upload with an explicit
 nonzero `i` or a nonzero `I` receives one reply
 after its final chunk: `OK` only after successful storage, otherwise a bounded

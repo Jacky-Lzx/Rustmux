@@ -1,4 +1,5 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD};
+use flate2::{Compression, write::ZlibEncoder};
 use nix::{
     errno::Errno,
     fcntl::{FcntlArg, OFlag, fcntl},
@@ -566,6 +567,49 @@ fn kitty_sized_png_inference_recovers_after_invalid_image_replacement() {
         (Some(2), Some(2))
     );
     assert_eq!(pane.screen().cursor(), (2, 2));
+}
+
+#[test]
+fn kitty_zlib_png_upload_is_validated_and_bad_replacement_is_atomic() {
+    let mut pane = Pane::spawn("/bin/sh", 6, 20).unwrap();
+    let cell = CellPixelSize::new(2, 1).unwrap();
+    let mut png_bytes = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut png_bytes, 3, 2);
+        encoder.set_color(png::ColorType::Rgb);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder.write_header().unwrap();
+        writer.write_image_data(&[0; 18]).unwrap();
+    }
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(&png_bytes).unwrap();
+    let compressed = encoder.finish().unwrap();
+    let command = format!(
+        "\x1b_Ga=T,f=100,o=z,S={},i=21,p=1,C=1;{}\x1b\\",
+        png_bytes.len(),
+        STANDARD.encode(&compressed)
+    );
+    pane.process_output_with_image_store_sized(command.as_bytes(), &mut |_| {}, cell);
+    assert_eq!(pane.image_store().get(21).unwrap().data, png_bytes);
+    assert_eq!(placement_geometry(&pane, 1).columns, Some(2));
+    assert_eq!(placement_geometry(&pane, 1).rows, Some(2));
+
+    let revision = pane.image_store().revision();
+    let mut corrupt = compressed;
+    *corrupt.last_mut().unwrap() ^= 1;
+    let invalid = format!(
+        "\x1b_Ga=T,f=100,o=z,S={},i=21,p=2,C=1;{}\x1b\\",
+        png_bytes.len(),
+        STANDARD.encode(corrupt)
+    );
+    pane.process_output_with_image_store_sized(invalid.as_bytes(), &mut |_| {}, cell);
+    assert_eq!(pane.image_store().revision(), revision);
+    assert!(
+        pane.image_store()
+            .placements()
+            .all(|placement| placement.placement_id != Some(2))
+    );
+    assert_eq!(pane.image_store().get(21).unwrap().data, png_bytes);
 }
 
 #[test]

@@ -5,7 +5,9 @@
 
 use crate::graphics::MAX_GRAPHICS_COMMAND_BYTES;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
+use flate2::bufread::ZlibDecoder;
 use std::collections::BTreeMap;
+use std::io::Read;
 
 /// The protocol's maximum number of base64 bytes in one direct-data chunk.
 pub const MAX_ENCODED_CHUNK_BYTES: usize = 4096;
@@ -32,7 +34,7 @@ impl AssembledDirectTransfer {
         self.controls.keys().all(|key| {
             matches!(
                 key,
-                b'a' | b'f' | b'i' | b'I' | b'm' | b'q' | b's' | b't' | b'v' | b'N'
+                b'a' | b'f' | b'i' | b'I' | b'm' | b'o' | b'q' | b's' | b't' | b'v' | b'N' | b'S'
             )
         }) && self
             .control(b'N')
@@ -49,6 +51,7 @@ impl AssembledDirectTransfer {
                     | b'i'
                     | b'I'
                     | b'm'
+                    | b'o'
                     | b'q'
                     | b's'
                     | b't'
@@ -65,6 +68,7 @@ impl AssembledDirectTransfer {
                     | b'h'
                     | b'X'
                     | b'Y'
+                    | b'S'
             )
         }) && self
             .control(b'N')
@@ -94,7 +98,8 @@ impl DirectTransferAssembler {
 
     /// Accept one complete APC G command from `GraphicsFramer`. Invalid or
     /// unsupported commands abort an in-progress transfer. Only `t=d`,
-    /// uncompressed `a=t/T/q` data is assembled; no filesystem access occurs.
+    /// optionally zlib-compressed `a=t/T/q` data is assembled; no filesystem
+    /// access occurs.
     pub fn accept(&mut self, command: &[u8]) -> Option<AssembledDirectTransfer> {
         let Some((controls, encoded)) = parse_command(command) else {
             self.reset();
@@ -201,7 +206,12 @@ fn valid_first(controls: &Controls) -> bool {
             controls.get(&b'f').map(Vec::as_slice),
             None | Some(b"24" | b"32" | b"100")
         )
-        && !controls.contains_key(&b'o')
+        && matches!(controls.get(&b'o').map(Vec::as_slice), None | Some(b"z"))
+        && controls.get(&b'S').is_none_or(|value| {
+            controls.get(&b'o').is_some()
+                && parse_positive(value)
+                    .is_some_and(|size| size as usize <= MAX_DIRECT_TRANSFER_BYTES)
+        })
         && valid_quiet(controls)
         && b"sv".iter().copied().all(|key| {
             controls
@@ -248,29 +258,61 @@ fn append_bounded(data: &mut Vec<u8>, chunk: &[u8]) -> bool {
 }
 
 fn finish(pending: Pending) -> Option<AssembledDirectTransfer> {
-    let format = pending
-        .controls
-        .get(&b'f')
-        .map(Vec::as_slice)
-        .unwrap_or(b"32");
-    if format != b"100" {
-        let width = parse_positive(pending.controls.get(&b's')?)? as usize;
-        let height = parse_positive(pending.controls.get(&b'v')?)? as usize;
+    let Pending { controls, data } = pending;
+    let format = controls.get(&b'f').map(Vec::as_slice).unwrap_or(b"32");
+    let raw_size = if format != b"100" {
+        let width = parse_positive(controls.get(&b's')?)? as usize;
+        let height = parse_positive(controls.get(&b'v')?)? as usize;
         let channels = if format == b"24" { 3 } else { 4 };
-        if width.checked_mul(height)?.checked_mul(channels)? != pending.data.len() {
+        Some(width.checked_mul(height)?.checked_mul(channels)?)
+    } else {
+        None
+    };
+    let declared_size = controls
+        .get(&b'S')
+        .and_then(|value| parse_positive(value))
+        .map(|size| size as usize);
+    let expected_size = raw_size.or(declared_size);
+    let data = if controls.contains_key(&b'o') {
+        let limit = expected_size?;
+        if limit > MAX_DIRECT_TRANSFER_BYTES || declared_size.is_some_and(|size| size != limit) {
             return None;
         }
-    }
-    Some(AssembledDirectTransfer {
-        controls: pending.controls,
-        data: pending.data,
-    })
+        let mut decoder = ZlibDecoder::new(data.as_slice());
+        let mut decoded = Vec::new();
+        (&mut decoder)
+            .take(limit as u64 + 1)
+            .read_to_end(&mut decoded)
+            .ok()?;
+        if decoded.len() != limit || decoder.total_in() != data.len() as u64 {
+            return None;
+        }
+        decoded
+    } else {
+        if raw_size.is_some_and(|size| size != data.len()) {
+            return None;
+        }
+        data
+    };
+    Some(AssembledDirectTransfer { controls, data })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::graphics::{GraphicsEvent, GraphicsFramer};
+    use flate2::{Compression, write::ZlibEncoder};
+    use std::io::Write;
+
+    fn zlib(data: &[u8]) -> Vec<u8> {
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(data).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    fn direct(controls: &str, data: &[u8]) -> Vec<u8> {
+        format!("\x1b_G{controls};{}\x1b\\", STANDARD.encode(data)).into_bytes()
+    }
 
     #[test]
     fn framed_rgba_transfer_preserves_controls_and_decoded_data() {
@@ -322,11 +364,11 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unsupported_media_compression_and_malformed_fields() {
+    fn rejects_unsupported_media_and_malformed_fields() {
         let mut assembler = DirectTransferAssembler::new();
         for command in [
             b"\x1b_Ga=T,t=f,f=100;QUJD\x1b\\".as_slice(),
-            b"\x1b_Ga=T,o=z,f=100;QUJD\x1b\\",
+            b"\x1b_Ga=T,o=x,f=100;QUJD\x1b\\",
             b"\x1b_Ga=p,i=1;\x1b\\",
             b"\x1b_Gf=100,f=24;QUJD\x1b\\",
             b"\x1b_Gf=100,;QUJD\x1b\\",
@@ -337,6 +379,73 @@ mod tests {
             assert!(assembler.accept(command).is_none(), "{command:?}");
         }
         assert!(assembler.accept(b"\x1b_Gf=100;QUJD\x1b\\").is_some());
+    }
+
+    #[test]
+    fn zlib_direct_raw_and_png_transfers_decode_before_validation() {
+        let mut assembler = DirectTransferAssembler::new();
+        let rgb = direct("a=t,o=z,f=24,s=1,v=1,i=7", &zlib(&[1, 2, 3]));
+        let image = assembler.accept(&rgb).unwrap();
+        assert_eq!(image.data, [1, 2, 3]);
+        assert_eq!(image.control(b'o'), Some(b"z".as_slice()));
+        assert!(image.supported_data_only_controls());
+
+        let rgba = zlib(&[1, 2, 3, 4]);
+        let encoded = STANDARD.encode(rgba);
+        let first = format!("\x1b_Ga=T,o=z,f=32,s=1,v=1,i=8,m=1;{}\x1b\\", &encoded[..4]);
+        let last = format!("\x1b_Gm=0,q=2;{}\x1b\\", &encoded[4..]);
+        assert!(assembler.accept(first.as_bytes()).is_none());
+        let image = assembler.accept(last.as_bytes()).unwrap();
+        assert_eq!(image.data, [1, 2, 3, 4]);
+        assert_eq!(image.control(b'q'), Some(b"2".as_slice()));
+        assert!(image.supported_display_controls());
+
+        let png = direct("a=t,o=z,f=100,S=3,i=9", &zlib(b"PNG"));
+        assert_eq!(assembler.accept(&png).unwrap().data, b"PNG");
+    }
+
+    #[test]
+    fn zlib_direct_rejects_bad_stream_size_and_controls_then_recovers() {
+        let mut assembler = DirectTransferAssembler::new();
+        let mut corrupt = zlib(&[1, 2, 3, 4]);
+        *corrupt.last_mut().unwrap() ^= 1;
+        let valid = zlib(&[1, 2, 3, 4]);
+        let mut trailing = valid.clone();
+        trailing.push(0);
+        for command in [
+            direct("a=t,o=z,f=32,s=1,v=1", &corrupt),
+            direct("a=t,o=z,f=32,s=1,v=1", &valid[..valid.len() - 1]),
+            direct("a=t,o=z,f=32,s=1,v=1", &trailing),
+            direct("a=t,o=z,f=32,s=2,v=1", &valid),
+            direct("a=t,o=z,f=32,s=1,v=1,S=3", &valid),
+            direct("a=t,o=z,f=100", &zlib(b"PNG")),
+            direct("a=t,o=z,f=100,S=4", &zlib(b"PNG")),
+            direct("a=t,o=z,f=100,S=16777217", &zlib(b"PNG")),
+            direct("a=t,o=z,f=100,S=bad", &zlib(b"PNG")),
+            direct("a=t,f=100,S=3", b"PNG"),
+        ] {
+            assert!(assembler.accept(&command).is_none(), "{command:?}");
+        }
+        assert!(
+            assembler
+                .accept(&direct("a=t,o=z,f=32,s=1,v=1", &valid))
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn zlib_direct_stops_at_declared_output_bound() {
+        let mut controls = Controls::new();
+        controls.insert(b'f', b"100".to_vec());
+        controls.insert(b'o', b"z".to_vec());
+        controls.insert(b'S', b"4".to_vec());
+        assert!(
+            finish(Pending {
+                controls,
+                data: zlib(&vec![42; 4096])
+            })
+            .is_none()
+        );
     }
 
     #[test]
