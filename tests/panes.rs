@@ -7,6 +7,7 @@ use nix::{
     unistd::Pid,
 };
 use rustmux::{
+    graphics_composite::{ImageLayer, compose_image_layers},
     graphics_store::{
         CellPixelSize, PixelRect, PixelSize, PlacementGeometry, PlacementSizing, SignedPixelPoint,
     },
@@ -735,6 +736,67 @@ fn kitty_margin_scroll_clip_is_applied_to_visible_pixels() {
         }
     );
     assert_eq!(clipped.pixels, [20, 0, 0, 255]);
+}
+
+#[test]
+fn kitty_clipped_placements_compose_in_image_id_order() {
+    let mut pane = Pane::spawn("/bin/sh", 2, 2).unwrap();
+    let cell = CellPixelSize::new(1, 1).unwrap();
+    for (id, rgba) in [(8, [0, 0, 255, 128]), (7, [255, 0, 0, 128])] {
+        let image = format!(
+            "\x1b_Ga=T,f=32,s=1,v=1,i={id},p=1,c=1,r=1,z=0,C=1;{}\x1b\\",
+            STANDARD.encode(rgba)
+        );
+        pane.process_output_with_image_store_sized(image.as_bytes(), &mut |_| {}, cell);
+    }
+    let mut clipped = Vec::new();
+    let mut keys = Vec::new();
+    for placement in pane.image_store().placements() {
+        let geometry = placement.geometry.unwrap();
+        let image = pane
+            .image_store()
+            .get(placement.image_id)
+            .unwrap()
+            .decode_rgba()
+            .unwrap();
+        let layout = geometry
+            .pixel_layout(image.width, image.height, cell)
+            .unwrap();
+        let content = image.resample_placement(layout).unwrap();
+        clipped.push(
+            content
+                .clip_to_viewport_with_scroll_clip(
+                    geometry,
+                    cell,
+                    PixelSize {
+                        width: 2,
+                        height: 2,
+                    },
+                )
+                .unwrap()
+                .unwrap(),
+        );
+        keys.push((placement.image_id, geometry.z_index));
+    }
+    let layers: Vec<_> = clipped
+        .iter()
+        .zip(keys)
+        .map(|(placement, (image_id, z_index))| ImageLayer {
+            image_id,
+            z_index,
+            placement,
+        })
+        .collect();
+    let canvas = compose_image_layers(
+        PixelSize {
+            width: 2,
+            height: 2,
+        },
+        &layers,
+    )
+    .unwrap();
+    assert_eq!(&canvas.pixels[..4], &[85, 0, 170, 192]);
+    assert!(canvas.pixels[4..].iter().all(|&byte| byte == 0));
 }
 
 #[test]

@@ -123,8 +123,14 @@ without unsigned wraparound. The opt-in
 `clip_to_viewport_with_scroll_clip` path also applies the stored permanent
 top/bottom cell-row clips before extracting visible pixels. It limits only
 edges that were actually clipped, so an `X/Y` offset is not mistaken for an
-extra placement row. Z-order blending, redraw, and the normal runtime are
-unchanged.
+extra placement row. `compose_image_layers` can now blend these clipped RGBA
+images onto a transparent pane-sized canvas. It orders by `z`, then image ID
+(lower values underneath), with stable input order for the protocol's undefined
+equal-key tie. The output is capped at 32 MiB, cumulative layer input at
+64 MiB, and the layer count at the pane's 1024-placement limit. Negative `z`
+is ordered among images, but its relationship to text and cell backgrounds is
+not composed yet. Redraw and the normal runtime are unchanged. The ordering
+follows the [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
 
 `X/Y` position an image within its first cell; they are not added to `c/r` or
 cursor movement. On a sized opt-in call, either offset must be smaller than
@@ -188,6 +194,8 @@ nearest-neighbor enlargement, reduction, alpha preservation, invalid geometry,
 and the raster output limit. Viewport tests cover all four clipped edges,
 negative and disjoint anchors, malformed buffers, and oversized geometry.
 Scroll-clip tests verify top/bottom pixel rows and a pane-driven margin scroll.
+Composition tests cover `z`/image-ID order, straight-alpha blending, offsets,
+malformed layers, and output/work limits.
 Anchor tests cover interleaved text, final-chunk position, alternate-screen
 identity, explicit layout options, malformed metadata, and named replacement.
 Screen-lifecycle tests cover split `CSI 2 J`, non-clearing text erasures,
