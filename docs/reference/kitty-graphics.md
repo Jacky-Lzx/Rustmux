@@ -306,13 +306,16 @@ direct-data APCs with a nonzero image ID, requested `z`, `C=1`, and `q=2`.
 Each Base64 chunk is at most 4096 bytes; all continuation APCs carry only
 `m`. The encoder itself does not manage replacement/deletion; the runtime
 calls it only after preflighting the remaining 16 MiB frame budget. Before
-preflight, the runtime crops
-transparent margins from each composed band to the smallest cell-aligned
+preflight, the runtime crops transparent margins from each composed band to the
+smallest cell-aligned
 rectangle containing visible pixels, preserving its pane-relative origin.
 This avoids charging empty pane space against the frame budget, especially in
 large outer windows. If a cropped band still exceeds one frame, the runtime
-splits it into cell-aligned placements of at most 8 MiB raw RGBA each. It
-uploads missing tiles over successive frames and deletes every owned tile ID
+splits it into cell-aligned placements targeting at most 8 MiB raw RGBA each.
+A single physical cell larger than that target is still considered when its
+actual encoded placement fits the 16 MiB frame; the encoder's exact preflight
+remains the final limit. It uploads missing tiles over successive frames and
+deletes every owned tile ID
 when the band changes or clears. Deletions are queued ahead of new uploads if
 the current frame has no room; their IDs remain tracked until the deletion
 commands have been written in later frames. A tile that cannot fit by itself

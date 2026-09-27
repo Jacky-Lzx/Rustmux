@@ -47,7 +47,7 @@ const POLL_TIMEOUT_MILLIS: u16 = 50;
 const MAX_LEGACY_MOUSE_COORDINATE: usize = 223;
 const MAX_MOUSE_SEQUENCE_BYTES: usize = 64;
 const MAX_FRAME: usize = 16 * 1024 * 1024;
-// Keep each encoded Kitty placement comfortably below one output frame.
+// Preferred raw tile target; an indivisible larger cell gets exact frame preflight.
 const MAX_KITTY_TILE_RAW_BYTES: usize = 8 * 1024 * 1024;
 const SYNC_TIMEOUT: Duration = Duration::from_secs(1);
 const FRAME_INTERVAL: Duration = Duration::from_millis(6);
@@ -681,10 +681,10 @@ fn overlay_tile_size(image: &DecodedImage, cell: CellPixelSize) -> Option<(usize
     let cell_width = usize::from(cell.width());
     let cell_height = usize::from(cell.height());
     let cell_bytes = cell_width.checked_mul(cell_height)?.checked_mul(4)?;
-    let max_cells = MAX_KITTY_TILE_RAW_BYTES / cell_bytes;
-    if max_cells == 0 {
-        return None;
-    }
+    // A single physical cell can exceed the preferred tile target while its
+    // actual encoded placement still fits a frame. The exact output preflight
+    // below decides that case instead of silently dropping it here.
+    let max_cells = (MAX_KITTY_TILE_RAW_BYTES / cell_bytes).max(1);
     let columns = usize::try_from(image.width).ok()?.div_ceil(cell_width);
     if columns == 0 {
         return None;
@@ -3459,6 +3459,32 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn outer_image_tile_accepts_one_large_cell_when_encoded_output_fits() {
+        let cell = CellPixelSize::new(1600, 1600).unwrap();
+        let image = DecodedImage {
+            width: 1600,
+            height: 1600,
+            pixels: vec![255; 1600 * 1600 * 4],
+        };
+        assert!(image.pixels.len() > MAX_KITTY_TILE_RAW_BYTES);
+        assert_eq!(overlay_tile_size(&image, cell), Some((1600, 1600)));
+        let placement = kitty_rgba_placement_len(&image, 0x8000_0000, 0).unwrap();
+        assert!(b"\x1b[3;2H".len() + placement + b"\x1b[4;3H".len() <= MAX_FRAME);
+
+        let too_large = DecodedImage {
+            width: 2000,
+            height: 2000,
+            pixels: vec![255; 2000 * 2000 * 4],
+        };
+        let large_cell = CellPixelSize::new(2000, 2000).unwrap();
+        assert_eq!(
+            overlay_tile_size(&too_large, large_cell),
+            Some((2000, 2000))
+        );
+        assert!(kitty_rgba_placement_len(&too_large, 0x8000_0000, 0).unwrap() > MAX_FRAME);
     }
 
     #[test]
