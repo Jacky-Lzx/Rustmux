@@ -328,15 +328,18 @@ including every APC wrapper, without allocating a Base64 image. The bounded
 when its complete transfer would exceed the caller's remaining output budget.
 The runtime uses this preflight before each band upload.
 
-`EncodedKittyPng::from_rgba` is a separate, opt-in output boundary. It
+`EncodedKittyPng::from_rgba` is a bounded output boundary. It
 validates the RGBA dimensions, encodes a static 8-bit RGBA PNG with a bounded
-32 MiB output buffer, and retains it so callers can preflight the exact Kitty
-placement length without repeating compression. `write_with_limit` sends
+32 MiB output buffer using fast compression, and retains it so callers can
+preflight the exact Kitty placement length without repeating compression.
+`write_with_limit` sends
 `a=T,f=100` direct-data APCs with the same 4096-byte Base64 chunk limit and
 refuses an over-budget placement before writing. PNG dimensions are carried
-by the file itself, so the APC omits `s` and `v`. This encoder is not yet
-selected by the runtime: composed outer overlays still use `f=32` until a
-subsequent change can choose between PNG and raw RGBA under the frame budget.
+by the file itself, so the APC omits `s` and `v`. For composed overlays of at
+least 256 KiB raw RGBA, the runtime selects PNG only when its complete wire
+transfer is smaller; otherwise it sends the existing `f=32` RGBA transfer.
+Both choices receive the same exact 16 MiB frame preflight. PNG encoding or
+size-validation failures fall back to RGBA.
 
 `GraphicsCapabilityProbe` is a separate opt-in outer-terminal detection
 boundary. It generates a one-pixel, direct-RGB `a=q` query followed by primary

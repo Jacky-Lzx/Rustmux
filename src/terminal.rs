@@ -24,7 +24,9 @@ use crate::{
     chrome::{FooterMode, compose_with_mode, footer_enabled, pane_rows},
     graphics_capability::{GraphicsCapabilityProbe, GraphicsSupport},
     graphics_decode::DecodedImage,
-    graphics_output::{kitty_rgba_placement_len, write_kitty_rgba_placement_with_limit},
+    graphics_output::{
+        EncodedKittyPng, kitty_rgba_placement_len, write_kitty_rgba_placement_with_limit,
+    },
     graphics_snapshot::ImageBand,
     graphics_store::CellPixelSize,
     layout::{Direction, PaneId, Rect, SplitAxis},
@@ -49,6 +51,8 @@ const MAX_MOUSE_SEQUENCE_BYTES: usize = 64;
 const MAX_FRAME: usize = 16 * 1024 * 1024;
 // Preferred raw tile target; an indivisible larger cell gets exact frame preflight.
 const MAX_KITTY_TILE_RAW_BYTES: usize = 8 * 1024 * 1024;
+// Tiny images are cheaper to send as raw RGBA than to compress on every render.
+const MIN_KITTY_PNG_CANDIDATE_BYTES: usize = 256 * 1024;
 const SYNC_TIMEOUT: Duration = Duration::from_secs(1);
 const FRAME_INTERVAL: Duration = Duration::from_millis(6);
 const PANE_DRAG_RESIZE_INTERVAL: Duration = Duration::from_millis(33);
@@ -717,6 +721,27 @@ fn overlay_tile(
     })
 }
 
+enum OverlayPayload {
+    Rgba,
+    Png(EncodedKittyPng),
+}
+
+fn prepare_overlay_payload(
+    image: &DecodedImage,
+    image_id: u32,
+    z_index: i32,
+) -> io::Result<(OverlayPayload, usize)> {
+    let rgba_len = kitty_rgba_placement_len(image, image_id, z_index)?;
+    if image.pixels.len() >= MIN_KITTY_PNG_CANDIDATE_BYTES
+        && let Ok(png) = EncodedKittyPng::from_rgba(image)
+        && let Ok(png_len) = png.placement_len(image_id, z_index)
+        && png_len < rgba_len
+    {
+        return Ok((OverlayPayload::Png(png), png_len));
+    }
+    Ok((OverlayPayload::Rgba, rgba_len))
+}
+
 impl Default for KittyOverlays {
     fn default() -> Self {
         Self {
@@ -828,8 +853,8 @@ impl KittyOverlays {
                         let Some(next_id) = image_id.checked_add(1) else {
                             continue;
                         };
-                        let Ok(payload_len) =
-                            kitty_rgba_placement_len(tile, image_id, band.output_z())
+                        let Ok((payload, payload_len)) =
+                            prepare_overlay_payload(tile, image_id, band.output_z())
                         else {
                             continue;
                         };
@@ -842,13 +867,22 @@ impl KittyOverlays {
                             continue;
                         }
                         FrameWriter(output).write_all(position.as_bytes())?;
-                        write_kitty_rgba_placement_with_limit(
-                            tile,
-                            image_id,
-                            band.output_z(),
-                            MAX_FRAME - output.len() - restore.len(),
-                            &mut FrameWriter(output),
-                        )?;
+                        let remaining = MAX_FRAME - output.len() - restore.len();
+                        match payload {
+                            OverlayPayload::Rgba => write_kitty_rgba_placement_with_limit(
+                                tile,
+                                image_id,
+                                band.output_z(),
+                                remaining,
+                                &mut FrameWriter(output),
+                            )?,
+                            OverlayPayload::Png(png) => png.write_with_limit(
+                                image_id,
+                                band.output_z(),
+                                remaining,
+                                &mut FrameWriter(output),
+                            )?,
+                        }
                         moved_cursor = true;
                         self.next_id = next_id;
                         self.entries.push(KittyOverlay {
@@ -3485,6 +3519,48 @@ mod tests {
             Some((2000, 2000))
         );
         assert!(kitty_rgba_placement_len(&too_large, 0x8000_0000, 0).unwrap() > MAX_FRAME);
+        let (payload, encoded_len) = prepare_overlay_payload(&too_large, 0x8000_0000, 0).unwrap();
+        assert!(matches!(payload, OverlayPayload::Png(_)));
+        assert!(encoded_len < MAX_FRAME);
+    }
+
+    #[test]
+    fn overlay_uses_png_only_when_it_reduces_wire_bytes() {
+        let small = DecodedImage {
+            width: 1,
+            height: 1,
+            pixels: vec![1, 2, 3, 4],
+        };
+        assert!(matches!(
+            prepare_overlay_payload(&small, 7, 0).unwrap().0,
+            OverlayPayload::Rgba
+        ));
+
+        let flat = DecodedImage {
+            width: 512,
+            height: 512,
+            pixels: vec![255; 512 * 512 * 4],
+        };
+        let (payload, png_len) = prepare_overlay_payload(&flat, 7, 0).unwrap();
+        assert!(matches!(payload, OverlayPayload::Png(_)));
+        assert!(png_len < kitty_rgba_placement_len(&flat, 7, 0).unwrap());
+
+        let mut state = 0x1234_5678u32;
+        let noise = DecodedImage {
+            width: 512,
+            height: 512,
+            pixels: (0..512 * 512 * 4)
+                .map(|_| {
+                    state ^= state << 13;
+                    state ^= state >> 17;
+                    state ^= state << 5;
+                    state as u8
+                })
+                .collect(),
+        };
+        let (payload, wire_len) = prepare_overlay_payload(&noise, 7, 0).unwrap();
+        assert!(matches!(payload, OverlayPayload::Rgba));
+        assert_eq!(wire_len, kitty_rgba_placement_len(&noise, 7, 0).unwrap());
     }
 
     #[test]
@@ -3903,7 +3979,7 @@ mod tests {
     }
 
     #[test]
-    fn kitty_overlay_tiles_large_images_across_frames_and_deletes_every_tile() {
+    fn kitty_overlay_compresses_large_tiles_and_deletes_every_tile() {
         use base64::Engine;
         use std::collections::BTreeSet;
 
@@ -3955,9 +4031,14 @@ mod tests {
         cache
             .render(window_id, panes, cell, 204, (0, 0), &mut output)
             .unwrap();
-        assert!(cache.pending_retry, "large overlay must span frames");
         assert!(!cache.entries.is_empty());
         assert!(output.len() <= MAX_FRAME);
+        let first_frame: Vec<_> = output.iter().copied().collect();
+        assert!(
+            first_frame
+                .windows(b"a=T,f=100".len())
+                .any(|bytes| bytes == b"a=T,f=100")
+        );
         for _ in 0..8 {
             if !cache.pending_retry {
                 break;

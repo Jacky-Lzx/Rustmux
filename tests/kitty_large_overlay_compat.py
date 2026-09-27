@@ -17,13 +17,13 @@ import sys
 import tempfile
 import termios
 import time
+import zlib
 from pathlib import Path
 
 CELL_PIXELS = 10
 IMAGE_WIDTH = 2400
 IMAGE_HEIGHT = 1800
 MAX_CAPTURE = 48 * 1024 * 1024
-FINAL_CHUNK = b"\x1b_Gm=0;"
 TOKEN = re.compile(rb"\x1b\[([0-9]+);([0-9]+)H|\x1b_G([^;]*);([A-Za-z0-9+/=]*)\x1b\\")
 
 
@@ -57,24 +57,57 @@ def wait_for_bytes(master, output, process, expected, timeout, label):
 
 def wait_for_tiles(master, output, process, count):
     deadline = time.monotonic() + 60
-    completed = 0
-    cursor = 0
-    while completed < count:
+    while len(decode_tiles(output, require_complete=False)) < count:
         read_once(master, output, process, deadline, "complete tiled overlays")
-        while True:
-            start = output.find(FINAL_CHUNK, cursor)
-            if start < 0:
-                cursor = max(0, len(output) - len(FINAL_CHUNK) + 1)
-                break
-            end = output.find(b"\x1b\\", start + len(FINAL_CHUNK))
-            if end < 0:
-                cursor = start
-                break
-            completed += 1
-            cursor = end + 2
 
 
-def decode_tiles(output):
+def decode_png_boundary_pixels(data):
+    assert data.startswith(b"\x89PNG\r\n\x1a\n")
+    offset = 8
+    compressed = bytearray()
+    dimensions = None
+    while offset < len(data):
+        size = struct.unpack_from(">I", data, offset)[0]
+        kind = data[offset + 4 : offset + 8]
+        content = data[offset + 8 : offset + 8 + size]
+        assert len(content) == size
+        if kind == b"IHDR":
+            width, height, depth, color, _, _, interlace = struct.unpack(
+                ">IIBBBBB", content
+            )
+            assert (depth, color, interlace) == (8, 6, 0)
+            dimensions = width, height
+        elif kind == b"IDAT":
+            compressed.extend(content)
+        elif kind == b"IEND":
+            break
+        offset += size + 12
+    assert dimensions is not None
+    width, height = dimensions
+    scanlines = zlib.decompress(compressed)
+    stride = width * 4
+    assert len(scanlines) == height * (stride + 1)
+    first_pixel = None
+    previous_pixel = b"\0" * 4
+    for row in range(height):
+        start = row * (stride + 1)
+        filter_type = scanlines[start]
+        assert filter_type in range(5)
+        filtered = scanlines[start + 1 : start + 5]
+        if filter_type in (0, 1):
+            predictor = b"\0" * 4
+        elif filter_type in (2, 4):
+            predictor = previous_pixel
+        else:
+            predictor = bytes(value // 2 for value in previous_pixel)
+        pixel = bytes((value + delta) & 255 for value, delta in zip(filtered, predictor))
+        if row == 0:
+            first_pixel = pixel
+        previous_pixel = pixel
+    return width, height, first_pixel, previous_pixel
+
+
+def decode_tiles(output, require_complete=True):
     position = None
     active = None
     tiles = []
@@ -88,14 +121,16 @@ def decode_tiles(output):
         if controls.get(b"a") == b"T":
             image_id = int(controls.get(b"i", b"0"))
             assert image_id >= 0x80000000, "child graphics leaked to the outer terminal"
-            assert controls.get(b"f") == b"32"
+            image_format = controls.get(b"f")
+            assert image_format in (b"32", b"100")
             assert controls.get(b"z") == b"0"
             assert active is None and position is not None
             active = {
                 "id": image_id,
                 "position": position,
-                "width": int(controls[b"s"]),
-                "height": int(controls[b"v"]),
+                "format": image_format,
+                "width": int(controls[b"s"]) if image_format == b"32" else None,
+                "height": int(controls[b"v"]) if image_format == b"32" else None,
                 "pixels": bytearray(),
             }
         elif controls.keys() != {b"m"} or active is None:
@@ -103,20 +138,34 @@ def decode_tiles(output):
         assert len(token.group(4)) <= 4096
         active["pixels"].extend(base64.b64decode(token.group(4), validate=True))
         if controls.get(b"m") == b"0":
-            assert len(active["pixels"]) == active["width"] * active["height"] * 4
+            if active["format"] == b"100":
+                (
+                    active["width"], active["height"],
+                    active["first_pixel"], active["last_pixel"],
+                ) = decode_png_boundary_pixels(active["pixels"])
+            else:
+                assert len(active["pixels"]) == active["width"] * active["height"] * 4
+                active["first_pixel"] = active["pixels"][:4]
+                active["last_pixel"] = active["pixels"][
+                    -active["width"] * 4 :
+                ][:4]
             tiles.append(active)
             active = None
         else:
             assert controls.get(b"m") == b"1"
-    assert active is None, (
-        f"incomplete final upload: complete={len(tiles)}, "
-        f"active={active['id'] if active else None}, captured={len(output)}"
-    )
+    if require_complete:
+        assert active is None, (
+            f"incomplete final upload: complete={len(tiles)}, "
+            f"active={active['id'] if active else None}, captured={len(output)}"
+        )
     return tiles
 
 
 def check_tiles(tiles):
     assert len(tiles) >= 3, "large image should require multiple output tiles"
+    assert any(tile["format"] == b"100" for tile in tiles), (
+        "compressible overlay did not use PNG"
+    )
     ids = [tile["id"] for tile in tiles]
     assert len(ids) == len(set(ids))
     top = min(tile["position"][0] for tile in tiles)
@@ -133,14 +182,16 @@ def check_tiles(tiles):
     for row, column, tile in rectangles:
         assert (row, column) == (next_row, 0), "tile positions have a gap or overlap"
         assert tile["width"] == IMAGE_WIDTH
-        for local_row in (0, tile["height"] - 1):
+        for local_row, pixel in (
+            (0, tile["first_pixel"]),
+            (tile["height"] - 1, tile["last_pixel"]),
+        ):
             expected = (
                 b"\xff\0\0\xff"
                 if row + local_row < IMAGE_HEIGHT // 2
                 else b"\0\0\xff\xff"
             )
-            offset = local_row * tile["width"] * 4
-            assert tile["pixels"][offset : offset + 4] == expected
+            assert pixel == expected
         next_row += tile["height"]
     assert next_row == IMAGE_HEIGHT
     return ids

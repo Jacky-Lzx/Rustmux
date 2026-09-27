@@ -29,6 +29,9 @@ impl EncodedKittyPng {
             let mut encoder = png::Encoder::new(&mut output, image.width, image.height);
             encoder.set_color(png::ColorType::Rgba);
             encoder.set_depth(png::BitDepth::Eight);
+            // Overlay encoding runs on the render path; favor responsiveness
+            // over squeezing the last few bytes from an already smaller PNG.
+            encoder.set_compression(png::Compression::Fast);
             let mut writer = encoder.write_header().map_err(io::Error::other)?;
             writer
                 .write_image_data(&image.pixels)
