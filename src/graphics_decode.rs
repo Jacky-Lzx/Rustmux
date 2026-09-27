@@ -52,6 +52,12 @@ pub enum ResampleError {
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum StreamPngError {
+    Decode(DecodeError),
+    Resample(ResampleError),
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum DecodeError {
     InvalidDimensions,
     OutputLimit,
@@ -81,6 +87,46 @@ impl StoredImage {
             return Err(DecodeError::UnsupportedPng);
         }
         decode_png_thumbnail(self, target_width, target_height)
+    }
+
+    /// Decode and scale a PNG source crop directly into a placement without
+    /// materializing the full RGBA source. The layout must use dimensions
+    /// obtained from this image's validated PNG metadata.
+    pub fn resample_png_placement(
+        &self,
+        layout: PlacementPixelLayout,
+    ) -> Result<ResampledPlacement, StreamPngError> {
+        if self.format != ImageFormat::Png {
+            return Err(StreamPngError::Decode(DecodeError::UnsupportedPng));
+        }
+        if layout.source.width == 0
+            || layout.source.height == 0
+            || layout.destination.width == 0
+            || layout.destination.height == 0
+            || layout
+                .destination
+                .x
+                .checked_add(layout.destination.width)
+                .is_none()
+            || layout
+                .destination
+                .y
+                .checked_add(layout.destination.height)
+                .is_none()
+        {
+            return Err(StreamPngError::Resample(ResampleError::InvalidLayout));
+        }
+        let image = decode_png_sampled(
+            self,
+            layout.destination.width,
+            layout.destination.height,
+            Some(layout.source),
+        )
+        .map_err(StreamPngError::Decode)?;
+        Ok(ResampledPlacement {
+            destination: layout.destination,
+            pixels: image.pixels,
+        })
     }
 }
 
@@ -384,6 +430,15 @@ fn decode_png_thumbnail(
     target_width: u32,
     target_height: u32,
 ) -> Result<DecodedImage, DecodeError> {
+    decode_png_sampled(image, target_width, target_height, None)
+}
+
+fn decode_png_sampled(
+    image: &StoredImage,
+    target_width: u32,
+    target_height: u32,
+    source_crop: Option<PixelRect>,
+) -> Result<DecodedImage, DecodeError> {
     let output_size = decoded_size(target_width, target_height)?;
     let mut decoder = Decoder::new_with_limits(
         Cursor::new(image.data.as_slice()),
@@ -400,14 +455,29 @@ fn decode_png_thumbnail(
         return Err(DecodeError::UnsupportedPng);
     }
     let (width, height) = (info.width, info.height);
+    let source = source_crop.unwrap_or(PixelRect {
+        x: 0,
+        y: 0,
+        width,
+        height,
+    });
     if image
         .declared_width
         .is_some_and(|declared| declared != width)
         || image
             .declared_height
             .is_some_and(|declared| declared != height)
-        || target_width > width
-        || target_height > height
+        || source.width == 0
+        || source.height == 0
+        || source
+            .x
+            .checked_add(source.width)
+            .is_none_or(|end| end > width)
+        || source
+            .y
+            .checked_add(source.height)
+            .is_none_or(|end| end > height)
+        || (source_crop.is_none() && (target_width > width || target_height > height))
     {
         return Err(DecodeError::InvalidDimensions);
     }
@@ -437,19 +507,21 @@ fn decode_png_thumbnail(
             .next_row()
             .map_err(|_| DecodeError::InvalidData)?
             .ok_or(DecodeError::InvalidData)?;
-        let source = row.data();
-        if source.len() != row_len {
+        let source_row = row.data();
+        if source_row.len() != row_len {
             return Err(DecodeError::InvalidData);
         }
         while target_y < usize::try_from(target_height).unwrap()
-            && nearest_sample(target_y, height, target_height) == source_y
+            && source.y + nearest_sample(target_y, source.height, target_height) == source_y
         {
             let output_row = &mut pixels[target_y * target_stride..(target_y + 1) * target_stride];
             for (target_x, rgba) in output_row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
-                let source_x =
-                    usize::try_from(nearest_sample(target_x, width, target_width)).unwrap();
+                let source_x = usize::try_from(
+                    source.x + nearest_sample(target_x, source.width, target_width),
+                )
+                .unwrap();
                 let offset = source_x * channels;
-                let pixel = &source[offset..offset + channels];
+                let pixel = &source_row[offset..offset + channels];
                 match color {
                     ColorType::Grayscale => *rgba = [pixel[0], pixel[0], pixel[0], 255],
                     ColorType::GrayscaleAlpha => *rgba = [pixel[0], pixel[0], pixel[0], pixel[1]],
@@ -603,6 +675,32 @@ mod tests {
             &thumbnail.pixels[63 * 64 * 4..63 * 64 * 4 + 4],
             &[0, 0, 255, 255]
         );
+        let layout = PlacementPixelLayout {
+            source: PixelRect {
+                x: 64,
+                y: height / 2 - 32,
+                width: width - 128,
+                height: 64,
+            },
+            cell_bounds: PixelSize {
+                width: 8,
+                height: 8,
+            },
+            destination: PixelRect {
+                x: 2,
+                y: 3,
+                width: 4,
+                height: 4,
+            },
+        };
+        let placement = image.resample_png_placement(layout).unwrap();
+        assert_eq!(placement.destination, layout.destination);
+        assert_eq!(placement.pixels.len(), 4 * 4 * 4);
+        assert_eq!(&placement.pixels[..4], &[255, 0, 0, 255]);
+        assert_eq!(
+            &placement.pixels[3 * 4 * 4..3 * 4 * 4 + 4],
+            &[0, 0, 255, 255]
+        );
     }
 
     #[test]
@@ -636,6 +734,27 @@ mod tests {
             image.decode_png_thumbnail(1, 1),
             Err(DecodeError::InvalidData)
         );
+        assert_eq!(
+            image.resample_png_placement(PlacementPixelLayout {
+                source: PixelRect {
+                    x: 0,
+                    y: 0,
+                    width: 1,
+                    height: 1,
+                },
+                cell_bounds: PixelSize {
+                    width: 1,
+                    height: 1,
+                },
+                destination: PixelRect {
+                    x: 0,
+                    y: 0,
+                    width: 1,
+                    height: 1,
+                },
+            }),
+            Err(StreamPngError::Decode(DecodeError::InvalidData))
+        );
     }
 
     #[test]
@@ -664,6 +783,45 @@ mod tests {
         assert_eq!(
             image.decode_png_thumbnail(2, 2).unwrap().pixels,
             [1, 1, 7, 255, 3, 1, 7, 255, 1, 3, 7, 255, 3, 3, 7, 255]
+        );
+        let layout = PlacementPixelLayout {
+            source: PixelRect {
+                x: 1,
+                y: 1,
+                width: 2,
+                height: 2,
+            },
+            cell_bounds: PixelSize {
+                width: 8,
+                height: 8,
+            },
+            destination: PixelRect {
+                x: 5,
+                y: 7,
+                width: 4,
+                height: 2,
+            },
+        };
+        let resampled = image.resample_png_placement(layout).unwrap();
+        assert_eq!(resampled.destination, layout.destination);
+        assert_eq!(
+            resampled.pixels,
+            [
+                1, 1, 7, 255, 1, 1, 7, 255, 2, 1, 7, 255, 2, 1, 7, 255, 1, 2, 7, 255, 1, 2, 7, 255,
+                2, 2, 7, 255, 2, 2, 7, 255,
+            ]
+        );
+        assert_eq!(
+            image.resample_png_placement(PlacementPixelLayout {
+                source: PixelRect {
+                    x: 3,
+                    y: 3,
+                    width: 2,
+                    height: 2,
+                },
+                ..layout
+            }),
+            Err(StreamPngError::Decode(DecodeError::InvalidDimensions))
         );
     }
 
