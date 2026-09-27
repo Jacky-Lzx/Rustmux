@@ -47,6 +47,8 @@ const POLL_TIMEOUT_MILLIS: u16 = 50;
 const MAX_LEGACY_MOUSE_COORDINATE: usize = 223;
 const MAX_MOUSE_SEQUENCE_BYTES: usize = 64;
 const MAX_FRAME: usize = 16 * 1024 * 1024;
+// Keep each encoded Kitty placement comfortably below one output frame.
+const MAX_KITTY_TILE_RAW_BYTES: usize = 8 * 1024 * 1024;
 const SYNC_TIMEOUT: Duration = Duration::from_secs(1);
 const FRAME_INTERVAL: Duration = Duration::from_millis(6);
 const PANE_DRAG_RESIZE_INTERVAL: Duration = Duration::from_millis(33);
@@ -597,6 +599,8 @@ struct KittyOverlay {
     cell: CellPixelSize,
     alternate: bool,
     image_id: u32,
+    column_offset: usize,
+    row_offset: usize,
 }
 
 struct KittyOverlays {
@@ -670,6 +674,48 @@ fn crop_overlay_to_visible_cells(
     ))
 }
 
+/// Split a large image into cell-aligned rectangles. Keeping complete cells
+/// together avoids relying on Kitty's pixel-offset placement controls.
+fn overlay_tile_size(image: &DecodedImage, cell: CellPixelSize) -> Option<(usize, usize)> {
+    let cell_width = usize::from(cell.width());
+    let cell_height = usize::from(cell.height());
+    let cell_bytes = cell_width.checked_mul(cell_height)?.checked_mul(4)?;
+    let max_cells = MAX_KITTY_TILE_RAW_BYTES / cell_bytes;
+    if max_cells == 0 {
+        return None;
+    }
+    let columns = usize::try_from(image.width).ok()?.div_ceil(cell_width);
+    if columns == 0 {
+        return None;
+    }
+    let tile_columns = columns.min(max_cells);
+    let tile_rows = max_cells / tile_columns;
+    Some((
+        tile_columns.checked_mul(cell_width)?,
+        tile_rows.checked_mul(cell_height)?,
+    ))
+}
+
+fn overlay_tile(
+    image: &DecodedImage,
+    x: usize,
+    y: usize,
+    width: usize,
+    height: usize,
+) -> Option<DecodedImage> {
+    let source_width = usize::try_from(image.width).ok()?;
+    let mut pixels = Vec::with_capacity(width.checked_mul(height)?.checked_mul(4)?);
+    for row in y..y + height {
+        let start = (row * source_width + x) * 4;
+        pixels.extend_from_slice(&image.pixels[start..start + width * 4]);
+    }
+    Some(DecodedImage {
+        width: u32::try_from(width).ok()?,
+        height: u32::try_from(height).ok()?,
+        pixels,
+    })
+}
+
 impl Default for KittyOverlays {
     fn default() -> Self {
         Self {
@@ -731,13 +777,6 @@ impl KittyOverlays {
             let column = usize::from(rect.column) + 1;
             let restore = format!("\x1b[{};{}H", cursor.0 + 1, cursor.1 + 1);
             for band in ImageBand::ALL {
-                if self
-                    .entries
-                    .iter()
-                    .any(|entry| entry.window == window && entry.pane == id && entry.band == band)
-                {
-                    continue;
-                }
                 // A malformed or over-budget band must not suppress the other
                 // two or take down the terminal session.
                 let Ok(Some(image)) = pane.compose_image_band(cell, band) else {
@@ -748,44 +787,83 @@ impl KittyOverlays {
                 else {
                     continue;
                 };
-                let position = format!("\x1b[{};{}H", row + row_offset, column + column_offset);
-                let image_id = self.next_id;
-                let Some(next_id) = image_id.checked_add(1) else {
+                let Some((tile_width, tile_height)) = overlay_tile_size(&image, cell) else {
                     continue;
                 };
-                let Ok(payload_len) = kitty_rgba_placement_len(&image, image_id, band.output_z())
-                else {
-                    continue;
-                };
-                let frame_len = position.len() + payload_len + restore.len();
-                if frame_len > MAX_FRAME {
-                    continue;
+                let width = usize::try_from(image.width).expect("validated image width");
+                let height = usize::try_from(image.height).expect("validated image height");
+                for y in (0..height).step_by(tile_height) {
+                    for x in (0..width).step_by(tile_width) {
+                        let tile_column = column_offset + x / usize::from(cell.width());
+                        let tile_row = row_offset + y / usize::from(cell.height());
+                        if self.entries.iter().any(|entry| {
+                            entry.window == window
+                                && entry.pane == id
+                                && entry.band == band
+                                && entry.column_offset == tile_column
+                                && entry.row_offset == tile_row
+                        }) {
+                            continue;
+                        }
+                        let tile_image =
+                            if x == 0 && y == 0 && tile_width >= width && tile_height >= height {
+                                None
+                            } else {
+                                let Some(tile) = overlay_tile(
+                                    &image,
+                                    x,
+                                    y,
+                                    tile_width.min(width - x),
+                                    tile_height.min(height - y),
+                                ) else {
+                                    continue;
+                                };
+                                Some(tile)
+                            };
+                        let tile = tile_image.as_ref().unwrap_or(&image);
+                        let position = format!("\x1b[{};{}H", row + tile_row, column + tile_column);
+                        let image_id = self.next_id;
+                        let Some(next_id) = image_id.checked_add(1) else {
+                            continue;
+                        };
+                        let Ok(payload_len) =
+                            kitty_rgba_placement_len(tile, image_id, band.output_z())
+                        else {
+                            continue;
+                        };
+                        let frame_len = position.len() + payload_len + restore.len();
+                        if frame_len > MAX_FRAME {
+                            continue;
+                        }
+                        if frame_len > MAX_FRAME - output.len() {
+                            self.pending_retry = true;
+                            continue;
+                        }
+                        FrameWriter(output).write_all(position.as_bytes())?;
+                        write_kitty_rgba_placement_with_limit(
+                            tile,
+                            image_id,
+                            band.output_z(),
+                            MAX_FRAME - output.len() - restore.len(),
+                            &mut FrameWriter(output),
+                        )?;
+                        moved_cursor = true;
+                        self.next_id = next_id;
+                        self.entries.push(KittyOverlay {
+                            window,
+                            pane: id,
+                            band,
+                            revision: pane.image_store().revision(),
+                            placeholder_revision: pane.virtual_placeholder_revision(),
+                            rect,
+                            cell,
+                            alternate: pane.screen().is_alternate(),
+                            image_id,
+                            column_offset: tile_column,
+                            row_offset: tile_row,
+                        });
+                    }
                 }
-                if frame_len > MAX_FRAME - output.len() {
-                    self.pending_retry = true;
-                    continue;
-                }
-                FrameWriter(output).write_all(position.as_bytes())?;
-                write_kitty_rgba_placement_with_limit(
-                    &image,
-                    image_id,
-                    band.output_z(),
-                    MAX_FRAME - output.len() - restore.len(),
-                    &mut FrameWriter(output),
-                )?;
-                moved_cursor = true;
-                self.next_id = next_id;
-                self.entries.push(KittyOverlay {
-                    window,
-                    pane: id,
-                    band,
-                    revision: pane.image_store().revision(),
-                    placeholder_revision: pane.virtual_placeholder_revision(),
-                    rect,
-                    cell,
-                    alternate: pane.screen().is_alternate(),
-                    image_id,
-                });
             }
         }
         if moved_cursor {
@@ -3724,6 +3802,104 @@ mod tests {
                 .windows(b"i=2147483650,z=0".len())
                 .any(|w| w == b"i=2147483650,z=0")
         );
+    }
+
+    #[test]
+    fn kitty_overlay_tiles_large_images_across_frames_and_deletes_every_tile() {
+        use base64::Engine;
+        use std::collections::BTreeSet;
+
+        let cell = CellPixelSize::new(10, 10).unwrap();
+        let mut png = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut png, 2600, 2000);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder
+                .write_header()
+                .unwrap()
+                .write_image_data(&vec![255; 2600 * 2000 * 4])
+                .unwrap();
+        }
+        let encoded = base64::engine::general_purpose::STANDARD.encode(png);
+        let mut windows = Windows::default();
+        let window_id = windows
+            .create(
+                "large image".into(),
+                spawn_window(
+                    OsStr::new("/bin/sh"),
+                    None,
+                    202,
+                    262,
+                    crate::config::Notifications::default(),
+                    crate::config::DEFAULT_SCROLLBACK_LINES,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let panes = windows.active_mut().unwrap().content_mut();
+        let command = format!("\x1b_Ga=T,f=100,i=7,p=1,c=260,r=200,C=1;{encoded}\x1b\\");
+        panes.active_mut().process_output_with_image_store_sized(
+            command.as_bytes(),
+            &mut |_| {},
+            cell,
+        );
+        let full = panes
+            .active()
+            .compose_image_band(cell, ImageBand::AboveText)
+            .unwrap()
+            .unwrap();
+        let (full, _, _) = crop_overlay_to_visible_cells(full, cell).unwrap();
+        assert!(kitty_rgba_placement_len(&full, 0x8000_0000, 0).unwrap() > MAX_FRAME);
+        drop(full);
+        let mut cache = KittyOverlays::default();
+        let mut output = VecDeque::new();
+        cache
+            .render(window_id, panes, cell, 204, (0, 0), &mut output)
+            .unwrap();
+        assert!(cache.pending_retry, "large overlay must span frames");
+        assert!(!cache.entries.is_empty());
+        assert!(output.len() <= MAX_FRAME);
+        for _ in 0..8 {
+            if !cache.pending_retry {
+                break;
+            }
+            output.clear();
+            cache
+                .render(window_id, panes, cell, 204, (0, 0), &mut output)
+                .unwrap();
+            assert!(output.len() <= MAX_FRAME);
+        }
+        assert!(!cache.pending_retry);
+        assert!(cache.entries.len() > 1);
+        let ids: Vec<_> = cache.entries.iter().map(|entry| entry.image_id).collect();
+        assert_eq!(
+            ids.iter().copied().collect::<BTreeSet<_>>().len(),
+            ids.len()
+        );
+        let offsets: BTreeSet<_> = cache
+            .entries
+            .iter()
+            .map(|entry| (entry.column_offset, entry.row_offset))
+            .collect();
+        assert_eq!(offsets.len(), ids.len());
+
+        output.clear();
+        cache
+            .render(window_id, panes, cell, 204, (0, 0), &mut output)
+            .unwrap();
+        assert!(output.is_empty(), "unchanged tiles must not be resent");
+        cache.clear(&mut output).unwrap();
+        let deletes: Vec<_> = output.into();
+        for id in ids {
+            let command = format!("\x1b_Ga=d,d=I,i={id},q=2\x1b\\");
+            assert!(
+                deletes
+                    .windows(command.len())
+                    .any(|bytes| bytes == command.as_bytes())
+            );
+        }
+        assert!(cache.entries.is_empty());
     }
 
     #[test]

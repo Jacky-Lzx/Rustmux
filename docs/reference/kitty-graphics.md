@@ -305,12 +305,16 @@ It validates one decoded RGBA image before writing, then streams `a=T,f=32`
 direct-data APCs with a nonzero image ID, requested `z`, `C=1`, and `q=2`.
 Each Base64 chunk is at most 4096 bytes; all continuation APCs carry only
 `m`. The encoder itself does not manage replacement/deletion; the runtime
-calls it only after preflighting the remaining 16 MiB frame budget. An image
-too large for that frame is skipped. Before preflight, the runtime crops
+calls it only after preflighting the remaining 16 MiB frame budget. Before
+preflight, the runtime crops
 transparent margins from each composed band to the smallest cell-aligned
 rectangle containing visible pixels, preserving its pane-relative origin.
 This avoids charging empty pane space against the frame budget, especially in
-large outer windows. A failed write may leave a partial
+large outer windows. If a cropped band still exceeds one frame, the runtime
+splits it into cell-aligned placements of at most 8 MiB raw RGBA each. It
+uploads missing tiles over successive frames and deletes every owned tile ID
+when the band changes or clears. A tile that cannot fit by itself is skipped.
+A failed write may leave a partial
 transfer. The chunk format follows the
 [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
 
@@ -391,8 +395,8 @@ composites and displays all three image bands for visible panes. It uses
 representative outer z-values below the background boundary, below text, and
 above text while preserving source-image order inside each band. Output is
 bounded by the frame queue; unchanged image revisions are not retransmitted.
-A band that fits an empty frame but misses the current frame budget is retried
-on the next frame without resending bands that already succeeded.
+A band or tile that fits an empty frame but misses the current frame budget is
+retried on the next frame without resending uploads that already succeeded.
 Switching windows, moving/resizing panes, deleting placements, or opening an
 overlay removes the runtime-owned images. Unknown/unsupported terminals and
 inexact cell sizes receive no image commands. Scrollback images, unsupported
