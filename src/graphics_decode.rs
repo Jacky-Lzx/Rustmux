@@ -111,7 +111,7 @@ impl StoredImage {
         if self.format != ImageFormat::Png {
             return Err(DecodeError::UnsupportedPng);
         }
-        decode_png_sampled(self, 1, 1, None).map(|(dimensions, _)| dimensions)
+        decode_png_sampled(self, 1, 1, None, None).map(|(dimensions, _)| dimensions)
     }
 
     /// Check a compressed raw transfer through its last byte without
@@ -211,10 +211,50 @@ impl StoredImage {
             layout.destination.width,
             layout.destination.height,
             Some(layout.source),
+            None,
         )
         .map_err(StreamPngError::Decode)?;
         Ok(ResampledPlacement {
             destination: layout.destination,
+            pixels: image.pixels,
+        })
+    }
+
+    /// Sample only a visible rectangle of the full PNG destination while
+    /// retaining the original pixel-center coordinates for nearest sampling.
+    pub fn resample_png_placement_region(
+        &self,
+        layout: PlacementPixelLayout,
+        region: PixelRect,
+    ) -> Result<ResampledPlacement, StreamPngError> {
+        if self.format != ImageFormat::Png {
+            return Err(StreamPngError::Decode(DecodeError::UnsupportedPng));
+        }
+        if !valid_stream_layout(layout) {
+            return Err(StreamPngError::Resample(ResampleError::InvalidLayout));
+        }
+        let relative = PixelRect {
+            x: region
+                .x
+                .checked_sub(layout.destination.x)
+                .ok_or(StreamPngError::Resample(ResampleError::InvalidLayout))?,
+            y: region
+                .y
+                .checked_sub(layout.destination.y)
+                .ok_or(StreamPngError::Resample(ResampleError::InvalidLayout))?,
+            width: region.width,
+            height: region.height,
+        };
+        let (_, image) = decode_png_sampled(
+            self,
+            layout.destination.width,
+            layout.destination.height,
+            Some(layout.source),
+            Some(relative),
+        )
+        .map_err(StreamPngError::Decode)?;
+        Ok(ResampledPlacement {
+            destination: region,
             pixels: image.pixels,
         })
     }
@@ -706,7 +746,7 @@ fn decode_png_thumbnail(
     target_width: u32,
     target_height: u32,
 ) -> Result<DecodedImage, DecodeError> {
-    decode_png_sampled(image, target_width, target_height, None).map(|(_, decoded)| decoded)
+    decode_png_sampled(image, target_width, target_height, None, None).map(|(_, decoded)| decoded)
 }
 
 fn decode_png_sampled(
@@ -714,8 +754,26 @@ fn decode_png_sampled(
     target_width: u32,
     target_height: u32,
     source_crop: Option<PixelRect>,
+    target_region: Option<PixelRect>,
 ) -> Result<((u32, u32), DecodedImage), DecodeError> {
-    let output_size = decoded_size(target_width, target_height)?;
+    let region = target_region.unwrap_or(PixelRect {
+        x: 0,
+        y: 0,
+        width: target_width,
+        height: target_height,
+    });
+    let output_size = decoded_size(region.width, region.height)?;
+    if region
+        .x
+        .checked_add(region.width)
+        .is_none_or(|end| end > target_width)
+        || region
+            .y
+            .checked_add(region.height)
+            .is_none_or(|end| end > target_height)
+    {
+        return Err(DecodeError::InvalidDimensions);
+    }
     let mut decoder = Decoder::new_with_limits(
         Cursor::new(image.data.as_slice()),
         Limits {
@@ -776,7 +834,7 @@ fn decode_png_sampled(
         return Err(DecodeError::OutputLimit);
     }
     let mut pixels = vec![0; output_size];
-    let target_stride = usize::try_from(target_width).unwrap() * 4;
+    let target_stride = usize::try_from(region.width).unwrap() * 4;
     let mut target_y = 0usize;
     for source_y in 0..height {
         let row = reader
@@ -787,13 +845,24 @@ fn decode_png_sampled(
         if source_row.len() != row_len {
             return Err(DecodeError::InvalidData);
         }
-        while target_y < usize::try_from(target_height).unwrap()
-            && source.y + nearest_sample(target_y, source.height, target_height) == source_y
+        while target_y < usize::try_from(region.height).unwrap()
+            && source.y
+                + nearest_sample(
+                    usize::try_from(region.y).unwrap() + target_y,
+                    source.height,
+                    target_height,
+                )
+                == source_y
         {
             let output_row = &mut pixels[target_y * target_stride..(target_y + 1) * target_stride];
             for (target_x, rgba) in output_row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
                 let source_x = usize::try_from(
-                    source.x + nearest_sample(target_x, source.width, target_width),
+                    source.x
+                        + nearest_sample(
+                            usize::try_from(region.x).unwrap() + target_x,
+                            source.width,
+                            target_width,
+                        ),
                 )
                 .unwrap();
                 let offset = source_x * channels;
@@ -809,15 +878,15 @@ fn decode_png_sampled(
             target_y += 1;
         }
     }
-    if target_y != usize::try_from(target_height).unwrap() {
+    if target_y != usize::try_from(region.height).unwrap() {
         return Err(DecodeError::InvalidData);
     }
     reader.finish().map_err(|_| DecodeError::InvalidData)?;
     Ok((
         (width, height),
         DecodedImage {
-            width: target_width,
-            height: target_height,
+            width: region.width,
+            height: region.height,
             pixels,
         },
     ))
@@ -1137,6 +1206,36 @@ mod tests {
             }),
             Err(StreamPngError::Decode(DecodeError::InvalidData))
         );
+        let layout = PlacementPixelLayout {
+            source: PixelRect {
+                x: 0,
+                y: 0,
+                width: 1,
+                height: 1,
+            },
+            cell_bounds: PixelSize {
+                width: 1,
+                height: 1,
+            },
+            destination: PixelRect {
+                x: 0,
+                y: 0,
+                width: 4096,
+                height: 4096,
+            },
+        };
+        assert_eq!(
+            image.resample_png_placement_region(
+                layout,
+                PixelRect {
+                    x: 0,
+                    y: 0,
+                    width: 1,
+                    height: 1,
+                }
+            ),
+            Err(StreamPngError::Decode(DecodeError::InvalidData))
+        );
     }
 
     #[test]
@@ -1192,6 +1291,47 @@ mod tests {
                 1, 1, 7, 255, 1, 1, 7, 255, 2, 1, 7, 255, 2, 1, 7, 255, 1, 2, 7, 255, 1, 2, 7, 255,
                 2, 2, 7, 255, 2, 2, 7, 255,
             ]
+        );
+        let region = PixelRect {
+            x: 6,
+            y: 8,
+            width: 2,
+            height: 1,
+        };
+        let clipped = image.resample_png_placement_region(layout, region).unwrap();
+        assert_eq!(clipped.destination, region);
+        assert_eq!(clipped.pixels, [1, 2, 7, 255, 2, 2, 7, 255]);
+        assert_eq!(
+            image.resample_png_placement_region(layout, PixelRect { x: 8, ..region }),
+            Err(StreamPngError::Decode(DecodeError::InvalidDimensions))
+        );
+        let huge = PlacementPixelLayout {
+            destination: PixelRect {
+                x: 0,
+                y: 0,
+                width: 4096,
+                height: 4096,
+            },
+            ..layout
+        };
+        assert_eq!(
+            image.resample_png_placement(huge),
+            Err(StreamPngError::Decode(DecodeError::OutputLimit))
+        );
+        assert_eq!(
+            image
+                .resample_png_placement_region(
+                    huge,
+                    PixelRect {
+                        x: 3072,
+                        y: 3072,
+                        width: 2,
+                        height: 2,
+                    }
+                )
+                .unwrap()
+                .pixels,
+            [2, 2, 7, 255].repeat(4)
         );
         assert_eq!(
             image.resample_png_placement(PlacementPixelLayout {

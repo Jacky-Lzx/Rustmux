@@ -105,6 +105,10 @@ upscaling, without expanding the whole source image. Both paths validate the
 entire PNG, including its tail. Runtime upload now falls back to this bounded
 validation when full RGBA expansion exceeds 32 MiB, and regular and virtual
 placements use crop-aware streaming when such a validated PNG is composed.
+Regular placements also sample only the viewport-visible part of an oversized
+PNG source or destination, so a small on-screen fragment does not require a
+full destination raster. PNG validation still reads through the final row and
+tail, including when only a fragment is visible.
 Large `o=z` RGB/RGBA transfers also remain compressed in the pane store.
 Runtime upload validates their complete zlib stream, and a regular placement
 samples only its visible source-backed destination pixels; invisible pixels

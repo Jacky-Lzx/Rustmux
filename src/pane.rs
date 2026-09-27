@@ -1144,6 +1144,43 @@ mod io_tests {
     }
 
     #[test]
+    fn runtime_samples_only_visible_part_of_oversized_png_destination() {
+        let mut source = Vec::new();
+        for y in 0..4u8 {
+            for x in 0..4u8 {
+                source.extend_from_slice(&[x, y, 7, 255]);
+            }
+        }
+        let mut png = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut png, 4, 4);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().unwrap();
+            writer.write_image_data(&source).unwrap();
+            writer.finish().unwrap();
+        }
+        let mut pane = Pane::spawn("/bin/sh", 4, 4).unwrap();
+        let cell = CellPixelSize::new(1, 1).unwrap();
+        let mut replies = Vec::new();
+        let command = format!(
+            "\x1b_Ga=T,f=100,i=11,c=4096,r=4096,C=1;{}\x1b\\",
+            STANDARD.encode(png)
+        );
+        pane.process_output_for_runtime(
+            command.as_bytes(),
+            &mut |reply| replies.extend_from_slice(reply),
+            Some(cell),
+            true,
+        );
+        assert_eq!(replies, b"\x1b_Gi=11;OK\x1b\\");
+        let snapshot = pane.compose_image_snapshot(cell).unwrap();
+        assert_eq!(snapshot.pixels.len(), 4 * 4 * 4);
+        assert_eq!(&snapshot.pixels[..4], &[0, 0, 7, 255]);
+        assert_eq!(&snapshot.pixels[(4 * 4 - 1) * 4..], &[0, 0, 7, 255]);
+    }
+
+    #[test]
     fn runtime_streams_large_compressed_rgba_without_expanding_the_stored_image() {
         use flate2::{Compression, write::ZlibEncoder};
 

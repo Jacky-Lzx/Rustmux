@@ -325,22 +325,49 @@ fn collect_visible_clips(
         let image = store
             .get(placement.image_id)
             .ok_or(SnapshotError::MissingImage)?;
-        let visible = if matches!(image.format, ImageFormat::RgbZlib | ImageFormat::RgbaZlib)
-            && let Some((width, height)) = store.known_image_dimensions(placement.image_id)
+        let streamed_layout = if matches!(
+            image.format,
+            ImageFormat::RgbZlib | ImageFormat::RgbaZlib | ImageFormat::Png
+        ) && let Some((width, height)) =
+            store.known_image_dimensions(placement.image_id)
         {
             let layout = geometry
                 .pixel_layout(width, height, cell)
                 .ok_or(SnapshotError::InvalidLayout)?;
+            let oversized_png = image.format == ImageFormat::Png
+                && (u128::from(width) * u128::from(height) * 4 > MAX_DECODED_IMAGE_BYTES as u128
+                    || u128::from(layout.destination.width)
+                        * u128::from(layout.destination.height)
+                        * 4
+                        > MAX_DECODED_IMAGE_BYTES as u128);
+            if image.format != ImageFormat::Png || oversized_png {
+                Some(layout)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let visible = if let Some(layout) = streamed_layout {
             if let Some((region, destination)) =
                 visible_placement_region(layout.destination, geometry, cell, viewport)
                     .map_err(SnapshotError::Clip)?
             {
-                let pixels = image
-                    .resample_zlib_placement_region(layout, region)
-                    .map_err(|error| match error {
-                        StreamZlibError::Decode(error) => SnapshotError::Decode(error),
-                        StreamZlibError::Resample(error) => SnapshotError::Resample(error),
-                    })?;
+                let pixels = match image.format {
+                    ImageFormat::RgbZlib | ImageFormat::RgbaZlib => image
+                        .resample_zlib_placement_region(layout, region)
+                        .map_err(|error| match error {
+                            StreamZlibError::Decode(error) => SnapshotError::Decode(error),
+                            StreamZlibError::Resample(error) => SnapshotError::Resample(error),
+                        })?,
+                    ImageFormat::Png => image
+                        .resample_png_placement_region(layout, region)
+                        .map_err(|error| match error {
+                            StreamPngError::Decode(error) => SnapshotError::Decode(error),
+                            StreamPngError::Resample(error) => SnapshotError::Resample(error),
+                        })?,
+                    ImageFormat::Rgb | ImageFormat::Rgba => unreachable!(),
+                };
                 Some(ClippedPlacement {
                     destination,
                     pixels: pixels.pixels,
