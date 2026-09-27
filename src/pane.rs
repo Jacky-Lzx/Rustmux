@@ -1181,6 +1181,40 @@ mod io_tests {
     }
 
     #[test]
+    fn runtime_samples_visible_placeholder_without_full_virtual_png_raster() {
+        let mut png = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut png, 4, 4);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().unwrap();
+            writer.write_image_data(&[3, 5, 7, 255].repeat(16)).unwrap();
+            writer.finish().unwrap();
+        }
+        let mut pane = Pane::spawn("/bin/sh", 4, 4).unwrap();
+        let cell = CellPixelSize::new(1, 1).unwrap();
+        let upload = format!("\x1b_Ga=t,f=100,i=12;{}\x1b\\", STANDARD.encode(png));
+        pane.process_output_for_runtime(upload.as_bytes(), &mut |_| {}, Some(cell), true);
+        let mut replies = Vec::new();
+        pane.process_output_for_runtime(
+            b"\x1b_Ga=p,i=12,p=1,U=1,c=4096,r=4096\x1b\\",
+            &mut |reply| replies.extend_from_slice(reply),
+            Some(cell),
+            true,
+        );
+        assert_eq!(replies, b"\x1b_Gi=12,p=1;OK\x1b\\");
+        pane.process_output_for_runtime(
+            "\x1b[2;2H\x1b[38;5;12m\u{10eeee}\u{0305}\u{0305}".as_bytes(),
+            &mut |_| {},
+            Some(cell),
+            true,
+        );
+        let snapshot = pane.compose_image_snapshot(cell).unwrap();
+        assert_eq!(&snapshot.pixels[..4], &[0, 0, 0, 0]);
+        assert_eq!(&snapshot.pixels[(4 + 1) * 4..(4 + 2) * 4], &[3, 5, 7, 255]);
+    }
+
+    #[test]
     fn runtime_streams_large_compressed_rgba_without_expanding_the_stored_image() {
         use flate2::{Compression, write::ZlibEncoder};
 
@@ -1242,6 +1276,23 @@ mod io_tests {
         let snapshot = pane.compose_image_snapshot(cell).unwrap();
         assert_eq!(&snapshot.pixels[..4], &[255, 0, 0, 255]);
         assert_eq!(&snapshot.pixels[4 * 4..4 * 4 + 4], &[0, 0, 255, 255]);
+
+        replies.clear();
+        pane.process_output_for_runtime(
+            b"\x1b_Ga=p,i=9,p=2,U=1,c=2900,r=2900\x1b\\",
+            &mut |reply| replies.extend_from_slice(reply),
+            Some(cell),
+            true,
+        );
+        assert_eq!(replies, b"\x1b_Gi=9,p=2;OK\x1b\\");
+        pane.process_output_for_runtime(
+            "\x1b[4;4H\x1b[38;5;9m\u{10eeee}\u{0305}\u{0305}".as_bytes(),
+            &mut |_| {},
+            Some(cell),
+            true,
+        );
+        let snapshot = pane.compose_image_snapshot(cell).unwrap();
+        assert_eq!(&snapshot.pixels[(4 * 4 - 1) * 4..], &[255, 0, 0, 255]);
 
         let revision = pane.image_store().revision();
         *compressed.last_mut().unwrap() ^= 1;

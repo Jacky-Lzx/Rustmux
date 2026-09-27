@@ -443,6 +443,80 @@ fn collect_placeholder_clips(
             .or_insert(index);
         by_identity.entry((image_id, None)).or_insert(index);
     }
+    // Keep the usual single screen scan for small images. Only large or
+    // compressed virtual rasters need a prepass to find their visible cells.
+    let needs_bounded_raster = virtuals.iter().any(|placement| {
+        let Some(image) = store.get(placement.image_id) else {
+            return false;
+        };
+        if matches!(image.format, ImageFormat::RgbZlib | ImageFormat::RgbaZlib) {
+            return true;
+        }
+        if image.format != ImageFormat::Png {
+            return false;
+        }
+        let Some((width, height)) = store.known_image_dimensions(placement.image_id) else {
+            return false;
+        };
+        u128::from(width) * u128::from(height) * 4 > MAX_DECODED_IMAGE_BYTES as u128
+            || placement
+                .virtual_layout
+                .and_then(|layout| layout.pixel_layout(width, height, cell))
+                .is_some_and(|layout| {
+                    u128::from(layout.destination.width) * u128::from(layout.destination.height) * 4
+                        > MAX_DECODED_IMAGE_BYTES as u128
+                })
+    });
+    // Find the source-backed pixels actually referenced by this screen before
+    // allocating a large virtual raster. A large image may expose only a
+    // handful of placeholder cells in the viewport.
+    let mut known_layouts = vec![None; virtuals.len()];
+    let mut requested_regions: Vec<Option<PixelRect>> = vec![None; virtuals.len()];
+    if needs_bounded_raster {
+        for row in 0..rows {
+            for reference in decode_row(screen.row(row).unwrap()).into_iter().flatten() {
+                let Some(&index) = by_identity.get(&(reference.image_id, reference.placement_id))
+                else {
+                    continue;
+                };
+                let placement = virtuals[index];
+                let layout = placement.virtual_layout.unwrap();
+                if !include_z(layout.z_index)
+                    || !layout.may_contain_cell(reference.row, reference.column)
+                {
+                    continue;
+                }
+                if known_layouts[index].is_none()
+                    && let Some((width, height)) = store.known_image_dimensions(placement.image_id)
+                {
+                    known_layouts[index] = Some(
+                        layout
+                            .pixel_layout(width, height, cell)
+                            .ok_or(SnapshotError::InvalidLayout)?,
+                    );
+                }
+                let Some(pixel_layout) = known_layouts[index] else {
+                    continue;
+                };
+                let columns = pixel_layout.cell_bounds.width / u32::from(cell.width());
+                let rows = pixel_layout.cell_bounds.height / u32::from(cell.height());
+                if reference.row >= rows || reference.column >= columns {
+                    continue;
+                }
+                if let Some(region) = virtual_cell_region(
+                    pixel_layout.destination,
+                    reference.row,
+                    reference.column,
+                    cell,
+                )? {
+                    requested_regions[index] = Some(match requested_regions[index] {
+                        Some(previous) => union_region(previous, region),
+                        None => region,
+                    });
+                }
+            }
+        }
+    }
     let mut extents = vec![None; virtuals.len()];
     let mut rasters: Vec<Option<ResampledPlacement>> = (0..virtuals.len()).map(|_| None).collect();
     let mut raster_bytes = 0usize;
@@ -478,11 +552,51 @@ fn collect_placeholder_clips(
             {
                 continue;
             }
+            if known_layouts[index].is_some() && requested_regions[index].is_none() {
+                continue;
+            }
             if rasters[index].is_none() {
-                let (pixel_layout, raster) =
+                let image = store
+                    .get(placement.image_id)
+                    .ok_or(SnapshotError::MissingImage)?;
+                let streamed = known_layouts[index].zip(requested_regions[index]).filter(
+                    |(pixel_layout, _)| {
+                        matches!(image.format, ImageFormat::RgbZlib | ImageFormat::RgbaZlib)
+                            || (image.format == ImageFormat::Png
+                                && (u128::from(pixel_layout.destination.width)
+                                    * u128::from(pixel_layout.destination.height)
+                                    * 4
+                                    > MAX_DECODED_IMAGE_BYTES as u128
+                                    || store
+                                        .known_image_dimensions(placement.image_id)
+                                        .is_some_and(|(width, height)| {
+                                            u128::from(width) * u128::from(height) * 4
+                                                > MAX_DECODED_IMAGE_BYTES as u128
+                                        })))
+                    },
+                );
+                let (pixel_layout, raster) = if let Some((pixel_layout, region)) = streamed {
+                    let raster = match image.format {
+                        ImageFormat::RgbZlib | ImageFormat::RgbaZlib => image
+                            .resample_zlib_placement_region(pixel_layout, region)
+                            .map_err(|error| match error {
+                                StreamZlibError::Decode(error) => SnapshotError::Decode(error),
+                                StreamZlibError::Resample(error) => SnapshotError::Resample(error),
+                            })?,
+                        ImageFormat::Png => image
+                            .resample_png_placement_region(pixel_layout, region)
+                            .map_err(|error| match error {
+                                StreamPngError::Decode(error) => SnapshotError::Decode(error),
+                                StreamPngError::Resample(error) => SnapshotError::Resample(error),
+                            })?,
+                        ImageFormat::Rgb | ImageFormat::Rgba => unreachable!(),
+                    };
+                    (pixel_layout, raster)
+                } else {
                     rasterize_placement(store, placement.image_id, cell, |width, height, cell| {
                         layout.pixel_layout(width, height, cell)
-                    })?;
+                    })?
+                };
                 let columns = pixel_layout.cell_bounds.width / u32::from(cell.width());
                 let rows = pixel_layout.cell_bounds.height / u32::from(cell.height());
                 extents[index] = Some((columns, rows));
@@ -528,21 +642,10 @@ fn clip_virtual_cell(
     let source_left = source_column.checked_mul(cell_width).ok_or_else(invalid)?;
     let source_top = source_row.checked_mul(cell_height).ok_or_else(invalid)?;
     let content = raster.destination;
-    let left = source_left.max(content.x);
-    let top = source_top.max(content.y);
-    let right = source_left
-        .checked_add(cell_width)
-        .ok_or_else(invalid)?
-        .min(content.x.checked_add(content.width).ok_or_else(invalid)?);
-    let bottom = source_top
-        .checked_add(cell_height)
-        .ok_or_else(invalid)?
-        .min(content.y.checked_add(content.height).ok_or_else(invalid)?);
-    if left >= right || top >= bottom {
+    let Some(region) = virtual_cell_region(content, source_row, source_column, cell)? else {
         return Ok(None);
-    }
-    let width = right - left;
-    let height = bottom - top;
+    };
+    let (left, top, width, height) = (region.x, region.y, region.width, region.height);
     let x = u32::try_from(screen_column)
         .ok()
         .and_then(|column| column.checked_mul(cell_width))
@@ -581,6 +684,47 @@ fn clip_virtual_cell(
         },
         pixels,
     }))
+}
+
+fn virtual_cell_region(
+    content: PixelRect,
+    source_row: u32,
+    source_column: u32,
+    cell: CellPixelSize,
+) -> Result<Option<PixelRect>, SnapshotError> {
+    let invalid = || SnapshotError::InvalidLayout;
+    let cell_width = u32::from(cell.width());
+    let cell_height = u32::from(cell.height());
+    let left = source_column.checked_mul(cell_width).ok_or_else(invalid)?;
+    let top = source_row.checked_mul(cell_height).ok_or_else(invalid)?;
+    let right = left.checked_add(cell_width).ok_or_else(invalid)?;
+    let bottom = top.checked_add(cell_height).ok_or_else(invalid)?;
+    let content_right = content.x.checked_add(content.width).ok_or_else(invalid)?;
+    let content_bottom = content.y.checked_add(content.height).ok_or_else(invalid)?;
+    let left = left.max(content.x);
+    let top = top.max(content.y);
+    let right = right.min(content_right);
+    let bottom = bottom.min(content_bottom);
+    if left >= right || top >= bottom {
+        return Ok(None);
+    }
+    Ok(Some(PixelRect {
+        x: left,
+        y: top,
+        width: right - left,
+        height: bottom - top,
+    }))
+}
+
+fn union_region(left: PixelRect, right: PixelRect) -> PixelRect {
+    let x = left.x.min(right.x);
+    let y = left.y.min(right.y);
+    PixelRect {
+        x,
+        y,
+        width: (left.x + left.width).max(right.x + right.width) - x,
+        height: (left.y + left.height).max(right.y + right.height) - y,
+    }
 }
 
 #[cfg(test)]
@@ -630,6 +774,37 @@ mod placeholder_tests {
             clip_virtual_cell(&raster, 1, 0, 0, 0, cell)
                 .unwrap()
                 .is_none()
+        );
+        let bounded = ResampledPlacement {
+            destination: PixelRect {
+                x: 2,
+                y: 0,
+                width: 1,
+                height: 2,
+            },
+            pixels: vec![2, 0, 0, 255, 4, 0, 0, 255],
+        };
+        assert_eq!(
+            clip_virtual_cell(&bounded, 0, 1, 2, 3, cell)
+                .unwrap()
+                .unwrap(),
+            right
+        );
+        assert!(
+            clip_virtual_cell(&bounded, 0, 0, 1, 0, cell)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            union_region(
+                virtual_cell_region(raster.destination, 0, 0, cell)
+                    .unwrap()
+                    .unwrap(),
+                virtual_cell_region(raster.destination, 0, 1, cell)
+                    .unwrap()
+                    .unwrap(),
+            ),
+            raster.destination
         );
     }
 }
