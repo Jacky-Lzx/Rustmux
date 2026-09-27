@@ -44,6 +44,34 @@ fn installed_kitten_icat_displays_png_through_rustmux() {
     print!("{}", String::from_utf8_lossy(&output.stdout));
 }
 
+/// Optional end-to-end check for a caller-supplied image. Unlike the fixed
+/// fixtures, this test runs only when RUSTMUX_COMPAT_IMAGE names a file.
+#[test]
+#[ignore = "set RUSTMUX_COMPAT_IMAGE and run cargo compat"]
+fn installed_kitten_icat_displays_user_image_through_rustmux() {
+    let Some(image) = std::env::var_os("RUSTMUX_COMPAT_IMAGE") else {
+        println!("SKIP: set RUSTMUX_COMPAT_IMAGE to test a specific image");
+        return;
+    };
+    let output = std::process::Command::new("python3")
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/kitten_compat.py"
+        ))
+        .arg(env!("CARGO_BIN_EXE_rustmux"))
+        .arg(image)
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .output()
+        .expect("Python 3 is required for the optional image PTY smoke test");
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    print!("{}", String::from_utf8_lossy(&output.stdout));
+}
+
 /// Large synthetic PNG through a named PTY, excluded from regular CI because
 /// it captures and verifies tens of MiB of outer-terminal graphics output.
 #[test]

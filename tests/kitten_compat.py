@@ -18,6 +18,7 @@ import termios
 import zlib
 from pathlib import Path
 
+from kitty_large_overlay_compat import decode_tiles
 from yazi_compat import (
     FIRST_COLORS,
     assert_fixture_pixels,
@@ -60,6 +61,7 @@ def run_case(
     session_name=None,
     terminal_size=(24, 80, 960, 480),
     timeout=20,
+    verify_complete_tiles=False,
 ):
     config.mkdir()
     master, slave = os.openpty()
@@ -109,29 +111,63 @@ def run_case(
             wait_for(
                 master,
                 output,
-                complete_overlay,
+                lambda data: complete_overlay(data)
+                or (verify_complete_tiles and b"KITTEN_COMPAT_READY>" in data),
                 process,
                 timeout,
                 "complete composed kitten image overlay",
             )
+            if verify_complete_tiles and not complete_overlay(output):
+                # The shell can finish before an outer render flushes. Give
+                # it a short final chance, then report the missing upload.
+                wait_for(
+                    master,
+                    output,
+                    complete_overlay,
+                    process,
+                    min(timeout, 10),
+                    "outer Kitty image after kitten returned",
+                )
         except AssertionError as error:
-            plain = bytes(output).decode("utf-8", errors="replace")
             graphics_count = output.count(b"\x1b_G")
-            raise AssertionError(
-                f"{error}; captured {len(output)} bytes, "
-                f"{graphics_count} graphics commands; "
-                f"first output: {plain[:1000]!r}"
-            ) from error
+            reason = str(error).splitlines()[0]
+            if verify_complete_tiles and graphics_count == 0 and b"KITTEN_COMPAT_READY>" in output:
+                reason = "kitten returned to the shell without an outer Kitty image upload"
+            details = "" if verify_complete_tiles else (
+                f"; first output: {bytes(output[:250]).decode('utf-8', errors='replace')!r}"
+            )
+            failure = AssertionError(
+                f"{reason}; captured {len(output)} bytes, "
+                f"{graphics_count} graphics commands{details}"
+            )
+            if verify_complete_tiles:
+                raise failure from None
+            raise failure from error
         assert "\U0010eeee".encode() not in output, (
             "child placeholder leaked to outer terminal"
         )
-        _, width, height, pixels = decode_outer_rgba_overlay(output)
-        if expected_colors is None:
-            assert any(pixels[index] for index in range(3, len(pixels), 4)), (
-                "multi-chunk image had no visible pixels"
+        if verify_complete_tiles:
+            wait_for(
+                master,
+                output,
+                lambda data: b"KITTEN_COMPAT_READY>" in data,
+                process,
+                timeout,
+                "shell prompt after complete image upload",
             )
+            tiles = decode_tiles(output)
+            assert tiles, "no complete Rustmux-owned Kitty image was uploaded"
+            assert all(tile["width"] > 0 and tile["height"] > 0 for tile in tiles)
+            formats = ",".join(sorted({tile["format"].decode("ascii") for tile in tiles}))
+            print(f"PASS: {len(tiles)} complete outer Kitty image tiles parsed (f={formats})")
         else:
-            assert_fixture_pixels(width, height, pixels, expected_colors)
+            _, width, height, pixels = decode_outer_rgba_overlay(output)
+            if expected_colors is None:
+                assert any(pixels[index] for index in range(3, len(pixels), 4)), (
+                    "multi-chunk image had no visible pixels"
+                )
+            else:
+                assert_fixture_pixels(width, height, pixels, expected_colors)
         print(f"PASS: installed kitten icat {label} composited")
     finally:
         os.close(master)
@@ -147,16 +183,36 @@ def run_case(
                 except subprocess.TimeoutExpired:
                     pass
         if session_name:
-            subprocess.run([binary, "kill", session_name], check=True, capture_output=True)
+            # A failed startup may leave no named session to kill. Cleanup
+            # must not hide the probe or image error that caused the failure.
+            subprocess.run([binary, "kill", session_name], check=False, capture_output=True)
 
 
-def main(binary):
+def main(binary, custom_image=None):
     kitten = shutil.which("kitten")
     if kitten is None:
+        if custom_image is not None:
+            raise AssertionError("RUSTMUX_COMPAT_IMAGE requires an installed kitten")
         print("SKIP: kitten is not installed")
         return
     with tempfile.TemporaryDirectory(prefix="rustmux-kitten-compat-") as temporary:
         root = Path(temporary)
+        if custom_image is not None:
+            image = Path(custom_image)
+            assert image.is_file(), "RUSTMUX_COMPAT_IMAGE must name an existing file"
+            run_case(
+                binary,
+                kitten,
+                image,
+                root / "custom-config",
+                "",
+                "user-provided image",
+                session_name=f"compatimage{os.getpid()}",
+                terminal_size=(61, 215, 3655, 2013),
+                timeout=60,
+                verify_complete_tiles=True,
+            )
+            return
         small = root / "small.png"
         fixture_png(small, FIRST_COLORS)
         run_case(
@@ -192,4 +248,4 @@ def main(binary):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1])
+    main(sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else None)

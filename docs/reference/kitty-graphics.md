@@ -472,6 +472,15 @@ after text-grid or cell-pixel changes. If that size is unknown or exceeds the
 PTY's 16-bit pixel fields, both pixel fields remain zero. This smoke covers these
 PNG paths, not all `kitten icat` features.
 
+To test a specific local image after a viewer or image-format update, run
+`RUSTMUX_COMPAT_IMAGE=/absolute/path/to/image.png cargo compat`. Without that
+variable, the user-image case reports `SKIP`; when it is set, a missing file
+or missing `kitten` fails the test. It runs the real `kitten icat` command in
+a named Rustmux PTY, waits for the child shell to regain its prompt, and
+verifies every complete outer `f=32` or `f=100` tile. The image path is not
+stored in the repository. This remains a fake-Kitty PTY protocol check, not
+a claim that a particular GUI terminal displayed the pixels.
+
 `cargo compat` also runs a synthetic large-PNG smoke without requiring Kitty,
 Yazi, or another installed image viewer. A named Rustmux session receives the
 PNG through its child PTY; a fake Kitty-capable outer PTY captures the tiled
