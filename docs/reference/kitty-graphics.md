@@ -450,6 +450,13 @@ after text-grid or cell-pixel changes. If that size is unknown or exceeds the
 PTY's 16-bit pixel fields, both pixel fields remain zero. This smoke covers these
 PNG paths, not all `kitten icat` features.
 
+`cargo compat` also runs a synthetic large-PNG smoke without requiring Kitty,
+Yazi, or another installed image viewer. A named Rustmux session receives the
+PNG through its child PTY; a fake Kitty-capable outer PTY captures the tiled
+uploads. The test checks their cell-aligned positions, reconstructed height,
+sampled colors, unique image IDs, and all corresponding deletion commands.
+It is opt-in because it captures tens of MiB of outer-terminal output.
+
 A child running inside a pane may probe graphics with `a=q`. On a currently
 attached outer terminal whose Kitty graphics probe succeeded and whose physical
 cell size is exact, Rustmux replies to a completed, valid direct-data query
