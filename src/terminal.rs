@@ -605,6 +605,7 @@ struct KittyOverlay {
 
 struct KittyOverlays {
     entries: Vec<KittyOverlay>,
+    pending_delete: VecDeque<u32>,
     next_id: u32,
     pending_retry: bool,
 }
@@ -720,6 +721,7 @@ impl Default for KittyOverlays {
     fn default() -> Self {
         Self {
             entries: Vec::new(),
+            pending_delete: VecDeque::new(),
             next_id: 0x8000_0000,
             pending_retry: false,
         }
@@ -753,12 +755,12 @@ impl KittyOverlays {
             if unchanged {
                 self.entries.push(old);
             } else {
-                write!(
-                    FrameWriter(output),
-                    "\x1b_Ga=d,d=I,i={},q=2\x1b\\",
-                    old.image_id
-                )?;
+                self.pending_delete.push_back(old.image_id);
             }
+        }
+        self.flush_deletes(output)?;
+        if !self.pending_delete.is_empty() {
+            return Ok(());
         }
         for (id, rect) in visible {
             if !retry_missing
@@ -880,11 +882,21 @@ impl KittyOverlays {
     fn clear(&mut self, output: &mut VecDeque<u8>) -> io::Result<()> {
         self.pending_retry = false;
         for entry in self.entries.drain(..) {
-            write!(
-                FrameWriter(output),
-                "\x1b_Ga=d,d=I,i={},q=2\x1b\\",
-                entry.image_id
-            )?;
+            self.pending_delete.push_back(entry.image_id);
+        }
+        self.flush_deletes(output)?;
+        Ok(())
+    }
+
+    fn flush_deletes(&mut self, output: &mut VecDeque<u8>) -> io::Result<()> {
+        while let Some(&image_id) = self.pending_delete.front() {
+            let command = format!("\x1b_Ga=d,d=I,i={image_id},q=2\x1b\\");
+            if command.len() > MAX_FRAME - output.len() {
+                self.pending_retry = true;
+                break;
+            }
+            FrameWriter(output).write_all(command.as_bytes())?;
+            self.pending_delete.pop_front();
         }
         Ok(())
     }
@@ -3521,6 +3533,66 @@ mod tests {
     }
 
     #[test]
+    fn kitty_overlay_retries_invalidation_delete_when_frame_is_full() {
+        let cell = CellPixelSize::new(1, 1).unwrap();
+        let mut windows = Windows::default();
+        let window_id = windows
+            .create(
+                "delete retry".into(),
+                spawn_window(
+                    OsStr::new("/bin/sh"),
+                    None,
+                    4,
+                    4,
+                    crate::config::Notifications::default(),
+                    crate::config::DEFAULT_SCROLLBACK_LINES,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let panes = windows.active_mut().unwrap().content_mut();
+        panes.active_mut().process_output_with_image_store_sized(
+            b"\x1b_Ga=T,f=32,s=1,v=1,i=7,p=1,c=1,r=1,C=1;AQIDBA==\x1b\\",
+            &mut |_| {},
+            cell,
+        );
+        let mut cache = KittyOverlays::default();
+        let mut output = VecDeque::new();
+        cache
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        assert_eq!(cache.entries.len(), 1);
+        panes.active_mut().image_store_mut().clear();
+        panes.active_mut().process_output_with_image_store_sized(
+            b"\x1b_Ga=T,f=32,s=1,v=1,i=8,p=1,c=1,r=1,C=1;AQIDBA==\x1b\\",
+            &mut |_| {},
+            cell,
+        );
+        let delete = b"\x1b_Ga=d,d=I,i=2147483648,q=2\x1b\\";
+        output = VecDeque::from(vec![0; MAX_FRAME - delete.len() + 1]);
+        cache
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        assert_eq!(cache.pending_delete.front(), Some(&0x8000_0000));
+        assert!(cache.pending_retry);
+        assert!(cache.entries.is_empty());
+        output.clear();
+        cache
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        let refreshed: Vec<_> = output.into();
+        assert!(refreshed.starts_with(delete));
+        assert!(
+            refreshed
+                .windows(b"i=2147483649,z=0".len())
+                .any(|bytes| bytes == b"i=2147483649,z=0")
+        );
+        assert!(cache.pending_delete.is_empty());
+        assert!(!cache.pending_retry);
+        assert_eq!(cache.entries.len(), 1);
+    }
+
+    #[test]
     fn kitty_overlay_follows_virtual_placeholder_appearance_and_erasure() {
         let cell = CellPixelSize::new(1, 1).unwrap();
         let mut windows = Windows::default();
@@ -3889,8 +3961,20 @@ mod tests {
             .render(window_id, panes, cell, 204, (0, 0), &mut output)
             .unwrap();
         assert!(output.is_empty(), "unchanged tiles must not be resent");
+        let first_delete = format!("\x1b_Ga=d,d=I,i={},q=2\x1b\\", ids[0]);
+        output = VecDeque::from(vec![0; MAX_FRAME - first_delete.len()]);
         cache.clear(&mut output).unwrap();
-        let deletes: Vec<_> = output.into();
+        assert!(cache.pending_retry);
+        assert_eq!(cache.pending_delete.len(), ids.len() - 1);
+        let mut deletes: Vec<_> = output
+            .into_iter()
+            .skip(MAX_FRAME - first_delete.len())
+            .collect();
+        let mut output = VecDeque::new();
+        cache.clear(&mut output).unwrap();
+        deletes.extend(output);
+        assert!(cache.pending_delete.is_empty());
+        assert!(!cache.pending_retry);
         for id in ids {
             let command = format!("\x1b_Ga=d,d=I,i={id},q=2\x1b\\");
             assert!(

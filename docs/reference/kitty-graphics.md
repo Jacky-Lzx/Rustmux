@@ -313,9 +313,10 @@ This avoids charging empty pane space against the frame budget, especially in
 large outer windows. If a cropped band still exceeds one frame, the runtime
 splits it into cell-aligned placements of at most 8 MiB raw RGBA each. It
 uploads missing tiles over successive frames and deletes every owned tile ID
-when the band changes or clears. A tile that cannot fit by itself is skipped.
-A failed write may leave a partial
-transfer. The chunk format follows the
+when the band changes or clears. Deletions are queued ahead of new uploads if
+the current frame has no room; their IDs remain tracked until the deletion
+commands have been written in later frames. A tile that cannot fit by itself
+is skipped. A failed write may leave a partial transfer. The chunk format follows the
 [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
 
 `kitty_rgba_placement_len` now preflights the exact encoded byte count,
