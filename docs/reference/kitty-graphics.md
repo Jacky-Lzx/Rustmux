@@ -425,6 +425,15 @@ terminal. It is excluded from normal
 absent, it reports `SKIP`. The smoke passed with Yazi 26.9.1, but only covers
 this PNG/Kitty preview path, not every Yazi feature or terminal.
 
+The same optional `cargo compat` target also runs an installed `kitten icat`
+smoke when `kitten` is on `PATH`. It uses a generated PNG, stream transfer,
+Unicode placeholders and an explicit `--use-window-size` argument, then checks
+the composed outer RGBA pixels. This proves that limited display path, not
+automatic window-size discovery: Rustmux currently sets the child PTY's pixel
+size fields to zero, and `kitten icat` without the explicit size reports that
+pixel dimensions are unavailable. Forwarding exact pane pixel dimensions to
+child PTYs is separate follow-up work.
+
 A child running inside a pane may probe graphics with `a=q`. On a currently
 attached outer terminal whose Kitty graphics probe succeeded and whose physical
 cell size is exact, Rustmux replies to a completed, valid direct-data query

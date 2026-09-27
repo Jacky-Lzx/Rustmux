@@ -119,7 +119,7 @@ def assert_fixture_pixels(width, height, pixels, colors):
                 cell = offset // 4
                 positions[name].append((cell % width, cell // width))
     for name, points in positions.items():
-        assert points, f"Yazi fixture's {name} pixel is missing from the outer image"
+        assert points, f"fixture's {name} pixel is missing from the outer image"
     upper_left, upper_right, lower_left, lower_right = positions.values()
     assert max(x for x, _ in upper_left) < min(x for x, _ in upper_right), (
         "top-row preview colors are out of order"
