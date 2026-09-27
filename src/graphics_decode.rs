@@ -5,8 +5,10 @@ use crate::graphics_store::{
     CellPixelSize, ImageFormat, PixelRect, PixelSize, PlacementGeometry, PlacementPixelLayout,
     SignedPixelPoint, StoredImage,
 };
+use crate::graphics_transfer::MAX_STREAMED_RAW_BYTES;
+use flate2::bufread::ZlibDecoder;
 use png::{BitDepth, ColorType, Decoder, Limits, Transformations};
-use std::io::Cursor;
+use std::io::{Cursor, Read};
 
 pub const MAX_DECODED_IMAGE_BYTES: usize = 32 * 1024 * 1024;
 pub const MAX_RESAMPLED_PLACEMENT_BYTES: usize = MAX_DECODED_IMAGE_BYTES;
@@ -58,10 +60,17 @@ pub enum StreamPngError {
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum StreamZlibError {
+    Decode(DecodeError),
+    Resample(ResampleError),
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum DecodeError {
     InvalidDimensions,
     OutputLimit,
     InvalidData,
+    UnsupportedFormat,
     UnsupportedPng,
 }
 
@@ -71,6 +80,13 @@ impl StoredImage {
     pub fn decode_rgba(&self) -> Result<DecodedImage, DecodeError> {
         match self.format {
             ImageFormat::Rgb | ImageFormat::Rgba => decode_raw(self),
+            ImageFormat::RgbZlib | ImageFormat::RgbaZlib => {
+                let (Some(width), Some(height)) = (self.declared_width, self.declared_height)
+                else {
+                    return Err(DecodeError::InvalidDimensions);
+                };
+                decode_zlib_sampled(self, width, height, None, None)
+            }
             ImageFormat::Png => decode_png(self),
         }
     }
@@ -98,6 +114,85 @@ impl StoredImage {
         decode_png_sampled(self, 1, 1, None).map(|(dimensions, _)| dimensions)
     }
 
+    /// Check a compressed raw transfer through its last byte without
+    /// allocating its expanded RGBA image.
+    pub fn validated_zlib_dimensions(&self) -> Result<(u32, u32), DecodeError> {
+        if !matches!(self.format, ImageFormat::RgbZlib | ImageFormat::RgbaZlib) {
+            return Err(DecodeError::UnsupportedFormat);
+        }
+        let (Some(width), Some(height)) = (self.declared_width, self.declared_height) else {
+            return Err(DecodeError::InvalidDimensions);
+        };
+        decode_zlib_sampled(self, 1, 1, None, None)?;
+        Ok((width, height))
+    }
+
+    /// Sample a source crop of a compressed raw image into bounded placement
+    /// pixels while expanding only one source row at a time.
+    pub fn resample_zlib_placement(
+        &self,
+        layout: PlacementPixelLayout,
+    ) -> Result<ResampledPlacement, StreamZlibError> {
+        if !matches!(self.format, ImageFormat::RgbZlib | ImageFormat::RgbaZlib) {
+            return Err(StreamZlibError::Decode(DecodeError::UnsupportedFormat));
+        }
+        if !valid_stream_layout(layout) {
+            return Err(StreamZlibError::Resample(ResampleError::InvalidLayout));
+        }
+        let image = decode_zlib_sampled(
+            self,
+            layout.destination.width,
+            layout.destination.height,
+            Some(layout.source),
+            None,
+        )
+        .map_err(StreamZlibError::Decode)?;
+        Ok(ResampledPlacement {
+            destination: layout.destination,
+            pixels: image.pixels,
+        })
+    }
+
+    /// Sample only a visible subrectangle of the full destination. Sampling
+    /// coordinates still refer to the original destination so clipping does
+    /// not change nearest-neighbor pixel selection.
+    pub fn resample_zlib_placement_region(
+        &self,
+        layout: PlacementPixelLayout,
+        region: PixelRect,
+    ) -> Result<ResampledPlacement, StreamZlibError> {
+        if !matches!(self.format, ImageFormat::RgbZlib | ImageFormat::RgbaZlib) {
+            return Err(StreamZlibError::Decode(DecodeError::UnsupportedFormat));
+        }
+        if !valid_stream_layout(layout) {
+            return Err(StreamZlibError::Resample(ResampleError::InvalidLayout));
+        }
+        let relative = PixelRect {
+            x: region
+                .x
+                .checked_sub(layout.destination.x)
+                .ok_or(StreamZlibError::Resample(ResampleError::InvalidLayout))?,
+            y: region
+                .y
+                .checked_sub(layout.destination.y)
+                .ok_or(StreamZlibError::Resample(ResampleError::InvalidLayout))?,
+            width: region.width,
+            height: region.height,
+        };
+        let image = decode_zlib_sampled(
+            self,
+            layout.destination.width,
+            layout.destination.height,
+            Some(layout.source),
+            Some(relative),
+        )
+        .map_err(StreamZlibError::Decode)?;
+        Ok(ResampledPlacement {
+            destination: region,
+            pixels: image.pixels,
+        })
+    }
+
     /// Decode and scale a PNG source crop directly into a placement without
     /// materializing the full RGBA source. The layout must use dimensions
     /// obtained from this image's validated PNG metadata.
@@ -108,21 +203,7 @@ impl StoredImage {
         if self.format != ImageFormat::Png {
             return Err(StreamPngError::Decode(DecodeError::UnsupportedPng));
         }
-        if layout.source.width == 0
-            || layout.source.height == 0
-            || layout.destination.width == 0
-            || layout.destination.height == 0
-            || layout
-                .destination
-                .x
-                .checked_add(layout.destination.width)
-                .is_none()
-            || layout
-                .destination
-                .y
-                .checked_add(layout.destination.height)
-                .is_none()
-        {
+        if !valid_stream_layout(layout) {
             return Err(StreamPngError::Resample(ResampleError::InvalidLayout));
         }
         let (_, image) = decode_png_sampled(
@@ -220,28 +301,7 @@ impl ResampledPlacement {
         let anchor = geometry
             .pixel_anchor(cell)
             .ok_or(ClipError::InvalidGeometry)?;
-        if geometry.clip_top_rows == 0 && geometry.clip_bottom_rows == 0 {
-            return self.clip_to_viewport(anchor, viewport);
-        }
-        let rows = geometry.rows.ok_or(ClipError::InvalidGeometry)?;
-        if geometry
-            .clip_top_rows
-            .saturating_add(geometry.clip_bottom_rows)
-            >= rows
-        {
-            return self.clip_between_rows(anchor, viewport, 0, 0);
-        }
-        let row_height = i128::from(cell.height());
-        let top = if geometry.clip_top_rows == 0 {
-            i128::MIN
-        } else {
-            i128::from(anchor.y) + i128::from(geometry.clip_top_rows) * row_height
-        };
-        let bottom = if geometry.clip_bottom_rows == 0 {
-            i128::MAX
-        } else {
-            i128::from(anchor.y) + i128::from(rows - geometry.clip_bottom_rows) * row_height
-        };
+        let (top, bottom) = scroll_clip_bounds(geometry, cell, anchor)?;
         self.clip_between_rows(anchor, viewport, top, bottom)
     }
 
@@ -266,45 +326,113 @@ impl ResampledPlacement {
         if self.pixels.len() != source_size {
             return Err(ClipError::InvalidPixels);
         }
-        if viewport.width == 0 || viewport.height == 0 {
+        let Some((region, destination)) =
+            visible_bounds(source, anchor, viewport, clip_top, clip_bottom)?
+        else {
             return Ok(None);
-        }
-        let left = i128::from(anchor.x) + i128::from(source.x);
-        let top = i128::from(anchor.y) + i128::from(source.y);
-        let right = left + i128::from(source.width);
-        let bottom = top + i128::from(source.height);
-        let visible_left = left.max(0);
-        let visible_top = top.max(0).max(clip_top);
-        let visible_right = right.min(i128::from(viewport.width));
-        let visible_bottom = bottom.min(i128::from(viewport.height)).min(clip_bottom);
-        if visible_left >= visible_right || visible_top >= visible_bottom {
-            return Ok(None);
-        }
-        // Intersection with a validated source and viewport bounds all these
-        // values to u32/usize, even for an extreme signed anchor.
-        let x = u32::try_from(visible_left).unwrap();
-        let y = u32::try_from(visible_top).unwrap();
-        let width = u32::try_from(visible_right - visible_left).unwrap();
-        let height = u32::try_from(visible_bottom - visible_top).unwrap();
-        let skip_x = usize::try_from(visible_left - left).unwrap();
-        let skip_y = usize::try_from(visible_top - top).unwrap();
+        };
+        let skip_x = usize::try_from(region.x - source.x).unwrap();
+        let skip_y = usize::try_from(region.y - source.y).unwrap();
         let input_width = usize::try_from(source.width).unwrap();
-        let output_width = usize::try_from(width).unwrap();
-        let mut pixels = vec![0; decoded_size(width, height).unwrap()];
+        let output_width = usize::try_from(region.width).unwrap();
+        let mut pixels = vec![0; decoded_size(region.width, region.height).unwrap()];
         for (row, destination_row) in pixels.chunks_exact_mut(output_width * 4).enumerate() {
             let start = ((skip_y + row) * input_width + skip_x) * 4;
             destination_row.copy_from_slice(&self.pixels[start..start + output_width * 4]);
         }
         Ok(Some(ClippedPlacement {
-            destination: PixelRect {
-                x,
-                y,
-                width,
-                height,
-            },
+            destination,
             pixels,
         }))
     }
+}
+
+pub(crate) fn visible_placement_region(
+    destination: PixelRect,
+    geometry: PlacementGeometry,
+    cell: CellPixelSize,
+    viewport: PixelSize,
+) -> Result<Option<(PixelRect, PixelRect)>, ClipError> {
+    let anchor = geometry
+        .pixel_anchor(cell)
+        .ok_or(ClipError::InvalidGeometry)?;
+    let (top, bottom) = scroll_clip_bounds(geometry, cell, anchor)?;
+    visible_bounds(destination, anchor, viewport, top, bottom)
+}
+
+fn scroll_clip_bounds(
+    geometry: PlacementGeometry,
+    cell: CellPixelSize,
+    anchor: SignedPixelPoint,
+) -> Result<(i128, i128), ClipError> {
+    if geometry.clip_top_rows == 0 && geometry.clip_bottom_rows == 0 {
+        return Ok((i128::MIN, i128::MAX));
+    }
+    let rows = geometry.rows.ok_or(ClipError::InvalidGeometry)?;
+    if geometry
+        .clip_top_rows
+        .saturating_add(geometry.clip_bottom_rows)
+        >= rows
+    {
+        return Ok((0, 0));
+    }
+    let row_height = i128::from(cell.height());
+    let top = if geometry.clip_top_rows == 0 {
+        i128::MIN
+    } else {
+        i128::from(anchor.y) + i128::from(geometry.clip_top_rows) * row_height
+    };
+    let bottom = if geometry.clip_bottom_rows == 0 {
+        i128::MAX
+    } else {
+        i128::from(anchor.y) + i128::from(rows - geometry.clip_bottom_rows) * row_height
+    };
+    Ok((top, bottom))
+}
+
+fn visible_bounds(
+    source: PixelRect,
+    anchor: SignedPixelPoint,
+    viewport: PixelSize,
+    clip_top: i128,
+    clip_bottom: i128,
+) -> Result<Option<(PixelRect, PixelRect)>, ClipError> {
+    if source.width == 0
+        || source.height == 0
+        || source.x.checked_add(source.width).is_none()
+        || source.y.checked_add(source.height).is_none()
+    {
+        return Err(ClipError::InvalidDestination);
+    }
+    if viewport.width == 0 || viewport.height == 0 {
+        return Ok(None);
+    }
+    let left = i128::from(anchor.x) + i128::from(source.x);
+    let top = i128::from(anchor.y) + i128::from(source.y);
+    let visible_left = left.max(0);
+    let visible_top = top.max(0).max(clip_top);
+    let visible_right = (left + i128::from(source.width)).min(i128::from(viewport.width));
+    let visible_bottom = (top + i128::from(source.height))
+        .min(i128::from(viewport.height))
+        .min(clip_bottom);
+    if visible_left >= visible_right || visible_top >= visible_bottom {
+        return Ok(None);
+    }
+    let width = u32::try_from(visible_right - visible_left).unwrap();
+    let height = u32::try_from(visible_bottom - visible_top).unwrap();
+    let region = PixelRect {
+        x: source.x + u32::try_from(visible_left - left).unwrap(),
+        y: source.y + u32::try_from(visible_top - top).unwrap(),
+        width,
+        height,
+    };
+    let destination = PixelRect {
+        x: u32::try_from(visible_left).unwrap(),
+        y: u32::try_from(visible_top).unwrap(),
+        width,
+        height,
+    };
+    Ok(Some((region, destination)))
 }
 
 fn nearest_sample(output_index: usize, source_extent: u32, output_extent: u32) -> u32 {
@@ -314,6 +442,23 @@ fn nearest_sample(output_index: usize, source_extent: u32, output_extent: u32) -
     let numerator = center * u128::from(source_extent);
     let denominator = 2 * u128::from(output_extent);
     u32::try_from(numerator / denominator).unwrap()
+}
+
+fn valid_stream_layout(layout: PlacementPixelLayout) -> bool {
+    layout.source.width != 0
+        && layout.source.height != 0
+        && layout.destination.width != 0
+        && layout.destination.height != 0
+        && layout
+            .destination
+            .x
+            .checked_add(layout.destination.width)
+            .is_some()
+        && layout
+            .destination
+            .y
+            .checked_add(layout.destination.height)
+            .is_some()
 }
 
 fn decoded_size(width: u32, height: u32) -> Result<usize, DecodeError> {
@@ -355,11 +500,133 @@ fn decode_raw(image: &StoredImage) -> Result<DecodedImage, DecodeError> {
             }
             image.data.clone()
         }
-        ImageFormat::Png => unreachable!(),
+        ImageFormat::Png | ImageFormat::RgbZlib | ImageFormat::RgbaZlib => unreachable!(),
     };
     Ok(DecodedImage {
         width,
         height,
+        pixels,
+    })
+}
+
+fn decode_zlib_sampled(
+    image: &StoredImage,
+    target_width: u32,
+    target_height: u32,
+    source_crop: Option<PixelRect>,
+    target_region: Option<PixelRect>,
+) -> Result<DecodedImage, DecodeError> {
+    let region = target_region.unwrap_or(PixelRect {
+        x: 0,
+        y: 0,
+        width: target_width,
+        height: target_height,
+    });
+    let output_size = decoded_size(region.width, region.height)?;
+    if region
+        .x
+        .checked_add(region.width)
+        .is_none_or(|end| end > target_width)
+        || region
+            .y
+            .checked_add(region.height)
+            .is_none_or(|end| end > target_height)
+    {
+        return Err(DecodeError::InvalidDimensions);
+    }
+    let (Some(width), Some(height)) = (image.declared_width, image.declared_height) else {
+        return Err(DecodeError::InvalidDimensions);
+    };
+    let channels = match image.format {
+        ImageFormat::RgbZlib => 3usize,
+        ImageFormat::RgbaZlib => 4usize,
+        _ => return Err(DecodeError::UnsupportedFormat),
+    };
+    let row_len = usize::try_from(width)
+        .ok()
+        .and_then(|width| width.checked_mul(channels))
+        .ok_or(DecodeError::OutputLimit)?;
+    let raw_size = row_len
+        .checked_mul(usize::try_from(height).map_err(|_| DecodeError::OutputLimit)?)
+        .ok_or(DecodeError::OutputLimit)?;
+    if row_len > MAX_DECODED_IMAGE_BYTES || raw_size > MAX_STREAMED_RAW_BYTES {
+        return Err(DecodeError::OutputLimit);
+    }
+    let source = source_crop.unwrap_or(PixelRect {
+        x: 0,
+        y: 0,
+        width,
+        height,
+    });
+    if source.width == 0
+        || source.height == 0
+        || source
+            .x
+            .checked_add(source.width)
+            .is_none_or(|end| end > width)
+        || source
+            .y
+            .checked_add(source.height)
+            .is_none_or(|end| end > height)
+        || (source_crop.is_none() && (target_width > width || target_height > height))
+    {
+        return Err(DecodeError::InvalidDimensions);
+    }
+    let mut reader = ZlibDecoder::new(image.data.as_slice());
+    let mut row = vec![0; row_len];
+    let mut pixels = vec![0; output_size];
+    let target_stride = usize::try_from(region.width).unwrap() * 4;
+    let mut target_y = 0usize;
+    for source_y in 0..height {
+        reader
+            .read_exact(&mut row)
+            .map_err(|_| DecodeError::InvalidData)?;
+        while target_y < usize::try_from(region.height).unwrap()
+            && source.y
+                + nearest_sample(
+                    usize::try_from(region.y).unwrap() + target_y,
+                    source.height,
+                    target_height,
+                )
+                == source_y
+        {
+            let output_row = &mut pixels[target_y * target_stride..(target_y + 1) * target_stride];
+            for (target_x, rgba) in output_row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                let source_x = usize::try_from(
+                    source.x
+                        + nearest_sample(
+                            usize::try_from(region.x).unwrap() + target_x,
+                            source.width,
+                            target_width,
+                        ),
+                )
+                .unwrap();
+                let offset = source_x * channels;
+                let pixel = &row[offset..offset + channels];
+                if channels == 3 {
+                    *rgba = [pixel[0], pixel[1], pixel[2], 255];
+                } else {
+                    rgba.copy_from_slice(pixel);
+                }
+            }
+            target_y += 1;
+        }
+    }
+    if target_y != usize::try_from(region.height).unwrap() {
+        return Err(DecodeError::InvalidData);
+    }
+    let mut extra = [0];
+    if reader
+        .read(&mut extra)
+        .map_err(|_| DecodeError::InvalidData)?
+        != 0
+        || reader.total_in() != image.data.len() as u64
+    {
+        return Err(DecodeError::InvalidData);
+    }
+    Ok(DecodedImage {
+        width: region.width,
+        height: region.height,
         pixels,
     })
 }
@@ -564,6 +831,8 @@ mod tests {
         graphics_transfer::DirectTransferAssembler,
     };
     use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use flate2::{Compression, write::ZlibEncoder};
+    use std::io::Write;
 
     fn stored(controls: &str, bytes: &[u8]) -> StoredImage {
         let command = format!("\x1b_G{controls};{}\x1b\\", STANDARD.encode(bytes));
@@ -585,6 +854,102 @@ mod tests {
             writer.write_image_data(pixels).unwrap();
         }
         bytes
+    }
+
+    fn zlib_bytes(bytes: &[u8]) -> Vec<u8> {
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(bytes).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    #[test]
+    fn compressed_rgba_streams_crop_and_checks_complete_payload() {
+        let mut source = Vec::new();
+        for y in 0..4u8 {
+            for x in 0..4u8 {
+                source.extend_from_slice(&[x, y, 7, 255]);
+            }
+        }
+        let image = StoredImage {
+            format: ImageFormat::RgbaZlib,
+            data: zlib_bytes(&source),
+            declared_width: Some(4),
+            declared_height: Some(4),
+        };
+        assert_eq!(image.validated_zlib_dimensions(), Ok((4, 4)));
+        assert_eq!(image.decode_rgba().unwrap().pixels, source);
+        let layout = PlacementPixelLayout {
+            source: PixelRect {
+                x: 1,
+                y: 1,
+                width: 2,
+                height: 2,
+            },
+            cell_bounds: PixelSize {
+                width: 4,
+                height: 2,
+            },
+            destination: PixelRect {
+                x: 0,
+                y: 0,
+                width: 4,
+                height: 2,
+            },
+        };
+        assert_eq!(
+            image.resample_zlib_placement(layout).unwrap().pixels,
+            [
+                1, 1, 7, 255, 1, 1, 7, 255, 2, 1, 7, 255, 2, 1, 7, 255, 1, 2, 7, 255, 1, 2, 7, 255,
+                2, 2, 7, 255, 2, 2, 7, 255,
+            ]
+        );
+        assert_eq!(
+            image
+                .resample_zlib_placement_region(
+                    layout,
+                    PixelRect {
+                        x: 1,
+                        y: 1,
+                        width: 2,
+                        height: 1,
+                    },
+                )
+                .unwrap()
+                .pixels,
+            [1, 2, 7, 255, 2, 2, 7, 255]
+        );
+        let mut corrupt = image.data.clone();
+        *corrupt.last_mut().unwrap() ^= 1;
+        assert_eq!(
+            StoredImage {
+                data: corrupt,
+                ..image
+            }
+            .validated_zlib_dimensions(),
+            Err(DecodeError::InvalidData)
+        );
+        let mut trailing = zlib_bytes(&source);
+        trailing.push(0);
+        assert_eq!(
+            StoredImage {
+                format: ImageFormat::RgbaZlib,
+                data: trailing,
+                declared_width: Some(4),
+                declared_height: Some(4),
+            }
+            .validated_zlib_dimensions(),
+            Err(DecodeError::InvalidData)
+        );
+        let rgb = StoredImage {
+            format: ImageFormat::RgbZlib,
+            data: zlib_bytes(&[1, 2, 3, 4, 5, 6]),
+            declared_width: Some(2),
+            declared_height: Some(1),
+        };
+        assert_eq!(
+            rgb.decode_rgba().unwrap().pixels,
+            [1, 2, 3, 255, 4, 5, 6, 255]
+        );
     }
 
     fn indexed_png_bytes() -> Vec<u8> {
@@ -1282,6 +1647,23 @@ mod tests {
         assert_eq!(both.destination.y, 2);
         assert_eq!(both.destination.height, 2);
         assert_eq!(values(both), [3, 4]);
+        assert_eq!(
+            visible_placement_region(placement.destination, geometry, cell, viewport),
+            Ok(Some((
+                PixelRect {
+                    x: 0,
+                    y: 2,
+                    width: 1,
+                    height: 2,
+                },
+                PixelRect {
+                    x: 0,
+                    y: 2,
+                    width: 1,
+                    height: 2,
+                },
+            )))
+        );
         let top_only = placement
             .clip_to_viewport_with_scroll_clip(
                 PlacementGeometry {

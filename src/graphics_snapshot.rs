@@ -9,7 +9,8 @@ use crate::{
     },
     graphics_decode::{
         ClipError, ClippedPlacement, DecodeError, DecodedImage, MAX_DECODED_IMAGE_BYTES,
-        ResampleError, ResampledPlacement, StreamPngError,
+        ResampleError, ResampledPlacement, StreamPngError, StreamZlibError,
+        visible_placement_region,
     },
     graphics_placeholder::decode_row,
     graphics_store::{
@@ -270,6 +271,18 @@ fn rasterize_placement(
 ) -> Result<(PlacementPixelLayout, ResampledPlacement), SnapshotError> {
     let image = store.get(image_id).ok_or(SnapshotError::MissingImage)?;
     let dimensions = store.known_image_dimensions(image_id);
+    if matches!(image.format, ImageFormat::RgbZlib | ImageFormat::RgbaZlib)
+        && let Some((width, height)) = dimensions
+    {
+        let layout = pixel_layout(width, height, cell).ok_or(SnapshotError::InvalidLayout)?;
+        let pixels = image
+            .resample_zlib_placement(layout)
+            .map_err(|error| match error {
+                StreamZlibError::Decode(error) => SnapshotError::Decode(error),
+                StreamZlibError::Resample(error) => SnapshotError::Resample(error),
+            })?;
+        return Ok((layout, pixels));
+    }
     if image.format == ImageFormat::Png
         && let Some((width, height)) = dimensions
         && u128::from(width) * u128::from(height) * 4 > MAX_DECODED_IMAGE_BYTES as u128
@@ -309,14 +322,42 @@ fn collect_visible_clips(
         if geometry.anchor.alternate != alternate || !include_z(geometry.z_index) {
             continue;
         }
-        let (_, pixels) =
-            rasterize_placement(store, placement.image_id, cell, |width, height, cell| {
-                geometry.pixel_layout(width, height, cell)
-            })?;
-        if let Some(visible) = pixels
-            .clip_to_viewport_with_scroll_clip(geometry, cell, viewport)
-            .map_err(SnapshotError::Clip)?
+        let image = store
+            .get(placement.image_id)
+            .ok_or(SnapshotError::MissingImage)?;
+        let visible = if matches!(image.format, ImageFormat::RgbZlib | ImageFormat::RgbaZlib)
+            && let Some((width, height)) = store.known_image_dimensions(placement.image_id)
         {
+            let layout = geometry
+                .pixel_layout(width, height, cell)
+                .ok_or(SnapshotError::InvalidLayout)?;
+            if let Some((region, destination)) =
+                visible_placement_region(layout.destination, geometry, cell, viewport)
+                    .map_err(SnapshotError::Clip)?
+            {
+                let pixels = image
+                    .resample_zlib_placement_region(layout, region)
+                    .map_err(|error| match error {
+                        StreamZlibError::Decode(error) => SnapshotError::Decode(error),
+                        StreamZlibError::Resample(error) => SnapshotError::Resample(error),
+                    })?;
+                Some(ClippedPlacement {
+                    destination,
+                    pixels: pixels.pixels,
+                })
+            } else {
+                None
+            }
+        } else {
+            let (_, pixels) =
+                rasterize_placement(store, placement.image_id, cell, |width, height, cell| {
+                    geometry.pixel_layout(width, height, cell)
+                })?;
+            pixels
+                .clip_to_viewport_with_scroll_clip(geometry, cell, viewport)
+                .map_err(SnapshotError::Clip)?
+        };
+        if let Some(visible) = visible {
             input_bytes = input_bytes
                 .checked_add(visible.pixels.len())
                 .filter(|&total| total <= MAX_COMPOSITE_INPUT_BYTES)

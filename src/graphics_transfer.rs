@@ -16,6 +16,9 @@ use std::io::Read;
 pub const MAX_ENCODED_CHUNK_BYTES: usize = 128 * 1024;
 /// Cap one in-progress image independently of its number of chunks.
 pub const MAX_DIRECT_TRANSFER_BYTES: usize = 16 * 1024 * 1024;
+/// Bound the declared expanded size of a compressed raw image. Such transfers
+/// remain compressed in the store and are decoded a row at a time.
+pub const MAX_STREAMED_RAW_BYTES: usize = 256 * 1024 * 1024;
 
 type Controls = BTreeMap<u8, Vec<u8>>;
 
@@ -23,12 +26,17 @@ type Controls = BTreeMap<u8, Vec<u8>>;
 pub struct AssembledDirectTransfer {
     controls: Controls,
     pub data: Vec<u8>,
+    streamed_raw_zlib: bool,
 }
 
 impl AssembledDirectTransfer {
     /// The first chunk's controls, with a final chunk's optional `q` override.
     pub fn control(&self, key: u8) -> Option<&[u8]> {
         self.controls.get(&key).map(Vec::as_slice)
+    }
+
+    pub(crate) fn streamed_raw_zlib(&self) -> bool {
+        self.streamed_raw_zlib
     }
 
     /// Replies for queries and data-only uploads cover only these direct-data
@@ -256,8 +264,18 @@ fn valid_first(controls: &Controls) -> bool {
         && controls.get(&b'S').is_none_or(|value| {
             (controls.get(&b'o').is_some()
                 || controls.get(&b'a').is_some_and(|action| action == b"q"))
-                && parse_positive(value)
-                    .is_some_and(|size| size as usize <= MAX_DIRECT_TRANSFER_BYTES)
+                && parse_positive(value).is_some_and(|size| {
+                    let limit = if controls.get(&b'o').map(Vec::as_slice) == Some(b"z")
+                        && matches!(
+                            controls.get(&b'f').map(Vec::as_slice),
+                            None | Some(b"24" | b"32")
+                        ) {
+                        MAX_STREAMED_RAW_BYTES
+                    } else {
+                        MAX_DIRECT_TRANSFER_BYTES
+                    };
+                    size as usize <= limit
+                })
         })
         && valid_quiet(controls)
         && b"sv".iter().copied().all(|key| {
@@ -320,7 +338,15 @@ fn finish(pending: Pending) -> Option<AssembledDirectTransfer> {
         .and_then(|value| parse_positive(value))
         .map(|size| size as usize);
     let expected_size = raw_size.or(declared_size);
-    let data = if controls.contains_key(&b'o') {
+    let streamed_raw_zlib = controls.contains_key(&b'o')
+        && raw_size.is_some_and(|size| size > MAX_DIRECT_TRANSFER_BYTES);
+    let data = if streamed_raw_zlib {
+        let limit = raw_size?;
+        if limit > MAX_STREAMED_RAW_BYTES || declared_size.is_some_and(|size| size != limit) {
+            return None;
+        }
+        data
+    } else if controls.contains_key(&b'o') {
         let limit = expected_size?;
         if limit > MAX_DIRECT_TRANSFER_BYTES || declared_size.is_some_and(|size| size != limit) {
             return None;
@@ -344,7 +370,11 @@ fn finish(pending: Pending) -> Option<AssembledDirectTransfer> {
         }
         data
     };
-    Some(AssembledDirectTransfer { controls, data })
+    Some(AssembledDirectTransfer {
+        controls,
+        data,
+        streamed_raw_zlib,
+    })
 }
 
 #[cfg(test)]
@@ -606,5 +636,22 @@ mod tests {
         let mut full = vec![0; MAX_DIRECT_TRANSFER_BYTES];
         assert!(!append_bounded(&mut full, b"x"));
         assert_eq!(full.len(), MAX_DIRECT_TRANSFER_BYTES);
+    }
+
+    #[test]
+    fn compressed_raw_above_legacy_limit_stays_compressed() {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+
+        let raw = vec![0; 2048 * 2049 * 4];
+        let compressed = zlib(&raw);
+        let command = format!(
+            "\x1b_Ga=T,o=z,s=2048,v=2049,i=7;{}\x1b\\",
+            STANDARD.encode(&compressed)
+        );
+        let transfer = DirectTransferAssembler::new()
+            .accept(command.as_bytes())
+            .unwrap();
+        assert!(transfer.streamed_raw_zlib());
+        assert_eq!(transfer.data, compressed);
     }
 }

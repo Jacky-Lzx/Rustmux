@@ -15,6 +15,8 @@ pub const MAX_PANE_PLACEMENTS: usize = 1024;
 pub enum ImageFormat {
     Rgb,
     Rgba,
+    RgbZlib,
+    RgbaZlib,
     Png,
 }
 
@@ -584,10 +586,10 @@ impl ImageStore {
         transfer: AssembledDirectTransfer,
         anchor: CellAnchor,
         cell_pixels: Option<CellPixelSize>,
-        validate_png: bool,
+        validate_images: bool,
     ) -> Result<(u32, Option<PlacementGeometry>), StoreError> {
         let (id, geometry) =
-            self.insert_inner(transfer, Some(anchor), cell_pixels, validate_png)?;
+            self.insert_inner(transfer, Some(anchor), cell_pixels, validate_images)?;
         Ok((id, self.resolve_latest_geometry(id, geometry, cell_pixels)))
     }
 
@@ -596,7 +598,7 @@ impl ImageStore {
         transfer: AssembledDirectTransfer,
         anchor: Option<CellAnchor>,
         cell_pixels: Option<CellPixelSize>,
-        validate_png: bool,
+        validate_images: bool,
     ) -> Result<(u32, Option<PlacementGeometry>), StoreError> {
         let display = match transfer.control(b'a') {
             None | Some(b"t") => false,
@@ -653,10 +655,12 @@ impl ImageStore {
         } else {
             return Err(StoreError::UnsupportedIdentity);
         };
-        let format = match transfer.control(b'f') {
-            None | Some(b"32") => ImageFormat::Rgba,
-            Some(b"24") => ImageFormat::Rgb,
-            Some(b"100") => ImageFormat::Png,
+        let format = match (transfer.control(b'f'), transfer.streamed_raw_zlib()) {
+            (None | Some(b"32"), false) => ImageFormat::Rgba,
+            (None | Some(b"32"), true) => ImageFormat::RgbaZlib,
+            (Some(b"24"), false) => ImageFormat::Rgb,
+            (Some(b"24"), true) => ImageFormat::RgbZlib,
+            (Some(b"100"), false) => ImageFormat::Png,
             _ => return Err(StoreError::UnsupportedAction),
         };
         let transient = match transfer.control(b'N') {
@@ -676,19 +680,30 @@ impl ImageStore {
             declared_height,
         };
         // The runtime must not replace a displayable image with corrupt or
-        // unsupported PNG bytes. Raw lengths were checked by the assembler.
+        // unsupported PNG or compressed raw bytes. Plain raw lengths were
+        // checked by the assembler.
         // Cache successful dimensions so sized placement does not decode twice.
         // When full expansion exceeds the limit, validate every PNG row and
         // checksum through the bounded streaming decoder instead.
-        let decoded_dimensions = if validate_png && format == ImageFormat::Png {
-            let dimensions = match image.decode_rgba() {
-                Ok(decoded) => (decoded.width, decoded.height),
-                Err(DecodeError::OutputLimit) => image
-                    .validated_png_dimensions()
-                    .map_err(|_| StoreError::InvalidData)?,
-                Err(_) => return Err(StoreError::InvalidData),
-            };
-            Some(dimensions)
+        let decoded_dimensions = if validate_images {
+            match format {
+                ImageFormat::Png => {
+                    let dimensions = match image.decode_rgba() {
+                        Ok(decoded) => (decoded.width, decoded.height),
+                        Err(DecodeError::OutputLimit) => image
+                            .validated_png_dimensions()
+                            .map_err(|_| StoreError::InvalidData)?,
+                        Err(_) => return Err(StoreError::InvalidData),
+                    };
+                    Some(dimensions)
+                }
+                ImageFormat::RgbZlib | ImageFormat::RgbaZlib => Some(
+                    image
+                        .validated_zlib_dimensions()
+                        .map_err(|_| StoreError::InvalidData)?,
+                ),
+                ImageFormat::Rgb | ImageFormat::Rgba => None,
+            }
         } else {
             None
         };
@@ -957,7 +972,9 @@ impl ImageStore {
     pub(crate) fn known_image_dimensions(&self, image_id: u32) -> Option<(u32, u32)> {
         let image = self.images.get(&image_id)?;
         match image.format {
-            ImageFormat::Png => self.decoded_dimensions.get(&image_id).copied().flatten(),
+            ImageFormat::Png | ImageFormat::RgbZlib | ImageFormat::RgbaZlib => {
+                self.decoded_dimensions.get(&image_id).copied().flatten()
+            }
             ImageFormat::Rgb | ImageFormat::Rgba => image.declared_width.zip(image.declared_height),
         }
     }

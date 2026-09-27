@@ -54,7 +54,7 @@ enum GraphicsSink<'a> {
     Store {
         cell_pixels: Option<CellPixelSize>,
         answer_graphics: bool,
-        validate_png: bool,
+        validate_images: bool,
     },
 }
 
@@ -419,7 +419,7 @@ impl Pane {
             GraphicsSink::Store {
                 cell_pixels,
                 answer_graphics,
-                validate_png: true,
+                validate_images: true,
             },
         );
     }
@@ -446,7 +446,7 @@ impl Pane {
             GraphicsSink::Store {
                 cell_pixels: None,
                 answer_graphics: false,
-                validate_png: false,
+                validate_images: false,
             },
         );
     }
@@ -465,7 +465,7 @@ impl Pane {
             GraphicsSink::Store {
                 cell_pixels: Some(cell_pixels),
                 answer_graphics: false,
-                validate_png: false,
+                validate_images: false,
             },
         );
     }
@@ -490,7 +490,7 @@ impl Pane {
             GraphicsSink::Store {
                 cell_pixels,
                 answer_graphics: false,
-                validate_png: false,
+                validate_images: false,
             },
         );
     }
@@ -612,7 +612,7 @@ impl Pane {
                     GraphicsSink::Store {
                         cell_pixels,
                         answer_graphics,
-                        validate_png,
+                        validate_images,
                     } => {
                         let (row, column) = self.screen.cursor();
                         let anchor = CellAnchor {
@@ -639,7 +639,7 @@ impl Pane {
                                 transfer,
                                 anchor,
                                 *cell_pixels,
-                                *validate_png,
+                                *validate_images,
                             );
                             if let Some(response) = transfer_reply.and_then(|transfer| {
                                 transfer.response(
@@ -1136,6 +1136,87 @@ mod io_tests {
             true,
         );
         assert_eq!(replies, b"\x1b_Gi=7;EINVAL:invalid image\x1b\\");
+        assert_eq!(pane.image_store().revision(), revision);
+        assert_eq!(
+            &pane.compose_image_snapshot(cell).unwrap().pixels[..4],
+            &[255, 0, 0, 255]
+        );
+    }
+
+    #[test]
+    fn runtime_streams_large_compressed_rgba_without_expanding_the_stored_image() {
+        use flate2::{Compression, write::ZlibEncoder};
+
+        fn send_compressed(
+            pane: &mut Pane,
+            controls: &str,
+            compressed: &[u8],
+            cell: CellPixelSize,
+            replies: &mut Vec<u8>,
+        ) {
+            let encoded = STANDARD.encode(compressed);
+            let chunks: Vec<_> = encoded.as_bytes().chunks(100_000).collect();
+            for (index, chunk) in chunks.iter().enumerate() {
+                let controls = if index == 0 { controls } else { "" };
+                let more = u8::from(index + 1 != chunks.len());
+                let command = format!(
+                    "\x1b_G{controls}m={more};{}\x1b\\",
+                    std::str::from_utf8(chunk).unwrap()
+                );
+                pane.process_output_for_runtime(
+                    command.as_bytes(),
+                    &mut |reply| replies.extend_from_slice(reply),
+                    Some(cell),
+                    true,
+                );
+            }
+        }
+
+        let width = 2900u32;
+        let height = 2900u32;
+        let red_row = [255, 0, 0, 255].repeat(width as usize);
+        let blue_row = [0, 0, 255, 255].repeat(width as usize);
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::fast());
+        for _ in 0..height / 2 {
+            encoder.write_all(&red_row).unwrap();
+        }
+        for _ in height / 2..height {
+            encoder.write_all(&blue_row).unwrap();
+        }
+        let mut compressed = encoder.finish().unwrap();
+        let mut pane = Pane::spawn("/bin/sh", 4, 4).unwrap();
+        let cell = CellPixelSize::new(1, 1).unwrap();
+        let mut replies = Vec::new();
+        send_compressed(
+            &mut pane,
+            &format!("a=T,o=z,s={width},v={height},i=9,p=1,x=1449,y=1449,w=2,h=2,c=2,r=2,C=1,"),
+            &compressed,
+            cell,
+            &mut replies,
+        );
+        assert_eq!(replies, b"\x1b_Gi=9,p=1;OK\x1b\\");
+        let image = pane.image_store().get(9).unwrap();
+        assert_eq!(image.format, crate::graphics_store::ImageFormat::RgbaZlib);
+        assert_eq!(image.data, compressed);
+        assert_eq!(
+            image.decode_rgba(),
+            Err(crate::graphics_decode::DecodeError::OutputLimit)
+        );
+        let snapshot = pane.compose_image_snapshot(cell).unwrap();
+        assert_eq!(&snapshot.pixels[..4], &[255, 0, 0, 255]);
+        assert_eq!(&snapshot.pixels[4 * 4..4 * 4 + 4], &[0, 0, 255, 255]);
+
+        let revision = pane.image_store().revision();
+        *compressed.last_mut().unwrap() ^= 1;
+        replies.clear();
+        send_compressed(
+            &mut pane,
+            &format!("a=t,o=z,s={width},v={height},i=9,"),
+            &compressed,
+            cell,
+            &mut replies,
+        );
+        assert_eq!(replies, b"\x1b_Gi=9;EINVAL:invalid image\x1b\\");
         assert_eq!(pane.image_store().revision(), revision);
         assert_eq!(
             &pane.compose_image_snapshot(cell).unwrap().pixels[..4],

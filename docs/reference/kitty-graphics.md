@@ -26,9 +26,12 @@ One encoded chunk is limited to 128 KiB to accommodate installed `kitten icat`
 output (the published protocol specifies 4096 bytes); one assembled transfer
 is still limited to 16 MiB. The final chunk may omit Base64 padding. Direct
 data (`t=d`, `a=t/T/q`) may be uncompressed or use `o=z`
-zlib compression. Both compressed input and decompressed output are bounded
-to 16 MiB; raw RGB/RGBA output must match its dimensions, and compressed PNG
-requires `S=<uncompressed-byte-count>`. Malformed streams, mismatched sizes,
+zlib compression. Compressed input stays bounded to 16 MiB. Raw RGB/RGBA
+whose declared expansion exceeds 16 MiB is kept compressed and validated a
+row at a time, up to 256 MiB expanded and a 32 MiB row budget; smaller raw
+transfers and compressed PNG retain the 16 MiB expansion limit. Raw RGB/RGBA
+output must match its dimensions, and compressed PNG requires
+`S=<uncompressed-byte-count>`. Malformed streams, mismatched sizes,
 and trailing compressed bytes are discarded before they can replace an image.
 File, temporary-file and shared-memory media are not read. When outer graphics
 support is confirmed, a complete, syntactically recognizable request for one
@@ -102,8 +105,11 @@ upscaling, without expanding the whole source image. Both paths validate the
 entire PNG, including its tail. Runtime upload now falls back to this bounded
 validation when full RGBA expansion exceeds 32 MiB, and regular and virtual
 placements use crop-aware streaming when such a validated PNG is composed.
-This does not relax the separate 16 MiB limit on zlib-compressed raw RGB/RGBA
-transfers; `kitten icat` may choose that format for large images.
+Large `o=z` RGB/RGBA transfers also remain compressed in the pane store.
+Runtime upload validates their complete zlib stream, and a regular placement
+samples only its visible source-backed destination pixels; invisible pixels
+do not consume the 32 MiB placement budget. This path does not yet stream
+large virtual-placeholder rasters that exceed the placement budget.
 An optional local-file check is
 `RUSTMUX_COMPAT_IMAGE=/absolute/path/to/image.png cargo test --lib user_png_streams_to_thumbnail -- --ignored`.
 
