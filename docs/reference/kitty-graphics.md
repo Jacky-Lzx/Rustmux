@@ -91,6 +91,17 @@ declared dimensions, rejects animation, and caps each decoded pixel buffer at
 cache the decoded pixels or render them; callers must opt in to decoding.
 Color-profile conversion is not yet implemented.
 
+`StoredImage::decode_png_thumbnail(width, height)` is a separate opt-in
+boundary for non-interlaced static PNGs whose full RGBA expansion exceeds
+32 MiB. It validates the complete PNG while reading one transformed row at a
+time, samples into a caller-chosen nearest-neighbor thumbnail of at most
+32 MiB, and bounds decoder allocation and row size. It does not yet change
+upload acceptance or placement behavior: source crops and image coordinates
+must be mapped before using a thumbnail in the running multiplexer. The
+existing 32 MiB full-decode rejection therefore still applies to `kitten icat`
+uploads. An optional local-file check is
+`RUSTMUX_COMPAT_IMAGE=/absolute/path/to/image.png cargo test --lib user_png_streams_to_thumbnail -- --ignored`.
+
 The running multiplexer validates PNG data before replacing a pane image.
 Corrupt, unsupported, oversized-decoded, or dimension-mismatched PNG transfers
 leave the existing image, placements, revision, and cursor unchanged. Successful

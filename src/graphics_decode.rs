@@ -68,6 +68,20 @@ impl StoredImage {
             ImageFormat::Png => decode_png(self),
         }
     }
+
+    /// Decode a static PNG row by row into a bounded nearest-neighbor
+    /// thumbnail. This is an opt-in preparation step: callers must still map
+    /// source crop coordinates before using the result as a placement.
+    pub fn decode_png_thumbnail(
+        &self,
+        target_width: u32,
+        target_height: u32,
+    ) -> Result<DecodedImage, DecodeError> {
+        if self.format != ImageFormat::Png {
+            return Err(DecodeError::UnsupportedPng);
+        }
+        decode_png_thumbnail(self, target_width, target_height)
+    }
 }
 
 impl DecodedImage {
@@ -365,6 +379,99 @@ fn decode_png(image: &StoredImage) -> Result<DecodedImage, DecodeError> {
     })
 }
 
+fn decode_png_thumbnail(
+    image: &StoredImage,
+    target_width: u32,
+    target_height: u32,
+) -> Result<DecodedImage, DecodeError> {
+    let output_size = decoded_size(target_width, target_height)?;
+    let mut decoder = Decoder::new_with_limits(
+        Cursor::new(image.data.as_slice()),
+        Limits {
+            bytes: MAX_DECODED_IMAGE_BYTES,
+        },
+    );
+    decoder.set_transformations(Transformations::EXPAND | Transformations::STRIP_16);
+    decoder.set_ignore_text_chunk(true);
+    decoder.set_ignore_iccp_chunk(true);
+    let mut reader = decoder.read_info().map_err(|_| DecodeError::InvalidData)?;
+    let info = reader.info();
+    if info.animation_control.is_some() || info.interlaced {
+        return Err(DecodeError::UnsupportedPng);
+    }
+    let (width, height) = (info.width, info.height);
+    if image
+        .declared_width
+        .is_some_and(|declared| declared != width)
+        || image
+            .declared_height
+            .is_some_and(|declared| declared != height)
+        || target_width > width
+        || target_height > height
+    {
+        return Err(DecodeError::InvalidDimensions);
+    }
+    let (color, depth) = reader.output_color_type();
+    if depth != BitDepth::Eight {
+        return Err(DecodeError::UnsupportedPng);
+    }
+    let channels = match color {
+        ColorType::Grayscale => 1,
+        ColorType::GrayscaleAlpha => 2,
+        ColorType::Rgb => 3,
+        ColorType::Rgba => 4,
+        ColorType::Indexed => return Err(DecodeError::UnsupportedPng),
+    };
+    let row_len = usize::try_from(width)
+        .ok()
+        .and_then(|width| width.checked_mul(channels))
+        .ok_or(DecodeError::OutputLimit)?;
+    if row_len > MAX_DECODED_IMAGE_BYTES || reader.output_line_size(width) != Some(row_len) {
+        return Err(DecodeError::OutputLimit);
+    }
+    let mut pixels = vec![0; output_size];
+    let target_stride = usize::try_from(target_width).unwrap() * 4;
+    let mut target_y = 0usize;
+    for source_y in 0..height {
+        let row = reader
+            .next_row()
+            .map_err(|_| DecodeError::InvalidData)?
+            .ok_or(DecodeError::InvalidData)?;
+        let source = row.data();
+        if source.len() != row_len {
+            return Err(DecodeError::InvalidData);
+        }
+        while target_y < usize::try_from(target_height).unwrap()
+            && nearest_sample(target_y, height, target_height) == source_y
+        {
+            let output_row = &mut pixels[target_y * target_stride..(target_y + 1) * target_stride];
+            for (target_x, rgba) in output_row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                let source_x =
+                    usize::try_from(nearest_sample(target_x, width, target_width)).unwrap();
+                let offset = source_x * channels;
+                let pixel = &source[offset..offset + channels];
+                match color {
+                    ColorType::Grayscale => *rgba = [pixel[0], pixel[0], pixel[0], 255],
+                    ColorType::GrayscaleAlpha => *rgba = [pixel[0], pixel[0], pixel[0], pixel[1]],
+                    ColorType::Rgb => *rgba = [pixel[0], pixel[1], pixel[2], 255],
+                    ColorType::Rgba => rgba.copy_from_slice(pixel),
+                    ColorType::Indexed => unreachable!(),
+                }
+            }
+            target_y += 1;
+        }
+    }
+    if target_y != usize::try_from(target_height).unwrap() {
+        return Err(DecodeError::InvalidData);
+    }
+    reader.finish().map_err(|_| DecodeError::InvalidData)?;
+    Ok(DecodedImage {
+        width: target_width,
+        height: target_height,
+        pixels,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -449,6 +556,142 @@ mod tests {
         *corrupt.last_mut().unwrap() ^= 1;
         let image = stored("a=t,f=100,i=1", &corrupt);
         assert_eq!(image.decode_rgba(), Err(DecodeError::InvalidData));
+    }
+
+    #[test]
+    fn oversized_png_streams_into_bounded_thumbnail() {
+        let width = 3072u32;
+        let height = 3072u32;
+        let mut source = vec![0; usize::try_from(width * height * 4).unwrap()];
+        let stride = usize::try_from(width * 4).unwrap();
+        for (row, pixels) in source.chunks_exact_mut(stride).enumerate() {
+            let color = if row < usize::try_from(height / 2).unwrap() {
+                [255, 0, 0, 255]
+            } else {
+                [0, 0, 255, 255]
+            };
+            for pixel in pixels.as_chunks_mut::<4>().0 {
+                *pixel = color;
+            }
+        }
+        let mut data = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut data, width, height);
+            encoder.set_color(ColorType::Rgba);
+            encoder.set_depth(BitDepth::Eight);
+            encoder.set_compression(png::Compression::Fast);
+            let mut writer = encoder.write_header().unwrap();
+            writer.write_image_data(&source).unwrap();
+            writer.finish().unwrap();
+        }
+        let image = StoredImage {
+            format: ImageFormat::Png,
+            data,
+            declared_width: Some(width),
+            declared_height: Some(height),
+        };
+        assert_eq!(image.decode_rgba(), Err(DecodeError::OutputLimit));
+        assert_eq!(
+            image.decode_png_thumbnail(width, height),
+            Err(DecodeError::OutputLimit)
+        );
+        let thumbnail = image.decode_png_thumbnail(64, 64).unwrap();
+        assert_eq!((thumbnail.width, thumbnail.height), (64, 64));
+        assert_eq!(thumbnail.pixels.len(), 64 * 64 * 4);
+        assert_eq!(&thumbnail.pixels[..4], &[255, 0, 0, 255]);
+        assert_eq!(
+            &thumbnail.pixels[63 * 64 * 4..63 * 64 * 4 + 4],
+            &[0, 0, 255, 255]
+        );
+    }
+
+    #[test]
+    fn thumbnail_rejects_corrupt_tail_and_invalid_targets() {
+        let data = png_bytes(ColorType::Rgb, &[3, 5, 7]);
+        let image = StoredImage {
+            format: ImageFormat::Png,
+            data: data.clone(),
+            declared_width: None,
+            declared_height: None,
+        };
+        assert_eq!(
+            image.decode_png_thumbnail(1, 1).unwrap().pixels,
+            [3, 5, 7, 255]
+        );
+        assert_eq!(
+            image.decode_png_thumbnail(0, 1),
+            Err(DecodeError::InvalidDimensions)
+        );
+        assert_eq!(
+            image.decode_png_thumbnail(2, 1),
+            Err(DecodeError::InvalidDimensions)
+        );
+        let mut corrupt = data;
+        *corrupt.last_mut().unwrap() ^= 1;
+        let image = StoredImage {
+            data: corrupt,
+            ..image
+        };
+        assert_eq!(
+            image.decode_png_thumbnail(1, 1),
+            Err(DecodeError::InvalidData)
+        );
+    }
+
+    #[test]
+    fn thumbnail_samples_pixel_centers_in_both_axes() {
+        let mut source = Vec::new();
+        for y in 0..4u8 {
+            for x in 0..4u8 {
+                source.extend_from_slice(&[x, y, 7, 255]);
+            }
+        }
+        let mut data = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut data, 4, 4);
+            encoder.set_color(ColorType::Rgba);
+            encoder.set_depth(BitDepth::Eight);
+            let mut writer = encoder.write_header().unwrap();
+            writer.write_image_data(&source).unwrap();
+            writer.finish().unwrap();
+        }
+        let image = StoredImage {
+            format: ImageFormat::Png,
+            data,
+            declared_width: None,
+            declared_height: None,
+        };
+        assert_eq!(
+            image.decode_png_thumbnail(2, 2).unwrap().pixels,
+            [1, 1, 7, 255, 3, 1, 7, 255, 1, 3, 7, 255, 3, 3, 7, 255]
+        );
+    }
+
+    #[test]
+    #[ignore = "set RUSTMUX_COMPAT_IMAGE to a PNG and run this test explicitly"]
+    fn user_png_streams_to_thumbnail() {
+        let Some(path) = std::env::var_os("RUSTMUX_COMPAT_IMAGE") else {
+            println!("SKIP: set RUSTMUX_COMPAT_IMAGE to a PNG file");
+            return;
+        };
+        let data = std::fs::read(path).unwrap();
+        assert!(data.len() <= crate::graphics_store::MAX_PANE_IMAGE_BYTES);
+        let image = StoredImage {
+            format: ImageFormat::Png,
+            data,
+            declared_width: None,
+            declared_height: None,
+        };
+        let thumbnail = image.decode_png_thumbnail(512, 512).unwrap();
+        assert_eq!(thumbnail.pixels.len(), 512 * 512 * 4);
+        assert!(
+            thumbnail
+                .pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|pixel| pixel[3] != 0)
+        );
     }
 
     #[test]
