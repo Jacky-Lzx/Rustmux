@@ -306,7 +306,11 @@ direct-data APCs with a nonzero image ID, requested `z`, `C=1`, and `q=2`.
 Each Base64 chunk is at most 4096 bytes; all continuation APCs carry only
 `m`. The encoder itself does not manage replacement/deletion; the runtime
 calls it only after preflighting the remaining 16 MiB frame budget. An image
-too large for that frame is skipped. A failed write may leave a partial
+too large for that frame is skipped. Before preflight, the runtime crops
+transparent margins from each composed band to the smallest cell-aligned
+rectangle containing visible pixels, preserving its pane-relative origin.
+This avoids charging empty pane space against the frame budget, especially in
+large outer windows. A failed write may leave a partial
 transfer. The chunk format follows the
 [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
 
@@ -432,7 +436,9 @@ this PNG/Kitty preview path, not every Yazi feature or terminal.
 The same optional `cargo compat` target also runs an installed `kitten icat`
 smoke when `kitten` is on `PATH`. It checks a small generated PNG with Unicode
 placeholders and another generated image through the default auto-detect,
-multi-chunk command, without overriding window size. Both must produce a
+multi-chunk command, without overriding window size. A named-session case
+also checks a generated image in a large pixel viewport where an uncropped
+pane canvas would exceed the output frame budget. All must produce a
 composed outer RGBA image. When the attached terminal supplies an exact cell size,
 Rustmux writes the current pane's pixel dimensions to its child PTY, including
 after text-grid or cell-pixel changes. If that size is unknown or exceeds the

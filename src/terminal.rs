@@ -23,6 +23,7 @@ use crate::pane::{INPUT_LIMIT as LIMIT, MAX_CELLS, Pane};
 use crate::{
     chrome::{FooterMode, compose_with_mode, footer_enabled, pane_rows},
     graphics_capability::{GraphicsCapabilityProbe, GraphicsSupport},
+    graphics_decode::DecodedImage,
     graphics_output::{kitty_rgba_placement_len, write_kitty_rgba_placement_with_limit},
     graphics_snapshot::ImageBand,
     graphics_store::CellPixelSize,
@@ -604,6 +605,71 @@ struct KittyOverlays {
     pending_retry: bool,
 }
 
+/// Drop transparent pane-sized margins before encoding an outer placement.
+/// Keeping the crop aligned to cells lets the cursor represent its origin
+/// without introducing a separate pixel-offset protocol path.
+fn crop_overlay_to_visible_cells(
+    image: DecodedImage,
+    cell: CellPixelSize,
+) -> Option<(DecodedImage, usize, usize)> {
+    let width = usize::try_from(image.width).ok()?;
+    let height = usize::try_from(image.height).ok()?;
+    if width == 0
+        || height == 0
+        || image.pixels.len() != width.checked_mul(height)?.checked_mul(4)?
+    {
+        return None;
+    }
+    let mut left = width;
+    let mut top = height;
+    let mut right = 0;
+    let mut bottom = 0;
+    for (index, pixel) in image.pixels.as_chunks::<4>().0.iter().enumerate() {
+        if pixel[3] != 0 {
+            let x = index % width;
+            let y = index / width;
+            left = left.min(x);
+            top = top.min(y);
+            right = right.max(x + 1);
+            bottom = bottom.max(y + 1);
+        }
+    }
+    if left == width {
+        return None;
+    }
+    let cell_width = usize::from(cell.width());
+    let cell_height = usize::from(cell.height());
+    left = left / cell_width * cell_width;
+    top = top / cell_height * cell_height;
+    right = right
+        .div_ceil(cell_width)
+        .saturating_mul(cell_width)
+        .min(width);
+    bottom = bottom
+        .div_ceil(cell_height)
+        .saturating_mul(cell_height)
+        .min(height);
+    let cropped_width = right - left;
+    let cropped_height = bottom - top;
+    if left == 0 && top == 0 && right == width && bottom == height {
+        return Some((image, 0, 0));
+    }
+    let mut pixels = Vec::with_capacity(cropped_width * cropped_height * 4);
+    for y in top..bottom {
+        let start = (y * width + left) * 4;
+        pixels.extend_from_slice(&image.pixels[start..start + cropped_width * 4]);
+    }
+    Some((
+        DecodedImage {
+            width: u32::try_from(cropped_width).ok()?,
+            height: u32::try_from(cropped_height).ok()?,
+            pixels,
+        },
+        left / cell_width,
+        top / cell_height,
+    ))
+}
+
 impl Default for KittyOverlays {
     fn default() -> Self {
         Self {
@@ -663,7 +729,6 @@ impl KittyOverlays {
             }
             let row = usize::from(outer_rows > 1) + usize::from(rect.row) + 1;
             let column = usize::from(rect.column) + 1;
-            let position = format!("\x1b[{row};{column}H");
             let restore = format!("\x1b[{};{}H", cursor.0 + 1, cursor.1 + 1);
             for band in ImageBand::ALL {
                 if self
@@ -678,6 +743,12 @@ impl KittyOverlays {
                 let Ok(Some(image)) = pane.compose_image_band(cell, band) else {
                     continue;
                 };
+                let Some((image, column_offset, row_offset)) =
+                    crop_overlay_to_visible_cells(image, cell)
+                else {
+                    continue;
+                };
+                let position = format!("\x1b[{};{}H", row + row_offset, column + column_offset);
                 let image_id = self.next_id;
                 let Some(next_id) = image_id.checked_add(1) else {
                     continue;
@@ -3273,6 +3344,34 @@ mod tests {
     }
 
     #[test]
+    fn outer_image_crop_preserves_cell_aligned_origin_and_pixels() {
+        let cell = CellPixelSize::new(2, 2).unwrap();
+        let mut pixels = vec![0; 7 * 5 * 4];
+        pixels[(3 * 7 + 3) * 4..(3 * 7 + 3) * 4 + 4].copy_from_slice(&[4, 5, 6, 255]);
+        let image = DecodedImage {
+            width: 7,
+            height: 5,
+            pixels,
+        };
+        let (cropped, column, row) = crop_overlay_to_visible_cells(image, cell).unwrap();
+        assert_eq!((column, row), (1, 1));
+        assert_eq!((cropped.width, cropped.height), (2, 2));
+        assert_eq!(&cropped.pixels[12..16], &[4, 5, 6, 255]);
+        assert_eq!(cropped.pixels.iter().filter(|&&byte| byte != 0).count(), 4);
+        assert!(
+            crop_overlay_to_visible_cells(
+                DecodedImage {
+                    width: 2,
+                    height: 2,
+                    pixels: vec![0; 16],
+                },
+                cell,
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
     fn graphics_probe_filters_only_new_input_and_preserves_queued_bytes() {
         let mut probe = Some(GraphicsCapabilityProbe::new(GRAPHICS_PROBE_IMAGE_ID));
         let mut support = None;
@@ -3321,7 +3420,7 @@ mod tests {
             .unwrap();
         let upload: Vec<_> = output.drain(..).collect();
         assert!(
-            upload.starts_with(b"\x1b[3;2H\x1b_Ga=T,f=32,s=2,v=2,i=2147483648,z=0,C=1,q=2,m=0;")
+            upload.starts_with(b"\x1b[3;2H\x1b_Ga=T,f=32,s=1,v=1,i=2147483648,z=0,C=1,q=2,m=0;")
         );
         assert!(upload.ends_with(b"\x1b[4;3H"));
         cache
@@ -3453,8 +3552,8 @@ mod tests {
                 .iter()
                 .copied()
                 .collect::<Vec<_>>()
-                .windows(b"a=T,f=32,s=2,v=2,i=2147483648".len())
-                .any(|bytes| bytes == b"a=T,f=32,s=2,v=2,i=2147483648"),
+                .windows(b"a=T,f=32,s=2,v=1,i=2147483648".len())
+                .any(|bytes| bytes == b"a=T,f=32,s=2,v=1,i=2147483648"),
             "{}",
             String::from_utf8_lossy(&output.iter().copied().collect::<Vec<_>>())
         );
@@ -3467,8 +3566,10 @@ mod tests {
         assert!(refreshed.starts_with(b"\x1b_Ga=d,d=I,i=2147483648,q=2\x1b\\"));
         assert!(
             refreshed
-                .windows(b"a=T,f=32,s=4,v=2,i=2147483649".len())
-                .any(|bytes| bytes == b"a=T,f=32,s=4,v=2,i=2147483649")
+                .windows(b"a=T,f=32,s=2,v=1,i=2147483649".len())
+                .any(|bytes| bytes == b"a=T,f=32,s=2,v=1,i=2147483649"),
+            "{}",
+            String::from_utf8_lossy(&refreshed)
         );
         assert_eq!(cache.entries.len(), 1);
         assert_eq!(panes.active().image_store().revision(), revision);
@@ -3588,6 +3689,7 @@ mod tests {
             .compose_image_band(cell, ImageBand::BehindBackground)
             .unwrap()
             .unwrap();
+        let (first, _, _) = crop_overlay_to_visible_cells(first, cell).unwrap();
         let allowance = b"\x1b[3;2H".len()
             + kitty_rgba_placement_len(&first, 0x8000_0000, i32::MIN).unwrap()
             + b"\x1b[4;3H".len();

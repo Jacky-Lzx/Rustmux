@@ -29,11 +29,10 @@ from yazi_compat import (
 
 
 def complete_overlay(output):
-    try:
-        decode_outer_rgba_overlay(output)
-        return True
-    except AssertionError:
-        return False
+    # Do not repeatedly Base64-decode every preceding chunk while a large
+    # overlay is still streaming; decode it once after the final APC arrives.
+    final = output.rfind(b"m=0;")
+    return final >= 0 and output.find(b"\x1b\\", final) >= 0
 
 
 def multichunk_png(path):
@@ -50,10 +49,21 @@ def multichunk_png(path):
     )
 
 
-def run_case(binary, kitten, image, config, options, label, expected_colors=None):
+def run_case(
+    binary,
+    kitten,
+    image,
+    config,
+    options,
+    label,
+    expected_colors=None,
+    session_name=None,
+    terminal_size=(24, 80, 960, 480),
+    timeout=20,
+):
     config.mkdir()
     master, slave = os.openpty()
-    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 960, 480))
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", *terminal_size))
     os.set_blocking(master, False)
     environment = dict(
         os.environ,
@@ -70,7 +80,7 @@ def run_case(binary, kitten, image, config, options, label, expected_colors=None
         fcntl.ioctl(0, termios.TIOCSCTTY, 0)
 
     process = subprocess.Popen(
-        [binary],
+        [binary, "new", session_name] if session_name else [binary],
         stdin=slave,
         stdout=slave,
         stderr=slave,
@@ -101,7 +111,7 @@ def run_case(binary, kitten, image, config, options, label, expected_colors=None
                 output,
                 complete_overlay,
                 process,
-                20,
+                timeout,
                 "complete composed kitten image overlay",
             )
         except AssertionError as error:
@@ -136,6 +146,8 @@ def run_case(binary, kitten, image, config, options, label, expected_colors=None
                     process.wait(timeout=3)
                 except subprocess.TimeoutExpired:
                     pass
+        if session_name:
+            subprocess.run([binary, "kill", session_name], check=True, capture_output=True)
 
 
 def main(binary):
@@ -165,6 +177,17 @@ def main(binary):
             root / "large-config",
             "",
             "default auto-detect multi-chunk PNG",
+        )
+        run_case(
+            binary,
+            kitten,
+            large,
+            root / "large-viewport-config",
+            "",
+            "large-viewport named-session PNG",
+            session_name=f"compatkitten{os.getpid()}",
+            terminal_size=(61, 215, 3655, 2013),
+            timeout=60,
         )
 
 

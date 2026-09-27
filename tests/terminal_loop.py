@@ -449,12 +449,15 @@ try:
         b"\\033_Ga=T,f=32,s=1,v=1,i=6,p=1,c=1,r=1,z=-1,C=1,q=2;AQIDBA==\\033\\\\"
         b"\\033_Ga=T,f=32,s=1,v=1,i=7,p=1,c=1,r=1,z=0,C=1,q=2;AQIDBA==\\033\\\\'\n"
     )
-    header = rb"\x1b_Ga=T,f=32,s=78,v=20,i=([0-9]+),z=(-2147483648|-1|0),C=1,q=2,m=1;"
+    header = rb"\x1b_Ga=T,f=32,s=([0-9]+),v=([0-9]+),i=([0-9]+),z=(-2147483648|-1|0),C=1,q=2,m=0;"
     deadline = time.monotonic() + 8
-    while len({int(z) for _, z in re.findall(header, s.output)}) != 3:
+    while len({int(z) for _, _, _, z in re.findall(header, s.output)}) != 3:
         s.read()
         assert time.monotonic() < deadline, bytes(s.output[-1000:])
-    uploaded = {int(z): int(image_id) for image_id, z in re.findall(header, s.output)}
+    uploads = re.findall(header, s.output)
+    assert all(0 < int(width) <= 78 and 0 < int(height) <= 20
+               for width, height, _, _ in uploads)
+    uploaded = {int(z): int(image_id) for _, _, image_id, z in uploads}
     s.output.clear()
     s.send(b"printf '\\033[2J'\n")
     deletes = [f"\x1b_Ga=d,d=I,i={image_id},q=2\x1b\\".encode()
