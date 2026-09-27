@@ -4,13 +4,16 @@
 //! implementation. Callers validate assembled blobs before display or replies.
 
 use crate::graphics::MAX_GRAPHICS_COMMAND_BYTES;
-use base64::{Engine as _, engine::general_purpose::STANDARD};
+use base64::{
+    Engine as _,
+    engine::general_purpose::{STANDARD, STANDARD_NO_PAD},
+};
 use flate2::bufread::ZlibDecoder;
 use std::collections::BTreeMap;
 use std::io::Read;
 
-/// The protocol's maximum number of base64 bytes in one direct-data chunk.
-pub const MAX_ENCODED_CHUNK_BYTES: usize = 4096;
+/// Kitten icat's largest observed encoded chunk; larger APCs remain bounded.
+pub const MAX_ENCODED_CHUNK_BYTES: usize = 128 * 1024;
 /// Cap one in-progress image independently of its number of chunks.
 pub const MAX_DIRECT_TRANSFER_BYTES: usize = 16 * 1024 * 1024;
 
@@ -119,16 +122,20 @@ impl DirectTransferAssembler {
             self.reset();
             return None;
         }
-        let Ok(chunk) = STANDARD.decode(encoded) else {
+        let Some(chunk) = decode_base64(encoded) else {
             self.reset();
             return None;
         };
 
         if let Some(mut pending) = self.pending.take() {
-            // Later chunks inherit all image parameters from the first one.
-            // Kitty allows only m and optionally q in these commands.
-            if !controls.contains_key(&b'm')
-                || controls.keys().any(|key| !matches!(key, b'm' | b'q'))
+            // Later chunks inherit image parameters. Kitten icat repeats the
+            // same action on continuation chunks and omits m on the last one.
+            if controls
+                .get(&b'a')
+                .is_some_and(|action| pending.controls.get(&b'a') != Some(action))
+                || controls
+                    .keys()
+                    .any(|key| !matches!(key, b'a' | b'm' | b'q'))
                 || !valid_quiet(&controls)
                 || !append_bounded(&mut pending.data, &chunk)
             {
@@ -160,6 +167,16 @@ impl DirectTransferAssembler {
         } else {
             finish(pending)
         }
+    }
+}
+
+fn decode_base64(encoded: &[u8]) -> Option<Vec<u8>> {
+    // Kitty chunks after encoding, so only the final chunk may omit padding.
+    // The caller separately requires all non-final chunks to be 4-byte aligned.
+    if encoded.ends_with(b"=") {
+        STANDARD.decode(encoded).ok()
+    } else {
+        STANDARD_NO_PAD.decode(encoded).ok()
     }
 }
 
@@ -219,7 +236,7 @@ pub(crate) fn unsupported_medium_controls(command: &[u8]) -> Option<Controls> {
         )
         || !valid_quiet(&controls)
         || encoded.is_empty()
-        || STANDARD.decode(encoded).is_err()
+        || decode_base64(encoded).is_none()
     {
         return None;
     }
@@ -237,7 +254,8 @@ fn valid_first(controls: &Controls) -> bool {
         )
         && matches!(controls.get(&b'o').map(Vec::as_slice), None | Some(b"z"))
         && controls.get(&b'S').is_none_or(|value| {
-            controls.get(&b'o').is_some()
+            (controls.get(&b'o').is_some()
+                || controls.get(&b'a').is_some_and(|action| action == b"q"))
                 && parse_positive(value)
                     .is_some_and(|size| size as usize <= MAX_DIRECT_TRANSFER_BYTES)
         })
@@ -319,6 +337,9 @@ fn finish(pending: Pending) -> Option<AssembledDirectTransfer> {
         decoded
     } else {
         if raw_size.is_some_and(|size| size != data.len()) {
+            return None;
+        }
+        if declared_size.is_some_and(|size| size != data.len()) {
             return None;
         }
         data
@@ -431,6 +452,72 @@ mod tests {
 
         let png = direct("a=t,o=z,f=100,S=3,i=9", &zlib(b"PNG"));
         assert_eq!(assembler.accept(&png).unwrap().data, b"PNG");
+    }
+
+    #[test]
+    fn kitten_direct_probe_accepts_matching_uncompressed_size_only_for_queries() {
+        let mut assembler = DirectTransferAssembler::new();
+        let query = direct("a=q,t=d,f=24,i=1,s=1,v=1,S=3", b"123");
+        let image = assembler.accept(&query).unwrap();
+        assert_eq!(image.data, b"123");
+        assert_eq!(image.control(b'S'), Some(b"3".as_slice()));
+        assert!(
+            assembler
+                .accept(&direct("a=q,t=d,f=24,i=1,s=1,v=1,S=4", b"123"))
+                .is_none()
+        );
+        assert!(
+            assembler
+                .accept(&direct("a=T,t=d,f=24,i=1,s=1,v=1,S=3", b"123"))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn final_direct_chunk_accepts_kitty_unpadded_base64() {
+        let mut assembler = DirectTransferAssembler::new();
+        let rgba = [1, 2, 3, 4, 5, 6, 7, 8];
+        let encoded = STANDARD_NO_PAD.encode(zlib(&rgba));
+        assert_ne!(encoded.len() % 4, 0);
+        let command = format!("\x1b_Ga=T,o=z,f=32,s=2,v=1;{encoded}\x1b\\");
+        assert_eq!(assembler.accept(command.as_bytes()).unwrap().data, rgba);
+        assert!(assembler.accept(b"\x1b_Gf=100;A\x1b\\").is_none());
+        assert!(assembler.accept(b"\x1b_Gf=100;QUJ=\x1b\\").is_none());
+    }
+
+    #[test]
+    fn kitten_continuations_repeat_action_and_omit_final_chunk_marker() {
+        let mut assembler = DirectTransferAssembler::new();
+        assert!(
+            assembler
+                .accept(b"\x1b_Ga=T,f=24,s=3,v=1,m=1;AQID\x1b\\")
+                .is_none()
+        );
+        assert!(assembler.accept(b"\x1b_Ga=T,q=2,m=1;BAUG\x1b\\").is_none());
+        let image = assembler.accept(b"\x1b_Ga=T,q=2;BwgJ\x1b\\").unwrap();
+        assert_eq!(image.data, [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        assert_eq!(image.control(b'q'), Some(b"2".as_slice()));
+        assert!(
+            assembler
+                .accept(b"\x1b_Ga=T,f=24,s=1,v=1,m=1;AQID\x1b\\")
+                .is_none()
+        );
+        assert!(assembler.accept(b"\x1b_Ga=t;BAUG\x1b\\").is_none());
+    }
+
+    #[test]
+    fn kitten_sized_chunk_passes_framer_and_assembler() {
+        let raw = vec![7; 98_304];
+        let command = direct("a=T,f=24,s=32768,v=1", &raw);
+        assert_eq!(STANDARD.encode(&raw).len(), MAX_ENCODED_CHUNK_BYTES);
+        let mut framer = GraphicsFramer::new();
+        let mut assembler = DirectTransferAssembler::new();
+        let events = framer.advance(&command);
+        assert_eq!(events.len(), 1);
+        let GraphicsEvent::Command(command) = &events[0] else {
+            panic!("Kitten-sized chunk must be framed");
+        };
+        assert_eq!(assembler.accept(command).unwrap().data, raw);
     }
 
     #[test]

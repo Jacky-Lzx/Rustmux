@@ -3,9 +3,9 @@
 //! This module only frames input; image display and conditional capability
 //! replies are handled by later runtime stages.
 
-/// Kitty limits a direct-data chunk to 4096 encoded bytes. Allow room for
-/// control fields without retaining an unbounded APC from a hostile child.
-pub const MAX_GRAPHICS_COMMAND_BYTES: usize = 16 * 1024;
+/// Kitten icat sends up to 128 KiB of encoded data per APC, even though the
+/// published protocol specifies 4096 bytes. Reserve bounded control space.
+pub const MAX_GRAPHICS_COMMAND_BYTES: usize = 128 * 1024 + 4096;
 
 /// Events retain their order relative to ordinary terminal output.
 #[derive(Debug, Eq, PartialEq)]

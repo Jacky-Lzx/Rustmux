@@ -6,22 +6,26 @@ their 8-bit APC/ST form) across arbitrary PTY read boundaries. It emits graphics
 commands and ordinary terminal bytes as ordered events. Other APCs pass through
 unchanged. A UTF-8 continuation byte cannot be mistaken for an 8-bit APC.
 
-Each retained command is limited to 16 KiB, enough for Kitty's documented
-4 KiB encoded direct-data chunk plus control fields. An oversized, cancelled,
+Each retained command is limited to 128 KiB of encoded data plus 4 KiB of
+control/framing space. This accommodates installed `kitten icat`, which sends
+larger chunks than Kitty's documented 4 KiB limit. An oversized, cancelled,
 incorrectly terminated or unfinished graphics command is discarded without exposing its
 payload as terminal text. The framer does not concatenate separate Kitty
 transfer chunks; each APC is one event.
 
 `DirectTransferAssembler` is the next, separate data boundary. It parses
 complete APC G commands, decodes Base64 direct-data chunks, and combines them
-until `m=0`. Subsequent chunks may contain only `m` and optional `q`; an invalid
-or interrupted transfer is discarded, and the next independent transfer can
+until the final chunk (`m=0` or an omitted `m`). Subsequent chunks may contain
+`m`, optional `q`, and a repeated matching action, as sent by `kitten icat`;
+an invalid or interrupted transfer is discarded, and the next independent transfer can
 start cleanly. It preserves the first chunk's control fields and the final
 chunk's optional `q` override. It checks the byte count for raw RGB/RGBA data;
 PNG bytes remain opaque until a later image decoder validates them.
 
-One encoded chunk is limited to 4096 bytes and one assembled transfer to
-16 MiB. Direct data (`t=d`, `a=t/T/q`) may be uncompressed or use `o=z`
+One encoded chunk is limited to 128 KiB to accommodate installed `kitten icat`
+output (the published protocol specifies 4096 bytes); one assembled transfer
+is still limited to 16 MiB. The final chunk may omit Base64 padding. Direct
+data (`t=d`, `a=t/T/q`) may be uncompressed or use `o=z`
 zlib compression. Both compressed input and decompressed output are bounded
 to 16 MiB; raw RGB/RGBA output must match its dimensions, and compressed PNG
 requires `S=<uncompressed-byte-count>`. Malformed streams, mismatched sizes,
@@ -426,18 +430,21 @@ absent, it reports `SKIP`. The smoke passed with Yazi 26.9.1, but only covers
 this PNG/Kitty preview path, not every Yazi feature or terminal.
 
 The same optional `cargo compat` target also runs an installed `kitten icat`
-smoke when `kitten` is on `PATH`. It uses a generated PNG, stream transfer and
-Unicode placeholders without overriding window size, then checks the composed
-outer RGBA pixels. When the attached terminal supplies an exact cell size,
+smoke when `kitten` is on `PATH`. It checks a small generated PNG with Unicode
+placeholders and another generated image through the default auto-detect,
+multi-chunk command, without overriding window size. Both must produce a
+composed outer RGBA image. When the attached terminal supplies an exact cell size,
 Rustmux writes the current pane's pixel dimensions to its child PTY, including
 after text-grid or cell-pixel changes. If that size is unknown or exceeds the
-PTY's 16-bit pixel fields, both pixel fields remain zero. This smoke covers one
-small PNG path, not all `kitten icat` features.
+PTY's 16-bit pixel fields, both pixel fields remain zero. This smoke covers these
+PNG paths, not all `kitten icat` features.
 
 A child running inside a pane may probe graphics with `a=q`. On a currently
 attached outer terminal whose Kitty graphics probe succeeded and whose physical
 cell size is exact, Rustmux replies to a completed, valid direct-data query
-using the same nonzero image ID. The reply is delivered through the pane's PTY
+using the same nonzero image ID. An uncompressed direct query may include an
+`S` byte count when it matches the payload, as `kitten icat` does. The reply is
+delivered through the pane's PTY
 before a subsequent primary-DA reply, so a child can detect this supported
 subset. Completed transfers with invalid image data or unsupported controls
 receive a bounded error reply; `q=1` suppresses success and `q=2` suppresses
