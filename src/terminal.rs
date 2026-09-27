@@ -592,7 +592,7 @@ impl Write for FrameWriter<'_> {
 
 // The outer alternate screen belongs to this attachment. Only delete IDs we
 // allocated here; deleting all images could erase another client's graphics.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 struct KittyOverlay {
     window: WindowId,
     pane: PaneId,
@@ -607,9 +607,16 @@ struct KittyOverlay {
     row_offset: usize,
 }
 
+struct PendingPngTile {
+    overlay: KittyOverlay,
+    png: EncodedKittyPng,
+    placement_len: usize,
+}
+
 struct KittyOverlays {
     entries: Vec<KittyOverlay>,
     pending_delete: VecDeque<u32>,
+    pending_png: Option<PendingPngTile>,
     next_id: u32,
     pending_retry: bool,
 }
@@ -747,6 +754,7 @@ impl Default for KittyOverlays {
         Self {
             entries: Vec::new(),
             pending_delete: VecDeque::new(),
+            pending_png: None,
             next_id: 0x8000_0000,
             pending_retry: false,
         }
@@ -766,6 +774,25 @@ impl KittyOverlays {
         let retry_missing = self.pending_retry;
         self.pending_retry = false;
         let visible = panes.layout().content_geometry().panes;
+        // A deferred PNG belongs to the same scene revision as its tile. Drop
+        // it before considering output if that scene has changed meanwhile.
+        if self.pending_png.as_ref().is_some_and(|pending| {
+            let cached = pending.overlay;
+            cached.window != window
+                || cached.cell != cell
+                || !visible.iter().any(|(id, rect)| {
+                    *id == cached.pane
+                        && *rect == cached.rect
+                        && panes.get(*id).is_some_and(|pane| {
+                            pane.image_store().revision() == cached.revision
+                                && pane.virtual_placeholder_revision()
+                                    == cached.placeholder_revision
+                                && pane.screen().is_alternate() == cached.alternate
+                        })
+                })
+        }) {
+            self.pending_png = None;
+        }
         let mut moved_cursor = false;
         for old in std::mem::take(&mut self.entries) {
             let current = visible.iter().find(|(id, _)| *id == old.pane);
@@ -853,9 +880,30 @@ impl KittyOverlays {
                         let Some(next_id) = image_id.checked_add(1) else {
                             continue;
                         };
-                        let Ok((payload, payload_len)) =
+                        let overlay = KittyOverlay {
+                            window,
+                            pane: id,
+                            band,
+                            revision: pane.image_store().revision(),
+                            placeholder_revision: pane.virtual_placeholder_revision(),
+                            rect,
+                            cell,
+                            alternate: pane.screen().is_alternate(),
+                            image_id,
+                            column_offset: tile_column,
+                            row_offset: tile_row,
+                        };
+                        let prepared = if self
+                            .pending_png
+                            .as_ref()
+                            .is_some_and(|pending| pending.overlay == overlay)
+                        {
+                            let pending = self.pending_png.take().expect("matching cached tile");
+                            Ok((OverlayPayload::Png(pending.png), pending.placement_len))
+                        } else {
                             prepare_overlay_payload(tile, image_id, band.output_z())
-                        else {
+                        };
+                        let Ok((payload, payload_len)) = prepared else {
                             continue;
                         };
                         let frame_len = position.len() + payload_len + restore.len();
@@ -864,6 +912,15 @@ impl KittyOverlays {
                         }
                         if frame_len > MAX_FRAME - output.len() {
                             self.pending_retry = true;
+                            if let OverlayPayload::Png(png) = payload
+                                && self.pending_png.is_none()
+                            {
+                                self.pending_png = Some(PendingPngTile {
+                                    overlay,
+                                    png,
+                                    placement_len: payload_len,
+                                });
+                            }
                             continue;
                         }
                         FrameWriter(output).write_all(position.as_bytes())?;
@@ -885,19 +942,7 @@ impl KittyOverlays {
                         }
                         moved_cursor = true;
                         self.next_id = next_id;
-                        self.entries.push(KittyOverlay {
-                            window,
-                            pane: id,
-                            band,
-                            revision: pane.image_store().revision(),
-                            placeholder_revision: pane.virtual_placeholder_revision(),
-                            rect,
-                            cell,
-                            alternate: pane.screen().is_alternate(),
-                            image_id,
-                            column_offset: tile_column,
-                            row_offset: tile_row,
-                        });
+                        self.entries.push(overlay);
                     }
                 }
             }
@@ -910,11 +955,15 @@ impl KittyOverlays {
                 cursor.1 + 1
             )?;
         }
+        if !self.pending_retry {
+            self.pending_png = None;
+        }
         Ok(())
     }
 
     fn clear(&mut self, output: &mut VecDeque<u8>) -> io::Result<()> {
         self.pending_retry = false;
+        self.pending_png = None;
         for entry in self.entries.drain(..) {
             self.pending_delete.push_back(entry.image_id);
         }
@@ -4027,11 +4076,21 @@ mod tests {
         assert!(kitty_rgba_placement_len(&full, 0x8000_0000, 0).unwrap() > MAX_FRAME);
         drop(full);
         let mut cache = KittyOverlays::default();
-        let mut output = VecDeque::new();
+        // Force a frame-pressure retry before the normal upload. The first
+        // compressed tile should be retained instead of compressed again.
+        let mut output = VecDeque::from(vec![0; MAX_FRAME - 1]);
+        cache
+            .render(window_id, panes, cell, 204, (0, 0), &mut output)
+            .unwrap();
+        assert!(cache.pending_retry);
+        assert!(cache.entries.is_empty());
+        assert!(cache.pending_png.is_some());
+        output.clear();
         cache
             .render(window_id, panes, cell, 204, (0, 0), &mut output)
             .unwrap();
         assert!(!cache.entries.is_empty());
+        assert!(cache.pending_png.is_none());
         assert!(output.len() <= MAX_FRAME);
         let first_frame: Vec<_> = output.iter().copied().collect();
         assert!(
@@ -4068,6 +4127,26 @@ mod tests {
             .render(window_id, panes, cell, 204, (0, 0), &mut output)
             .unwrap();
         assert!(output.is_empty(), "unchanged tiles must not be resent");
+        let mut stale = cache.entries[0];
+        stale.revision += 1;
+        cache.pending_png = Some(PendingPngTile {
+            overlay: stale,
+            png: EncodedKittyPng::from_rgba(&DecodedImage {
+                width: 1,
+                height: 1,
+                pixels: vec![0; 4],
+            })
+            .unwrap(),
+            placement_len: 1,
+        });
+        cache
+            .render(window_id, panes, cell, 204, (0, 0), &mut output)
+            .unwrap();
+        assert!(
+            cache.pending_png.is_none(),
+            "stale scene must drop cached PNG"
+        );
+        assert!(output.is_empty());
         let first_delete = format!("\x1b_Ga=d,d=I,i={},q=2\x1b\\", ids[0]);
         output = VecDeque::from(vec![0; MAX_FRAME - first_delete.len()]);
         cache.clear(&mut output).unwrap();

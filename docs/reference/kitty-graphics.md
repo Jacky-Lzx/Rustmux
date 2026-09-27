@@ -340,6 +340,12 @@ least 256 KiB raw RGBA, the runtime selects PNG only when its complete wire
 transfer is smaller; otherwise it sends the existing `f=32` RGBA transfer.
 Both choices receive the same exact 16 MiB frame preflight. PNG encoding or
 size-validation failures fall back to RGBA.
+If a PNG tile is prepared but the current frame has insufficient space, the
+runtime retains at most one encoded tile (bounded by the same 32 MiB PNG
+limit) for the next frame. It reuses that transfer only while the pane,
+revision, geometry, cell size, image ID, band, and tile position still match;
+scene changes and attachment cleanup discard it. Other deferred tiles can be
+prepared on later frames without retaining unbounded compressed copies.
 
 `GraphicsCapabilityProbe` is a separate opt-in outer-terminal detection
 boundary. It generates a one-pixel, direct-RGB `a=q` query followed by primary
