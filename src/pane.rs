@@ -82,6 +82,7 @@ pub struct PreparedPaneResize<'a> {
     prompt_start: Option<(usize, usize)>,
     rows: u16,
     columns: u16,
+    cell_pixels: Option<(u16, u16)>,
 }
 
 impl PreparedPaneResize<'_> {
@@ -95,9 +96,11 @@ impl PreparedPaneResize<'_> {
             prompt_start,
             rows,
             columns,
+            cell_pixels,
         } = self;
         if pane.io.status.is_none() && !pane.io.eof {
-            pane.shell.resize(rows, columns)?;
+            pane.shell
+                .resize_with_cell_pixels(rows, columns, cell_pixels)?;
         }
         if let Some(screen) = screen {
             pane.screen = screen;
@@ -293,6 +296,37 @@ impl Pane {
         rows: u16,
         columns: u16,
     ) -> io::Result<PreparedPaneResize<'_>> {
+        let cell_pixels = self.shell.cell_pixels();
+        self.prepare_resize_inner(rows, columns, cell_pixels)
+    }
+
+    pub(crate) fn prepare_resize_with_cell_pixels(
+        &mut self,
+        rows: u16,
+        columns: u16,
+        cell_pixels: Option<CellPixelSize>,
+    ) -> io::Result<PreparedPaneResize<'_>> {
+        self.prepare_resize_inner(
+            rows,
+            columns,
+            cell_pixels.map(|cell| (cell.width(), cell.height())),
+        )
+    }
+
+    pub(crate) fn sync_pty_cell_pixels(
+        &mut self,
+        cell_pixels: Option<CellPixelSize>,
+    ) -> io::Result<()> {
+        self.shell
+            .sync_cell_pixels(cell_pixels.map(|cell| (cell.width(), cell.height())))
+    }
+
+    fn prepare_resize_inner(
+        &mut self,
+        rows: u16,
+        columns: u16,
+        cell_pixels: Option<(u16, u16)>,
+    ) -> io::Result<PreparedPaneResize<'_>> {
         if rows == 0 || columns == 0 || usize::from(rows) * usize::from(columns) > MAX_CELLS {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -333,6 +367,7 @@ impl Pane {
             prompt_start,
             rows,
             columns,
+            cell_pixels,
         })
     }
 

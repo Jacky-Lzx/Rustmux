@@ -2079,13 +2079,27 @@ fn forward(
                 let rectangles = &sizes.iter().find(|(id, _)| *id == window.id()).unwrap().1;
                 for (pane_id, pane) in window.content_mut().iter_mut() {
                     let rect = rectangles.iter().find(|(id, _)| *id == pane_id).unwrap().1;
-                    prepared.push(pane.prepare_resize(rect.rows, rect.columns)?);
+                    prepared.push(pane.prepare_resize_with_cell_pixels(
+                        rect.rows,
+                        rect.columns,
+                        *cell_pixels,
+                    )?);
                 }
             }
             for resize in prepared {
                 resize.commit()?;
             }
             pane_resize_pending = None;
+        }
+        // New panes can already match their layout's character dimensions,
+        // so PaneSet::synchronize_sizes may have skipped their first ioctl.
+        // Keep their PTY pixel fields current before servicing child output.
+        for window in windows.iter_mut() {
+            for (_, pane) in window.content_mut().iter_mut() {
+                if pane.io().status.is_none() && !pane.io().eof {
+                    pane.sync_pty_cell_pixels(*cell_pixels)?;
+                }
+            }
         }
         // Service the hidden undo pane after consuming an outer resize, so it
         // never interprets new graphics output using stale physical cells.

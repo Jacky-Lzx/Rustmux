@@ -23,6 +23,9 @@ use nix::unistd::{Pid, setsid, tcgetpgrp};
 pub struct PtyShell {
     master: Option<File>,
     child: Child,
+    rows: u16,
+    columns: u16,
+    cell_pixels: Option<(u16, u16)>,
 }
 
 impl PtyShell {
@@ -63,18 +66,7 @@ impl PtyShell {
     }
 
     fn spawn_command(mut command: Command, rows: u16, columns: u16) -> io::Result<Self> {
-        if rows == 0 || columns == 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "PTY dimensions must be nonzero",
-            ));
-        }
-        let size = Winsize {
-            ws_row: rows,
-            ws_col: columns,
-            ws_xpixel: 0,
-            ws_ypixel: 0,
-        };
+        let size = winsize(rows, columns, None)?;
         let pair = openpty(Some(&size), None)?;
         // Move both descriptors above stderr even if the caller closed stdio.
         // CLOEXEC prevents master/slave copies surviving a successful exec.
@@ -105,6 +97,9 @@ impl PtyShell {
         Ok(Self {
             master: Some(master.into()),
             child,
+            rows,
+            columns,
+            cell_pixels: None,
         })
     }
 
@@ -146,26 +141,41 @@ impl PtyShell {
         preferred_directory(tracked, foreground_name.as_deref(), process_directory)
     }
 
-    /// Update character dimensions; the kernel notifies the PTY foreground process group.
-    /// Zero dimensions are rejected. Returns NotConnected after termination.
+    /// Update character dimensions while preserving the last exact cell-pixel size.
+    /// The kernel notifies the PTY foreground process group. Zero dimensions are
+    /// rejected. Returns NotConnected after termination.
     pub fn resize(&mut self, rows: u16, columns: u16) -> io::Result<()> {
-        if rows == 0 || columns == 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "PTY dimensions must be nonzero",
-            ));
+        self.resize_with_cell_pixels(rows, columns, self.cell_pixels)
+    }
+
+    pub(crate) fn cell_pixels(&self) -> Option<(u16, u16)> {
+        self.cell_pixels
+    }
+
+    /// Refresh a newly created pane or a pixel-only outer resize without
+    /// sending redundant SIGWINCH notifications when nothing changed.
+    pub(crate) fn sync_cell_pixels(&mut self, cell_pixels: Option<(u16, u16)>) -> io::Result<()> {
+        if self.cell_pixels == cell_pixels {
+            return Ok(());
         }
-        let size = Winsize {
-            ws_row: rows,
-            ws_col: columns,
-            ws_xpixel: 0,
-            ws_ypixel: 0,
-        };
+        self.resize_with_cell_pixels(self.rows, self.columns, cell_pixels)
+    }
+
+    pub(crate) fn resize_with_cell_pixels(
+        &mut self,
+        rows: u16,
+        columns: u16,
+        cell_pixels: Option<(u16, u16)>,
+    ) -> io::Result<()> {
+        let size = winsize(rows, columns, cell_pixels)?;
         let master = self.master()?;
         // SAFETY: master is live and size points to initialized Winsize storage.
         if unsafe { nix::libc::ioctl(master.as_raw_fd(), nix::libc::TIOCSWINSZ, &size) } == -1 {
             return Err(io::Error::last_os_error());
         }
+        self.rows = rows;
+        self.columns = columns;
+        self.cell_pixels = cell_pixels;
         Ok(())
     }
 
@@ -230,6 +240,31 @@ impl PtyShell {
             .as_mut()
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "PTY is closed"))
     }
+}
+
+fn winsize(rows: u16, columns: u16, cell_pixels: Option<(u16, u16)>) -> io::Result<Winsize> {
+    if rows == 0 || columns == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "PTY dimensions must be nonzero",
+        ));
+    }
+    let pixels = cell_pixels.and_then(|(width, height)| {
+        if width == 0 || height == 0 {
+            return None;
+        }
+        Some((
+            u16::try_from(u32::from(columns) * u32::from(width)).ok()?,
+            u16::try_from(u32::from(rows) * u32::from(height)).ok()?,
+        ))
+    });
+    let (ws_xpixel, ws_ypixel) = pixels.unwrap_or((0, 0));
+    Ok(Winsize {
+        ws_row: rows,
+        ws_col: columns,
+        ws_xpixel,
+        ws_ypixel,
+    })
 }
 
 fn private_fd(fd: OwnedFd) -> io::Result<OwnedFd> {
@@ -376,5 +411,63 @@ mod directory_tests {
                 .ok()
         );
         assert!(process_name(Pid::this()).is_some());
+    }
+}
+
+#[cfg(test)]
+mod pixel_size_tests {
+    use super::*;
+
+    fn current_size(shell: &PtyShell) -> Winsize {
+        let mut size = Winsize {
+            ws_row: 0,
+            ws_col: 0,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        let fd = shell.master_fd().unwrap();
+        // SAFETY: fd is a live PTY and size is initialized writable storage.
+        assert_ne!(
+            unsafe { nix::libc::ioctl(fd.as_raw_fd(), nix::libc::TIOCGWINSZ, &mut size) },
+            -1
+        );
+        size
+    }
+
+    #[test]
+    fn pixel_dimensions_require_exact_non_overflowing_cells() {
+        let size = winsize(24, 80, Some((12, 20))).unwrap();
+        assert_eq!((size.ws_xpixel, size.ws_ypixel), (960, 480));
+        let size = winsize(24, 80, None).unwrap();
+        assert_eq!((size.ws_xpixel, size.ws_ypixel), (0, 0));
+        let size = winsize(24, 80, Some((0, 20))).unwrap();
+        assert_eq!((size.ws_xpixel, size.ws_ypixel), (0, 0));
+        let size = winsize(2, u16::MAX, Some((2, 1))).unwrap();
+        assert_eq!((size.ws_xpixel, size.ws_ypixel), (0, 0));
+    }
+
+    #[test]
+    fn child_pty_pixel_size_tracks_cells_and_resizes() {
+        let mut shell = PtyShell::spawn("/bin/sh", 24, 80).unwrap();
+        let size = current_size(&shell);
+        assert_eq!((size.ws_xpixel, size.ws_ypixel), (0, 0));
+
+        shell.sync_cell_pixels(Some((12, 20))).unwrap();
+        let size = current_size(&shell);
+        assert_eq!((size.ws_row, size.ws_col), (24, 80));
+        assert_eq!((size.ws_xpixel, size.ws_ypixel), (960, 480));
+
+        shell.resize(3, 5).unwrap();
+        let size = current_size(&shell);
+        assert_eq!((size.ws_xpixel, size.ws_ypixel), (60, 60));
+
+        shell.sync_cell_pixels(Some((13, 20))).unwrap();
+        let size = current_size(&shell);
+        assert_eq!((size.ws_row, size.ws_col), (3, 5));
+        assert_eq!((size.ws_xpixel, size.ws_ypixel), (65, 60));
+
+        shell.sync_cell_pixels(None).unwrap();
+        let size = current_size(&shell);
+        assert_eq!((size.ws_xpixel, size.ws_ypixel), (0, 0));
     }
 }

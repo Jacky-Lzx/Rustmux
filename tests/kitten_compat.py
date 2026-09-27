@@ -1,10 +1,9 @@
 """Opt-in end-to-end smoke for an installed kitten icat in a Rustmux pane.
 
 The fake outer PTY advertises Kitty graphics. The test asks real kitten icat
-to send a PNG with Unicode placeholders and an explicit window size, then
-checks Rustmux's composed outer RGBA upload. It does not require a GUI terminal
-or a particular home config. Automatic kitten window-size discovery is not
-covered: the child PTY currently has zero pixel-size ioctl fields.
+to discover the child PTY's window size and send a PNG with Unicode
+placeholders, then checks Rustmux's composed outer RGBA upload. It does not
+require a GUI terminal or a particular home config.
 """
 
 import fcntl
@@ -80,7 +79,6 @@ def main(binary):
             command = (
                 f"{shlex.quote(kitten)} icat --transfer-mode=stream "
                 "--unicode-placeholder --place=2x2@0x0 "
-                "--use-window-size=80,24,960,480 "
                 f"--stdin=no --image-id=47 {shlex.quote(str(image))}\n"
             )
             os.write(master, command.encode())
@@ -91,7 +89,7 @@ def main(binary):
             )
             _, width, height, pixels = decode_outer_rgba_overlay(output)
             assert_fixture_pixels(width, height, pixels, FIRST_COLORS)
-            print("PASS: installed kitten icat explicit-size Unicode-placeholder PNG composited")
+            print("PASS: installed kitten icat automatic-size Unicode-placeholder PNG composited")
         finally:
             os.close(master)
             os.close(slave)
