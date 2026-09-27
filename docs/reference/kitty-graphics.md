@@ -407,7 +407,9 @@ bounds to be checked before decoding too; unvalidated PNG declarations are
 not trusted for this shortcut. The pane answers `CSI 16t` with
 `CSI 6;height;width t` when that cell size is known. It also answers `CSI 14t`
 with `CSI 4;height;width t` for the current pane text area, computed from its
-grid and the exact cell size. Otherwise it does not invent a pixel-size reply.
+grid and the exact cell size. `CSI 15t` reports that pane's logical screen with
+the same pixel dimensions and the distinct `CSI 5;height;width t` reply.
+Otherwise it does not invent a pixel-size reply.
 
 An optional installed-Yazi smoke test exercises the actual preview path. After
 updating Yazi, run `cargo compat`. This alias runs the opt-in tests in

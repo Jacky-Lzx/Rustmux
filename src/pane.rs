@@ -1537,6 +1537,39 @@ mod io_tests {
     }
 
     #[test]
+    fn pane_pixel_size_replies_follow_runtime_resize_and_exact_cell_size() {
+        let mut pane = Pane::spawn("/bin/sh", 2, 8).unwrap();
+        let cell = CellPixelSize::new(12, 20).unwrap();
+        let mut replies = Vec::new();
+        pane.process_output_for_runtime(
+            b"\x1b[14t\x1b[15t\x1b[16t",
+            &mut |reply| replies.extend_from_slice(reply),
+            Some(cell),
+            false,
+        );
+        assert_eq!(replies, b"\x1b[4;40;96t\x1b[5;40;96t\x1b[6;20;12t");
+
+        pane.prepare_resize(3, 5).unwrap().commit().unwrap();
+        replies.clear();
+        pane.process_output_for_runtime(
+            b"\x1b[15t\x1b[19t",
+            &mut |reply| replies.extend_from_slice(reply),
+            Some(cell),
+            false,
+        );
+        assert_eq!(replies, b"\x1b[5;60;60t\x1b[9;3;5t");
+
+        replies.clear();
+        pane.process_output_for_runtime(
+            b"\x1b[14t\x1b[15t\x1b[16t\x1b[18t",
+            &mut |reply| replies.extend_from_slice(reply),
+            None,
+            false,
+        );
+        assert_eq!(replies, b"\x1b[8;3;5t");
+    }
+
+    #[test]
     fn graphics_payload_does_not_enter_semantic_command_output() {
         let mut pane = Pane::spawn("/bin/sh", 4, 40).unwrap();
         for part in [
