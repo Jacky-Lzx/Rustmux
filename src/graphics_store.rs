@@ -2,8 +2,8 @@
 //! anchors are recorded, but no pixels are rendered here.
 
 use crate::{
-    graphics::MAX_GRAPHICS_COMMAND_BYTES, graphics_transfer::AssembledDirectTransfer,
-    screen::ScrollEvent,
+    graphics::MAX_GRAPHICS_COMMAND_BYTES, graphics_decode::DecodeError,
+    graphics_transfer::AssembledDirectTransfer, screen::ScrollEvent,
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -678,9 +678,17 @@ impl ImageStore {
         // The runtime must not replace a displayable image with corrupt or
         // unsupported PNG bytes. Raw lengths were checked by the assembler.
         // Cache successful dimensions so sized placement does not decode twice.
+        // When full expansion exceeds the limit, validate every PNG row and
+        // checksum through the bounded streaming decoder instead.
         let decoded_dimensions = if validate_png && format == ImageFormat::Png {
-            let decoded = image.decode_rgba().map_err(|_| StoreError::InvalidData)?;
-            Some((decoded.width, decoded.height))
+            let dimensions = match image.decode_rgba() {
+                Ok(decoded) => (decoded.width, decoded.height),
+                Err(DecodeError::OutputLimit) => image
+                    .validated_png_dimensions()
+                    .map_err(|_| StoreError::InvalidData)?,
+                Err(_) => return Err(StoreError::InvalidData),
+            };
+            Some(dimensions)
         } else {
             None
         };

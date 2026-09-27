@@ -1043,6 +1043,107 @@ mod io_tests {
     }
 
     #[test]
+    fn runtime_streams_large_png_into_cropped_regular_and_virtual_placements() {
+        let width = 2900u32;
+        let height = 2900u32;
+        let mut source = vec![0; (width * height * 4) as usize];
+        let split = (width * height / 2 * 4) as usize;
+        for pixel in source[..split].as_chunks_mut::<4>().0 {
+            *pixel = [255, 0, 0, 255];
+        }
+        for pixel in source[split..].as_chunks_mut::<4>().0 {
+            *pixel = [0, 0, 255, 255];
+        }
+        let mut png = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut png, width, height);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder.set_compression(png::Compression::Fast);
+            let mut writer = encoder.write_header().unwrap();
+            writer.write_image_data(&source).unwrap();
+            writer.finish().unwrap();
+        }
+        let mut pane = Pane::spawn("/bin/sh", 4, 4).unwrap();
+        let cell = CellPixelSize::new(1, 1).unwrap();
+        let encoded = STANDARD.encode(&png);
+        assert!(encoded.len() > 100_000);
+        let first = format!(
+            "\x1b_Ga=t,f=100,i=7,q=2,s={width},v={height},m=1;{}\x1b\\",
+            &encoded[..100_000]
+        );
+        let last = format!("\x1b_Gm=0;{}\x1b\\", &encoded[100_000..]);
+        pane.process_output_for_runtime(first.as_bytes(), &mut |_| {}, Some(cell), true);
+        pane.process_output_for_runtime(last.as_bytes(), &mut |_| {}, Some(cell), true);
+        assert_eq!(
+            pane.image_store().get(7).unwrap().decode_rgba(),
+            Err(crate::graphics_decode::DecodeError::OutputLimit)
+        );
+
+        let mut replies = Vec::new();
+        pane.process_output_for_runtime(
+            b"\x1b[3;3H\x1b_Ga=p,i=7,p=1,x=1449,y=1449,w=2,h=2,c=2,r=2,C=1\x1b\\",
+            &mut |reply| replies.extend_from_slice(reply),
+            Some(cell),
+            true,
+        );
+        assert_eq!(replies, b"\x1b_Gi=7,p=1;OK\x1b\\");
+        let snapshot = pane.compose_image_snapshot(cell).unwrap();
+        let at = |row: usize, column: usize| {
+            &snapshot.pixels[(row * 4 + column) * 4..(row * 4 + column + 1) * 4]
+        };
+        assert_eq!(at(2, 2), &[255, 0, 0, 255]);
+        assert_eq!(at(3, 2), &[0, 0, 255, 255]);
+        assert_eq!(at(0, 0), &[0, 0, 0, 0]);
+
+        replies.clear();
+        pane.process_output_for_runtime(
+            b"\x1b_Ga=p,i=7,p=2,U=1,x=1449,y=1449,w=2,h=2,c=2,r=2\x1b\\",
+            &mut |reply| replies.extend_from_slice(reply),
+            Some(cell),
+            true,
+        );
+        assert_eq!(replies, b"\x1b_Gi=7,p=2;OK\x1b\\");
+        pane.process_output_for_runtime(
+            "\x1b[1;1H\x1b[38;5;7m\u{10eeee}\u{0305}\u{0305}".as_bytes(),
+            &mut |_| {},
+            Some(cell),
+            true,
+        );
+        let snapshot = pane.compose_image_snapshot(cell).unwrap();
+        assert_eq!(&snapshot.pixels[..4], &[255, 0, 0, 255]);
+        assert_eq!(
+            &snapshot.pixels[(3 * 4 + 2) * 4..(3 * 4 + 3) * 4],
+            &[0, 0, 255, 255]
+        );
+
+        let revision = pane.image_store().revision();
+        *png.last_mut().unwrap() ^= 1;
+        let encoded = STANDARD.encode(&png);
+        let first = format!("\x1b_Ga=t,f=100,i=7,m=1;{}\x1b\\", &encoded[..100_000]);
+        let last = format!("\x1b_Gm=0;{}\x1b\\", &encoded[100_000..]);
+        replies.clear();
+        pane.process_output_for_runtime(
+            first.as_bytes(),
+            &mut |reply| replies.extend_from_slice(reply),
+            Some(cell),
+            true,
+        );
+        pane.process_output_for_runtime(
+            last.as_bytes(),
+            &mut |reply| replies.extend_from_slice(reply),
+            Some(cell),
+            true,
+        );
+        assert_eq!(replies, b"\x1b_Gi=7;EINVAL:invalid image\x1b\\");
+        assert_eq!(pane.image_store().revision(), revision);
+        assert_eq!(
+            &pane.compose_image_snapshot(cell).unwrap().pixels[..4],
+            &[255, 0, 0, 255]
+        );
+    }
+
+    #[test]
     fn virtual_place_placeholder_extent_follows_current_cell_pixels() {
         use base64::Engine;
 

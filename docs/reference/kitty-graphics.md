@@ -99,13 +99,16 @@ time, samples into a caller-chosen nearest-neighbor thumbnail of at most
 `StoredImage::resample_png_placement(layout)` uses the same bounded row decoder
 to sample an explicit source crop directly into destination pixels, including
 upscaling, without expanding the whole source image. Both paths validate the
-entire PNG, including its tail. Neither path is wired into runtime upload
-acceptance or composition yet, so the existing 32 MiB full-decode rejection
-still applies to `kitten icat` uploads. An optional local-file check is
+entire PNG, including its tail. Runtime upload now falls back to this bounded
+validation when full RGBA expansion exceeds 32 MiB, and regular and virtual
+placements use crop-aware streaming when such a validated PNG is composed.
+This does not relax the separate 16 MiB limit on zlib-compressed raw RGB/RGBA
+transfers; `kitten icat` may choose that format for large images.
+An optional local-file check is
 `RUSTMUX_COMPAT_IMAGE=/absolute/path/to/image.png cargo test --lib user_png_streams_to_thumbnail -- --ignored`.
 
 The running multiplexer validates PNG data before replacing a pane image.
-Corrupt, unsupported, oversized-decoded, or dimension-mismatched PNG transfers
+Corrupt, unsupported, over-budget streamed, or dimension-mismatched PNG transfers
 leave the existing image, placements, revision, and cursor unchanged. Successful
 PNG dimensions are cached for sized placement inference, avoiding a second
 decode at insertion time. Raw transfers were already byte-count checked by the

@@ -9,10 +9,12 @@ use crate::{
     },
     graphics_decode::{
         ClipError, ClippedPlacement, DecodeError, DecodedImage, MAX_DECODED_IMAGE_BYTES,
-        ResampleError, ResampledPlacement,
+        ResampleError, ResampledPlacement, StreamPngError,
     },
     graphics_placeholder::decode_row,
-    graphics_store::{CellPixelSize, ImageStore, PixelRect, PixelSize},
+    graphics_store::{
+        CellPixelSize, ImageFormat, ImageStore, PixelRect, PixelSize, PlacementPixelLayout,
+    },
     screen::Screen,
 };
 
@@ -260,6 +262,36 @@ fn validate_viewport(viewport: PixelSize) -> Result<usize, SnapshotError> {
     Ok(usize::try_from(canvas_bytes).unwrap())
 }
 
+fn rasterize_placement(
+    store: &ImageStore,
+    image_id: u32,
+    cell: CellPixelSize,
+    pixel_layout: impl FnOnce(u32, u32, CellPixelSize) -> Option<PlacementPixelLayout>,
+) -> Result<(PlacementPixelLayout, ResampledPlacement), SnapshotError> {
+    let image = store.get(image_id).ok_or(SnapshotError::MissingImage)?;
+    let dimensions = store.known_image_dimensions(image_id);
+    if image.format == ImageFormat::Png
+        && let Some((width, height)) = dimensions
+        && u128::from(width) * u128::from(height) * 4 > MAX_DECODED_IMAGE_BYTES as u128
+    {
+        let layout = pixel_layout(width, height, cell).ok_or(SnapshotError::InvalidLayout)?;
+        let pixels = image
+            .resample_png_placement(layout)
+            .map_err(|error| match error {
+                StreamPngError::Decode(error) => SnapshotError::Decode(error),
+                StreamPngError::Resample(error) => SnapshotError::Resample(error),
+            })?;
+        return Ok((layout, pixels));
+    }
+    let decoded = image.decode_rgba().map_err(SnapshotError::Decode)?;
+    let layout =
+        pixel_layout(decoded.width, decoded.height, cell).ok_or(SnapshotError::InvalidLayout)?;
+    let pixels = decoded
+        .resample_placement(layout)
+        .map_err(SnapshotError::Resample)?;
+    Ok((layout, pixels))
+}
+
 fn collect_visible_clips(
     store: &ImageStore,
     screen: Option<&Screen>,
@@ -277,17 +309,10 @@ fn collect_visible_clips(
         if geometry.anchor.alternate != alternate || !include_z(geometry.z_index) {
             continue;
         }
-        let image = store
-            .get(placement.image_id)
-            .ok_or(SnapshotError::MissingImage)?
-            .decode_rgba()
-            .map_err(SnapshotError::Decode)?;
-        let layout = geometry
-            .pixel_layout(image.width, image.height, cell)
-            .ok_or(SnapshotError::InvalidLayout)?;
-        let pixels = image
-            .resample_placement(layout)
-            .map_err(SnapshotError::Resample)?;
+        let (_, pixels) =
+            rasterize_placement(store, placement.image_id, cell, |width, height, cell| {
+                geometry.pixel_layout(width, height, cell)
+            })?;
         if let Some(visible) = pixels
             .clip_to_viewport_with_scroll_clip(geometry, cell, viewport)
             .map_err(SnapshotError::Clip)?
@@ -386,23 +411,16 @@ fn collect_placeholder_clips(
                 continue;
             }
             if rasters[index].is_none() {
-                let image = store
-                    .get(placement.image_id)
-                    .ok_or(SnapshotError::MissingImage)?
-                    .decode_rgba()
-                    .map_err(SnapshotError::Decode)?;
-                let pixel_layout = layout
-                    .pixel_layout(image.width, image.height, cell)
-                    .ok_or(SnapshotError::InvalidLayout)?;
+                let (pixel_layout, raster) =
+                    rasterize_placement(store, placement.image_id, cell, |width, height, cell| {
+                        layout.pixel_layout(width, height, cell)
+                    })?;
                 let columns = pixel_layout.cell_bounds.width / u32::from(cell.width());
                 let rows = pixel_layout.cell_bounds.height / u32::from(cell.height());
                 extents[index] = Some((columns, rows));
                 if reference.row >= rows || reference.column >= columns {
                     continue;
                 }
-                let raster = image
-                    .resample_placement(pixel_layout)
-                    .map_err(SnapshotError::Resample)?;
                 raster_bytes = raster_bytes
                     .checked_add(raster.pixels.len())
                     .filter(|&total| total <= MAX_COMPOSITE_INPUT_BYTES)

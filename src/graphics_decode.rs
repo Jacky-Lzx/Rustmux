@@ -89,6 +89,15 @@ impl StoredImage {
         decode_png_thumbnail(self, target_width, target_height)
     }
 
+    /// Validate a static PNG without allocating its full RGBA image and return
+    /// the dimensions from the verified PNG header.
+    pub fn validated_png_dimensions(&self) -> Result<(u32, u32), DecodeError> {
+        if self.format != ImageFormat::Png {
+            return Err(DecodeError::UnsupportedPng);
+        }
+        decode_png_sampled(self, 1, 1, None).map(|(dimensions, _)| dimensions)
+    }
+
     /// Decode and scale a PNG source crop directly into a placement without
     /// materializing the full RGBA source. The layout must use dimensions
     /// obtained from this image's validated PNG metadata.
@@ -116,7 +125,7 @@ impl StoredImage {
         {
             return Err(StreamPngError::Resample(ResampleError::InvalidLayout));
         }
-        let image = decode_png_sampled(
+        let (_, image) = decode_png_sampled(
             self,
             layout.destination.width,
             layout.destination.height,
@@ -430,7 +439,7 @@ fn decode_png_thumbnail(
     target_width: u32,
     target_height: u32,
 ) -> Result<DecodedImage, DecodeError> {
-    decode_png_sampled(image, target_width, target_height, None)
+    decode_png_sampled(image, target_width, target_height, None).map(|(_, decoded)| decoded)
 }
 
 fn decode_png_sampled(
@@ -438,7 +447,7 @@ fn decode_png_sampled(
     target_width: u32,
     target_height: u32,
     source_crop: Option<PixelRect>,
-) -> Result<DecodedImage, DecodeError> {
+) -> Result<((u32, u32), DecodedImage), DecodeError> {
     let output_size = decoded_size(target_width, target_height)?;
     let mut decoder = Decoder::new_with_limits(
         Cursor::new(image.data.as_slice()),
@@ -537,11 +546,14 @@ fn decode_png_sampled(
         return Err(DecodeError::InvalidData);
     }
     reader.finish().map_err(|_| DecodeError::InvalidData)?;
-    Ok(DecodedImage {
-        width: target_width,
-        height: target_height,
-        pixels,
-    })
+    Ok((
+        (width, height),
+        DecodedImage {
+            width: target_width,
+            height: target_height,
+            pixels,
+        },
+    ))
 }
 
 #[cfg(test)]
@@ -663,6 +675,7 @@ mod tests {
             declared_height: Some(height),
         };
         assert_eq!(image.decode_rgba(), Err(DecodeError::OutputLimit));
+        assert_eq!(image.validated_png_dimensions(), Ok((width, height)));
         assert_eq!(
             image.decode_png_thumbnail(width, height),
             Err(DecodeError::OutputLimit)
@@ -732,6 +745,10 @@ mod tests {
         };
         assert_eq!(
             image.decode_png_thumbnail(1, 1),
+            Err(DecodeError::InvalidData)
+        );
+        assert_eq!(
+            image.validated_png_dimensions(),
             Err(DecodeError::InvalidData)
         );
         assert_eq!(
