@@ -404,9 +404,10 @@ explicit `c`/`r` bounds can also be checked before image decoding. An in-range
 reference to invalid image data remains a snapshot error on opt-in paths. Raw
 image dimensions and previously validated PNG dimensions now allow inferred
 bounds to be checked before decoding too; unvalidated PNG declarations are
-not trusted for this shortcut. The pane also answers `CSI 16t` with
-`CSI 6;height;width t` when that cell size is known;
-otherwise it does not invent a pixel-size reply.
+not trusted for this shortcut. The pane answers `CSI 16t` with
+`CSI 6;height;width t` when that cell size is known. It also answers `CSI 14t`
+with `CSI 4;height;width t` for the current pane text area, computed from its
+grid and the exact cell size. Otherwise it does not invent a pixel-size reply.
 
 An optional installed-Yazi smoke test exercises the actual preview path. After
 updating Yazi, run `cargo compat`. This alias runs the opt-in tests in

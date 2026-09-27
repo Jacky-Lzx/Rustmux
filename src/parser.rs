@@ -694,8 +694,27 @@ impl Parser {
             return;
         }
         if command == b't' {
-            if parameters.is_plain_single_parameter(16) {
-                if let Some((width, height)) = cell_pixels {
+            if parameters.is_plain_single_parameter(14) {
+                if let Some((width, height)) =
+                    cell_pixels.filter(|(width, height)| *width > 0 && *height > 0)
+                {
+                    let (rows, columns) = screen.dimensions();
+                    let pixel_height = u32::try_from(rows)
+                        .ok()
+                        .and_then(|rows| rows.checked_mul(u32::from(height)));
+                    let pixel_width = u32::try_from(columns)
+                        .ok()
+                        .and_then(|columns| columns.checked_mul(u32::from(width)));
+                    if let (Some(pixel_height), Some(pixel_width)) = (pixel_height, pixel_width) {
+                        let response = format!("\x1b[4;{pixel_height};{pixel_width}t");
+                        debug_assert!(response.len() <= MAX_REPLY_BYTES);
+                        reply(response.as_bytes());
+                    }
+                }
+            } else if parameters.is_plain_single_parameter(16) {
+                if let Some((width, height)) =
+                    cell_pixels.filter(|(width, height)| *width > 0 && *height > 0)
+                {
                     let response = format!("\x1b[6;{height};{width}t");
                     debug_assert!(response.len() <= MAX_REPLY_BYTES);
                     reply(response.as_bytes());
@@ -1200,6 +1219,62 @@ mod tests {
             replies.extend_from_slice(reply)
         });
         assert_eq!(replies, b"\x1b[6;20;12t\x1b[6;20;12t");
+    }
+
+    #[test]
+    fn pane_pixel_query_uses_current_grid_and_exact_cell_size() {
+        let mut parser = Parser::new();
+        let mut screen = Screen::new(2, 8).unwrap();
+        let mut replies = Vec::new();
+        parser.advance_with_replies(&mut screen, b"\x1b[14t", &mut |reply| {
+            replies.extend_from_slice(reply)
+        });
+        assert!(replies.is_empty());
+
+        parser.set_cell_pixels(Some((12, 20)));
+        for part in [b"\x1b[1".as_slice(), b"4t\x1b[16t".as_slice()] {
+            parser.advance_with_replies(&mut screen, part, &mut |reply| {
+                replies.extend_from_slice(reply)
+            });
+        }
+        assert_eq!(replies, b"\x1b[4;40;96t\x1b[6;20;12t");
+
+        screen.resize(3, 5).unwrap();
+        parser.advance_with_replies(&mut screen, b"\x1b[14t", &mut |reply| {
+            replies.extend_from_slice(reply)
+        });
+        assert_eq!(replies, b"\x1b[4;40;96t\x1b[6;20;12t\x1b[4;60;60t");
+
+        parser.set_cell_pixels(Some((10, 18)));
+        parser.advance_with_replies(&mut screen, b"\x1b[14t", &mut |reply| {
+            replies.extend_from_slice(reply)
+        });
+        assert!(replies.ends_with(b"\x1b[4;54;50t"));
+
+        let reply_count = replies.len();
+        parser.set_cell_pixels(None);
+        parser.advance_with_replies(&mut screen, b"\x1b[14t", &mut |reply| {
+            replies.extend_from_slice(reply)
+        });
+        assert_eq!(replies.len(), reply_count);
+    }
+
+    #[test]
+    fn malformed_or_zero_cell_pixel_queries_are_silent() {
+        let mut parser = Parser::new();
+        let mut screen = Screen::new(2, 8).unwrap();
+        parser.set_cell_pixels(Some((12, 20)));
+        let mut replies = Vec::new();
+        parser.advance_with_replies(
+            &mut screen,
+            b"\x1b[14;2t\x1b[?14t\x1b[14:0t",
+            &mut |reply| replies.extend_from_slice(reply),
+        );
+        parser.set_cell_pixels(Some((0, 20)));
+        parser.advance_with_replies(&mut screen, b"\x1b[14t\x1b[16t", &mut |reply| {
+            replies.extend_from_slice(reply)
+        });
+        assert!(replies.is_empty());
     }
 
     #[test]

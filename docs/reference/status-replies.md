@@ -11,6 +11,8 @@ from its screen model.
 | CSI ? 6 n | CSI ? row ; column R (DECXCPR) |
 | CSI ? 15 n | CSI ? 11 n (printer not ready) |
 | CSI ? 25 n | CSI ? 21 n (UDK locked) |
+| CSI 14 t | CSI 4 ; height ; width t (pane text-area size in pixels, when known) |
+| CSI 16 t | CSI 6 ; height ; width t (one cell in pixels, when known) |
 | CSI 18 t | CSI 8 ; rows ; columns t (pane text-area size) |
 | CSI 19 t | CSI 9 ; rows ; columns t (pane terminal-screen size) |
 | CSI " v | CSI rows ; columns ; 1 ; 1 ; 1 " w (displayed extent) |
@@ -34,6 +36,9 @@ the last column without triggering pending wrap.
 The text-area size report uses the active pane's current `Screen` dimensions.
 It therefore excludes Rustmux's top bar, footer and pane borders, and changes
 after an outer resize or layout change. Querying it does not resize anything.
+The pixel-size report multiplies those same pane dimensions by the exact known
+cell size. Both pixel queries stay silent if that size is unavailable; a zero
+cell size or an overflowing pixel extent is not reported.
 For a child process, its pane is the complete terminal screen it can address, so
 the screen-size report uses the same rows and columns with the distinct standard
 reply operation `9`.
