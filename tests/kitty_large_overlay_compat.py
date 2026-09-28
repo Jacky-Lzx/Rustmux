@@ -286,6 +286,16 @@ def main(binary):
             print("PASS: opaque small Kitty overlay uses f=24 with correct pixels")
 
             output.clear()
+            os.write(master, f"python3 {shlex.quote(str(child))} alpha\n".encode())
+            wait_for_tiles(master, output, process, 1)
+            alpha = decode_tiles(output)[0]
+            assert alpha["format"] == b"32", "translucent overlay lost its alpha channel"
+            assert (alpha["width"], alpha["height"]) == (20, 10)
+            assert alpha["first_pixel"] == b"\xff\0\0\x80"
+            assert alpha["bottom_right_pixel"] == b"\0\0\xff\x40"
+            print("PASS: translucent Kitty overlay uses f=32 with correct alpha")
+
+            output.clear()
             os.write(master, f"python3 {shlex.quote(str(child))} large-input\n".encode())
             wait_for_tiles(master, output, process, 1)
             large_input = decode_tiles(output)[0]

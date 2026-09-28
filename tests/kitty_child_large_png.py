@@ -65,6 +65,20 @@ def send_large_input_png():
     output.flush()
 
 
+def send_alpha_image():
+    """Replace the small opaque image with a two-color translucent raw image."""
+    width, height = 20, 10
+    red = bytes((255, 0, 0, 128)) * width
+    blue = bytes((0, 0, 255, 64)) * width
+    pixels = red * (height // 2) + blue * (height // 2)
+    command = (
+        f"\x1b[1;1H\x1b_Ga=T,t=d,f=32,s={width},v={height},i=8,"
+        f"p=1,c=2,r=1,z=0,C=1,q=2;"
+    ).encode() + base64.b64encode(pixels) + b"\x1b\\"
+    sys.stdout.buffer.write(command)
+    sys.stdout.buffer.flush()
+
+
 def main():
     if len(sys.argv) == 2 and sys.argv[1] == "delete":
         sys.stdout.buffer.write(b"\x1b_Ga=d,d=I,i=7,q=2;\x1b\\")
@@ -72,13 +86,16 @@ def main():
         return
     if len(sys.argv) == 2 and sys.argv[1] == "small":
         width, height, image_id = 20, 10, 8
+    elif len(sys.argv) == 2 and sys.argv[1] == "alpha":
+        send_alpha_image()
+        return
     elif len(sys.argv) == 2 and sys.argv[1] == "large-input":
         send_large_input_png()
         return
     elif len(sys.argv) == 1:
         width, height, image_id = WIDTH, HEIGHT, IMAGE_ID
     else:
-        raise SystemExit("usage: kitty_child_large_png.py [small|large-input|delete]")
+        raise SystemExit("usage: kitty_child_large_png.py [small|alpha|large-input|delete]")
 
     red = bytes((255, 0, 0, 255)) * width
     blue = bytes((0, 0, 255, 255)) * width
