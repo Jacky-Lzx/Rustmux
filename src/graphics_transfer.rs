@@ -16,6 +16,9 @@ use std::io::Read;
 pub const MAX_ENCODED_CHUNK_BYTES: usize = 128 * 1024;
 /// Cap one in-progress image independently of its number of chunks.
 pub const MAX_DIRECT_TRANSFER_BYTES: usize = 16 * 1024 * 1024;
+/// PNG file bytes may use the pane's larger stored-image budget. Raw pixel
+/// transfers keep the smaller limit above unless they remain zlib-compressed.
+pub const MAX_DIRECT_PNG_TRANSFER_BYTES: usize = 32 * 1024 * 1024;
 /// Bound the declared expanded size of a compressed raw image. Such transfers
 /// remain compressed in the store and are decoded a row at a time.
 pub const MAX_STREAMED_RAW_BYTES: usize = 256 * 1024 * 1024;
@@ -145,7 +148,11 @@ impl DirectTransferAssembler {
                     .keys()
                     .any(|key| !matches!(key, b'a' | b'm' | b'q'))
                 || !valid_quiet(&controls)
-                || !append_bounded(&mut pending.data, &chunk)
+                || !append_bounded(
+                    &mut pending.data,
+                    &chunk,
+                    max_transfer_bytes(&pending.controls),
+                )
             {
                 return None;
             }
@@ -166,7 +173,11 @@ impl DirectTransferAssembler {
             controls,
             data: Vec::new(),
         };
-        if !append_bounded(&mut pending.data, &chunk) {
+        if !append_bounded(
+            &mut pending.data,
+            &chunk,
+            max_transfer_bytes(&pending.controls),
+        ) {
             return None;
         }
         if more {
@@ -272,7 +283,7 @@ fn valid_first(controls: &Controls) -> bool {
                         ) {
                         MAX_STREAMED_RAW_BYTES
                     } else {
-                        MAX_DIRECT_TRANSFER_BYTES
+                        max_transfer_bytes(controls)
                     };
                     size as usize <= limit
                 })
@@ -310,11 +321,19 @@ fn parse_decimal(value: &[u8]) -> Option<u32> {
     std::str::from_utf8(value).ok()?.parse::<u32>().ok()
 }
 
-fn append_bounded(data: &mut Vec<u8>, chunk: &[u8]) -> bool {
+fn max_transfer_bytes(controls: &Controls) -> usize {
+    if controls.get(&b'f').map(Vec::as_slice) == Some(b"100") {
+        MAX_DIRECT_PNG_TRANSFER_BYTES
+    } else {
+        MAX_DIRECT_TRANSFER_BYTES
+    }
+}
+
+fn append_bounded(data: &mut Vec<u8>, chunk: &[u8], limit: usize) -> bool {
     if data
         .len()
         .checked_add(chunk.len())
-        .is_none_or(|size| size > MAX_DIRECT_TRANSFER_BYTES)
+        .is_none_or(|size| size > limit)
     {
         return false;
     }
@@ -348,7 +367,8 @@ fn finish(pending: Pending) -> Option<AssembledDirectTransfer> {
         data
     } else if controls.contains_key(&b'o') {
         let limit = expected_size?;
-        if limit > MAX_DIRECT_TRANSFER_BYTES || declared_size.is_some_and(|size| size != limit) {
+        if limit > max_transfer_bytes(&controls) || declared_size.is_some_and(|size| size != limit)
+        {
             return None;
         }
         let mut decoder = ZlibDecoder::new(data.as_slice());
@@ -634,8 +654,107 @@ mod tests {
         assert!(assembler.accept(&command).is_none());
         assert!(assembler.accept(b"\x1b_Gf=100,m=1;QUJ\x1b\\").is_none());
         let mut full = vec![0; MAX_DIRECT_TRANSFER_BYTES];
-        assert!(!append_bounded(&mut full, b"x"));
+        assert!(!append_bounded(&mut full, b"x", MAX_DIRECT_TRANSFER_BYTES));
         assert_eq!(full.len(), MAX_DIRECT_TRANSFER_BYTES);
+        assert!(append_bounded(
+            &mut full,
+            b"x",
+            MAX_DIRECT_PNG_TRANSFER_BYTES
+        ));
+        assert_eq!(full.len(), MAX_DIRECT_TRANSFER_BYTES + 1);
+    }
+
+    #[test]
+    fn png_transfer_can_cross_raw_limit_but_still_recovers_at_pane_quota() {
+        assert_eq!(
+            MAX_DIRECT_PNG_TRANSFER_BYTES,
+            crate::graphics_store::MAX_PANE_IMAGE_BYTES
+        );
+        let mut assembler = DirectTransferAssembler::new();
+        let chunk = vec![7; 96 * 1024];
+        for index in 0..=MAX_DIRECT_TRANSFER_BYTES / chunk.len() {
+            let controls = if index == 0 { "f=100,m=1" } else { "m=1" };
+            assert!(assembler.accept(&direct(controls, &chunk)).is_none());
+        }
+        let transfer = assembler.accept(&direct("m=0", b"x")).unwrap();
+        assert!(transfer.data.len() > MAX_DIRECT_TRANSFER_BYTES);
+        assert!(transfer.data.len() < MAX_DIRECT_PNG_TRANSFER_BYTES);
+        assert_eq!(transfer.data.last(), Some(&b'x'));
+
+        assembler.pending = Some(Pending {
+            controls: Controls::from([(b'f', b"100".to_vec())]),
+            data: vec![0; MAX_DIRECT_PNG_TRANSFER_BYTES],
+        });
+        assert!(assembler.accept(&direct("m=0", b"x")).is_none());
+        assert!(assembler.pending.is_none());
+        assert!(assembler.accept(&direct("f=100", b"ok")).is_some());
+    }
+
+    #[test]
+    fn compressed_png_declared_size_uses_png_budget() {
+        let original = vec![0; MAX_DIRECT_TRANSFER_BYTES + 1];
+        let compressed = zlib(&original);
+        let command = direct(&format!("f=100,o=z,S={}", original.len()), &compressed);
+        let transfer = DirectTransferAssembler::new().accept(&command).unwrap();
+        assert_eq!(transfer.data, original);
+        assert!(
+            DirectTransferAssembler::new()
+                .accept(&direct(
+                    &format!("f=100,o=z,S={}", MAX_DIRECT_PNG_TRANSFER_BYTES + 1),
+                    &compressed,
+                ))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn valid_png_above_raw_limit_reaches_validated_pane_store() {
+        use crate::graphics_store::{CellAnchor, ImageStore};
+
+        let (width, height) = (2048, 2800);
+        let mut raw = vec![0; width as usize * height as usize * 3];
+        let mut state = 0x1234_5678_u32;
+        for byte in &mut raw {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            *byte = (state >> 24) as u8;
+        }
+        let mut png_data = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut png_data, width, height);
+            encoder.set_color(png::ColorType::Rgb);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder.set_compression(png::Compression::Fast);
+            let mut writer = encoder.write_header().unwrap();
+            writer.write_image_data(&raw).unwrap();
+            writer.finish().unwrap();
+        }
+        assert!(png_data.len() > MAX_DIRECT_TRANSFER_BYTES);
+        assert!(png_data.len() < MAX_DIRECT_PNG_TRANSFER_BYTES);
+
+        let mut assembler = DirectTransferAssembler::new();
+        let chunk_size = 96 * 1024;
+        let mut completed = None;
+        for (index, chunk) in png_data.chunks(chunk_size).enumerate() {
+            let last = (index + 1) * chunk_size >= png_data.len();
+            let controls = match (index == 0, last) {
+                (true, false) => "a=t,f=100,i=7,m=1",
+                (true, true) => "a=t,f=100,i=7,m=0",
+                (false, false) => "m=1",
+                (false, true) => "m=0",
+            };
+            completed = assembler.accept(&direct(controls, chunk));
+            if !last {
+                assert!(completed.is_none());
+            }
+        }
+        let mut store = ImageStore::new();
+        let (id, _) = store
+            .insert_for_pane(completed.unwrap(), CellAnchor::default(), None, true)
+            .unwrap();
+        assert_eq!(id, 7);
+        assert_eq!(store.total_bytes(), png_data.len());
     }
 
     #[test]

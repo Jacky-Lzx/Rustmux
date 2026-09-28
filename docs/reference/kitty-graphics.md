@@ -23,14 +23,16 @@ chunk's optional `q` override. It checks the byte count for raw RGB/RGBA data;
 PNG bytes remain opaque until a later image decoder validates them.
 
 One encoded chunk is limited to 128 KiB to accommodate installed `kitten icat`
-output (the published protocol specifies 4096 bytes); one assembled transfer
-is still limited to 16 MiB. The final chunk may omit Base64 padding. Direct
-data (`t=d`, `a=t/T/q`) may be uncompressed or use `o=z`
-zlib compression. Compressed input stays bounded to 16 MiB. Raw RGB/RGBA
-whose declared expansion exceeds 16 MiB is kept compressed and validated a
+output (the published protocol specifies 4096 bytes); an assembled raw transfer
+is limited to 16 MiB, while direct PNG file bytes may use the pane's 32 MiB
+image-store budget. The final chunk may omit Base64 padding. Direct data
+(`t=d`, `a=t/T/q`) may be uncompressed or use `o=z` zlib compression.
+Compressed input follows the same format-specific limit. Raw RGB/RGBA whose
+declared expansion exceeds 16 MiB is kept compressed and validated a
 row at a time, up to 256 MiB expanded and a 32 MiB row budget; smaller raw
-transfers and compressed PNG retain the 16 MiB expansion limit. Raw RGB/RGBA
-output must match its dimensions, and compressed PNG requires
+transfers retain the 16 MiB expansion limit, while compressed PNG file bytes
+may expand to 32 MiB. Raw RGB/RGBA output must match its dimensions, and
+compressed PNG requires
 `S=<uncompressed-byte-count>`. Malformed streams, mismatched sizes,
 and trailing compressed bytes are discarded before they can replace an image.
 File, temporary-file and shared-memory media are not read. When outer graphics
@@ -559,7 +561,8 @@ reply after its final chunk and the store result. Successful storage and
 placement return `OK`, with a valid nonzero `p` echoed; invalid geometry
 returns `EINVAL:invalid placement`, while rejected image data or unsupported
 controls return `EINVAL:invalid image`. Transfers exceeding the assembler's
-16 MiB bound never complete, so they receive no reply.
+format-specific 16 or 32 MiB bound never complete, so they receive no
+reply.
 Unknown display controls are rejected before replacing an existing image, and
 `q=1`/`q=2` retain the same reply suppression rules. Incomplete or malformed
 transfers, anonymous image acknowledgements, and unsupported outer graphics
@@ -570,8 +573,10 @@ The query/DA ordering follows the
 
 Unit tests cover every two-chunk split of a command, ordinary output ordering,
 non-graphics APCs, UTF-8/C1 ambiguity, oversized and cancelled commands, and
-EOF recovery. Assembler tests cover chunk inheritance, raw byte counts, bounds,
-unsupported media and recovery. Pane tests cover interleaved text, per-pane
+EOF recovery. Assembler tests cover chunk inheritance, raw byte counts,
+format-specific 16/32 MiB bounds, a valid PNG above the raw-transfer limit
+reaching the validated pane store, unsupported media and recovery. Pane tests
+cover interleaved text, per-pane
 isolation and command-output filtering. Run `cargo test --lib graphics::tests`,
 `cargo test --lib graphics_transfer::tests` and `cargo test --test panes`.
 Store tests also cover replacement, isolation, transient/unplaced quota eviction,
