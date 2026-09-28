@@ -472,6 +472,8 @@ fn collect_placeholder_clips(
     // handful of placeholder cells in the viewport.
     let mut known_layouts = vec![None; virtuals.len()];
     let mut requested_regions: Vec<Option<PixelRect>> = vec![None; virtuals.len()];
+    let mut sparse_regions: Vec<BTreeMap<(u32, u32), PixelRect>> =
+        (0..virtuals.len()).map(|_| BTreeMap::new()).collect();
     if needs_bounded_raster {
         for row in 0..rows {
             for reference in decode_row(screen.row(row).unwrap()).into_iter().flatten() {
@@ -509,6 +511,13 @@ fn collect_placeholder_clips(
                     reference.column,
                     cell,
                 )? {
+                    if store.get(placement.image_id).is_some_and(|image| {
+                        matches!(image.format, ImageFormat::RgbZlib | ImageFormat::RgbaZlib)
+                    }) {
+                        sparse_regions[index]
+                            .entry((reference.row, reference.column))
+                            .or_insert(region);
+                    }
                     requested_regions[index] = Some(match requested_regions[index] {
                         Some(previous) => union_region(previous, region),
                         None => region,
@@ -519,6 +528,8 @@ fn collect_placeholder_clips(
     }
     let mut extents = vec![None; virtuals.len()];
     let mut rasters: Vec<Option<ResampledPlacement>> = (0..virtuals.len()).map(|_| None).collect();
+    let mut sparse_rasters: Vec<Option<BTreeMap<(u32, u32), ResampledPlacement>>> =
+        (0..virtuals.len()).map(|_| None).collect();
     let mut raster_bytes = 0usize;
     for row in 0..rows {
         for (column, reference) in decode_row(screen.row(row).unwrap()).into_iter().enumerate() {
@@ -555,68 +566,101 @@ fn collect_placeholder_clips(
             if known_layouts[index].is_some() && requested_regions[index].is_none() {
                 continue;
             }
-            if rasters[index].is_none() {
+            if rasters[index].is_none() && sparse_rasters[index].is_none() {
                 let image = store
                     .get(placement.image_id)
                     .ok_or(SnapshotError::MissingImage)?;
-                let streamed = known_layouts[index].zip(requested_regions[index]).filter(
-                    |(pixel_layout, _)| {
-                        matches!(image.format, ImageFormat::RgbZlib | ImageFormat::RgbaZlib)
-                            || (image.format == ImageFormat::Png
-                                && (u128::from(pixel_layout.destination.width)
-                                    * u128::from(pixel_layout.destination.height)
-                                    * 4
-                                    > MAX_DECODED_IMAGE_BYTES as u128
-                                    || store
-                                        .known_image_dimensions(placement.image_id)
-                                        .is_some_and(|(width, height)| {
-                                            u128::from(width) * u128::from(height) * 4
-                                                > MAX_DECODED_IMAGE_BYTES as u128
-                                        })))
-                    },
-                );
-                let (pixel_layout, raster) = if let Some((pixel_layout, region)) = streamed {
-                    let raster = match image.format {
-                        ImageFormat::RgbZlib | ImageFormat::RgbaZlib => image
-                            .resample_zlib_placement_region(pixel_layout, region)
-                            .map_err(|error| match error {
-                                StreamZlibError::Decode(error) => SnapshotError::Decode(error),
-                                StreamZlibError::Resample(error) => SnapshotError::Resample(error),
-                            })?,
-                        ImageFormat::Png => image
-                            .resample_png_placement_region(pixel_layout, region)
-                            .map_err(|error| match error {
-                                StreamPngError::Decode(error) => SnapshotError::Decode(error),
-                                StreamPngError::Resample(error) => SnapshotError::Resample(error),
-                            })?,
-                        ImageFormat::Rgb | ImageFormat::Rgba => unreachable!(),
-                    };
-                    (pixel_layout, raster)
+                let sparse = matches!(image.format, ImageFormat::RgbZlib | ImageFormat::RgbaZlib)
+                    && requested_regions[index].is_some_and(|bounds| {
+                        u128::from(bounds.width) * u128::from(bounds.height) * 4
+                            > MAX_DECODED_IMAGE_BYTES as u128
+                    });
+                if sparse {
+                    let pixel_layout = known_layouts[index].ok_or(SnapshotError::InvalidLayout)?;
+                    let regions: Vec<_> = sparse_regions[index].values().copied().collect();
+                    let sampled = image
+                        .resample_zlib_placement_regions(pixel_layout, &regions)
+                        .map_err(|error| match error {
+                            StreamZlibError::Decode(error) => SnapshotError::Decode(error),
+                            StreamZlibError::Resample(error) => SnapshotError::Resample(error),
+                        })?;
+                    let sampled_bytes: usize = sampled.iter().map(|tile| tile.pixels.len()).sum();
+                    raster_bytes = raster_bytes
+                        .checked_add(sampled_bytes)
+                        .filter(|&total| total <= MAX_COMPOSITE_INPUT_BYTES)
+                        .ok_or(SnapshotError::Composite(CompositeError::InputLimit))?;
+                    sparse_rasters[index] =
+                        Some(sparse_regions[index].keys().copied().zip(sampled).collect());
                 } else {
-                    rasterize_placement(store, placement.image_id, cell, |width, height, cell| {
-                        layout.pixel_layout(width, height, cell)
-                    })?
-                };
-                let columns = pixel_layout.cell_bounds.width / u32::from(cell.width());
-                let rows = pixel_layout.cell_bounds.height / u32::from(cell.height());
-                extents[index] = Some((columns, rows));
-                if reference.row >= rows || reference.column >= columns {
-                    continue;
+                    let streamed = known_layouts[index].zip(requested_regions[index]).filter(
+                        |(pixel_layout, _)| {
+                            matches!(image.format, ImageFormat::RgbZlib | ImageFormat::RgbaZlib)
+                                || (image.format == ImageFormat::Png
+                                    && (u128::from(pixel_layout.destination.width)
+                                        * u128::from(pixel_layout.destination.height)
+                                        * 4
+                                        > MAX_DECODED_IMAGE_BYTES as u128
+                                        || store
+                                            .known_image_dimensions(placement.image_id)
+                                            .is_some_and(|(width, height)| {
+                                                u128::from(width) * u128::from(height) * 4
+                                                    > MAX_DECODED_IMAGE_BYTES as u128
+                                            })))
+                        },
+                    );
+                    let (pixel_layout, raster) = if let Some((pixel_layout, region)) = streamed {
+                        let raster = match image.format {
+                            ImageFormat::RgbZlib | ImageFormat::RgbaZlib => image
+                                .resample_zlib_placement_region(pixel_layout, region)
+                                .map_err(|error| match error {
+                                    StreamZlibError::Decode(error) => SnapshotError::Decode(error),
+                                    StreamZlibError::Resample(error) => {
+                                        SnapshotError::Resample(error)
+                                    }
+                                })?,
+                            ImageFormat::Png => image
+                                .resample_png_placement_region(pixel_layout, region)
+                                .map_err(|error| match error {
+                                    StreamPngError::Decode(error) => SnapshotError::Decode(error),
+                                    StreamPngError::Resample(error) => {
+                                        SnapshotError::Resample(error)
+                                    }
+                                })?,
+                            ImageFormat::Rgb | ImageFormat::Rgba => unreachable!(),
+                        };
+                        (pixel_layout, raster)
+                    } else {
+                        rasterize_placement(
+                            store,
+                            placement.image_id,
+                            cell,
+                            |width, height, cell| layout.pixel_layout(width, height, cell),
+                        )?
+                    };
+                    let columns = pixel_layout.cell_bounds.width / u32::from(cell.width());
+                    let rows = pixel_layout.cell_bounds.height / u32::from(cell.height());
+                    extents[index] = Some((columns, rows));
+                    if reference.row >= rows || reference.column >= columns {
+                        continue;
+                    }
+                    raster_bytes = raster_bytes
+                        .checked_add(raster.pixels.len())
+                        .filter(|&total| total <= MAX_COMPOSITE_INPUT_BYTES)
+                        .ok_or(SnapshotError::Composite(CompositeError::InputLimit))?;
+                    rasters[index] = Some(raster);
                 }
-                raster_bytes = raster_bytes
-                    .checked_add(raster.pixels.len())
-                    .filter(|&total| total <= MAX_COMPOSITE_INPUT_BYTES)
-                    .ok_or(SnapshotError::Composite(CompositeError::InputLimit))?;
-                rasters[index] = Some(raster);
             }
-            if let Some(tile) = clip_virtual_cell(
-                rasters[index].as_ref().unwrap(),
-                reference.row,
-                reference.column,
-                row,
-                column,
-                cell,
-            )? {
+            let raster = if let Some(sparse) = &sparse_rasters[index] {
+                sparse.get(&(reference.row, reference.column))
+            } else {
+                rasters[index].as_ref()
+            };
+            let Some(raster) = raster else {
+                continue;
+            };
+            if let Some(tile) =
+                clip_virtual_cell(raster, reference.row, reference.column, row, column, cell)?
+            {
                 *input_bytes = input_bytes
                     .checked_add(tile.pixels.len())
                     .filter(|&total| total <= MAX_COMPOSITE_INPUT_BYTES)

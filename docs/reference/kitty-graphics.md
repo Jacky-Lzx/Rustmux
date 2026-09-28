@@ -115,8 +115,10 @@ samples only its visible source-backed destination pixels; invisible pixels
 do not consume the 32 MiB placement budget. For virtual placeholders, the
 screen's referenced source cells are collected first; PNG and compressed raw
 images are sampled once into their bounding source-backed rectangle rather
-than a full virtual raster. Widely separated references whose bounding
-rectangle still exceeds the placement budget remain unsupported.
+than a full virtual raster. When compressed raw references are too far apart
+for a bounded rectangle, one zlib pass samples the disjoint referenced cells
+directly and limits their aggregate RGBA output to 32 MiB. Sparse PNG
+references whose bounding rectangle exceeds that budget remain unsupported.
 An optional local-file check is
 `RUSTMUX_COMPAT_IMAGE=/absolute/path/to/image.png cargo test --lib user_png_streams_to_thumbnail -- --ignored`.
 

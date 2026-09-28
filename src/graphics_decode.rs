@@ -8,10 +8,13 @@ use crate::graphics_store::{
 use crate::graphics_transfer::MAX_STREAMED_RAW_BYTES;
 use flate2::bufread::ZlibDecoder;
 use png::{BitDepth, ColorType, Decoder, Limits, Transformations};
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 use std::io::{Cursor, Read};
 
 pub const MAX_DECODED_IMAGE_BYTES: usize = 32 * 1024 * 1024;
 pub const MAX_RESAMPLED_PLACEMENT_BYTES: usize = MAX_DECODED_IMAGE_BYTES;
+const MAX_SAMPLED_REGIONS: usize = 64 * 1024;
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct DecodedImage {
@@ -191,6 +194,50 @@ impl StoredImage {
             destination: region,
             pixels: image.pixels,
         })
+    }
+
+    /// Sample disjoint destination rectangles during one complete zlib pass.
+    /// The aggregate RGBA output, rather than their enclosing box, is bounded.
+    pub(crate) fn resample_zlib_placement_regions(
+        &self,
+        layout: PlacementPixelLayout,
+        regions: &[PixelRect],
+    ) -> Result<Vec<ResampledPlacement>, StreamZlibError> {
+        if !matches!(self.format, ImageFormat::RgbZlib | ImageFormat::RgbaZlib) {
+            return Err(StreamZlibError::Decode(DecodeError::UnsupportedFormat));
+        }
+        if !valid_stream_layout(layout) {
+            return Err(StreamZlibError::Resample(ResampleError::InvalidLayout));
+        }
+        let relative: Vec<_> = regions
+            .iter()
+            .map(|region| {
+                Some(PixelRect {
+                    x: region.x.checked_sub(layout.destination.x)?,
+                    y: region.y.checked_sub(layout.destination.y)?,
+                    width: region.width,
+                    height: region.height,
+                })
+            })
+            .collect::<Option<_>>()
+            .ok_or(StreamZlibError::Resample(ResampleError::InvalidLayout))?;
+        let images = decode_zlib_regions(
+            self,
+            layout.destination.width,
+            layout.destination.height,
+            Some(layout.source),
+            &relative,
+        )
+        .map_err(StreamZlibError::Decode)?;
+        Ok(regions
+            .iter()
+            .copied()
+            .zip(images)
+            .map(|(destination, image)| ResampledPlacement {
+                destination,
+                pixels: image.pixels,
+            })
+            .collect())
     }
 
     /// Decode and scale a PNG source crop directly into a placement without
@@ -562,17 +609,43 @@ fn decode_zlib_sampled(
         width: target_width,
         height: target_height,
     });
-    let output_size = decoded_size(region.width, region.height)?;
-    if region
-        .x
-        .checked_add(region.width)
-        .is_none_or(|end| end > target_width)
-        || region
-            .y
-            .checked_add(region.height)
-            .is_none_or(|end| end > target_height)
-    {
-        return Err(DecodeError::InvalidDimensions);
+    Ok(decode_zlib_regions(image, target_width, target_height, source_crop, &[region])?.remove(0))
+}
+
+fn decode_zlib_regions(
+    image: &StoredImage,
+    target_width: u32,
+    target_height: u32,
+    source_crop: Option<PixelRect>,
+    regions: &[PixelRect],
+) -> Result<Vec<DecodedImage>, DecodeError> {
+    if regions.len() > MAX_SAMPLED_REGIONS {
+        return Err(DecodeError::OutputLimit);
+    }
+    let mut total_output = 0usize;
+    let mut images = Vec::with_capacity(regions.len());
+    for region in regions {
+        let size = decoded_size(region.width, region.height)?;
+        if region
+            .x
+            .checked_add(region.width)
+            .is_none_or(|end| end > target_width)
+            || region
+                .y
+                .checked_add(region.height)
+                .is_none_or(|end| end > target_height)
+        {
+            return Err(DecodeError::InvalidDimensions);
+        }
+        total_output = total_output
+            .checked_add(size)
+            .filter(|&total| total <= MAX_DECODED_IMAGE_BYTES)
+            .ok_or(DecodeError::OutputLimit)?;
+        images.push(DecodedImage {
+            width: region.width,
+            height: region.height,
+            pixels: vec![0; size],
+        });
     }
     let (Some(width), Some(height)) = (image.declared_width, image.declared_height) else {
         return Err(DecodeError::InvalidDimensions);
@@ -614,23 +687,28 @@ fn decode_zlib_sampled(
     }
     let mut reader = ZlibDecoder::new(image.data.as_slice());
     let mut row = vec![0; row_len];
-    let mut pixels = vec![0; output_size];
-    let target_stride = usize::try_from(region.width).unwrap() * 4;
-    let mut target_y = 0usize;
+    let mut next_rows = vec![0usize; regions.len()];
+    let mut pending = BinaryHeap::new();
+    for (index, region) in regions.iter().enumerate() {
+        pending.push(Reverse((
+            source.y + nearest_sample(region.y as usize, source.height, target_height),
+            index,
+        )));
+    }
     for source_y in 0..height {
         reader
             .read_exact(&mut row)
             .map_err(|_| DecodeError::InvalidData)?;
-        while target_y < usize::try_from(region.height).unwrap()
-            && source.y
-                + nearest_sample(
-                    usize::try_from(region.y).unwrap() + target_y,
-                    source.height,
-                    target_height,
-                )
-                == source_y
+        while pending
+            .peek()
+            .is_some_and(|Reverse((requested_y, _))| *requested_y == source_y)
         {
-            let output_row = &mut pixels[target_y * target_stride..(target_y + 1) * target_stride];
+            let Reverse((_, index)) = pending.pop().unwrap();
+            let region = regions[index];
+            let target_y = next_rows[index];
+            let target_stride = usize::try_from(region.width).unwrap() * 4;
+            let output_row =
+                &mut images[index].pixels[target_y * target_stride..(target_y + 1) * target_stride];
             for (target_x, rgba) in output_row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
                 let source_x = usize::try_from(
                     source.x
@@ -649,10 +727,21 @@ fn decode_zlib_sampled(
                     rgba.copy_from_slice(pixel);
                 }
             }
-            target_y += 1;
+            next_rows[index] += 1;
+            if next_rows[index] < usize::try_from(region.height).unwrap() {
+                pending.push(Reverse((
+                    source.y
+                        + nearest_sample(
+                            usize::try_from(region.y).unwrap() + next_rows[index],
+                            source.height,
+                            target_height,
+                        ),
+                    index,
+                )));
+            }
         }
     }
-    if target_y != usize::try_from(region.height).unwrap() {
+    if !pending.is_empty() {
         return Err(DecodeError::InvalidData);
     }
     let mut extra = [0];
@@ -664,11 +753,7 @@ fn decode_zlib_sampled(
     {
         return Err(DecodeError::InvalidData);
     }
-    Ok(DecodedImage {
-        width: region.width,
-        height: region.height,
-        pixels,
-    })
+    Ok(images)
 }
 
 fn decode_png(image: &StoredImage) -> Result<DecodedImage, DecodeError> {
@@ -1018,6 +1103,111 @@ mod tests {
         assert_eq!(
             rgb.decode_rgba().unwrap().pixels,
             [1, 2, 3, 255, 4, 5, 6, 255]
+        );
+    }
+
+    #[test]
+    fn compressed_raw_samples_sparse_regions_in_one_bounded_pass() {
+        let mut source = Vec::new();
+        for y in 0..4u8 {
+            for x in 0..4u8 {
+                source.extend_from_slice(&[x, y, 7, 255]);
+            }
+        }
+        let image = StoredImage {
+            format: ImageFormat::RgbaZlib,
+            data: zlib_bytes(&source),
+            declared_width: Some(4),
+            declared_height: Some(4),
+        };
+        let layout = PlacementPixelLayout {
+            source: PixelRect {
+                x: 0,
+                y: 0,
+                width: 4,
+                height: 4,
+            },
+            cell_bounds: PixelSize {
+                width: 4096,
+                height: 4096,
+            },
+            destination: PixelRect {
+                x: 0,
+                y: 0,
+                width: 4096,
+                height: 4096,
+            },
+        };
+        let regions = [
+            PixelRect {
+                x: 0,
+                y: 0,
+                width: 1,
+                height: 1,
+            },
+            PixelRect {
+                x: 2048,
+                y: 2048,
+                width: 2,
+                height: 2,
+            },
+            PixelRect {
+                x: 4095,
+                y: 4095,
+                width: 1,
+                height: 1,
+            },
+        ];
+        let sampled = image
+            .resample_zlib_placement_regions(layout, &regions)
+            .unwrap();
+        assert_eq!(sampled.len(), regions.len());
+        for (region, pixels) in regions.into_iter().zip(sampled) {
+            assert_eq!(pixels.destination, region);
+            assert_eq!(
+                pixels,
+                image
+                    .resample_zlib_placement_region(layout, region)
+                    .unwrap()
+            );
+        }
+        assert_eq!(
+            image.resample_zlib_placement_regions(
+                layout,
+                &[
+                    PixelRect {
+                        x: 0,
+                        y: 0,
+                        width: 2048,
+                        height: 2048,
+                    },
+                    PixelRect {
+                        x: 2048,
+                        y: 2048,
+                        width: 2048,
+                        height: 2048,
+                    },
+                    regions[0],
+                ]
+            ),
+            Err(StreamZlibError::Decode(DecodeError::OutputLimit))
+        );
+        assert_eq!(
+            image.resample_zlib_placement_regions(
+                layout,
+                &vec![regions[0]; MAX_SAMPLED_REGIONS + 1]
+            ),
+            Err(StreamZlibError::Decode(DecodeError::OutputLimit))
+        );
+        let mut corrupt = image.data.clone();
+        *corrupt.last_mut().unwrap() ^= 1;
+        assert_eq!(
+            StoredImage {
+                data: corrupt,
+                ..image
+            }
+            .resample_zlib_placement_regions(layout, &regions),
+            Err(StreamZlibError::Decode(DecodeError::InvalidData))
         );
     }
 
