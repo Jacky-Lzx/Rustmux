@@ -592,6 +592,142 @@ fn valid_stream_layout(layout: PlacementPixelLayout) -> bool {
             .is_some()
 }
 
+fn sample_output_buffers(
+    regions: &[PixelRect],
+    target_width: u32,
+    target_height: u32,
+) -> Result<Vec<DecodedImage>, DecodeError> {
+    if regions.len() > MAX_SAMPLED_REGIONS {
+        return Err(DecodeError::OutputLimit);
+    }
+    let mut total_output = 0usize;
+    let mut images = Vec::with_capacity(regions.len());
+    for region in regions {
+        let size = decoded_size(region.width, region.height)?;
+        if region
+            .x
+            .checked_add(region.width)
+            .is_none_or(|end| end > target_width)
+            || region
+                .y
+                .checked_add(region.height)
+                .is_none_or(|end| end > target_height)
+        {
+            return Err(DecodeError::InvalidDimensions);
+        }
+        total_output = total_output
+            .checked_add(size)
+            .filter(|&total| total <= MAX_DECODED_IMAGE_BYTES)
+            .ok_or(DecodeError::OutputLimit)?;
+        images.push(DecodedImage {
+            width: region.width,
+            height: region.height,
+            pixels: vec![0; size],
+        });
+    }
+    Ok(images)
+}
+
+/// Share pixel-center coordinates, sparse row scheduling and color conversion
+/// between the PNG and zlib row readers. Each reader still validates its own
+/// framing and complete tail before returning these sampled pixels.
+struct RowSampler<'a> {
+    regions: &'a [PixelRect],
+    source: PixelRect,
+    target_width: u32,
+    target_height: u32,
+    color: ColorType,
+    channels: usize,
+    images: Vec<DecodedImage>,
+    next_rows: Vec<usize>,
+    pending: BinaryHeap<Reverse<(u32, usize)>>,
+}
+
+impl<'a> RowSampler<'a> {
+    fn new(
+        regions: &'a [PixelRect],
+        images: Vec<DecodedImage>,
+        source: PixelRect,
+        target_width: u32,
+        target_height: u32,
+        color: ColorType,
+        channels: usize,
+    ) -> Self {
+        let mut pending = BinaryHeap::new();
+        for (index, region) in regions.iter().enumerate() {
+            pending.push(Reverse((
+                source.y + nearest_sample(region.y as usize, source.height, target_height),
+                index,
+            )));
+        }
+        Self {
+            regions,
+            source,
+            target_width,
+            target_height,
+            color,
+            channels,
+            images,
+            next_rows: vec![0; regions.len()],
+            pending,
+        }
+    }
+
+    fn accept_row(&mut self, source_y: u32, source_row: &[u8]) {
+        while self
+            .pending
+            .peek()
+            .is_some_and(|Reverse((requested_y, _))| *requested_y == source_y)
+        {
+            let Reverse((_, index)) = self.pending.pop().unwrap();
+            let region = self.regions[index];
+            let target_y = self.next_rows[index];
+            let target_stride = usize::try_from(region.width).unwrap() * 4;
+            let output_row = &mut self.images[index].pixels
+                [target_y * target_stride..(target_y + 1) * target_stride];
+            for (target_x, rgba) in output_row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                let source_x = usize::try_from(
+                    self.source.x
+                        + nearest_sample(
+                            usize::try_from(region.x).unwrap() + target_x,
+                            self.source.width,
+                            self.target_width,
+                        ),
+                )
+                .unwrap();
+                let offset = source_x * self.channels;
+                let pixel = &source_row[offset..offset + self.channels];
+                match self.color {
+                    ColorType::Grayscale => *rgba = [pixel[0], pixel[0], pixel[0], 255],
+                    ColorType::GrayscaleAlpha => *rgba = [pixel[0], pixel[0], pixel[0], pixel[1]],
+                    ColorType::Rgb => *rgba = [pixel[0], pixel[1], pixel[2], 255],
+                    ColorType::Rgba => rgba.copy_from_slice(pixel),
+                    ColorType::Indexed => unreachable!(),
+                }
+            }
+            self.next_rows[index] += 1;
+            if self.next_rows[index] < usize::try_from(region.height).unwrap() {
+                self.pending.push(Reverse((
+                    self.source.y
+                        + nearest_sample(
+                            usize::try_from(region.y).unwrap() + self.next_rows[index],
+                            self.source.height,
+                            self.target_height,
+                        ),
+                    index,
+                )));
+            }
+        }
+    }
+
+    fn finish(self) -> Result<Vec<DecodedImage>, DecodeError> {
+        if !self.pending.is_empty() {
+            return Err(DecodeError::InvalidData);
+        }
+        Ok(self.images)
+    }
+}
+
 fn decoded_size(width: u32, height: u32) -> Result<usize, DecodeError> {
     if width == 0 || height == 0 {
         return Err(DecodeError::InvalidDimensions);
@@ -663,34 +799,7 @@ fn decode_zlib_regions(
     source_crop: Option<PixelRect>,
     regions: &[PixelRect],
 ) -> Result<Vec<DecodedImage>, DecodeError> {
-    if regions.len() > MAX_SAMPLED_REGIONS {
-        return Err(DecodeError::OutputLimit);
-    }
-    let mut total_output = 0usize;
-    let mut images = Vec::with_capacity(regions.len());
-    for region in regions {
-        let size = decoded_size(region.width, region.height)?;
-        if region
-            .x
-            .checked_add(region.width)
-            .is_none_or(|end| end > target_width)
-            || region
-                .y
-                .checked_add(region.height)
-                .is_none_or(|end| end > target_height)
-        {
-            return Err(DecodeError::InvalidDimensions);
-        }
-        total_output = total_output
-            .checked_add(size)
-            .filter(|&total| total <= MAX_DECODED_IMAGE_BYTES)
-            .ok_or(DecodeError::OutputLimit)?;
-        images.push(DecodedImage {
-            width: region.width,
-            height: region.height,
-            pixels: vec![0; size],
-        });
-    }
+    let images = sample_output_buffers(regions, target_width, target_height)?;
     let (Some(width), Some(height)) = (image.declared_width, image.declared_height) else {
         return Err(DecodeError::InvalidDimensions);
     };
@@ -731,63 +840,27 @@ fn decode_zlib_regions(
     }
     let mut reader = ZlibDecoder::new(image.data.as_slice());
     let mut row = vec![0; row_len];
-    let mut next_rows = vec![0usize; regions.len()];
-    let mut pending = BinaryHeap::new();
-    for (index, region) in regions.iter().enumerate() {
-        pending.push(Reverse((
-            source.y + nearest_sample(region.y as usize, source.height, target_height),
-            index,
-        )));
-    }
+    let color = if channels == 3 {
+        ColorType::Rgb
+    } else {
+        ColorType::Rgba
+    };
+    let mut sampler = RowSampler::new(
+        regions,
+        images,
+        source,
+        target_width,
+        target_height,
+        color,
+        channels,
+    );
     for source_y in 0..height {
         reader
             .read_exact(&mut row)
             .map_err(|_| DecodeError::InvalidData)?;
-        while pending
-            .peek()
-            .is_some_and(|Reverse((requested_y, _))| *requested_y == source_y)
-        {
-            let Reverse((_, index)) = pending.pop().unwrap();
-            let region = regions[index];
-            let target_y = next_rows[index];
-            let target_stride = usize::try_from(region.width).unwrap() * 4;
-            let output_row =
-                &mut images[index].pixels[target_y * target_stride..(target_y + 1) * target_stride];
-            for (target_x, rgba) in output_row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
-                let source_x = usize::try_from(
-                    source.x
-                        + nearest_sample(
-                            usize::try_from(region.x).unwrap() + target_x,
-                            source.width,
-                            target_width,
-                        ),
-                )
-                .unwrap();
-                let offset = source_x * channels;
-                let pixel = &row[offset..offset + channels];
-                if channels == 3 {
-                    *rgba = [pixel[0], pixel[1], pixel[2], 255];
-                } else {
-                    rgba.copy_from_slice(pixel);
-                }
-            }
-            next_rows[index] += 1;
-            if next_rows[index] < usize::try_from(region.height).unwrap() {
-                pending.push(Reverse((
-                    source.y
-                        + nearest_sample(
-                            usize::try_from(region.y).unwrap() + next_rows[index],
-                            source.height,
-                            target_height,
-                        ),
-                    index,
-                )));
-            }
-        }
+        sampler.accept_row(source_y, &row);
     }
-    if !pending.is_empty() {
-        return Err(DecodeError::InvalidData);
-    }
+    let images = sampler.finish()?;
     let mut extra = [0];
     if reader
         .read(&mut extra)
@@ -903,34 +976,7 @@ fn decode_png_regions(
     source_crop: Option<PixelRect>,
     regions: &[PixelRect],
 ) -> Result<((u32, u32), Vec<DecodedImage>), DecodeError> {
-    if regions.len() > MAX_SAMPLED_REGIONS {
-        return Err(DecodeError::OutputLimit);
-    }
-    let mut total_output = 0usize;
-    let mut images = Vec::with_capacity(regions.len());
-    for region in regions {
-        let size = decoded_size(region.width, region.height)?;
-        if region
-            .x
-            .checked_add(region.width)
-            .is_none_or(|end| end > target_width)
-            || region
-                .y
-                .checked_add(region.height)
-                .is_none_or(|end| end > target_height)
-        {
-            return Err(DecodeError::InvalidDimensions);
-        }
-        total_output = total_output
-            .checked_add(size)
-            .filter(|&total| total <= MAX_DECODED_IMAGE_BYTES)
-            .ok_or(DecodeError::OutputLimit)?;
-        images.push(DecodedImage {
-            width: region.width,
-            height: region.height,
-            pixels: vec![0; size],
-        });
-    }
+    let images = sample_output_buffers(regions, target_width, target_height)?;
     let mut decoder = Decoder::new_with_limits(
         Cursor::new(image.data.as_slice()),
         Limits {
@@ -990,14 +1036,15 @@ fn decode_png_regions(
     if row_len > MAX_DECODED_IMAGE_BYTES || reader.output_line_size(width) != Some(row_len) {
         return Err(DecodeError::OutputLimit);
     }
-    let mut next_rows = vec![0usize; regions.len()];
-    let mut pending = BinaryHeap::new();
-    for (index, region) in regions.iter().enumerate() {
-        pending.push(Reverse((
-            source.y + nearest_sample(region.y as usize, source.height, target_height),
-            index,
-        )));
-    }
+    let mut sampler = RowSampler::new(
+        regions,
+        images,
+        source,
+        target_width,
+        target_height,
+        color,
+        channels,
+    );
     for source_y in 0..height {
         let row = reader
             .next_row()
@@ -1007,53 +1054,9 @@ fn decode_png_regions(
         if source_row.len() != row_len {
             return Err(DecodeError::InvalidData);
         }
-        while pending
-            .peek()
-            .is_some_and(|Reverse((requested_y, _))| *requested_y == source_y)
-        {
-            let Reverse((_, index)) = pending.pop().unwrap();
-            let region = regions[index];
-            let target_y = next_rows[index];
-            let target_stride = usize::try_from(region.width).unwrap() * 4;
-            let output_row =
-                &mut images[index].pixels[target_y * target_stride..(target_y + 1) * target_stride];
-            for (target_x, rgba) in output_row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
-                let source_x = usize::try_from(
-                    source.x
-                        + nearest_sample(
-                            usize::try_from(region.x).unwrap() + target_x,
-                            source.width,
-                            target_width,
-                        ),
-                )
-                .unwrap();
-                let offset = source_x * channels;
-                let pixel = &source_row[offset..offset + channels];
-                match color {
-                    ColorType::Grayscale => *rgba = [pixel[0], pixel[0], pixel[0], 255],
-                    ColorType::GrayscaleAlpha => *rgba = [pixel[0], pixel[0], pixel[0], pixel[1]],
-                    ColorType::Rgb => *rgba = [pixel[0], pixel[1], pixel[2], 255],
-                    ColorType::Rgba => rgba.copy_from_slice(pixel),
-                    ColorType::Indexed => unreachable!(),
-                }
-            }
-            next_rows[index] += 1;
-            if next_rows[index] < usize::try_from(region.height).unwrap() {
-                pending.push(Reverse((
-                    source.y
-                        + nearest_sample(
-                            usize::try_from(region.y).unwrap() + next_rows[index],
-                            source.height,
-                            target_height,
-                        ),
-                    index,
-                )));
-            }
-        }
+        sampler.accept_row(source_y, source_row);
     }
-    if !pending.is_empty() {
-        return Err(DecodeError::InvalidData);
-    }
+    let images = sampler.finish()?;
     reader.finish().map_err(|_| DecodeError::InvalidData)?;
     Ok(((width, height), images))
 }
@@ -1723,6 +1726,81 @@ mod tests {
             }
             .resample_png_placement_regions(layout, &regions),
             Err(StreamPngError::Decode(DecodeError::InvalidData))
+        );
+    }
+
+    #[test]
+    fn png_and_zlib_use_identical_cropped_sparse_sampling() {
+        let mut source = Vec::new();
+        for y in 0..4u8 {
+            for x in 0..4u8 {
+                source.extend_from_slice(&[x, y, 7, 100 + x + y]);
+            }
+        }
+        let mut png_data = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut png_data, 4, 4);
+            encoder.set_color(ColorType::Rgba);
+            encoder.set_depth(BitDepth::Eight);
+            let mut writer = encoder.write_header().unwrap();
+            writer.write_image_data(&source).unwrap();
+            writer.finish().unwrap();
+        }
+        let png = StoredImage {
+            format: ImageFormat::Png,
+            data: png_data,
+            declared_width: Some(4),
+            declared_height: Some(4),
+        };
+        let zlib = StoredImage {
+            format: ImageFormat::RgbaZlib,
+            data: zlib_bytes(&source),
+            declared_width: Some(4),
+            declared_height: Some(4),
+        };
+        let layout = PlacementPixelLayout {
+            source: PixelRect {
+                x: 1,
+                y: 1,
+                width: 2,
+                height: 2,
+            },
+            cell_bounds: PixelSize {
+                width: 8,
+                height: 8,
+            },
+            destination: PixelRect {
+                x: 5,
+                y: 7,
+                width: 8,
+                height: 8,
+            },
+        };
+        let regions = [
+            PixelRect {
+                x: 5,
+                y: 7,
+                width: 1,
+                height: 1,
+            },
+            PixelRect {
+                x: 8,
+                y: 10,
+                width: 2,
+                height: 2,
+            },
+            PixelRect {
+                x: 12,
+                y: 14,
+                width: 1,
+                height: 1,
+            },
+        ];
+        assert_eq!(
+            png.resample_png_placement_regions(layout, &regions)
+                .unwrap(),
+            zlib.resample_zlib_placement_regions(layout, &regions)
+                .unwrap()
         );
     }
 
