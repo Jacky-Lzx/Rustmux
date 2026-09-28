@@ -528,6 +528,10 @@ PNG through its child PTY; a fake Kitty-capable outer PTY captures the tiled
 uploads. The test checks their cell-aligned positions, reconstructed height,
 sampled colors, unique image IDs, and all corresponding deletion commands.
 It then checks that a small opaque image uses `f=24` with correct pixels.
+Finally, it sends a deliberately incompressible 16–32 MiB PNG in bounded
+Kitty chunks through the child PTY and checks the downsampled outer `f=24`
+image's size and corner pixels. This covers the raised direct-PNG input limit
+through the named-session bridge, not just the in-process decoder.
 It is opt-in because it captures tens of MiB of outer-terminal output.
 
 A child running inside a pane may probe graphics with `a=q`. On a currently

@@ -155,9 +155,11 @@ def decode_tiles(output, require_complete=True):
                 active["last_pixel"] = active["pixels"][
                     -active["width"] * channels :
                 ][:channels]
+                active["bottom_right_pixel"] = active["pixels"][-channels:]
                 if channels == 3:
                     active["first_pixel"] += b"\xff"
                     active["last_pixel"] += b"\xff"
+                    active["bottom_right_pixel"] += b"\xff"
             tiles.append(active)
             active = None
         else:
@@ -282,6 +284,16 @@ def main(binary):
             assert small["first_pixel"] == b"\xff\0\0\xff"
             assert small["last_pixel"] == b"\0\0\xff\xff"
             print("PASS: opaque small Kitty overlay uses f=24 with correct pixels")
+
+            output.clear()
+            os.write(master, f"python3 {shlex.quote(str(child))} large-input\n".encode())
+            wait_for_tiles(master, output, process, 1)
+            large_input = decode_tiles(output)[0]
+            assert large_input["format"] == b"24"
+            assert (large_input["width"], large_input["height"]) == (100, 100)
+            assert large_input["first_pixel"] == b"\xff\0\0\xff"
+            assert large_input["bottom_right_pixel"] == b"\0\0\xff\xff"
+            print("PASS: >16 MiB PNG streamed through named PTY and rendered correctly")
         finally:
             os.close(master)
             os.close(slave)
