@@ -1117,6 +1117,44 @@ mod io_tests {
             &[0, 0, 255, 255]
         );
 
+        let mut sparse_pane = Pane::spawn("/bin/sh", 2, 2).unwrap();
+        let large_cell = CellPixelSize::new(1024, 1024).unwrap();
+        sparse_pane.process_output_for_runtime(
+            first.as_bytes(),
+            &mut |_| {},
+            Some(large_cell),
+            true,
+        );
+        sparse_pane.process_output_for_runtime(
+            last.as_bytes(),
+            &mut |_| {},
+            Some(large_cell),
+            true,
+        );
+        let mut sparse_replies = Vec::new();
+        sparse_pane.process_output_for_runtime(
+            b"\x1b_Ga=p,i=7,p=3,U=1\x1b\\",
+            &mut |reply| sparse_replies.extend_from_slice(reply),
+            Some(large_cell),
+            true,
+        );
+        assert_eq!(sparse_replies, b"\x1b_Gi=7,p=3;OK\x1b\\");
+        sparse_pane.process_output_for_runtime(
+            "\x1b[1;1H\x1b[38;5;7m\u{10eeee}\u{0305}\u{0305}\x1b[2;2H\u{10eeee}\u{030e}\u{030e}"
+                .as_bytes(),
+            &mut |_| {},
+            Some(large_cell),
+            true,
+        );
+        let sparse = sparse_pane.compose_image_snapshot(large_cell).unwrap();
+        let stride = 2048usize * 4;
+        assert_eq!(&sparse.pixels[..4], &[255, 0, 0, 255]);
+        assert_eq!(
+            &sparse.pixels[1024 * stride + 1024 * 4..1024 * stride + 1024 * 4 + 4],
+            &[0, 0, 255, 255]
+        );
+        assert_eq!(&sparse.pixels[1024 * 4..1024 * 4 + 4], &[0, 0, 0, 0]);
+
         let revision = pane.image_store().revision();
         *png.last_mut().unwrap() ^= 1;
         let encoded = STANDARD.encode(&png);

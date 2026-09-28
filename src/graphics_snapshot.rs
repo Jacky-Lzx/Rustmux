@@ -512,7 +512,10 @@ fn collect_placeholder_clips(
                     cell,
                 )? {
                     if store.get(placement.image_id).is_some_and(|image| {
-                        matches!(image.format, ImageFormat::RgbZlib | ImageFormat::RgbaZlib)
+                        matches!(
+                            image.format,
+                            ImageFormat::RgbZlib | ImageFormat::RgbaZlib | ImageFormat::Png
+                        )
                     }) {
                         sparse_regions[index]
                             .entry((reference.row, reference.column))
@@ -570,20 +573,31 @@ fn collect_placeholder_clips(
                 let image = store
                     .get(placement.image_id)
                     .ok_or(SnapshotError::MissingImage)?;
-                let sparse = matches!(image.format, ImageFormat::RgbZlib | ImageFormat::RgbaZlib)
-                    && requested_regions[index].is_some_and(|bounds| {
-                        u128::from(bounds.width) * u128::from(bounds.height) * 4
-                            > MAX_DECODED_IMAGE_BYTES as u128
-                    });
+                let sparse = matches!(
+                    image.format,
+                    ImageFormat::RgbZlib | ImageFormat::RgbaZlib | ImageFormat::Png
+                ) && requested_regions[index].is_some_and(|bounds| {
+                    u128::from(bounds.width) * u128::from(bounds.height) * 4
+                        > MAX_DECODED_IMAGE_BYTES as u128
+                });
                 if sparse {
                     let pixel_layout = known_layouts[index].ok_or(SnapshotError::InvalidLayout)?;
                     let regions: Vec<_> = sparse_regions[index].values().copied().collect();
-                    let sampled = image
-                        .resample_zlib_placement_regions(pixel_layout, &regions)
-                        .map_err(|error| match error {
-                            StreamZlibError::Decode(error) => SnapshotError::Decode(error),
-                            StreamZlibError::Resample(error) => SnapshotError::Resample(error),
-                        })?;
+                    let sampled = match image.format {
+                        ImageFormat::RgbZlib | ImageFormat::RgbaZlib => image
+                            .resample_zlib_placement_regions(pixel_layout, &regions)
+                            .map_err(|error| match error {
+                                StreamZlibError::Decode(error) => SnapshotError::Decode(error),
+                                StreamZlibError::Resample(error) => SnapshotError::Resample(error),
+                            })?,
+                        ImageFormat::Png => image
+                            .resample_png_placement_regions(pixel_layout, &regions)
+                            .map_err(|error| match error {
+                                StreamPngError::Decode(error) => SnapshotError::Decode(error),
+                                StreamPngError::Resample(error) => SnapshotError::Resample(error),
+                            })?,
+                        ImageFormat::Rgb | ImageFormat::Rgba => unreachable!(),
+                    };
                     let sampled_bytes: usize = sampled.iter().map(|tile| tile.pixels.len()).sum();
                     raster_bytes = raster_bytes
                         .checked_add(sampled_bytes)

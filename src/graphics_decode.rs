@@ -305,6 +305,50 @@ impl StoredImage {
             pixels: image.pixels,
         })
     }
+
+    /// Sample disjoint PNG destination rectangles in a single row-decoder
+    /// pass, with an aggregate RGBA output bound and complete tail validation.
+    pub(crate) fn resample_png_placement_regions(
+        &self,
+        layout: PlacementPixelLayout,
+        regions: &[PixelRect],
+    ) -> Result<Vec<ResampledPlacement>, StreamPngError> {
+        if self.format != ImageFormat::Png {
+            return Err(StreamPngError::Decode(DecodeError::UnsupportedPng));
+        }
+        if !valid_stream_layout(layout) {
+            return Err(StreamPngError::Resample(ResampleError::InvalidLayout));
+        }
+        let relative: Vec<_> = regions
+            .iter()
+            .map(|region| {
+                Some(PixelRect {
+                    x: region.x.checked_sub(layout.destination.x)?,
+                    y: region.y.checked_sub(layout.destination.y)?,
+                    width: region.width,
+                    height: region.height,
+                })
+            })
+            .collect::<Option<_>>()
+            .ok_or(StreamPngError::Resample(ResampleError::InvalidLayout))?;
+        let (_, images) = decode_png_regions(
+            self,
+            layout.destination.width,
+            layout.destination.height,
+            Some(layout.source),
+            &relative,
+        )
+        .map_err(StreamPngError::Decode)?;
+        Ok(regions
+            .iter()
+            .copied()
+            .zip(images)
+            .map(|(destination, image)| ResampledPlacement {
+                destination,
+                pixels: image.pixels,
+            })
+            .collect())
+    }
 }
 
 impl DecodedImage {
@@ -847,17 +891,45 @@ fn decode_png_sampled(
         width: target_width,
         height: target_height,
     });
-    let output_size = decoded_size(region.width, region.height)?;
-    if region
-        .x
-        .checked_add(region.width)
-        .is_none_or(|end| end > target_width)
-        || region
-            .y
-            .checked_add(region.height)
-            .is_none_or(|end| end > target_height)
-    {
-        return Err(DecodeError::InvalidDimensions);
+    let (dimensions, mut images) =
+        decode_png_regions(image, target_width, target_height, source_crop, &[region])?;
+    Ok((dimensions, images.remove(0)))
+}
+
+fn decode_png_regions(
+    image: &StoredImage,
+    target_width: u32,
+    target_height: u32,
+    source_crop: Option<PixelRect>,
+    regions: &[PixelRect],
+) -> Result<((u32, u32), Vec<DecodedImage>), DecodeError> {
+    if regions.len() > MAX_SAMPLED_REGIONS {
+        return Err(DecodeError::OutputLimit);
+    }
+    let mut total_output = 0usize;
+    let mut images = Vec::with_capacity(regions.len());
+    for region in regions {
+        let size = decoded_size(region.width, region.height)?;
+        if region
+            .x
+            .checked_add(region.width)
+            .is_none_or(|end| end > target_width)
+            || region
+                .y
+                .checked_add(region.height)
+                .is_none_or(|end| end > target_height)
+        {
+            return Err(DecodeError::InvalidDimensions);
+        }
+        total_output = total_output
+            .checked_add(size)
+            .filter(|&total| total <= MAX_DECODED_IMAGE_BYTES)
+            .ok_or(DecodeError::OutputLimit)?;
+        images.push(DecodedImage {
+            width: region.width,
+            height: region.height,
+            pixels: vec![0; size],
+        });
     }
     let mut decoder = Decoder::new_with_limits(
         Cursor::new(image.data.as_slice()),
@@ -918,9 +990,14 @@ fn decode_png_sampled(
     if row_len > MAX_DECODED_IMAGE_BYTES || reader.output_line_size(width) != Some(row_len) {
         return Err(DecodeError::OutputLimit);
     }
-    let mut pixels = vec![0; output_size];
-    let target_stride = usize::try_from(region.width).unwrap() * 4;
-    let mut target_y = 0usize;
+    let mut next_rows = vec![0usize; regions.len()];
+    let mut pending = BinaryHeap::new();
+    for (index, region) in regions.iter().enumerate() {
+        pending.push(Reverse((
+            source.y + nearest_sample(region.y as usize, source.height, target_height),
+            index,
+        )));
+    }
     for source_y in 0..height {
         let row = reader
             .next_row()
@@ -930,16 +1007,16 @@ fn decode_png_sampled(
         if source_row.len() != row_len {
             return Err(DecodeError::InvalidData);
         }
-        while target_y < usize::try_from(region.height).unwrap()
-            && source.y
-                + nearest_sample(
-                    usize::try_from(region.y).unwrap() + target_y,
-                    source.height,
-                    target_height,
-                )
-                == source_y
+        while pending
+            .peek()
+            .is_some_and(|Reverse((requested_y, _))| *requested_y == source_y)
         {
-            let output_row = &mut pixels[target_y * target_stride..(target_y + 1) * target_stride];
+            let Reverse((_, index)) = pending.pop().unwrap();
+            let region = regions[index];
+            let target_y = next_rows[index];
+            let target_stride = usize::try_from(region.width).unwrap() * 4;
+            let output_row =
+                &mut images[index].pixels[target_y * target_stride..(target_y + 1) * target_stride];
             for (target_x, rgba) in output_row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
                 let source_x = usize::try_from(
                     source.x
@@ -960,21 +1037,25 @@ fn decode_png_sampled(
                     ColorType::Indexed => unreachable!(),
                 }
             }
-            target_y += 1;
+            next_rows[index] += 1;
+            if next_rows[index] < usize::try_from(region.height).unwrap() {
+                pending.push(Reverse((
+                    source.y
+                        + nearest_sample(
+                            usize::try_from(region.y).unwrap() + next_rows[index],
+                            source.height,
+                            target_height,
+                        ),
+                    index,
+                )));
+            }
         }
     }
-    if target_y != usize::try_from(region.height).unwrap() {
+    if !pending.is_empty() {
         return Err(DecodeError::InvalidData);
     }
     reader.finish().map_err(|_| DecodeError::InvalidData)?;
-    Ok((
-        (width, height),
-        DecodedImage {
-            width: region.width,
-            height: region.height,
-            pixels,
-        },
-    ))
+    Ok(((width, height), images))
 }
 
 #[cfg(test)]
@@ -1534,6 +1615,114 @@ mod tests {
                 ..layout
             }),
             Err(StreamPngError::Decode(DecodeError::InvalidDimensions))
+        );
+    }
+
+    #[test]
+    fn png_samples_sparse_regions_and_checks_complete_tail() {
+        let mut source = Vec::new();
+        for y in 0..4u8 {
+            for x in 0..4u8 {
+                source.extend_from_slice(&[x, y, 7, 255]);
+            }
+        }
+        let mut data = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut data, 4, 4);
+            encoder.set_color(ColorType::Rgba);
+            encoder.set_depth(BitDepth::Eight);
+            let mut writer = encoder.write_header().unwrap();
+            writer.write_image_data(&source).unwrap();
+            writer.finish().unwrap();
+        }
+        let image = StoredImage {
+            format: ImageFormat::Png,
+            data,
+            declared_width: Some(4),
+            declared_height: Some(4),
+        };
+        let layout = PlacementPixelLayout {
+            source: PixelRect {
+                x: 0,
+                y: 0,
+                width: 4,
+                height: 4,
+            },
+            cell_bounds: PixelSize {
+                width: 4096,
+                height: 4096,
+            },
+            destination: PixelRect {
+                x: 0,
+                y: 0,
+                width: 4096,
+                height: 4096,
+            },
+        };
+        let regions = [
+            PixelRect {
+                x: 0,
+                y: 0,
+                width: 1,
+                height: 1,
+            },
+            PixelRect {
+                x: 2048,
+                y: 2048,
+                width: 2,
+                height: 2,
+            },
+            PixelRect {
+                x: 4095,
+                y: 4095,
+                width: 1,
+                height: 1,
+            },
+        ];
+        let sampled = image
+            .resample_png_placement_regions(layout, &regions)
+            .unwrap();
+        for (region, pixels) in regions.into_iter().zip(sampled) {
+            assert_eq!(
+                pixels,
+                image.resample_png_placement_region(layout, region).unwrap()
+            );
+        }
+        assert_eq!(
+            image.resample_png_placement_regions(
+                layout,
+                &[
+                    PixelRect {
+                        x: 0,
+                        y: 0,
+                        width: 2048,
+                        height: 2048,
+                    },
+                    PixelRect {
+                        x: 2048,
+                        y: 2048,
+                        width: 2048,
+                        height: 2048,
+                    },
+                    regions[0],
+                ]
+            ),
+            Err(StreamPngError::Decode(DecodeError::OutputLimit))
+        );
+        assert_eq!(
+            image
+                .resample_png_placement_regions(layout, &vec![regions[0]; MAX_SAMPLED_REGIONS + 1]),
+            Err(StreamPngError::Decode(DecodeError::OutputLimit))
+        );
+        let mut corrupt = image.data.clone();
+        *corrupt.last_mut().unwrap() ^= 1;
+        assert_eq!(
+            StoredImage {
+                data: corrupt,
+                ..image
+            }
+            .resample_png_placement_regions(layout, &regions),
+            Err(StreamPngError::Decode(DecodeError::InvalidData))
         );
     }
 
