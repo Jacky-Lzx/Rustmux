@@ -24,18 +24,47 @@ pub struct EncodedKittyPng {
 impl EncodedKittyPng {
     pub fn from_rgba(image: &DecodedImage) -> io::Result<Self> {
         validate(image, 1)?;
+        let opaque = image
+            .pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|pixel| pixel[3] == 255);
         let mut output = BoundedPngBuffer::default();
         {
             let mut encoder = png::Encoder::new(&mut output, image.width, image.height);
-            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_color(if opaque {
+                png::ColorType::Rgb
+            } else {
+                png::ColorType::Rgba
+            });
             encoder.set_depth(png::BitDepth::Eight);
             // Overlay encoding runs on the render path; favor responsiveness
             // over squeezing the last few bytes from an already smaller PNG.
             encoder.set_compression(png::Compression::Fast);
             let mut writer = encoder.write_header().map_err(io::Error::other)?;
-            writer
-                .write_image_data(&image.pixels)
-                .map_err(io::Error::other)?;
+            if opaque {
+                // Keep only one converted row, not another full-sized RGB image.
+                let width = usize::try_from(image.width).unwrap();
+                let mut rgb_row = vec![0; width * 3];
+                let mut stream = writer.stream_writer().map_err(io::Error::other)?;
+                for rgba_row in image.pixels.chunks_exact(width * 4) {
+                    for (rgba, rgb) in rgba_row
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .zip(rgb_row.as_chunks_mut::<3>().0.iter_mut())
+                    {
+                        rgb.copy_from_slice(&rgba[..3]);
+                    }
+                    stream.write_all(&rgb_row)?;
+                }
+                stream.finish().map_err(io::Error::other)?;
+            } else {
+                writer
+                    .write_image_data(&image.pixels)
+                    .map_err(io::Error::other)?;
+            }
             writer.finish().map_err(io::Error::other)?;
         }
         Ok(Self {
@@ -441,6 +470,35 @@ mod tests {
         assert_eq!((frame.width, frame.height), (128, 128));
         assert_eq!(frame.color_type, png::ColorType::Rgba);
         assert_eq!(&decoded[..frame.buffer_size()], pixels);
+    }
+
+    #[test]
+    fn opaque_png_uses_rgb_and_preserves_pixels_across_rows() {
+        let pixels: Vec<u8> = (0..15)
+            .flat_map(|index| {
+                [
+                    (index * 17) as u8,
+                    (index * 11) as u8,
+                    (index * 5) as u8,
+                    255,
+                ]
+            })
+            .collect();
+        let prepared = EncodedKittyPng::from_rgba(&image(pixels.clone(), 5, 3)).unwrap();
+        let mut reader = png::Decoder::new(std::io::Cursor::new(&prepared.bytes))
+            .read_info()
+            .unwrap();
+        let mut decoded = vec![0; reader.output_buffer_size().unwrap()];
+        let frame = reader.next_frame(&mut decoded).unwrap();
+        assert_eq!((frame.width, frame.height), (5, 3));
+        assert_eq!(frame.color_type, png::ColorType::Rgb);
+        let expected: Vec<u8> = pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .flat_map(|pixel| pixel[..3].iter().copied())
+            .collect();
+        assert_eq!(&decoded[..frame.buffer_size()], expected);
     }
 
     #[test]

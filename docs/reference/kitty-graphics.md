@@ -364,9 +364,11 @@ when its complete transfer would exceed the caller's remaining output budget.
 The runtime uses this preflight before each band upload.
 
 `EncodedKittyPng::from_rgba` is a bounded output boundary. It
-validates the RGBA dimensions, encodes a static 8-bit RGBA PNG with a bounded
+validates the RGBA dimensions, encodes a static 8-bit PNG with a bounded
 32 MiB output buffer using fast compression, and retains it so callers can
 preflight the exact Kitty placement length without repeating compression.
+Fully opaque input uses RGB PNG, converting one row at a time; any transparency
+keeps RGBA PNG so alpha is preserved.
 `write_with_limit` sends
 `a=T,f=100` direct-data APCs with the same 4096-byte Base64 chunk limit and
 refuses an over-budget placement before writing. PNG dimensions are carried

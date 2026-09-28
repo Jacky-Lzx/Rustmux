@@ -66,6 +66,7 @@ def decode_png_boundary_pixels(data):
     offset = 8
     compressed = bytearray()
     dimensions = None
+    bytes_per_pixel = None
     while offset < len(data):
         size = struct.unpack_from(">I", data, offset)[0]
         kind = data[offset + 4 : offset + 8]
@@ -75,8 +76,9 @@ def decode_png_boundary_pixels(data):
             width, height, depth, color, _, _, interlace = struct.unpack(
                 ">IIBBBBB", content
             )
-            assert (depth, color, interlace) == (8, 6, 0)
+            assert depth == 8 and color in (2, 6) and interlace == 0
             dimensions = width, height
+            bytes_per_pixel = 3 if color == 2 else 4
         elif kind == b"IDAT":
             compressed.extend(content)
         elif kind == b"IEND":
@@ -85,17 +87,17 @@ def decode_png_boundary_pixels(data):
     assert dimensions is not None
     width, height = dimensions
     scanlines = zlib.decompress(compressed)
-    stride = width * 4
+    stride = width * bytes_per_pixel
     assert len(scanlines) == height * (stride + 1)
     first_pixel = None
-    previous_pixel = b"\0" * 4
+    previous_pixel = b"\0" * bytes_per_pixel
     for row in range(height):
         start = row * (stride + 1)
         filter_type = scanlines[start]
         assert filter_type in range(5)
-        filtered = scanlines[start + 1 : start + 5]
+        filtered = scanlines[start + 1 : start + 1 + bytes_per_pixel]
         if filter_type in (0, 1):
-            predictor = b"\0" * 4
+            predictor = b"\0" * bytes_per_pixel
         elif filter_type in (2, 4):
             predictor = previous_pixel
         else:
@@ -104,6 +106,9 @@ def decode_png_boundary_pixels(data):
         if row == 0:
             first_pixel = pixel
         previous_pixel = pixel
+    if bytes_per_pixel == 3:
+        first_pixel += b"\xff"
+        previous_pixel += b"\xff"
     return width, height, first_pixel, previous_pixel
 
 
