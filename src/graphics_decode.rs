@@ -1805,6 +1805,168 @@ mod tests {
     }
 
     #[test]
+    fn sparse_png_and_zlib_match_full_rgba_resampling() {
+        for (width, height) in [(3, 2), (5, 4), (7, 6)] {
+            for color in [
+                ColorType::Grayscale,
+                ColorType::GrayscaleAlpha,
+                ColorType::Rgb,
+                ColorType::Rgba,
+            ] {
+                let mut raw = Vec::new();
+                let mut rgba = Vec::new();
+                for y in 0..height {
+                    for x in 0..width {
+                        let pixel = [
+                            (x * 31 + y * 7) as u8,
+                            (x * 13 + y * 29) as u8,
+                            (x * 3 + y * 17) as u8,
+                            (x * 19 + y * 23) as u8,
+                        ];
+                        match color {
+                            ColorType::Grayscale => {
+                                raw.push(pixel[0]);
+                                rgba.extend_from_slice(&[pixel[0], pixel[0], pixel[0], 255]);
+                            }
+                            ColorType::GrayscaleAlpha => {
+                                raw.extend_from_slice(&[pixel[0], pixel[3]]);
+                                rgba.extend_from_slice(&[pixel[0], pixel[0], pixel[0], pixel[3]]);
+                            }
+                            ColorType::Rgb => {
+                                raw.extend_from_slice(&pixel[..3]);
+                                rgba.extend_from_slice(&[pixel[0], pixel[1], pixel[2], 255]);
+                            }
+                            ColorType::Rgba => {
+                                raw.extend_from_slice(&pixel);
+                                rgba.extend_from_slice(&pixel);
+                            }
+                            ColorType::Indexed => unreachable!(),
+                        }
+                    }
+                }
+                let mut png_data = Vec::new();
+                {
+                    let mut encoder = png::Encoder::new(&mut png_data, width, height);
+                    encoder.set_color(color);
+                    encoder.set_depth(BitDepth::Eight);
+                    let mut writer = encoder.write_header().unwrap();
+                    writer.write_image_data(&raw).unwrap();
+                    writer.finish().unwrap();
+                }
+                let png = StoredImage {
+                    format: ImageFormat::Png,
+                    data: png_data,
+                    declared_width: Some(width),
+                    declared_height: Some(height),
+                };
+                let zlib = match color {
+                    ColorType::Rgb | ColorType::Rgba => Some(StoredImage {
+                        format: if color == ColorType::Rgb {
+                            ImageFormat::RgbZlib
+                        } else {
+                            ImageFormat::RgbaZlib
+                        },
+                        data: zlib_bytes(&raw),
+                        declared_width: Some(width),
+                        declared_height: Some(height),
+                    }),
+                    _ => None,
+                };
+                let decoded = DecodedImage {
+                    width,
+                    height,
+                    pixels: rgba,
+                };
+
+                for source in [
+                    PixelRect {
+                        x: 0,
+                        y: 0,
+                        width,
+                        height,
+                    },
+                    PixelRect {
+                        x: 1,
+                        y: 1,
+                        width: width - 1,
+                        height: height - 1,
+                    },
+                ] {
+                    for (target_width, target_height) in [(1, 1), (2, 3), (width + 3, height + 2)] {
+                        let destination = PixelRect {
+                            x: 11,
+                            y: 13,
+                            width: target_width,
+                            height: target_height,
+                        };
+                        let layout = PlacementPixelLayout {
+                            source,
+                            cell_bounds: PixelSize {
+                                width: target_width,
+                                height: target_height,
+                            },
+                            destination,
+                        };
+                        let mut regions = vec![PixelRect {
+                            x: destination.x + target_width - 1,
+                            y: destination.y + target_height - 1,
+                            width: 1,
+                            height: 1,
+                        }];
+                        if target_width > 1 && target_height > 1 {
+                            regions.push(PixelRect {
+                                x: destination.x,
+                                y: destination.y,
+                                width: 1,
+                                height: 1,
+                            });
+                        }
+                        if target_width >= 4 && target_height >= 4 {
+                            regions.push(PixelRect {
+                                x: destination.x + 1,
+                                y: destination.y + 1,
+                                width: 2,
+                                height: 2,
+                            });
+                        }
+                        let full = decoded.resample_placement(layout).unwrap();
+                        let mut sampled_outputs = vec![
+                            png.resample_png_placement_regions(layout, &regions)
+                                .unwrap(),
+                        ];
+                        if let Some(zlib) = &zlib {
+                            sampled_outputs.push(
+                                zlib.resample_zlib_placement_regions(layout, &regions)
+                                    .unwrap(),
+                            );
+                        }
+                        for sampled in sampled_outputs {
+                            for (region, actual) in regions.iter().zip(sampled) {
+                                let mut expected = Vec::new();
+                                for row in 0..region.height {
+                                    let offset = (((region.y - destination.y + row) * target_width
+                                        + region.x
+                                        - destination.x)
+                                        * 4)
+                                        as usize;
+                                    expected.extend_from_slice(
+                                        &full.pixels[offset..offset + region.width as usize * 4],
+                                    );
+                                }
+                                assert_eq!(actual.destination, *region);
+                                assert_eq!(
+                                    actual.pixels, expected,
+                                    "{color:?}, {layout:?}, {region:?}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     #[ignore = "set RUSTMUX_COMPAT_IMAGE to a PNG and run this test explicitly"]
     fn user_png_streams_to_thumbnail() {
         let Some(path) = std::env::var_os("RUSTMUX_COMPAT_IMAGE") else {

@@ -578,7 +578,10 @@ and soft versus hard deletion.
 Decoder tests cover raw and PNG formats, palette transparency, corrupted PNGs,
 dimension checks and the output-size bound. Resampling tests cover cropped
 nearest-neighbor enlargement, reduction, alpha preservation, invalid geometry,
-and the raster output limit. Viewport tests cover all four clipped edges,
+and the raster output limit. A sparse-sampling regression compares PNG and
+compressed RGB/RGBA regions against a separately resampled full RGBA image
+across crop, scaling, region-order and PNG color-type cases. Viewport tests
+cover all four clipped edges,
 negative and disjoint anchors, malformed buffers, and oversized geometry.
 Runtime upload tests cover atomic rejection of corrupt PNG replacements and
 acceptance of valid PNG with inferred placement extent.
