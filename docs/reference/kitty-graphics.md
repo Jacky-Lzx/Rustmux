@@ -118,7 +118,9 @@ images are sampled once into their bounding source-backed rectangle rather
 than a full virtual raster. When references are too far apart for a bounded
 rectangle, a single zlib or PNG row-decoder pass samples their disjoint cells
 directly. Both paths limit the aggregate RGBA output to 32 MiB and still
-validate the complete source stream.
+validate the complete source stream. Adjacent output columns advance their
+pixel-center source coordinate by quotient and remainder, avoiding a 128-bit
+division for each sampled output pixel.
 An optional local-file check is
 `RUSTMUX_COMPAT_IMAGE=/absolute/path/to/image.png cargo test --lib user_png_streams_to_thumbnail -- --ignored`.
 

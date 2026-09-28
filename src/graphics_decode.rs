@@ -575,6 +575,42 @@ fn nearest_sample(output_index: usize, source_extent: u32, output_extent: u32) -
     u32::try_from(numerator / denominator).unwrap()
 }
 
+/// Advance the same pixel-center sample across adjacent output columns with
+/// quotient/remainder addition instead of dividing once per output pixel.
+struct SampledColumns {
+    current: u64,
+    remainder: u64,
+    whole_step: u64,
+    fractional_step: u64,
+    denominator: u64,
+}
+
+impl SampledColumns {
+    fn new(first: u32, source_extent: u32, output_extent: u32) -> Self {
+        debug_assert!(source_extent != 0 && first < output_extent);
+        let denominator = 2 * u64::from(output_extent);
+        let numerator = (2 * u128::from(first) + 1) * u128::from(source_extent);
+        Self {
+            current: u64::try_from(numerator / u128::from(denominator)).unwrap(),
+            remainder: u64::try_from(numerator % u128::from(denominator)).unwrap(),
+            whole_step: u64::from(source_extent / output_extent),
+            fractional_step: 2 * u64::from(source_extent % output_extent),
+            denominator,
+        }
+    }
+
+    fn next(&mut self) -> u32 {
+        let sample = u32::try_from(self.current).unwrap();
+        self.current += self.whole_step;
+        self.remainder += self.fractional_step;
+        if self.remainder >= self.denominator {
+            self.remainder -= self.denominator;
+            self.current += 1;
+        }
+        sample
+    }
+}
+
 fn valid_stream_layout(layout: PlacementPixelLayout) -> bool {
     layout.source.width != 0
         && layout.source.height != 0
@@ -685,16 +721,9 @@ impl<'a> RowSampler<'a> {
             let target_stride = usize::try_from(region.width).unwrap() * 4;
             let output_row = &mut self.images[index].pixels
                 [target_y * target_stride..(target_y + 1) * target_stride];
-            for (target_x, rgba) in output_row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
-                let source_x = usize::try_from(
-                    self.source.x
-                        + nearest_sample(
-                            usize::try_from(region.x).unwrap() + target_x,
-                            self.source.width,
-                            self.target_width,
-                        ),
-                )
-                .unwrap();
+            let mut columns = SampledColumns::new(region.x, self.source.width, self.target_width);
+            for rgba in output_row.as_chunks_mut::<4>().0.iter_mut() {
+                let source_x = usize::try_from(self.source.x + columns.next()).unwrap();
                 let offset = source_x * self.channels;
                 let pixel = &source_row[offset..offset + self.channels];
                 match self.color {
@@ -1802,6 +1831,31 @@ mod tests {
             zlib.resample_zlib_placement_regions(layout, &regions)
                 .unwrap()
         );
+    }
+
+    #[test]
+    fn incremental_columns_match_pixel_center_sampling_at_extreme_extents() {
+        for (source_extent, output_extent) in [
+            (1, 1),
+            (7, 3),
+            (3, 7),
+            (255, 64),
+            (1_000, 1_001),
+            (u32::MAX, u32::MAX),
+            (u32::MAX, 1),
+            (1, u32::MAX),
+        ] {
+            for first in [0, output_extent / 2, output_extent.saturating_sub(3)] {
+                let mut columns = SampledColumns::new(first, source_extent, output_extent);
+                for output_index in first..first + (output_extent - first).min(4) {
+                    assert_eq!(
+                        columns.next(),
+                        nearest_sample(output_index as usize, source_extent, output_extent),
+                        "source={source_extent}, output={output_extent}, index={output_index}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
