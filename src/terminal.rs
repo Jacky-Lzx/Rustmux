@@ -25,7 +25,8 @@ use crate::{
     graphics_capability::{GraphicsCapabilityProbe, GraphicsSupport},
     graphics_decode::DecodedImage,
     graphics_output::{
-        EncodedKittyPng, kitty_rgba_placement_len, write_kitty_rgba_placement_with_limit,
+        EncodedKittyPng, kitty_rgb_placement_len, kitty_rgba_placement_len,
+        write_kitty_rgb_placement_with_limit, write_kitty_rgba_placement_with_limit,
     },
     graphics_snapshot::ImageBand,
     graphics_store::CellPixelSize,
@@ -729,6 +730,7 @@ fn overlay_tile(
 }
 
 enum OverlayPayload {
+    Rgb,
     Rgba,
     Png(EncodedKittyPng),
 }
@@ -739,14 +741,18 @@ fn prepare_overlay_payload(
     z_index: i32,
 ) -> io::Result<(OverlayPayload, usize)> {
     let rgba_len = kitty_rgba_placement_len(image, image_id, z_index)?;
+    let (raw_payload, raw_len) = match kitty_rgb_placement_len(image, image_id, z_index) {
+        Ok(rgb_len) if rgb_len < rgba_len => (OverlayPayload::Rgb, rgb_len),
+        _ => (OverlayPayload::Rgba, rgba_len),
+    };
     if image.pixels.len() >= MIN_KITTY_PNG_CANDIDATE_BYTES
         && let Ok(png) = EncodedKittyPng::from_rgba(image)
         && let Ok(png_len) = png.placement_len(image_id, z_index)
-        && png_len < rgba_len
+        && png_len < raw_len
     {
         return Ok((OverlayPayload::Png(png), png_len));
     }
-    Ok((OverlayPayload::Rgba, rgba_len))
+    Ok((raw_payload, raw_len))
 }
 
 impl Default for KittyOverlays {
@@ -926,6 +932,13 @@ impl KittyOverlays {
                         FrameWriter(output).write_all(position.as_bytes())?;
                         let remaining = MAX_FRAME - output.len() - restore.len();
                         match payload {
+                            OverlayPayload::Rgb => write_kitty_rgb_placement_with_limit(
+                                tile,
+                                image_id,
+                                band.output_z(),
+                                remaining,
+                                &mut FrameWriter(output),
+                            )?,
                             OverlayPayload::Rgba => write_kitty_rgba_placement_with_limit(
                                 tile,
                                 image_id,
@@ -3585,6 +3598,18 @@ mod tests {
             OverlayPayload::Rgba
         ));
 
+        let small_opaque = DecodedImage {
+            width: 2,
+            height: 1,
+            pixels: vec![1, 2, 3, 255, 4, 5, 6, 255],
+        };
+        let (payload, rgb_len) = prepare_overlay_payload(&small_opaque, 7, 0).unwrap();
+        assert!(matches!(payload, OverlayPayload::Rgb));
+        assert_eq!(
+            rgb_len,
+            kitty_rgb_placement_len(&small_opaque, 7, 0).unwrap()
+        );
+
         let flat = DecodedImage {
             width: 512,
             height: 512,
@@ -3853,8 +3878,8 @@ mod tests {
                 .iter()
                 .copied()
                 .collect::<Vec<_>>()
-                .windows(b"a=T,f=32,s=2,v=1,i=2147483648".len())
-                .any(|bytes| bytes == b"a=T,f=32,s=2,v=1,i=2147483648"),
+                .windows(b"a=T,f=24,s=2,v=1,i=2147483648".len())
+                .any(|bytes| bytes == b"a=T,f=24,s=2,v=1,i=2147483648"),
             "{}",
             String::from_utf8_lossy(&output.iter().copied().collect::<Vec<_>>())
         );
@@ -3867,8 +3892,8 @@ mod tests {
         assert!(refreshed.starts_with(b"\x1b_Ga=d,d=I,i=2147483648,q=2\x1b\\"));
         assert!(
             refreshed
-                .windows(b"a=T,f=32,s=2,v=1,i=2147483649".len())
-                .any(|bytes| bytes == b"a=T,f=32,s=2,v=1,i=2147483649"),
+                .windows(b"a=T,f=24,s=2,v=1,i=2147483649".len())
+                .any(|bytes| bytes == b"a=T,f=24,s=2,v=1,i=2147483649"),
             "{}",
             String::from_utf8_lossy(&refreshed)
         );

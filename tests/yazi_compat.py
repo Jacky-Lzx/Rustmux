@@ -78,19 +78,21 @@ def wait_for(master, output, predicate, process, timeout, label):
 
 
 def decode_outer_rgba_overlay(output, expected_width=None):
-    """Decode the first complete Rustmux-owned Kitty RGBA upload of a width."""
+    """Decode the first complete Rustmux-owned Kitty raw upload to RGBA."""
     payload = bytearray()
     dimensions = None
+    channels = None
     for command in re.finditer(rb"\x1b_G([^;]*);([A-Za-z0-9+/=]*)\x1b\\", output):
         controls = dict(
             part.split(b"=", 1) for part in command.group(1).split(b",") if b"=" in part
         )
-        if controls.get(b"a") == b"T" and controls.get(b"f") == b"32":
+        if controls.get(b"a") == b"T" and controls.get(b"f") in (b"24", b"32"):
             image_id = int(controls.get(b"i", b"0"))
             if image_id < 0x80000000:
                 continue
             width = int(controls[b"s"])
             dimensions = (width, int(controls[b"v"])) if expected_width in (None, width) else None
+            channels = 3 if controls[b"f"] == b"24" else 4
             payload.clear()
         elif dimensions is None or set(controls) != {b"m"}:
             continue
@@ -100,12 +102,18 @@ def decode_outer_rgba_overlay(output, expected_width=None):
         payload.extend(base64.b64decode(encoded, validate=True))
         if controls.get(b"m") == b"0":
             width, height = dimensions
-            assert len(payload) == width * height * 4, (
-                "outer RGBA dimensions do not match payload"
+            assert len(payload) == width * height * channels, (
+                "outer raw dimensions do not match payload"
             )
-            return image_id, width, height, bytes(payload)
+            pixels = bytes(payload)
+            if channels == 3:
+                pixels = b"".join(
+                    pixels[index:index + 3] + b"\xff"
+                    for index in range(0, len(pixels), 3)
+                )
+            return image_id, width, height, pixels
         assert controls.get(b"m") == b"1", "invalid outer Kitty chunk continuation"
-    raise AssertionError("no complete Rustmux-owned RGBA overlay found")
+    raise AssertionError("no complete Rustmux-owned raw overlay found")
 
 
 def assert_fixture_pixels(width, height, pixels, colors):

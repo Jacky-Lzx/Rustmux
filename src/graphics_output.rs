@@ -179,7 +179,7 @@ pub fn kitty_rgba_placement_len(
     while let Some(raw) = chunks.next() {
         let header_len = if first {
             first = false;
-            first_header(image, image_id, z_index, chunks.peek().is_some()).len()
+            first_header(image, image_id, z_index, chunks.peek().is_some(), 32).len()
         } else {
             if chunks.peek().is_some() {
                 MORE_HEADER.len()
@@ -195,6 +195,73 @@ pub fn kitty_rgba_placement_len(
             })?;
     }
     Ok(total)
+}
+
+/// Exact `f=24` length for a fully opaque RGBA image. The alpha check keeps
+/// callers from silently losing transparency when choosing the smaller wire
+/// representation.
+pub fn kitty_rgb_placement_len(
+    image: &DecodedImage,
+    image_id: u32,
+    z_index: i32,
+) -> io::Result<usize> {
+    validate_opaque(image, image_id)?;
+    let mut chunks = image.pixels.chunks(RAW_CHUNK_BYTES / 3 * 4).peekable();
+    let mut total = 0usize;
+    let mut first = true;
+    while let Some(rgba) = chunks.next() {
+        let header_len = if first {
+            first = false;
+            first_header(image, image_id, z_index, chunks.peek().is_some(), 24).len()
+        } else if chunks.peek().is_some() {
+            MORE_HEADER.len()
+        } else {
+            FINAL_HEADER.len()
+        };
+        let raw_len = rgba.len() / 4 * 3;
+        total = total
+            .checked_add(header_len + raw_len.div_ceil(3) * 4 + APC_END.len())
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "Kitty output length overflow")
+            })?;
+    }
+    Ok(total)
+}
+
+/// Preflight and send an opaque image as bounded `f=24` RGB chunks. At most
+/// one 3072-byte converted chunk is retained at a time.
+pub fn write_kitty_rgb_placement_with_limit(
+    image: &DecodedImage,
+    image_id: u32,
+    z_index: i32,
+    max_bytes: usize,
+    output: &mut impl Write,
+) -> io::Result<()> {
+    if kitty_rgb_placement_len(image, image_id, z_index)? > max_bytes {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Kitty placement exceeds output budget",
+        ));
+    }
+    let mut chunks = image.pixels.chunks(RAW_CHUNK_BYTES / 3 * 4).peekable();
+    let mut converted = Vec::with_capacity(RAW_CHUNK_BYTES);
+    let mut first = true;
+    while let Some(rgba) = chunks.next() {
+        let more = chunks.peek().is_some();
+        if first {
+            output.write_all(first_header(image, image_id, z_index, more, 24).as_bytes())?;
+            first = false;
+        } else {
+            output.write_all(if more { MORE_HEADER } else { FINAL_HEADER })?;
+        }
+        converted.clear();
+        for pixel in rgba.as_chunks::<4>().0 {
+            converted.extend_from_slice(&pixel[..3]);
+        }
+        output.write_all(STANDARD.encode(&converted).as_bytes())?;
+        output.write_all(APC_END)?;
+    }
+    Ok(())
 }
 
 /// Write only if the complete encoded placement fits `max_bytes`.
@@ -236,7 +303,7 @@ pub fn write_kitty_rgba_placement(
     while let Some(raw) = chunks.next() {
         let more = chunks.peek().is_some();
         if first {
-            output.write_all(first_header(image, image_id, z_index, more).as_bytes())?;
+            output.write_all(first_header(image, image_id, z_index, more, 32).as_bytes())?;
             first = false;
         } else {
             output.write_all(if more { MORE_HEADER } else { FINAL_HEADER })?;
@@ -267,9 +334,32 @@ fn validate(image: &DecodedImage, image_id: u32) -> io::Result<()> {
     Ok(())
 }
 
-fn first_header(image: &DecodedImage, image_id: u32, z_index: i32, more: bool) -> String {
+fn validate_opaque(image: &DecodedImage, image_id: u32) -> io::Result<()> {
+    validate(image, image_id)?;
+    if image
+        .pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .any(|pixel| pixel[3] != 255)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Kitty RGB output requires opaque pixels",
+        ));
+    }
+    Ok(())
+}
+
+fn first_header(
+    image: &DecodedImage,
+    image_id: u32,
+    z_index: i32,
+    more: bool,
+    format: u8,
+) -> String {
     format!(
-        "\x1b_Ga=T,f=32,s={},v={},i={},z={},C=1,q=2,m={};",
+        "\x1b_Ga=T,f={format},s={},v={},i={},z={},C=1,q=2,m={};",
         image.width,
         image.height,
         image_id,
@@ -300,6 +390,54 @@ mod tests {
             output,
             b"\x1b_Ga=T,f=32,s=1,v=1,i=7,z=-9,C=1,q=2,m=0;AQIDBA==\x1b\\"
         );
+    }
+
+    #[test]
+    fn opaque_rgb_chunks_round_trip_and_reject_alpha_or_budget_without_output() {
+        let pixels: Vec<u8> = (0..1025)
+            .flat_map(|index| [(index % 251) as u8, 9, 17, 255])
+            .collect();
+        let image = image(pixels.clone(), 1025, 1);
+        let expected_len = kitty_rgb_placement_len(&image, 42, -3).unwrap();
+        assert!(expected_len < kitty_rgba_placement_len(&image, 42, -3).unwrap());
+        let mut output = Vec::new();
+        write_kitty_rgb_placement_with_limit(&image, 42, -3, expected_len, &mut output).unwrap();
+        assert_eq!(output.len(), expected_len);
+
+        let mut assembler = DirectTransferAssembler::new();
+        let mut transfer = None;
+        for event in GraphicsFramer::new().advance(&output) {
+            let GraphicsEvent::Command(command) = event else {
+                panic!("RGB output should contain graphics commands only");
+            };
+            transfer = assembler.accept(&command).or(transfer);
+        }
+        let transfer = transfer.unwrap();
+        assert_eq!(transfer.control(b'f'), Some(b"24".as_slice()));
+        assert_eq!(transfer.control(b'i'), Some(b"42".as_slice()));
+        assert_eq!(transfer.control(b'z'), Some(b"-3".as_slice()));
+        let expected: Vec<u8> = pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .flat_map(|pixel| pixel[..3].iter().copied())
+            .collect();
+        assert_eq!(transfer.data, expected);
+
+        output.clear();
+        assert!(
+            write_kitty_rgb_placement_with_limit(&image, 42, -3, expected_len - 1, &mut output,)
+                .is_err()
+        );
+        assert!(output.is_empty());
+        let mut translucent = image;
+        translucent.pixels[3] = 254;
+        assert!(kitty_rgb_placement_len(&translucent, 42, -3).is_err());
+        assert!(
+            write_kitty_rgb_placement_with_limit(&translucent, 42, -3, expected_len, &mut output,)
+                .is_err()
+        );
+        assert!(output.is_empty());
     }
 
     #[test]

@@ -361,7 +361,11 @@ is skipped. A failed write may leave a partial transfer. The chunk format follow
 including every APC wrapper, without allocating a Base64 image. The bounded
 `write_kitty_rgba_placement_with_limit` rejects a placement before writing
 when its complete transfer would exceed the caller's remaining output budget.
-The runtime uses this preflight before each band upload.
+For a fully opaque tile, `kitty_rgb_placement_len` and
+`write_kitty_rgb_placement_with_limit` instead preflight and stream `f=24`
+pixels, converting only one Base64-sized chunk at a time. A tile containing
+any transparency retains `f=32`; both paths reject an over-budget transfer
+before writing. The runtime uses the shorter eligible raw transfer.
 
 `EncodedKittyPng::from_rgba` is a bounded output boundary. It
 validates the RGBA dimensions, encodes a static 8-bit PNG with a bounded
@@ -374,9 +378,9 @@ keeps RGBA PNG so alpha is preserved.
 refuses an over-budget placement before writing. PNG dimensions are carried
 by the file itself, so the APC omits `s` and `v`. For composed overlays of at
 least 256 KiB raw RGBA, the runtime selects PNG only when its complete wire
-transfer is smaller; otherwise it sends the existing `f=32` RGBA transfer.
+transfer is smaller than the eligible `f=24` or `f=32` raw transfer.
 Both choices receive the same exact 16 MiB frame preflight. PNG encoding or
-size-validation failures fall back to RGBA.
+size-validation failures fall back to that raw transfer.
 If a PNG tile is prepared but the current frame has insufficient space, the
 runtime retains at most one encoded tile (bounded by the same 32 MiB PNG
 limit) for the next frame. It reuses that transfer only while the pane,
@@ -503,7 +507,7 @@ placeholders and another generated image through the default auto-detect,
 multi-chunk command, without overriding window size. A named-session case
 also checks a generated image in a large pixel viewport where an uncropped
 pane canvas would exceed the output frame budget. All must produce a
-composed outer RGBA image. When the attached terminal supplies an exact cell size,
+composed outer image. When the attached terminal supplies an exact cell size,
 Rustmux writes the current pane's pixel dimensions to its child PTY, including
 after text-grid or cell-pixel changes. If that size is unknown or exceeds the
 PTY's 16-bit pixel fields, both pixel fields remain zero. This smoke covers these
@@ -514,7 +518,7 @@ To test a specific local image after a viewer or image-format update, run
 variable, the user-image case reports `SKIP`; when it is set, a missing file
 or missing `kitten` fails the test. It runs the real `kitten icat` command in
 a named Rustmux PTY, waits for the child shell to regain its prompt, and
-verifies every complete outer `f=32` or `f=100` tile. The image path is not
+verifies every complete outer `f=24`, `f=32`, or `f=100` tile. The image path is not
 stored in the repository. This remains a fake-Kitty PTY protocol check, not
 a claim that a particular GUI terminal displayed the pixels.
 
@@ -523,6 +527,7 @@ Yazi, or another installed image viewer. A named Rustmux session receives the
 PNG through its child PTY; a fake Kitty-capable outer PTY captures the tiled
 uploads. The test checks their cell-aligned positions, reconstructed height,
 sampled colors, unique image IDs, and all corresponding deletion commands.
+It then checks that a small opaque image uses `f=24` with correct pixels.
 It is opt-in because it captures tens of MiB of outer-terminal output.
 
 A child running inside a pane may probe graphics with `a=q`. On a currently

@@ -127,15 +127,15 @@ def decode_tiles(output, require_complete=True):
             image_id = int(controls.get(b"i", b"0"))
             assert image_id >= 0x80000000, "child graphics leaked to the outer terminal"
             image_format = controls.get(b"f")
-            assert image_format in (b"32", b"100")
+            assert image_format in (b"24", b"32", b"100")
             assert controls.get(b"z") == b"0"
             assert active is None and position is not None
             active = {
                 "id": image_id,
                 "position": position,
                 "format": image_format,
-                "width": int(controls[b"s"]) if image_format == b"32" else None,
-                "height": int(controls[b"v"]) if image_format == b"32" else None,
+                "width": int(controls[b"s"]) if image_format != b"100" else None,
+                "height": int(controls[b"v"]) if image_format != b"100" else None,
                 "pixels": bytearray(),
             }
         elif controls.keys() != {b"m"} or active is None:
@@ -149,11 +149,15 @@ def decode_tiles(output, require_complete=True):
                     active["first_pixel"], active["last_pixel"],
                 ) = decode_png_boundary_pixels(active["pixels"])
             else:
-                assert len(active["pixels"]) == active["width"] * active["height"] * 4
-                active["first_pixel"] = active["pixels"][:4]
+                channels = 3 if active["format"] == b"24" else 4
+                assert len(active["pixels"]) == active["width"] * active["height"] * channels
+                active["first_pixel"] = active["pixels"][:channels]
                 active["last_pixel"] = active["pixels"][
-                    -active["width"] * 4 :
-                ][:4]
+                    -active["width"] * channels :
+                ][:channels]
+                if channels == 3:
+                    active["first_pixel"] += b"\xff"
+                    active["last_pixel"] += b"\xff"
             tiles.append(active)
             active = None
         else:
@@ -268,6 +272,16 @@ def main(binary):
             print(
                 f"PASS: {len(ids)} large Kitty tiles reconstructed and deleted through named PTY"
             )
+
+            output.clear()
+            os.write(master, f"python3 {shlex.quote(str(child))} small\n".encode())
+            wait_for_tiles(master, output, process, 1)
+            small = decode_tiles(output)[0]
+            assert small["format"] == b"24", "opaque small overlay did not use raw RGB"
+            assert (small["width"], small["height"]) == (20, 10)
+            assert small["first_pixel"] == b"\xff\0\0\xff"
+            assert small["last_pixel"] == b"\0\0\xff\xff"
+            print("PASS: opaque small Kitty overlay uses f=24 with correct pixels")
         finally:
             os.close(master)
             os.close(slave)

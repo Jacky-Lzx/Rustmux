@@ -1,4 +1,4 @@
-"""Emit one large, two-color Kitty PNG or delete it in a child PTY."""
+"""Emit a large or small two-color Kitty PNG, or delete the large one."""
 
 import base64
 import struct
@@ -22,21 +22,25 @@ def main():
         sys.stdout.buffer.write(b"\x1b_Ga=d,d=I,i=7,q=2;\x1b\\")
         sys.stdout.buffer.flush()
         return
-    if len(sys.argv) != 1:
-        raise SystemExit("usage: kitty_child_large_png.py [delete]")
+    if len(sys.argv) == 2 and sys.argv[1] == "small":
+        width, height, image_id = 20, 10, 8
+    elif len(sys.argv) == 1:
+        width, height, image_id = WIDTH, HEIGHT, IMAGE_ID
+    else:
+        raise SystemExit("usage: kitty_child_large_png.py [small|delete]")
 
-    red = bytes((255, 0, 0, 255)) * WIDTH
-    blue = bytes((0, 0, 255, 255)) * WIDTH
+    red = bytes((255, 0, 0, 255)) * width
+    blue = bytes((0, 0, 255, 255)) * width
     compressor = zlib.compressobj(level=1)
     compressed = bytearray()
-    for row in range(HEIGHT):
+    for row in range(height):
         compressed.extend(
-            compressor.compress(b"\0" + (red if row < HEIGHT // 2 else blue))
+            compressor.compress(b"\0" + (red if row < height // 2 else blue))
         )
     compressed.extend(compressor.flush())
     png = (
         b"\x89PNG\r\n\x1a\n"
-        + png_chunk(b"IHDR", struct.pack(">IIBBBBB", WIDTH, HEIGHT, 8, 6, 0, 0, 0))
+        + png_chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0))
         + png_chunk(b"IDAT", compressed)
         + png_chunk(b"IEND", b"")
     )
@@ -46,8 +50,8 @@ def main():
     assert len(encoded) < 128 * 1024
     command = (
         (
-            f"\x1b[1;1H\x1b_Ga=T,t=d,f=100,s={WIDTH},v={HEIGHT},i={IMAGE_ID},"
-            f"p=1,c={WIDTH // 10},r={HEIGHT // 10},z=0,C=1,q=2;"
+            f"\x1b[1;1H\x1b_Ga=T,t=d,f=100,s={width},v={height},i={image_id},"
+            f"p=1,c={width // 10},r={height // 10},z=0,C=1,q=2;"
         ).encode()
         + encoded
         + b"\x1b\\"
