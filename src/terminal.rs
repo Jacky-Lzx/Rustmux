@@ -28,8 +28,8 @@ use crate::{
         EncodedKittyPng, kitty_rgb_placement_len, kitty_rgba_placement_len,
         write_kitty_rgb_placement_with_limit, write_kitty_rgba_placement_with_limit,
     },
-    graphics_shared_memory_output::SharedRgb,
-    graphics_snapshot::{ImageBand, RawRgbProgress},
+    graphics_shared_memory_output::SharedPixels,
+    graphics_snapshot::{ImageBand, RawPixelProgress},
     graphics_store::CellPixelSize,
     layout::{Direction, PaneId, Rect, SplitAxis},
     pane_set::PaneSet,
@@ -639,7 +639,7 @@ struct KittyOverlays {
     incomplete_virtual: Vec<IncompleteVirtual>,
     next_id: u32,
     pending_retry: bool,
-    pending_shm: Vec<SharedRgb>,
+    pending_shm: Vec<SharedPixels>,
     shm_supported: bool,
 }
 
@@ -908,8 +908,8 @@ impl KittyOverlays {
             let column = usize::from(rect.column) + 1;
             let restore = format!("\x1b[{};{}H", cursor.0 + 1, cursor.1 + 1);
             for band in ImageBand::ALL {
-                let raw_progress = pane.raw_rgb_image_band_progress(cell, band);
-                if matches!(&raw_progress, Some(RawRgbProgress::Incomplete)) {
+                let raw_progress = pane.raw_pixel_image_band_progress(cell, band);
+                if matches!(&raw_progress, Some(RawPixelProgress::Incomplete)) {
                     if self.defer_incomplete_virtual(IncompleteVirtual {
                         window,
                         pane: id,
@@ -928,7 +928,7 @@ impl KittyOverlays {
                         .retain(|state| state.window != window || state.pane != id);
                 }
                 if self.shm_supported
-                    && let Some(RawRgbProgress::Complete(raw)) = raw_progress
+                    && let Some(RawPixelProgress::Complete(raw)) = raw_progress
                 {
                     let image_id = self.next_id;
                     let position = format!("\x1b[{};{}H", row + raw.row, column + raw.column);
@@ -938,15 +938,14 @@ impl KittyOverlays {
                         }) {
                             continue;
                         }
-                        let retained: usize = self.pending_shm.iter().map(SharedRgb::len).sum();
+                        let retained: usize = self.pending_shm.iter().map(SharedPixels::len).sum();
                         if raw.pixels.len() <= MAX_PENDING_SHM_BYTES.saturating_sub(retained)
-                            && let Ok(object) = SharedRgb::create(raw.pixels)
+                            && let Ok(object) = SharedPixels::create(raw.pixels)
                         {
                             let command = object.placement_command(
-                                raw.width,
-                                raw.height,
-                                raw.columns,
-                                raw.rows,
+                                raw.format,
+                                (raw.width, raw.height),
+                                (raw.columns, raw.rows),
                                 image_id,
                                 band.output_z(),
                             );
@@ -2265,7 +2264,7 @@ fn forward(
     let mut graphics_probe_deadline = None;
     let mut shm_probe_started = false;
     let mut shm_probe: Option<GraphicsCapabilityProbe> = None;
-    let mut shm_probe_object: Option<SharedRgb> = None;
+    let mut shm_probe_object: Option<SharedPixels> = None;
     let mut shm_probe_deadline = None;
     let mut shm_support = None;
     let mut input = VecDeque::new();
@@ -2325,7 +2324,7 @@ fn forward(
                 .is_none_or(GraphicsCapabilityProbe::complete)
         {
             shm_probe_started = true;
-            if let Ok(object) = SharedRgb::create(&[0, 0, 0]) {
+            if let Ok(object) = SharedPixels::create(&[0, 0, 0]) {
                 to_terminal.extend(object.query_command(SHM_PROBE_IMAGE_ID.get()));
                 to_terminal.extend(b"\x1b[c");
                 shm_probe = Some(GraphicsCapabilityProbe::new_strict(SHM_PROBE_IMAGE_ID));
@@ -3945,10 +3944,11 @@ mod tests {
         );
         let raw = panes
             .active()
-            .raw_rgb_image_band(cell, ImageBand::AboveText)
+            .raw_pixel_image_band(cell, ImageBand::AboveText)
             .unwrap();
         assert_eq!((raw.column, raw.row, raw.columns, raw.rows), (1, 1, 2, 2));
         assert_eq!(raw.pixels, pixels);
+        assert_eq!(raw.format, 24);
         let mut cache = KittyOverlays {
             shm_supported: true,
             ..KittyOverlays::default()
@@ -3978,7 +3978,7 @@ mod tests {
         assert!(
             panes
                 .active()
-                .raw_rgb_image_band(cell, ImageBand::AboveText)
+                .raw_pixel_image_band(cell, ImageBand::AboveText)
                 .is_none()
         );
         cache
@@ -4006,7 +4006,7 @@ mod tests {
         assert!(
             panes
                 .active()
-                .raw_rgb_image_band(cell, ImageBand::AboveText)
+                .raw_pixel_image_band(cell, ImageBand::AboveText)
                 .is_some()
         );
         panes.active_mut().process_output_with_image_store_sized(
@@ -4017,9 +4017,79 @@ mod tests {
         assert!(
             panes
                 .active()
-                .raw_rgb_image_band(cell, ImageBand::AboveText)
+                .raw_pixel_image_band(cell, ImageBand::AboveText)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn kitty_overlay_forwards_translucent_virtual_rgba_without_compositing() {
+        use base64::Engine;
+
+        let cell = CellPixelSize::new(1, 1).unwrap();
+        let mut windows = Windows::default();
+        let window_id = windows
+            .create(
+                "rgba preview".into(),
+                spawn_window(
+                    OsStr::new("/bin/sh"),
+                    None,
+                    6,
+                    6,
+                    crate::config::Notifications::default(),
+                    crate::config::DEFAULT_SCROLLBACK_LINES,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let panes = windows.active_mut().unwrap().content_mut();
+        let pixels = [
+            255, 0, 0, 128, 0, 255, 0, 0, 0, 0, 255, 64, 255, 255, 255, 255,
+        ];
+        let encoded = base64::engine::general_purpose::STANDARD.encode(pixels);
+        let child = format!(
+            "\x1b_Ga=T,f=32,s=2,v=2,i=8,p=1,U=1;{encoded}\x1b\\\
+             \x1b[38;5;8m\x1b[58;5;1m\
+             \x1b[2;2H\u{10eeee}\u{0305}\u{0305}\u{10eeee}\u{0305}\u{030d}\
+             \x1b[3;2H\u{10eeee}\u{030d}\u{0305}\u{10eeee}\u{030d}\u{030d}"
+        );
+        panes.active_mut().process_output_with_image_store_sized(
+            child.as_bytes(),
+            &mut |_| {},
+            cell,
+        );
+        let raw = panes
+            .active()
+            .raw_pixel_image_band(cell, ImageBand::AboveText)
+            .unwrap();
+        assert_eq!(raw.pixels, pixels);
+        assert_eq!(raw.format, 32);
+
+        let mut cache = KittyOverlays {
+            shm_supported: true,
+            ..KittyOverlays::default()
+        };
+        let mut output = VecDeque::new();
+        cache
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        let upload: Vec<_> = output.drain(..).collect();
+        assert!(upload.starts_with(
+            b"\x1b[4;3H\x1b_Ga=T,t=s,f=32,s=2,v=2,S=16,i=2147483648,c=2,r=2,z=0,C=1,q=2;"
+        ));
+        assert_eq!(cache.entries.len(), 1);
+        assert_eq!(cache.pending_shm.len(), 1);
+        panes
+            .active_mut()
+            .process_output_with_image_store_sized(b"\x1b[2;3H ", &mut |_| {}, cell);
+        cache
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        assert_eq!(
+            output.drain(..).collect::<Vec<_>>(),
+            b"\x1b_Ga=d,d=I,i=2147483648,q=2\x1b\\"
+        );
+        assert!(cache.next_deferred_retry().is_some());
     }
 
     #[test]
@@ -4184,6 +4254,12 @@ mod tests {
         let revision = panes.active().image_store().revision();
         let mut cache = KittyOverlays::default();
         let mut output = VecDeque::new();
+        cache
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        assert!(output.is_empty());
+        assert!(cache.next_deferred_retry().is_some());
+        cache.incomplete_virtual[0].last_change -= INCOMPLETE_VIRTUAL_QUIET;
         cache
             .render(window_id, panes, cell, 6, (3, 2), &mut output)
             .unwrap();

@@ -17,12 +17,12 @@ use crate::graphics_store::MAX_PANE_IMAGE_BYTES;
 
 static NEXT_NAME: AtomicU64 = AtomicU64::new(0);
 
-pub(crate) struct SharedRgb {
+pub(crate) struct SharedPixels {
     name: CString,
     len: usize,
 }
 
-impl SharedRgb {
+impl SharedPixels {
     pub(crate) fn create(pixels: &[u8]) -> io::Result<Self> {
         if pixels.is_empty() || pixels.len() > MAX_PANE_IMAGE_BYTES {
             return Err(io::Error::new(
@@ -135,15 +135,16 @@ impl SharedRgb {
 
     pub(crate) fn placement_command(
         &self,
-        width: u32,
-        height: u32,
-        columns: u32,
-        rows: u32,
+        format: u8,
+        image_size: (u32, u32),
+        cell_size: (u32, u32),
         image_id: u32,
         z_index: i32,
     ) -> Vec<u8> {
+        let (width, height) = image_size;
+        let (columns, rows) = cell_size;
         format!(
-            "\x1b_Ga=T,t=s,f=24,s={width},v={height},S={},i={image_id},c={columns},r={rows},z={z_index},C=1,q=2;{}\x1b\\",
+            "\x1b_Ga=T,t=s,f={format},s={width},v={height},S={},i={image_id},c={columns},r={rows},z={z_index},C=1,q=2;{}\x1b\\",
             self.len,
             STANDARD.encode(self.name.as_bytes())
         )
@@ -151,7 +152,7 @@ impl SharedRgb {
     }
 }
 
-impl Drop for SharedRgb {
+impl Drop for SharedPixels {
     fn drop(&mut self) {
         // SAFETY: this exact name was created by this process. Kitty may
         // already have unlinked it after reading; ENOENT is harmless.
@@ -164,8 +165,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn shared_rgb_has_bounded_lifetime_and_encoded_name() {
-        let object = SharedRgb::create(&[1, 2, 3]).unwrap();
+    fn shared_pixels_have_bounded_lifetime_and_encoded_name() {
+        let object = SharedPixels::create(&[1, 2, 3]).unwrap();
         assert!(
             object
                 .query_command(32)
@@ -173,8 +174,13 @@ mod tests {
         );
         assert!(
             object
-                .placement_command(1, 1, 1, 1, 42, 0)
+                .placement_command(24, (1, 1), (1, 1), 42, 0)
                 .starts_with(b"\x1b_Ga=T,t=s,f=24,s=1,v=1,S=3,i=42,c=1,r=1,z=0,C=1,q=2;")
+        );
+        let rgba = SharedPixels::create(&[1, 2, 3, 128]).unwrap();
+        assert!(
+            rgba.placement_command(32, (1, 1), (1, 1), 43, 0)
+                .starts_with(b"\x1b_Ga=T,t=s,f=32,s=1,v=1,S=4,i=43,c=1,r=1,z=0,C=1,q=2;")
         );
         // SAFETY: the object name exists until consumed or dropped.
         let fd = unsafe { libc::shm_open(object.name.as_ptr(), libc::O_RDONLY, 0) };
@@ -206,7 +212,7 @@ mod tests {
 
     #[test]
     fn consumed_object_is_detected_after_outer_unlink() {
-        let object = SharedRgb::create(&[4, 5, 6]).unwrap();
+        let object = SharedPixels::create(&[4, 5, 6]).unwrap();
         assert!(!object.consumed());
         // SAFETY: simulate the outer terminal consuming this exact object.
         assert_eq!(unsafe { libc::shm_unlink(object.name.as_ptr()) }, 0);

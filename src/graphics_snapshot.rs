@@ -34,11 +34,12 @@ pub enum ImageBand {
     AboveText,
 }
 
-/// A complete RGB virtual placement whose placeholder cells form one
+/// A complete raw RGB/RGBA virtual placement whose placeholder cells form one
 /// contiguous rectangle. The outer terminal can fit the stored source pixels
 /// into that rectangle without a pane-sized RGBA canvas.
-pub(crate) struct RawRgbPlacement<'a> {
+pub(crate) struct RawPixelPlacement<'a> {
     pub pixels: &'a [u8],
+    pub format: u8,
     pub width: u32,
     pub height: u32,
     pub columns: u32,
@@ -47,8 +48,8 @@ pub(crate) struct RawRgbPlacement<'a> {
     pub row: usize,
 }
 
-pub(crate) enum RawRgbProgress<'a> {
-    Complete(RawRgbPlacement<'a>),
+pub(crate) enum RawPixelProgress<'a> {
+    Complete(RawPixelPlacement<'a>),
     Incomplete,
 }
 
@@ -73,26 +74,26 @@ impl ImageBand {
 }
 
 #[cfg(test)]
-pub(crate) fn raw_rgb_pane_band<'a>(
+pub(crate) fn raw_pixel_pane_band<'a>(
     store: &'a ImageStore,
     screen: &Screen,
     viewport: PixelSize,
     cell: CellPixelSize,
     band: ImageBand,
-) -> Option<RawRgbPlacement<'a>> {
-    match raw_rgb_pane_band_progress(store, screen, viewport, cell, band)? {
-        RawRgbProgress::Complete(placement) => Some(placement),
-        RawRgbProgress::Incomplete => None,
+) -> Option<RawPixelPlacement<'a>> {
+    match raw_pixel_pane_band_progress(store, screen, viewport, cell, band)? {
+        RawPixelProgress::Complete(placement) => Some(placement),
+        RawPixelProgress::Incomplete => None,
     }
 }
 
-pub(crate) fn raw_rgb_pane_band_progress<'a>(
+pub(crate) fn raw_pixel_pane_band_progress<'a>(
     store: &'a ImageStore,
     screen: &Screen,
     viewport: PixelSize,
     cell: CellPixelSize,
     band: ImageBand,
-) -> Option<RawRgbProgress<'a>> {
+) -> Option<RawPixelProgress<'a>> {
     if band != ImageBand::AboveText {
         return None;
     }
@@ -124,8 +125,12 @@ pub(crate) fn raw_rgb_pane_band_progress<'a>(
         return None;
     }
     let image = store.get(placement.image_id)?;
-    if image.format != ImageFormat::Rgb
-        || layout.sizing != crate::graphics_store::PlacementSizing::Natural
+    let (format, bytes_per_pixel): (u8, usize) = match image.format {
+        ImageFormat::Rgb => (24, 3),
+        ImageFormat::Rgba => (32, 4),
+        _ => return None,
+    };
+    if layout.sizing != crate::graphics_store::PlacementSizing::Natural
         || layout.cell_offset.x != 0
         || layout.cell_offset.y != 0
     {
@@ -136,7 +141,7 @@ pub(crate) fn raw_rgb_pane_band_progress<'a>(
         != usize::try_from(width)
             .ok()?
             .checked_mul(usize::try_from(height).ok()?)?
-            .checked_mul(3)?
+            .checked_mul(bytes_per_pixel)?
     {
         return None;
     }
@@ -191,10 +196,11 @@ pub(crate) fn raw_rgb_pane_band_progress<'a>(
         return None;
     }
     if seen < expected {
-        return Some(RawRgbProgress::Incomplete);
+        return Some(RawPixelProgress::Incomplete);
     }
-    Some(RawRgbProgress::Complete(RawRgbPlacement {
+    Some(RawPixelProgress::Complete(RawPixelPlacement {
         pixels: &image.data,
+        format,
         width,
         height,
         columns: u32::try_from(columns).ok()?,
