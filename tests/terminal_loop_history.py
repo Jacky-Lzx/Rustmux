@@ -17,6 +17,22 @@ from terminal_loop_support import (
     expect_footer,
 )
 
+
+def expect_history_top(session):
+    """Wait for the current screen, not an earlier cached frame, to show HIST_00."""
+    deadline = time.monotonic() + 3
+    while True:
+        footer = session.physical_rows[-1] if session.physical_rows else b""
+        if re.search(rb"HISTORY  ([1-9][0-9]*)/\1(?:\D|$)", footer):
+            for index, row in enumerate(session.physical_rows[1:-1], start=1):
+                if b"HIST_00" in row:
+                    session.output.clear()
+                    session.frames.clear()
+                    return index + 1  # SGR mouse coordinates are one-based.
+        session.read()
+        assert time.monotonic() < deadline, (session.physical_rows, bytes(session.output[-1000:]))
+
+
 # A partially filled primary screen can enter history before it has scrollback.
 s = Session()
 try:
@@ -192,8 +208,7 @@ try:
         selected_text = base64.b64decode(selected.group(1), validate=True)
         assert selected_text == b"SELECT_TARGET", (selected_text, s.last_rows, bytes(s.output[-500:]))
         s.send(b"g")
-        s.expect(b"HIST_00")
-        s.output.clear()
+        expect_history_top(s)
         s.send(b"\x1b[6;2~\r")
         deadline = time.monotonic() + 3
         while not (selected := re.search(rb"\x1b\]52;c;([A-Za-z0-9+/=]*)\x07", s.output)):
@@ -204,8 +219,7 @@ try:
         assert selected_text.endswith(b"\nH"), (selected_text, s.last_rows, bytes(s.output[-500:]))
         assert selected_text.count(b"\n") >= 2, (selected_text, s.last_rows, bytes(s.output[-500:]))
         s.send(b"g")
-        s.expect(b"HIST_00")
-        s.output.clear()
+        expect_history_top(s)
         s.send(b"\x1b[1;6F\r")
         deadline = time.monotonic() + 3
         while not (selected := re.search(rb"\x1b\]52;c;([A-Za-z0-9+/=]*)\x07", s.output)):
@@ -215,11 +229,11 @@ try:
         assert b"\nHIST_00\n" in selected_text, (selected_text, s.last_rows, bytes(s.output[-500:]))
         assert b"\nHIST_44\n" in selected_text, (selected_text, s.last_rows, bytes(s.output[-500:]))
         s.send(b"g")
-        s.expect(b"HIST_00")
-        s.output.clear()
-        # HIST_00 begins at outer column 42, row 13 in this frozen split.
-        # Dragging over its first four cells copies HIST and leaves shell input untouched.
-        s.send(b"\x1b[<0;42;13M\x1b[<32;45;13M\x1b[<0;45;13m")
+        target_row = expect_history_top(s)
+        # Drag over HIST_00 in the right pane using its current outer-terminal row.
+        # Its first four cells copy HIST and leave shell input untouched.
+        s.send((f"\x1b[<0;42;{target_row}M\x1b[<32;45;{target_row}M"
+                f"\x1b[<0;45;{target_row}m").encode())
         deadline = time.monotonic() + 3
         while not (selected := re.search(rb"\x1b\]52;c;([A-Za-z0-9+/=]*)\x07", s.output)):
             s.read()
