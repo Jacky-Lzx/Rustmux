@@ -11,6 +11,7 @@ pub mod graphics_decode;
 pub mod graphics_output;
 pub mod graphics_placeholder;
 mod graphics_reply;
+mod graphics_shared_memory_output;
 pub mod graphics_snapshot;
 pub mod graphics_store;
 pub mod graphics_transfer;

@@ -28,6 +28,7 @@ use crate::{
         EncodedKittyPng, kitty_rgb_placement_len, kitty_rgba_placement_len,
         write_kitty_rgb_placement_with_limit, write_kitty_rgba_placement_with_limit,
     },
+    graphics_shared_memory_output::SharedRgb,
     graphics_snapshot::ImageBand,
     graphics_store::CellPixelSize,
     layout::{Direction, PaneId, Rect, SplitAxis},
@@ -50,6 +51,7 @@ const POLL_TIMEOUT_MILLIS: u16 = 50;
 const MAX_LEGACY_MOUSE_COORDINATE: usize = 223;
 const MAX_MOUSE_SEQUENCE_BYTES: usize = 64;
 const MAX_FRAME: usize = 16 * 1024 * 1024;
+const MAX_PENDING_SHM_BYTES: usize = 64 * 1024 * 1024;
 // Preferred raw tile target; an indivisible larger cell gets exact frame preflight.
 const MAX_KITTY_TILE_RAW_BYTES: usize = 8 * 1024 * 1024;
 // Tiny images are cheaper to send as raw RGBA than to compress on every render.
@@ -59,6 +61,7 @@ const FRAME_INTERVAL: Duration = Duration::from_millis(6);
 const PANE_DRAG_RESIZE_INTERVAL: Duration = Duration::from_millis(33);
 const GRAPHICS_PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 const GRAPHICS_PROBE_IMAGE_ID: std::num::NonZeroU32 = std::num::NonZeroU32::new(31).unwrap();
+const SHM_PROBE_IMAGE_ID: std::num::NonZeroU32 = std::num::NonZeroU32::new(32).unwrap();
 
 /// Run on the controlling terminal during single-threaded program startup.
 /// Returns the shell exit code, or 128 + signal for termination by signal.
@@ -620,6 +623,8 @@ struct KittyOverlays {
     pending_png: Option<PendingPngTile>,
     next_id: u32,
     pending_retry: bool,
+    pending_shm: Vec<SharedRgb>,
+    shm_supported: bool,
 }
 
 /// Drop transparent pane-sized margins before encoding an outer placement.
@@ -763,6 +768,8 @@ impl Default for KittyOverlays {
             pending_png: None,
             next_id: 0x8000_0000,
             pending_retry: false,
+            pending_shm: Vec::new(),
+            shm_supported: false,
         }
     }
 }
@@ -777,6 +784,7 @@ impl KittyOverlays {
         cursor: (usize, usize),
         output: &mut VecDeque<u8>,
     ) -> io::Result<()> {
+        self.pending_shm.retain(|object| !object.consumed());
         let retry_missing = self.pending_retry;
         self.pending_retry = false;
         let visible = panes.layout().content_geometry().panes;
@@ -837,6 +845,57 @@ impl KittyOverlays {
             let column = usize::from(rect.column) + 1;
             let restore = format!("\x1b[{};{}H", cursor.0 + 1, cursor.1 + 1);
             for band in ImageBand::ALL {
+                if self.shm_supported
+                    && let Some(raw) = pane.raw_rgb_image_band(cell, band)
+                {
+                    let image_id = self.next_id;
+                    let position = format!("\x1b[{};{}H", row + raw.row, column + raw.column);
+                    if let Some(next_id) = image_id.checked_add(1) {
+                        if self.entries.iter().any(|entry| {
+                            entry.window == window && entry.pane == id && entry.band == band
+                        }) {
+                            continue;
+                        }
+                        let retained: usize = self.pending_shm.iter().map(SharedRgb::len).sum();
+                        if raw.pixels.len() <= MAX_PENDING_SHM_BYTES.saturating_sub(retained)
+                            && let Ok(object) = SharedRgb::create(raw.pixels)
+                        {
+                            let command = object.placement_command(
+                                raw.width,
+                                raw.height,
+                                raw.columns,
+                                raw.rows,
+                                image_id,
+                                band.output_z(),
+                            );
+                            let frame_len = position.len() + command.len() + restore.len();
+                            if frame_len > MAX_FRAME - output.len() {
+                                self.pending_retry = true;
+                                continue;
+                            }
+                            let overlay = KittyOverlay {
+                                window,
+                                pane: id,
+                                band,
+                                revision: pane.image_store().revision(),
+                                placeholder_revision: pane.virtual_placeholder_revision(),
+                                rect,
+                                cell,
+                                alternate: pane.screen().is_alternate(),
+                                image_id,
+                                column_offset: raw.column,
+                                row_offset: raw.row,
+                            };
+                            FrameWriter(output).write_all(position.as_bytes())?;
+                            FrameWriter(output).write_all(&command)?;
+                            moved_cursor = true;
+                            self.next_id = next_id;
+                            self.entries.push(overlay);
+                            self.pending_shm.push(object);
+                            continue;
+                        }
+                    }
+                }
                 // A malformed or over-budget band must not suppress the other
                 // two or take down the terminal session.
                 let Ok(Some(image)) = pane.compose_image_band(cell, band) else {
@@ -2121,6 +2180,11 @@ fn forward(
     to_terminal.extend(probe.request_bytes());
     let mut graphics_probe = Some(probe);
     let mut graphics_probe_deadline = None;
+    let mut shm_probe_started = false;
+    let mut shm_probe: Option<GraphicsCapabilityProbe> = None;
+    let mut shm_probe_object: Option<SharedRgb> = None;
+    let mut shm_probe_deadline = None;
+    let mut shm_support = None;
     let mut input = VecDeque::new();
     let mut keys = WindowInput {
         shortcuts,
@@ -2150,6 +2214,14 @@ fn forward(
             *graphics_support = probe.finish(&mut released);
             input.extend(released);
         }
+        if shm_probe_deadline.is_some_and(|deadline| Instant::now() >= deadline)
+            && let Some(mut probe) = shm_probe.take()
+        {
+            let mut released = Vec::new();
+            shm_support = probe.finish(&mut released);
+            drop(shm_probe_object.take());
+            input.extend(released);
+        }
         let old_input_len = input.len();
         frontend.drain_input(&mut input);
         filter_graphics_probe_input(
@@ -2158,8 +2230,38 @@ fn forward(
             old_input_len,
             graphics_support,
         );
+        filter_graphics_probe_input(&mut shm_probe, &mut input, old_input_len, &mut shm_support);
         if !graphics_ready && *graphics_support == Some(GraphicsSupport::Supported) {
             graphics_ready = true;
+            force_redraw = true;
+        }
+        if graphics_ready
+            && !shm_probe_started
+            && graphics_probe
+                .as_ref()
+                .is_none_or(GraphicsCapabilityProbe::complete)
+        {
+            shm_probe_started = true;
+            if let Ok(object) = SharedRgb::create(&[0, 0, 0]) {
+                to_terminal.extend(object.query_command(SHM_PROBE_IMAGE_ID.get()));
+                to_terminal.extend(b"\x1b[c");
+                shm_probe = Some(GraphicsCapabilityProbe::new_strict(SHM_PROBE_IMAGE_ID));
+                shm_probe_object = Some(object);
+            }
+        }
+        if shm_probe.is_some() && shm_probe_deadline.is_none() && to_terminal.is_empty() {
+            shm_probe_deadline = Some(Instant::now() + GRAPHICS_PROBE_TIMEOUT);
+        }
+        if shm_probe
+            .as_ref()
+            .is_some_and(GraphicsCapabilityProbe::complete)
+        {
+            shm_probe = None;
+            drop(shm_probe_object.take());
+        }
+        if !kitty_overlays.shm_supported && shm_support == Some(GraphicsSupport::Supported) {
+            kitty_overlays.clear(&mut to_terminal)?;
+            kitty_overlays.shm_supported = true;
             force_redraw = true;
         }
         if connection != ConnectionState::Attached {
@@ -3380,6 +3482,12 @@ fn forward(
                 old_input_len,
                 graphics_support,
             );
+            filter_graphics_probe_input(
+                &mut shm_probe,
+                &mut input,
+                old_input_len,
+                &mut shm_support,
+            );
         }
         if connection == ConnectionState::Attached && outer.contains(PollFlags::POLLOUT) {
             frontend.send(&mut to_terminal)?;
@@ -3706,6 +3814,101 @@ mod tests {
             b"\x1b_Ga=d,d=I,i=2147483648,q=2\x1b\\"
         );
         assert!(cache.entries.is_empty());
+    }
+
+    #[test]
+    fn kitty_overlay_forwards_complete_virtual_rgb_without_compositing() {
+        use base64::Engine;
+
+        let cell = CellPixelSize::new(1, 1).unwrap();
+        let mut windows = Windows::default();
+        let window_id = windows
+            .create(
+                "raw preview".into(),
+                spawn_window(
+                    OsStr::new("/bin/sh"),
+                    None,
+                    6,
+                    6,
+                    crate::config::Notifications::default(),
+                    crate::config::DEFAULT_SCROLLBACK_LINES,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let panes = windows.active_mut().unwrap().content_mut();
+        let pixels = [255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255];
+        let encoded = base64::engine::general_purpose::STANDARD.encode(pixels);
+        let child = format!(
+            "\x1b_Ga=T,f=24,s=2,v=2,i=7,p=1,U=1;{encoded}\x1b\\\
+             \x1b[38;5;7m\x1b[58;5;1m\
+             \x1b[2;2H\u{10eeee}\u{0305}\u{0305}\u{10eeee}\u{0305}\u{030d}\
+             \x1b[3;2H\u{10eeee}\u{030d}\u{0305}\u{10eeee}\u{030d}\u{030d}"
+        );
+        panes.active_mut().process_output_with_image_store_sized(
+            child.as_bytes(),
+            &mut |_| {},
+            cell,
+        );
+        let raw = panes
+            .active()
+            .raw_rgb_image_band(cell, ImageBand::AboveText)
+            .unwrap();
+        assert_eq!((raw.column, raw.row, raw.columns, raw.rows), (1, 1, 2, 2));
+        assert_eq!(raw.pixels, pixels);
+        let mut cache = KittyOverlays {
+            shm_supported: true,
+            ..KittyOverlays::default()
+        };
+        let mut output = VecDeque::new();
+        cache
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        let upload: Vec<_> = output.drain(..).collect();
+        assert!(upload.starts_with(
+            b"\x1b[4;3H\x1b_Ga=T,t=s,f=24,s=2,v=2,S=12,i=2147483648,c=2,r=2,z=0,C=1,q=2;"
+        ));
+        assert!(upload.ends_with(b"\x1b[4;3H"));
+        assert_eq!(cache.entries.len(), 1);
+        assert_eq!(cache.pending_shm.len(), 1);
+        cache
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        assert!(output.is_empty());
+
+        // A missing placeholder changes the visible picture. It must use the
+        // normal clipped composition path instead of displaying hidden pixels.
+        panes
+            .active_mut()
+            .process_output_with_image_store_sized(b"\x1b[2;3H ", &mut |_| {}, cell);
+        assert!(
+            panes
+                .active()
+                .raw_rgb_image_band(cell, ImageBand::AboveText)
+                .is_none()
+        );
+        panes.active_mut().process_output_with_image_store_sized(
+            "\x1b[2;3H\u{10eeee}\u{0305}\u{030d}".as_bytes(),
+            &mut |_| {},
+            cell,
+        );
+        assert!(
+            panes
+                .active()
+                .raw_rgb_image_band(cell, ImageBand::AboveText)
+                .is_some()
+        );
+        panes.active_mut().process_output_with_image_store_sized(
+            b"\x1b_Ga=p,i=7,p=2,U=1,c=2,r=2;\x1b\\",
+            &mut |_| {},
+            cell,
+        );
+        assert!(
+            panes
+                .active()
+                .raw_rgb_image_band(cell, ImageBand::AboveText)
+                .is_none()
+        );
     }
 
     #[test]

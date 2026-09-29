@@ -4,8 +4,8 @@ use crate::{
     graphics::{GraphicsEvent, GraphicsFramer},
     graphics_decode::DecodedImage,
     graphics_snapshot::{
-        ImageBand, ImagePlanes, SnapshotError, compose_pane_band, compose_pane_planes,
-        compose_pane_snapshot,
+        ImageBand, ImagePlanes, RawRgbPlacement, SnapshotError, compose_pane_band,
+        compose_pane_planes, compose_pane_snapshot, raw_rgb_pane_band,
     },
     graphics_store::{CellAnchor, CellPixelSize, ImageStore, PixelSize},
     graphics_transfer::{AssembledDirectTransfer, DirectTransferAssembler},
@@ -558,6 +558,15 @@ impl Pane {
     ) -> Result<Option<DecodedImage>, SnapshotError> {
         let viewport = self.image_viewport(cell_pixels)?;
         compose_pane_band(&self.image_store, &self.screen, viewport, cell_pixels, band)
+    }
+
+    pub(crate) fn raw_rgb_image_band(
+        &self,
+        cell_pixels: CellPixelSize,
+        band: ImageBand,
+    ) -> Option<RawRgbPlacement<'_>> {
+        let viewport = self.image_viewport(cell_pixels).ok()?;
+        raw_rgb_pane_band(&self.image_store, &self.screen, viewport, cell_pixels, band)
     }
 
     /// Compose the z >= 0 band without decoding or allocating the two

@@ -478,10 +478,22 @@ rules in the
 
 The runtime probes Kitty graphics support separately for each outer-terminal
 attachment. When support and an exact physical cell size are known, it
-composites and displays all three image bands for visible panes. It uses
+composites and displays populated image bands for visible panes. It uses
 representative outer z-values below the background boundary, below text, and
 above text while preserving source-image order inside each band. Output is
 bounded by the frame queue; unchanged image revisions are not retransmitted.
+After the ordinary graphics probe, a separate one-pixel shared-memory query
+must receive `OK` before the outer shared-memory fast path is enabled. A
+single, uncompressed RGB image in the above-text band can bypass pane-sized
+RGBA composition and PNG encoding when its Unicode placeholders cover one
+complete contiguous rectangle and its source is neither cropped nor offset.
+Rustmux re-uploads the stored RGB pixels through a new POSIX shared-memory
+object, remaps the image ID, and asks the outer terminal to fit it into the
+same `c` by `r` cell rectangle. The outer terminal unlinks the object after
+reading it; Rustmux retains linked objects until then, bounds outstanding
+objects to 64 MiB, and cleans them up on attachment exit. Incomplete
+placeholders, overlapping placements, unsupported media, failed shared-memory
+creation, or an unsuccessful outer query keep the composed PNG/raw fallback.
 A band or tile that fits an empty frame but misses the current frame budget is
 retried on the next frame without resending uploads that already succeeded.
 Switching windows, moving/resizing panes, deleting placements, or opening an

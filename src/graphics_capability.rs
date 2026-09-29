@@ -25,6 +25,7 @@ pub enum GraphicsSupport {
 /// for this query and avoid another concurrent primary-DA request.
 pub struct GraphicsCapabilityProbe {
     image_id: NonZeroU32,
+    require_ok: bool,
     pending: Vec<u8>,
     utf8_continuations: u8,
     support: Option<GraphicsSupport>,
@@ -35,11 +36,25 @@ impl GraphicsCapabilityProbe {
     pub fn new(image_id: NonZeroU32) -> Self {
         Self {
             image_id,
+            require_ok: false,
             pending: Vec::new(),
             utf8_continuations: 0,
             support: None,
             complete: false,
         }
+    }
+
+    /// Probe a particular transport: an error reply means that transport
+    /// failed even though the terminal implements the graphics protocol.
+    pub fn new_strict(image_id: NonZeroU32) -> Self {
+        Self {
+            require_ok: true,
+            ..Self::new(image_id)
+        }
+    }
+
+    pub fn complete(&self) -> bool {
+        self.complete
     }
 
     /// Query a one-pixel RGB image without storing or displaying it, followed
@@ -105,7 +120,16 @@ impl GraphicsCapabilityProbe {
                     }
                     Candidate::Graphics(body) => {
                         if is_matching_reply(body, self.image_id) && self.support.is_none() {
-                            self.support = Some(GraphicsSupport::Supported);
+                            let message = body
+                                .iter()
+                                .position(|&byte| byte == b';')
+                                .map(|separator| &body[separator + 1..]);
+                            self.support =
+                                Some(if self.require_ok && message != Some(b"OK".as_slice()) {
+                                    GraphicsSupport::Unsupported
+                                } else {
+                                    GraphicsSupport::Supported
+                                });
                             decision = self.support;
                             self.pending.clear();
                         } else {
@@ -269,6 +293,28 @@ mod tests {
             Some(GraphicsSupport::Supported)
         );
         assert_eq!(forwarded, b"\x1b_Gi=32;OK\x1b\\");
+    }
+
+    #[test]
+    fn strict_transport_probe_requires_ok() {
+        let id = NonZeroU32::new(32).unwrap();
+        for (reply, expected) in [
+            (
+                b"\x1b_Gi=32;OK\x1b\\".as_slice(),
+                GraphicsSupport::Supported,
+            ),
+            (
+                b"\x1b_Gi=32;EBADF:Failed to read image file\x1b\\".as_slice(),
+                GraphicsSupport::Unsupported,
+            ),
+        ] {
+            let mut probe = GraphicsCapabilityProbe::new_strict(id);
+            let mut forwarded = Vec::new();
+            assert_eq!(probe.advance(reply, &mut forwarded), Some(expected));
+            assert!(forwarded.is_empty());
+            probe.advance(b"\x1b[?1;2c", &mut forwarded);
+            assert!(probe.complete());
+        }
     }
 
     #[test]
