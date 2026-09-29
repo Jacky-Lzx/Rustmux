@@ -495,33 +495,16 @@ fn collect_placeholder_clips(
             .or_insert(index);
         by_identity.entry((image_id, None)).or_insert(index);
     }
-    // Keep the usual single screen scan for small images. Only large or
-    // compressed virtual rasters need a prepass to find their visible cells.
+    // Find the source-backed pixels referenced by this screen before sampling
+    // PNG or compressed raw data, even when the complete raster is small.
     let needs_bounded_raster = virtuals.iter().any(|placement| {
-        let Some(image) = store.get(placement.image_id) else {
-            return false;
-        };
-        if matches!(image.format, ImageFormat::RgbZlib | ImageFormat::RgbaZlib) {
-            return true;
-        }
-        if image.format != ImageFormat::Png {
-            return false;
-        }
-        let Some((width, height)) = state.image_dimensions(store, placement.image_id) else {
-            return false;
-        };
-        u128::from(width) * u128::from(height) * 4 > MAX_DECODED_IMAGE_BYTES as u128
-            || placement
-                .virtual_layout
-                .and_then(|layout| layout.pixel_layout(width, height, cell))
-                .is_some_and(|layout| {
-                    u128::from(layout.destination.width) * u128::from(layout.destination.height) * 4
-                        > MAX_DECODED_IMAGE_BYTES as u128
-                })
+        store.get(placement.image_id).is_some_and(|image| {
+            matches!(
+                image.format,
+                ImageFormat::RgbZlib | ImageFormat::RgbaZlib | ImageFormat::Png
+            )
+        })
     });
-    // Find the source-backed pixels actually referenced by this screen before
-    // allocating a large virtual raster. A large image may expose only a
-    // handful of placeholder cells in the viewport.
     let mut known_layouts = vec![None; virtuals.len()];
     let mut requested_regions: Vec<Option<PixelRect>> = vec![None; virtuals.len()];
     let mut sparse_regions: Vec<BTreeMap<(u32, u32), PixelRect>> =
@@ -658,22 +641,14 @@ fn collect_placeholder_clips(
                     sparse_rasters[index] =
                         Some(sparse_regions[index].keys().copied().zip(sampled).collect());
                 } else {
-                    let streamed = known_layouts[index].zip(requested_regions[index]).filter(
-                        |(pixel_layout, _)| {
-                            matches!(image.format, ImageFormat::RgbZlib | ImageFormat::RgbaZlib)
-                                || (image.format == ImageFormat::Png
-                                    && (u128::from(pixel_layout.destination.width)
-                                        * u128::from(pixel_layout.destination.height)
-                                        * 4
-                                        > MAX_DECODED_IMAGE_BYTES as u128
-                                        || state
-                                            .image_dimensions(store, placement.image_id)
-                                            .is_some_and(|(width, height)| {
-                                                u128::from(width) * u128::from(height) * 4
-                                                    > MAX_DECODED_IMAGE_BYTES as u128
-                                            })))
-                        },
-                    );
+                    let streamed = if matches!(
+                        image.format,
+                        ImageFormat::RgbZlib | ImageFormat::RgbaZlib | ImageFormat::Png
+                    ) {
+                        known_layouts[index].zip(requested_regions[index])
+                    } else {
+                        None
+                    };
                     let (pixel_layout, raster) = if let Some((pixel_layout, region)) = streamed {
                         let raster = match image.format {
                             ImageFormat::RgbZlib | ImageFormat::RgbaZlib => image
@@ -684,14 +659,41 @@ fn collect_placeholder_clips(
                                         SnapshotError::Resample(error)
                                     }
                                 })?,
-                            ImageFormat::Png => image
-                                .resample_png_placement_region(pixel_layout, region)
-                                .map_err(|error| match error {
-                                    StreamPngError::Decode(error) => SnapshotError::Decode(error),
-                                    StreamPngError::Resample(error) => {
-                                        SnapshotError::Resample(error)
+                            ImageFormat::Png => {
+                                match image.resample_png_placement_region(pixel_layout, region) {
+                                    Ok(raster) => raster,
+                                    Err(StreamPngError::Decode(DecodeError::UnsupportedPng))
+                                        if state
+                                            .image_dimensions(store, placement.image_id)
+                                            .is_some_and(|(width, height)| {
+                                                u128::from(width) * u128::from(height) * 4
+                                                    <= MAX_DECODED_IMAGE_BYTES as u128
+                                            })
+                                            && u128::from(pixel_layout.destination.width)
+                                                * u128::from(pixel_layout.destination.height)
+                                                * 4
+                                                <= MAX_DECODED_IMAGE_BYTES as u128 =>
+                                    {
+                                        // Adam7 retains the bounded full-frame path.
+                                        rasterize_placement(
+                                            store,
+                                            placement.image_id,
+                                            state.image_dimensions(store, placement.image_id),
+                                            cell,
+                                            |width, height, cell| {
+                                                layout.pixel_layout(width, height, cell)
+                                            },
+                                        )?
+                                        .1
                                     }
-                                })?,
+                                    Err(StreamPngError::Decode(error)) => {
+                                        return Err(SnapshotError::Decode(error));
+                                    }
+                                    Err(StreamPngError::Resample(error)) => {
+                                        return Err(SnapshotError::Resample(error));
+                                    }
+                                }
+                            }
                             ImageFormat::Rgb | ImageFormat::Rgba => unreachable!(),
                         };
                         (pixel_layout, raster)

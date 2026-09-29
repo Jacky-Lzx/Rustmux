@@ -110,8 +110,9 @@ interlaced PNGs retain a full-decode fallback. Regular placements sample only
 their viewport-visible PNG pixels, including for small images, so a small
 on-screen fragment does not require a full source or destination raster.
 Bounded interlaced PNGs retain full decoding and clipping. Virtual placements
-use crop-aware streaming for oversized PNGs. PNG validation still reads through
-the final row and tail, including when only a fragment is visible.
+also sample only placeholder-referenced PNG cells, including for small images;
+bounded interlaced images retain the full-decode fallback. PNG validation still
+reads through the final row and tail, including when only a fragment is visible.
 Large `o=z` RGB/RGBA transfers also remain compressed in the pane store.
 Runtime upload validates their complete zlib stream, and a regular placement
 samples only its visible source-backed destination pixels; invisible pixels

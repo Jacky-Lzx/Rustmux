@@ -1043,6 +1043,83 @@ mod io_tests {
     }
 
     #[test]
+    fn small_virtual_png_samples_only_referenced_cells() {
+        let mut source = Vec::new();
+        for y in 0..4u8 {
+            for x in 0..4u8 {
+                source.extend_from_slice(&[x, y, 7, 255]);
+            }
+        }
+        let mut png = Vec::new();
+        let mut encoder = png::Encoder::new(&mut png, 4, 4);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder
+            .write_header()
+            .unwrap()
+            .write_image_data(&source)
+            .unwrap();
+        let mut pane = Pane::spawn("/bin/sh", 4, 4).unwrap();
+        let cell = CellPixelSize::new(1, 1).unwrap();
+        let upload = format!("\x1b_Ga=t,f=100,i=7;{}\x1b\\", STANDARD.encode(png));
+        pane.process_output_for_runtime(upload.as_bytes(), &mut |_| {}, Some(cell), true);
+        pane.process_output_for_runtime(
+            b"\x1b_Ga=p,i=7,U=1,c=4,r=4\x1b\\",
+            &mut |_| {},
+            Some(cell),
+            true,
+        );
+        pane.process_output_for_runtime(
+            "\x1b[1;1H\x1b[38;5;7m\u{10eeee}\u{0305}\u{0305}\x1b[3;3H\u{10eeee}\u{030e}\u{030e}"
+                .as_bytes(),
+            &mut |_| {},
+            Some(cell),
+            true,
+        );
+        let snapshot = pane.compose_image_snapshot(cell).unwrap();
+        let pixel = |row: usize, column: usize| {
+            let start = (row * 4 + column) * 4;
+            &snapshot.pixels[start..start + 4]
+        };
+        assert_eq!(pixel(0, 0), &[0, 0, 7, 255]);
+        assert_eq!(pixel(2, 2), &[2, 2, 7, 255]);
+        assert_eq!(pixel(1, 1), &[0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn small_interlaced_virtual_png_keeps_full_decode_fallback() {
+        let mut info = png::Info::with_size(1, 1);
+        info.color_type = png::ColorType::Rgba;
+        info.bit_depth = png::BitDepth::Eight;
+        info.interlaced = true;
+        let mut png = Vec::new();
+        png::Encoder::with_info(&mut png, info)
+            .unwrap()
+            .write_header()
+            .unwrap()
+            .write_image_data(&[11, 12, 13, 255])
+            .unwrap();
+        let mut pane = Pane::spawn("/bin/sh", 2, 2).unwrap();
+        let cell = CellPixelSize::new(1, 1).unwrap();
+        let upload = format!("\x1b_Ga=t,f=100,i=7;{}\x1b\\", STANDARD.encode(png));
+        pane.process_output_for_runtime(upload.as_bytes(), &mut |_| {}, Some(cell), true);
+        pane.process_output_for_runtime(
+            b"\x1b_Ga=p,i=7,U=1,c=1,r=1\x1b\\",
+            &mut |_| {},
+            Some(cell),
+            true,
+        );
+        pane.process_output_for_runtime(
+            "\x1b[38;5;7m\u{10eeee}\u{0305}\u{0305}".as_bytes(),
+            &mut |_| {},
+            Some(cell),
+            true,
+        );
+        let snapshot = pane.compose_image_snapshot(cell).unwrap();
+        assert_eq!(&snapshot.pixels[..4], &[11, 12, 13, 255]);
+    }
+
+    #[test]
     fn runtime_streams_large_png_into_cropped_regular_and_virtual_placements() {
         let width = 2900u32;
         let height = 2900u32;
