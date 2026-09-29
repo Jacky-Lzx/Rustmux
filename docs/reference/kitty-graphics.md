@@ -543,7 +543,10 @@ using the same nonzero image ID. An uncompressed direct query may include an
 `S` byte count when it matches the payload, as `kitten icat` does. The reply is
 delivered through the pane's PTY
 before a subsequent primary-DA reply, so a child can detect this supported
-subset. Completed transfers with invalid image data or unsupported controls
+subset. Large PNG queries use the same bounded full-stream validation as pane
+uploads when RGBA expansion exceeds 32 MiB; large zlib-compressed raw queries
+also validate the entire decompressed stream without allocating its full image.
+Completed transfers with invalid image data or unsupported controls
 receive a bounded error reply; `q=1` suppresses success and `q=2` suppresses
 all replies. A query never inserts or replaces an image. Without confirmed
 display support, or while detached, Rustmux stays silent on graphics queries;

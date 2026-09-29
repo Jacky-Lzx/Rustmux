@@ -28,6 +28,29 @@ pub struct StoredImage {
     pub(crate) declared_height: Option<u32>,
 }
 
+impl StoredImage {
+    /// Validate the image as the running pane does before accepting an upload.
+    /// The assembler has already checked uncompressed raw byte counts.
+    pub(crate) fn validated_pane_upload_dimensions(
+        &self,
+    ) -> Result<Option<(u32, u32)>, DecodeError> {
+        match self.format {
+            ImageFormat::Png => {
+                let dimensions = match self.decode_rgba() {
+                    Ok(decoded) => (decoded.width, decoded.height),
+                    Err(DecodeError::OutputLimit) => self.validated_png_dimensions()?,
+                    Err(error) => return Err(error),
+                };
+                Ok(Some(dimensions))
+            }
+            ImageFormat::RgbZlib | ImageFormat::RgbaZlib => {
+                self.validated_zlib_dimensions().map(Some)
+            }
+            ImageFormat::Rgb | ImageFormat::Rgba => Ok(None),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum StoreError {
     UnsupportedIdentity,
@@ -686,24 +709,9 @@ impl ImageStore {
         // When full expansion exceeds the limit, validate every PNG row and
         // checksum through the bounded streaming decoder instead.
         let decoded_dimensions = if validate_images {
-            match format {
-                ImageFormat::Png => {
-                    let dimensions = match image.decode_rgba() {
-                        Ok(decoded) => (decoded.width, decoded.height),
-                        Err(DecodeError::OutputLimit) => image
-                            .validated_png_dimensions()
-                            .map_err(|_| StoreError::InvalidData)?,
-                        Err(_) => return Err(StoreError::InvalidData),
-                    };
-                    Some(dimensions)
-                }
-                ImageFormat::RgbZlib | ImageFormat::RgbaZlib => Some(
-                    image
-                        .validated_zlib_dimensions()
-                        .map_err(|_| StoreError::InvalidData)?,
-                ),
-                ImageFormat::Rgb | ImageFormat::Rgba => None,
-            }
+            image
+                .validated_pane_upload_dimensions()
+                .map_err(|_| StoreError::InvalidData)?
         } else {
             None
         };

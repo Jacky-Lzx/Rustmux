@@ -58,26 +58,32 @@ pub(crate) fn direct_query_reply(
     if quiet == Some(b'2') {
         return None;
     }
-    let format = match transfer.control(b'f') {
-        None | Some(b"32") => Some(ImageFormat::Rgba),
-        Some(b"24") => Some(ImageFormat::Rgb),
-        Some(b"100") => Some(ImageFormat::Png),
+    let format = match (transfer.control(b'f'), transfer.streamed_raw_zlib()) {
+        (None | Some(b"32"), false) => Some(ImageFormat::Rgba),
+        (None | Some(b"32"), true) => Some(ImageFormat::RgbaZlib),
+        (Some(b"24"), false) => Some(ImageFormat::Rgb),
+        (Some(b"24"), true) => Some(ImageFormat::RgbZlib),
+        (Some(b"100"), false) => Some(ImageFormat::Png),
         _ => None,
     };
     let supported_controls = transfer.supported_data_only_controls();
     let declared_width = transfer.control(b's').and_then(parse_nonzero);
     let declared_height = transfer.control(b'v').and_then(parse_nonzero);
     let valid = format.is_some_and(|format| {
-        supported_controls
-            && transfer.control(b'I').is_none()
-            && StoredImage {
+        supported_controls && transfer.control(b'I').is_none() && {
+            let image = StoredImage {
                 format,
                 declared_width,
                 declared_height,
                 data: transfer.data,
+            };
+            match format {
+                ImageFormat::Rgb | ImageFormat::Rgba => image.decode_rgba().is_ok(),
+                ImageFormat::RgbZlib | ImageFormat::RgbaZlib | ImageFormat::Png => {
+                    image.validated_pane_upload_dimensions().is_ok()
+                }
             }
-            .decode_rgba()
-            .is_ok()
+        }
     });
     if valid && quiet == Some(b'1') {
         return None;
@@ -248,9 +254,17 @@ fn parse_decimal(bytes: &[u8]) -> Option<u32> {
 mod tests {
     use super::*;
     use crate::graphics_transfer::DirectTransferAssembler;
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use flate2::{Compression, write::ZlibEncoder};
+    use std::io::Write;
 
     fn assembled(command: &[u8]) -> AssembledDirectTransfer {
         DirectTransferAssembler::new().accept(command).unwrap()
+    }
+
+    fn query_with_data(controls: &str, data: &[u8]) -> AssembledDirectTransfer {
+        let command = format!("\x1b_G{controls};{}\x1b\\", STANDARD.encode(data));
+        assembled(command.as_bytes())
     }
 
     #[test]
@@ -274,6 +288,57 @@ mod tests {
         assert_eq!(direct_query_reply(assembled(quiet_ok), true), None);
         let quiet_all = b"\x1b_Gi=7,a=q,t=d,f=100,q=2;YQ==\x1b\\";
         assert_eq!(direct_query_reply(assembled(quiet_all), true), None);
+    }
+
+    #[test]
+    fn large_png_query_uses_bounded_validation_without_storing_image() {
+        let (width, height) = (3072, 3072);
+        let mut png = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut png, width, height);
+            encoder.set_color(png::ColorType::Grayscale);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().unwrap();
+            writer
+                .write_image_data(&vec![7; (width * height) as usize])
+                .unwrap();
+        }
+        let query = query_with_data("a=q,i=47,f=100,s=3072,v=3072", &png);
+        assert_eq!(
+            direct_query_reply(query, true).unwrap(),
+            b"\x1b_Gi=47;OK\x1b\\"
+        );
+
+        *png.last_mut().unwrap() ^= 1;
+        assert_eq!(
+            direct_query_reply(query_with_data("a=q,i=47,f=100,s=3072,v=3072", &png), true)
+                .unwrap(),
+            b"\x1b_Gi=47;EINVAL:invalid image\x1b\\"
+        );
+    }
+
+    #[test]
+    fn large_compressed_raw_query_validates_entire_stream() {
+        let (width, height) = (3072, 3072);
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+        encoder
+            .write_all(&vec![7; (width * height * 3) as usize])
+            .unwrap();
+        let compressed = encoder.finish().unwrap();
+        let controls = "a=q,i=48,f=24,s=3072,v=3072,o=z";
+        let query = query_with_data(controls, &compressed);
+        assert!(query.streamed_raw_zlib());
+        assert_eq!(
+            direct_query_reply(query, true).unwrap(),
+            b"\x1b_Gi=48;OK\x1b\\"
+        );
+
+        let mut corrupt = compressed;
+        corrupt.push(1);
+        assert_eq!(
+            direct_query_reply(query_with_data(controls, &corrupt), true).unwrap(),
+            b"\x1b_Gi=48;EINVAL:invalid image\x1b\\"
+        );
     }
 
     #[test]
