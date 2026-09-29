@@ -3,6 +3,7 @@
 use std::collections::VecDeque;
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
+use std::hash::{Hash, Hasher};
 use std::io::{self, Read, Write};
 use std::os::fd::{AsFd, BorrowedFd};
 use std::os::unix::net::UnixStream;
@@ -22,15 +23,15 @@ use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGWINCH};
 use crate::pane::{INPUT_LIMIT as LIMIT, MAX_CELLS, Pane};
 use crate::{
     chrome::{FooterMode, compose_with_mode, footer_enabled, pane_rows},
-    graphics_capability::{GraphicsCapabilityProbe, GraphicsSupport},
+    graphics_capability::{GraphicsCapabilityProbe, GraphicsSupport, OuterImageReplies},
     graphics_decode::DecodedImage,
     graphics_output::{
         EncodedKittyPng, kitty_png_passthrough_len, kitty_rgb_placement_len,
         kitty_rgba_placement_len, write_kitty_png_passthrough_with_limit,
         write_kitty_rgb_placement_with_limit, write_kitty_rgba_placement_with_limit,
     },
-    graphics_shared_memory_output::SharedPixels,
-    graphics_snapshot::{ImageBand, SourceImageProgress},
+    graphics_shared_memory_output::{SharedPixels, cached_placement_command},
+    graphics_snapshot::{ImageBand, SourceImagePlacement, SourceImageProgress},
     graphics_store::CellPixelSize,
     layout::{Direction, PaneId, Rect, SplitAxis},
     pane_set::PaneSet,
@@ -53,6 +54,8 @@ const MAX_LEGACY_MOUSE_COORDINATE: usize = 223;
 const MAX_MOUSE_SEQUENCE_BYTES: usize = 64;
 const MAX_FRAME: usize = 16 * 1024 * 1024;
 const MAX_PENDING_SHM_BYTES: usize = 64 * 1024 * 1024;
+const MAX_CACHED_OUTER_IMAGE_BYTES: usize = 32 * 1024 * 1024;
+const MAX_CACHED_OUTER_IMAGES: usize = 8;
 // Preferred raw tile target; an indivisible larger cell gets exact frame preflight.
 const MAX_KITTY_TILE_RAW_BYTES: usize = 8 * 1024 * 1024;
 // Tiny images are cheaper to send as raw RGBA than to compress on every render.
@@ -611,8 +614,32 @@ struct KittyOverlay {
     cell: CellPixelSize,
     alternate: bool,
     image_id: u32,
+    placement_id: Option<u32>,
     column_offset: usize,
     row_offset: usize,
+}
+
+struct CachedOuterImage {
+    image_id: u32,
+    format: u8,
+    width: u32,
+    height: u32,
+    fingerprint: u64,
+    data: Vec<u8>,
+    last_used: u64,
+}
+
+fn source_fingerprint(source: &SourceImagePlacement<'_>) -> u64 {
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    (source.format, source.width, source.height).hash(&mut hash);
+    source.data.hash(&mut hash);
+    hash.finish()
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OuterImageDelete {
+    Image(u32),
+    Placement { image_id: u32, placement_id: u32 },
 }
 
 struct PendingPngTile {
@@ -635,10 +662,13 @@ struct IncompleteVirtual {
 
 struct KittyOverlays {
     entries: Vec<KittyOverlay>,
-    pending_delete: VecDeque<u32>,
+    pending_delete: VecDeque<OuterImageDelete>,
+    cached_images: Vec<CachedOuterImage>,
     pending_png: Option<PendingPngTile>,
     incomplete_virtual: Vec<IncompleteVirtual>,
     next_id: u32,
+    next_placement_id: u32,
+    cache_clock: u64,
     pending_retry: bool,
     pending_shm: Vec<SharedPixels>,
     shm_supported: bool,
@@ -782,9 +812,12 @@ impl Default for KittyOverlays {
         Self {
             entries: Vec::new(),
             pending_delete: VecDeque::new(),
+            cached_images: Vec::new(),
             pending_png: None,
             incomplete_virtual: Vec::new(),
             next_id: 0x8000_0000,
+            next_placement_id: 1,
+            cache_clock: 0,
             pending_retry: false,
             pending_shm: Vec::new(),
             shm_supported: false,
@@ -793,6 +826,73 @@ impl Default for KittyOverlays {
 }
 
 impl KittyOverlays {
+    fn invalidate_cached_image(&mut self, image_id: u32) -> bool {
+        let Some(index) = self
+            .cached_images
+            .iter()
+            .position(|image| image.image_id == image_id)
+        else {
+            return false;
+        };
+        self.cached_images.remove(index);
+        self.entries.retain(|entry| entry.image_id != image_id);
+        self.pending_delete
+            .push_back(OuterImageDelete::Image(image_id));
+        self.pending_retry = true;
+        true
+    }
+
+    fn cached_source(&self, source: &SourceImagePlacement<'_>, fingerprint: u64) -> Option<usize> {
+        self.cached_images.iter().position(|cached| {
+            cached.fingerprint == fingerprint
+                && cached.format == source.format
+                && cached.width == source.width
+                && cached.height == source.height
+                && cached.data == source.data
+        })
+    }
+
+    fn make_cache_room(&mut self, size: usize, output: &mut VecDeque<u8>) -> io::Result<bool> {
+        if size > MAX_CACHED_OUTER_IMAGE_BYTES {
+            return Ok(false);
+        }
+        let mut room_available = true;
+        while self.cached_images.len() >= MAX_CACHED_OUTER_IMAGES
+            || self
+                .cached_images
+                .iter()
+                .map(|image| image.data.len())
+                .sum::<usize>()
+                > MAX_CACHED_OUTER_IMAGE_BYTES - size
+        {
+            let victim = self
+                .cached_images
+                .iter()
+                .enumerate()
+                .filter(|(_, image)| {
+                    !self
+                        .entries
+                        .iter()
+                        .any(|entry| entry.image_id == image.image_id)
+                })
+                .min_by_key(|(_, image)| image.last_used)
+                .map(|(index, _)| index);
+            let Some(victim) = victim else {
+                room_available = false;
+                break;
+            };
+            let image = self.cached_images.remove(victim);
+            self.pending_delete
+                .push_back(OuterImageDelete::Image(image.image_id));
+        }
+        self.flush_deletes(output)?;
+        if !self.pending_delete.is_empty() {
+            self.pending_retry = true;
+            return Ok(false);
+        }
+        Ok(room_available)
+    }
+
     fn defer_incomplete_virtual(&mut self, candidate: IncompleteVirtual) -> bool {
         let now = candidate.last_change;
         if let Some(state) = self
@@ -885,7 +985,13 @@ impl KittyOverlays {
             if unchanged {
                 self.entries.push(old);
             } else {
-                self.pending_delete.push_back(old.image_id);
+                self.pending_delete.push_back(match old.placement_id {
+                    Some(placement_id) => OuterImageDelete::Placement {
+                        image_id: old.image_id,
+                        placement_id,
+                    },
+                    None => OuterImageDelete::Image(old.image_id),
+                });
             }
         }
         self.flush_deletes(output)?;
@@ -931,30 +1037,107 @@ impl KittyOverlays {
                 if self.shm_supported
                     && let Some(SourceImageProgress::Complete(raw)) = &source_progress
                 {
-                    let image_id = self.next_id;
                     let position = format!("\x1b[{};{}H", row + raw.row, column + raw.column);
-                    if let Some(next_id) = image_id.checked_add(1) {
-                        if self.entries.iter().any(|entry| {
-                            entry.window == window && entry.pane == id && entry.band == band
-                        }) {
+                    if self.entries.iter().any(|entry| {
+                        entry.window == window && entry.pane == id && entry.band == band
+                    }) {
+                        continue;
+                    }
+                    let fingerprint = source_fingerprint(raw);
+                    if let Some(cached) = self.cached_source(raw, fingerprint)
+                        && let Some(next_placement_id) = self.next_placement_id.checked_add(1)
+                    {
+                        let image_id = self.cached_images[cached].image_id;
+                        let placement_id = self.next_placement_id;
+                        let command = cached_placement_command(
+                            raw.format,
+                            (raw.columns, raw.rows),
+                            image_id,
+                            placement_id,
+                            band.output_z(),
+                        );
+                        if position.len() + command.len() + restore.len() > MAX_FRAME - output.len()
+                        {
+                            self.pending_retry = true;
                             continue;
                         }
+                        let overlay = KittyOverlay {
+                            window,
+                            pane: id,
+                            band,
+                            revision: pane.image_store().revision(),
+                            placeholder_revision: pane.virtual_placeholder_revision(),
+                            rect,
+                            cell,
+                            alternate: pane.screen().is_alternate(),
+                            image_id,
+                            placement_id: Some(placement_id),
+                            column_offset: raw.column,
+                            row_offset: raw.row,
+                        };
+                        FrameWriter(output).write_all(position.as_bytes())?;
+                        FrameWriter(output).write_all(&command)?;
+                        moved_cursor = true;
+                        self.next_placement_id = next_placement_id;
+                        self.cache_clock = self.cache_clock.wrapping_add(1);
+                        self.cached_images[cached].last_used = self.cache_clock;
+                        self.entries.push(overlay);
+                        continue;
+                    }
+                    let image_id = self.next_id;
+                    if let Some(next_id) = image_id.checked_add(1) {
                         let retained: usize = self.pending_shm.iter().map(SharedPixels::len).sum();
                         if raw.data.len() <= MAX_PENDING_SHM_BYTES.saturating_sub(retained)
                             && let Ok(object) = SharedPixels::create(raw.data)
                         {
-                            let command = object.placement_command(
+                            let next_placement_id = self.next_placement_id.checked_add(1);
+                            let mut cached_data = if next_placement_id.is_some()
+                                && raw.data.len() <= MAX_CACHED_OUTER_IMAGE_BYTES
+                            {
+                                let mut copy = Vec::new();
+                                copy.try_reserve_exact(raw.data.len()).ok().map(|()| {
+                                    copy.extend_from_slice(raw.data);
+                                    copy
+                                })
+                            } else {
+                                None
+                            };
+                            let mut command = object.placement_command_with_id(
                                 raw.format,
                                 (raw.width, raw.height),
                                 (raw.columns, raw.rows),
                                 image_id,
+                                cached_data.as_ref().map(|_| self.next_placement_id),
                                 band.output_z(),
                             );
-                            let frame_len = position.len() + command.len() + restore.len();
-                            if frame_len > MAX_FRAME - output.len() {
+                            if position.len() + command.len() + restore.len()
+                                > MAX_FRAME - output.len()
+                            {
                                 self.pending_retry = true;
                                 continue;
                             }
+                            if cached_data.is_some()
+                                && !self.make_cache_room(raw.data.len(), output)?
+                            {
+                                if self.pending_retry {
+                                    continue;
+                                }
+                                cached_data = None;
+                                command = object.placement_command(
+                                    raw.format,
+                                    (raw.width, raw.height),
+                                    (raw.columns, raw.rows),
+                                    image_id,
+                                    band.output_z(),
+                                );
+                            }
+                            if position.len() + command.len() + restore.len()
+                                > MAX_FRAME - output.len()
+                            {
+                                self.pending_retry = true;
+                                continue;
+                            }
+                            let placement_id = cached_data.as_ref().map(|_| self.next_placement_id);
                             let overlay = KittyOverlay {
                                 window,
                                 pane: id,
@@ -965,6 +1148,7 @@ impl KittyOverlays {
                                 cell,
                                 alternate: pane.screen().is_alternate(),
                                 image_id,
+                                placement_id,
                                 column_offset: raw.column,
                                 row_offset: raw.row,
                             };
@@ -974,6 +1158,20 @@ impl KittyOverlays {
                             self.next_id = next_id;
                             self.entries.push(overlay);
                             self.pending_shm.push(object);
+                            if let Some(data) = cached_data {
+                                self.next_placement_id =
+                                    next_placement_id.expect("cache ID checked");
+                                self.cache_clock = self.cache_clock.wrapping_add(1);
+                                self.cached_images.push(CachedOuterImage {
+                                    image_id,
+                                    format: raw.format,
+                                    width: raw.width,
+                                    height: raw.height,
+                                    fingerprint,
+                                    data,
+                                    last_used: self.cache_clock,
+                                });
+                            }
                             continue;
                         }
                     }
@@ -1006,6 +1204,7 @@ impl KittyOverlays {
                                 cell,
                                 alternate: pane.screen().is_alternate(),
                                 image_id,
+                                placement_id: None,
                                 column_offset: source.column,
                                 row_offset: source.row,
                             };
@@ -1083,6 +1282,7 @@ impl KittyOverlays {
                             cell,
                             alternate: pane.screen().is_alternate(),
                             image_id,
+                            placement_id: None,
                             column_offset: tile_column,
                             row_offset: tile_row,
                         };
@@ -1166,15 +1366,30 @@ impl KittyOverlays {
         self.pending_png = None;
         self.incomplete_virtual.clear();
         for entry in self.entries.drain(..) {
-            self.pending_delete.push_back(entry.image_id);
+            if entry.placement_id.is_none() {
+                self.pending_delete
+                    .push_back(OuterImageDelete::Image(entry.image_id));
+            }
+        }
+        for image in self.cached_images.drain(..) {
+            self.pending_delete
+                .push_back(OuterImageDelete::Image(image.image_id));
         }
         self.flush_deletes(output)?;
         Ok(())
     }
 
     fn flush_deletes(&mut self, output: &mut VecDeque<u8>) -> io::Result<()> {
-        while let Some(&image_id) = self.pending_delete.front() {
-            let command = format!("\x1b_Ga=d,d=I,i={image_id},q=2\x1b\\");
+        while let Some(&delete) = self.pending_delete.front() {
+            let command = match delete {
+                OuterImageDelete::Image(image_id) => {
+                    format!("\x1b_Ga=d,d=I,i={image_id},q=2\x1b\\")
+                }
+                OuterImageDelete::Placement {
+                    image_id,
+                    placement_id,
+                } => format!("\x1b_Ga=d,d=i,i={image_id},p={placement_id},q=2\x1b\\"),
+            };
             if command.len() > MAX_FRAME - output.len() {
                 self.pending_retry = true;
                 break;
@@ -2303,6 +2518,7 @@ fn forward(
     } = context;
     let mut renderer = Renderer::default();
     let mut kitty_overlays = KittyOverlays::default();
+    let mut outer_image_replies = OuterImageReplies::default();
     let mut graphics_ready = false;
     let mut to_terminal = VecDeque::new();
     let probe = GraphicsCapabilityProbe::new(GRAPHICS_PROBE_IMAGE_ID);
@@ -3550,6 +3766,13 @@ fn forward(
                     .clamp(1, u128::from(POLL_TIMEOUT_MILLIS)) as u16,
             );
         }
+        if let Some(due) = outer_image_replies.next_expiry() {
+            timeout = timeout.min(
+                due.saturating_duration_since(Instant::now())
+                    .as_millis()
+                    .clamp(1, u128::from(POLL_TIMEOUT_MILLIS)) as u16,
+            );
+        }
         let mut interests = Vec::new();
         let (outer, events) = {
             let mut fds = vec![PollFd::new(frontend.poll_fd(), outer_events)];
@@ -3627,7 +3850,19 @@ fn forward(
                 old_input_len,
                 &mut shm_support,
             );
+            if input.len() > old_input_len {
+                let raw: Vec<_> = input.drain(old_input_len..).collect();
+                let mut passthrough = Vec::new();
+                let failed = outer_image_replies.advance(&raw, &mut passthrough);
+                input.extend(passthrough);
+                for image_id in failed {
+                    force_redraw |= kitty_overlays.invalidate_cached_image(image_id);
+                }
+            }
         }
+        let mut expired_reply = Vec::new();
+        outer_image_replies.expire(Instant::now(), &mut expired_reply);
+        input.extend(expired_reply);
         if connection == ConnectionState::Attached && outer.contains(PollFlags::POLLOUT) {
             frontend.send(&mut to_terminal)?;
         }
@@ -3734,6 +3969,35 @@ fn send(writer: &mut impl Write, pending: &mut VecDeque<u8>) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cached_outer_images_evict_the_oldest_inactive_source() {
+        let mut overlays = KittyOverlays::default();
+        for index in 0..MAX_CACHED_OUTER_IMAGES {
+            overlays.cached_images.push(CachedOuterImage {
+                image_id: 0x8000_0000 + index as u32,
+                format: 32,
+                width: 1,
+                height: 1,
+                fingerprint: index as u64,
+                data: vec![index as u8],
+                last_used: index as u64,
+            });
+        }
+        let mut output = VecDeque::new();
+        assert!(overlays.make_cache_room(1, &mut output).unwrap());
+        assert_eq!(overlays.cached_images.len(), MAX_CACHED_OUTER_IMAGES - 1);
+        assert!(
+            overlays
+                .cached_images
+                .iter()
+                .all(|image| image.image_id != 0x8000_0000)
+        );
+        assert_eq!(
+            output.into_iter().collect::<Vec<_>>(),
+            b"\x1b_Ga=d,d=I,i=2147483648,q=2\x1b\\"
+        );
+    }
     use crate::session::{
         handshake::{self, ClientPeer, ServerPeer},
         protocol::{ClientMessage, ServerMessage},
@@ -4006,7 +4270,7 @@ mod tests {
             .unwrap();
         let upload: Vec<_> = output.drain(..).collect();
         assert!(upload.starts_with(
-            b"\x1b[4;3H\x1b_Ga=T,t=s,f=24,s=2,v=2,S=12,i=2147483648,c=2,r=2,z=0,C=1,q=2;"
+            b"\x1b[4;3H\x1b_Ga=T,t=s,f=24,s=2,v=2,S=12,i=2147483648,p=1,c=2,r=2,z=0,C=1,q=1;"
         ));
         assert!(upload.ends_with(b"\x1b[4;3H"));
         assert_eq!(cache.entries.len(), 1);
@@ -4033,7 +4297,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             output.drain(..).collect::<Vec<_>>(),
-            b"\x1b_Ga=d,d=I,i=2147483648,q=2\x1b\\"
+            b"\x1b_Ga=d,d=i,i=2147483648,p=1,q=2\x1b\\"
         );
         assert!(!cache.pending_retry);
         assert!(cache.next_deferred_retry().is_some());
@@ -4156,7 +4420,7 @@ mod tests {
             .unwrap();
         let upload: Vec<_> = output.drain(..).collect();
         let prefix = format!(
-            "\x1b[4;3H\x1b_Ga=T,t=s,f=100,s=2,v=2,S={},i=2147483648,z=0,C=1,q=2;",
+            "\x1b[4;3H\x1b_Ga=T,t=s,f=100,s=2,v=2,S={},i=2147483648,p=1,z=0,C=1,q=1;",
             png.len()
         );
         assert!(upload.starts_with(prefix.as_bytes()));
@@ -4246,7 +4510,7 @@ mod tests {
             .unwrap();
         let upload: Vec<_> = output.drain(..).collect();
         assert!(upload.starts_with(
-            b"\x1b[4;3H\x1b_Ga=T,t=s,f=32,s=2,v=2,S=16,i=2147483648,c=2,r=2,z=0,C=1,q=2;"
+            b"\x1b[4;3H\x1b_Ga=T,t=s,f=32,s=2,v=2,S=16,i=2147483648,p=1,c=2,r=2,z=0,C=1,q=1;"
         ));
         assert_eq!(cache.entries.len(), 1);
         assert_eq!(cache.pending_shm.len(), 1);
@@ -4258,7 +4522,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             output.drain(..).collect::<Vec<_>>(),
-            b"\x1b_Ga=d,d=I,i=2147483648,q=2\x1b\\"
+            b"\x1b_Ga=d,d=i,i=2147483648,p=1,q=2\x1b\\"
         );
         assert!(cache.next_deferred_retry().is_some());
     }
@@ -4304,7 +4568,10 @@ mod tests {
         cache
             .render(window_id, panes, cell, 6, (3, 2), &mut output)
             .unwrap();
-        assert_eq!(cache.pending_delete.front(), Some(&0x8000_0000));
+        assert_eq!(
+            cache.pending_delete.front(),
+            Some(&OuterImageDelete::Image(0x8000_0000))
+        );
         assert!(cache.pending_retry);
         assert!(cache.entries.is_empty());
         output.clear();

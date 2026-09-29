@@ -22,6 +22,26 @@ fn installed_yazi_previews_png_through_rustmux() {
     print!("{}", String::from_utf8_lossy(&output.stdout));
 }
 
+/// Exercise shared-memory upload reuse and error recovery with real Yazi navigation.
+#[test]
+#[ignore = "requires installed Yazi and POSIX shared memory; run with cargo compat"]
+fn installed_yazi_previews_png_through_shared_memory() {
+    let output = std::process::Command::new("python3")
+        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/yazi_compat.py"))
+        .arg(env!("CARGO_BIN_EXE_rustmux"))
+        .arg("--shared-memory")
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .output()
+        .expect("Python 3 is required for the optional Yazi PTY smoke test");
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    print!("{}", String::from_utf8_lossy(&output.stdout));
+}
+
 /// Installed-kitten Unicode-placeholder smoke, excluded from regular CI.
 #[test]
 #[ignore = "requires an installed kitten; run with cargo compat"]

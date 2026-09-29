@@ -141,6 +141,18 @@ impl SharedPixels {
         image_id: u32,
         z_index: i32,
     ) -> Vec<u8> {
+        self.placement_command_with_id(format, image_size, cell_size, image_id, None, z_index)
+    }
+
+    pub(crate) fn placement_command_with_id(
+        &self,
+        format: u8,
+        image_size: (u32, u32),
+        cell_size: (u32, u32),
+        image_id: u32,
+        placement_id: Option<u32>,
+        z_index: i32,
+    ) -> Vec<u8> {
         let (width, height) = image_size;
         let (columns, rows) = cell_size;
         // A natural-size PNG must not be stretched to the inferred cell box.
@@ -150,13 +162,31 @@ impl SharedPixels {
         } else {
             format!(",c={columns},r={rows}")
         };
+        let placement = placement_id.map_or_else(String::new, |id| format!(",p={id}"));
+        let quiet = if placement_id.is_some() { 1 } else { 2 };
         format!(
-            "\x1b_Ga=T,t=s,f={format},s={width},v={height},S={},i={image_id}{fit},z={z_index},C=1,q=2;{}\x1b\\",
+            "\x1b_Ga=T,t=s,f={format},s={width},v={height},S={},i={image_id}{placement}{fit},z={z_index},C=1,q={quiet};{}\x1b\\",
             self.len,
             STANDARD.encode(self.name.as_bytes())
         )
         .into_bytes()
     }
+}
+
+pub(crate) fn cached_placement_command(
+    format: u8,
+    cell_size: (u32, u32),
+    image_id: u32,
+    placement_id: u32,
+    z_index: i32,
+) -> Vec<u8> {
+    let (columns, rows) = cell_size;
+    let fit = if format == 100 {
+        String::new()
+    } else {
+        format!(",c={columns},r={rows}")
+    };
+    format!("\x1b_Ga=p,i={image_id},p={placement_id}{fit},z={z_index},C=1,q=1\x1b\\").into_bytes()
 }
 
 impl Drop for SharedPixels {
@@ -192,6 +222,14 @@ mod tests {
         assert!(
             rgba.placement_command(100, (1, 1), (2, 2), 44, 0)
                 .starts_with(b"\x1b_Ga=T,t=s,f=100,s=1,v=1,S=4,i=44,z=0,C=1,q=2;")
+        );
+        assert!(
+            rgba.placement_command_with_id(32, (1, 1), (2, 2), 44, Some(7), 0)
+                .starts_with(b"\x1b_Ga=T,t=s,f=32,s=1,v=1,S=4,i=44,p=7,c=2,r=2,z=0,C=1,q=1;")
+        );
+        assert_eq!(
+            cached_placement_command(32, (2, 2), 44, 8, 0),
+            b"\x1b_Ga=p,i=44,p=8,c=2,r=2,z=0,C=1,q=1\x1b\\"
         );
         // SAFETY: the object name exists until consumed or dropped.
         let fd = unsafe { libc::shm_open(object.name.as_ptr(), libc::O_RDONLY, 0) };

@@ -487,9 +487,14 @@ must receive `OK` before the outer shared-memory fast path is enabled. A
 single RGB, RGBA, or validated PNG image in the above-text band can bypass
 pane-sized RGBA composition and PNG encoding when its Unicode placeholders
 cover one complete contiguous rectangle and its source is neither cropped nor
-offset. Rustmux re-uploads the stored raw pixels or original PNG bytes through a
-new POSIX shared-memory object and remaps the image ID. Raw previews fit the
-same `c` by `r` cell rectangle; natural-size PNG previews keep their source
+offset. On a cache miss, Rustmux uploads the stored raw pixels or original PNG
+bytes through a new POSIX shared-memory object and remaps the image ID. It
+retains up to eight exact source images or 32 MiB per attachment. Repeating a
+source uses `a=p` with a new placement ID instead of another upload; deleting
+an old placement with `d=i,p=...` preserves its image data. The least recently
+used inactive image is freed with `d=I` when the cache is full. An outer error
+reply invalidates the cached image and triggers a fresh upload. Raw previews
+fit the same `c` by `r` cell rectangle; natural-size PNG previews keep their source
 pixel dimensions. Without outer shared-memory support, eligible PNGs use a
 bounded direct-data transfer of the original bytes. The outer terminal unlinks
 the object after reading it; Rustmux retains linked objects until then,
@@ -503,8 +508,9 @@ Overlapping placements, unsupported media, failed shared-memory creation, or
 an unsuccessful outer query also use that fallback.
 A band or tile that fits an empty frame but misses the current frame budget is
 retried on the next frame without resending uploads that already succeeded.
-Switching windows, moving/resizing panes, deleting placements, or opening an
-overlay removes the runtime-owned images. Unknown/unsupported terminals and
+Switching windows, moving/resizing panes, or deleting placements removes their
+outer placements. Opening an overlay or leaving graphics mode clears the
+attachment's cached image data. Unknown/unsupported terminals and
 inexact cell sizes receive no image commands. Scrollback images, unsupported
 actions and transfers remain unimplemented;
 this is not a claim of complete Yazi or Kitty graphics compatibility.

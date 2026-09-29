@@ -5,9 +5,12 @@
 //! non-response bytes. The terminal runtime probes each new attachment.
 
 use std::num::NonZeroU32;
+use std::time::{Duration, Instant};
 
 const MAX_GRAPHICS_REPLY_BYTES: usize = 1024;
 const MAX_DEVICE_ATTRIBUTES_BYTES: usize = 64;
+const OUTER_REPLY_PREFIX_TIMEOUT: Duration = Duration::from_millis(25);
+const OUTER_GRAPHICS_REPLY_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// Whether the outer terminal answered the graphics query before primary DA.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -164,6 +167,106 @@ impl GraphicsCapabilityProbe {
     }
 }
 
+/// Consume replies for Rustmux-owned outer image IDs. Cached placements use
+/// q=1, so an error reply means their source image must be uploaded again.
+#[derive(Default)]
+pub struct OuterImageReplies {
+    pending: Vec<u8>,
+    pending_since: Option<Instant>,
+    utf8_continuations: u8,
+}
+
+impl OuterImageReplies {
+    pub fn next_expiry(&self) -> Option<Instant> {
+        self.pending_since.map(|since| {
+            let timeout =
+                if self.pending.starts_with(b"\x1b_G") || self.pending.starts_with(b"\x9fG") {
+                    OUTER_GRAPHICS_REPLY_TIMEOUT
+                } else {
+                    OUTER_REPLY_PREFIX_TIMEOUT
+                };
+            since + timeout
+        })
+    }
+
+    /// A standalone Esc is also keyboard input; release a stalled candidate
+    /// promptly rather than waiting forever for a Kitty reply suffix.
+    pub fn expire(&mut self, now: Instant, passthrough: &mut Vec<u8>) {
+        if self.next_expiry().is_some_and(|deadline| now >= deadline) {
+            passthrough.append(&mut self.pending);
+            self.pending_since = None;
+        }
+    }
+
+    pub fn advance(&mut self, input: &[u8], passthrough: &mut Vec<u8>) -> Vec<u32> {
+        let mut failed = Vec::new();
+        for &byte in input {
+            if self.pending.is_empty() {
+                if self.utf8_continuations > 0 {
+                    if byte & 0xc0 == 0x80 {
+                        self.utf8_continuations -= 1;
+                        passthrough.push(byte);
+                        continue;
+                    }
+                    self.utf8_continuations = 0;
+                }
+                if !matches!(byte, 0x1b | 0x9f) {
+                    passthrough.push(byte);
+                    self.utf8_continuations = utf8_trailing_bytes(byte);
+                    continue;
+                }
+            }
+            self.pending.push(byte);
+            loop {
+                match inspect(&self.pending) {
+                    Candidate::Incomplete => break,
+                    Candidate::Unrelated | Candidate::DeviceAttributes => {
+                        let first = self.pending.remove(0);
+                        passthrough.push(first);
+                        self.utf8_continuations = utf8_trailing_bytes(first);
+                        if self.pending.is_empty() {
+                            break;
+                        }
+                    }
+                    Candidate::Graphics(body) => {
+                        if let Some((image_id, is_error)) = owned_image_reply(body) {
+                            if is_error {
+                                failed.push(image_id);
+                            }
+                            self.pending.clear();
+                        } else {
+                            passthrough.append(&mut self.pending);
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        if self.pending.is_empty() {
+            self.pending_since = None;
+        } else if self.pending_since.is_none() {
+            self.pending_since = Some(Instant::now());
+        }
+        failed
+    }
+}
+
+fn owned_image_reply(body: &[u8]) -> Option<(u32, bool)> {
+    let separator = body.iter().position(|&byte| byte == b';')?;
+    let image_id = body[..separator]
+        .split(|&byte| byte == b',')
+        .find_map(|control| {
+            control
+                .strip_prefix(b"i=")
+                .and_then(|value| std::str::from_utf8(value).ok())
+                .and_then(|value| value.parse::<u32>().ok())
+        })?;
+    if image_id < 0x8000_0000 || body[separator + 1..].is_empty() {
+        return None;
+    }
+    Some((image_id, &body[separator + 1..] != b"OK"))
+}
+
 enum Candidate<'a> {
     Incomplete,
     Unrelated,
@@ -231,6 +334,59 @@ fn utf8_trailing_bytes(byte: u8) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn outer_image_errors_are_filtered_across_input_chunks() {
+        let input = b"a\x1b_Gi=2147483648,p=7;ENOENT:missing image\x1b\\b\x1b_Gi=31;OK\x1b\\c";
+        for split in 0..=input.len() {
+            let mut replies = OuterImageReplies::default();
+            let mut passthrough = Vec::new();
+            let mut failed = replies.advance(&input[..split], &mut passthrough);
+            failed.extend(replies.advance(&input[split..], &mut passthrough));
+            assert_eq!(failed, vec![0x8000_0000]);
+            assert_eq!(passthrough, b"ab\x1b_Gi=31;OK\x1b\\c");
+        }
+    }
+
+    #[test]
+    fn unfinished_outer_reply_releases_keyboard_escape() {
+        let mut replies = OuterImageReplies::default();
+        let mut passthrough = Vec::new();
+        assert!(replies.advance(b"\x1b", &mut passthrough).is_empty());
+        assert!(passthrough.is_empty());
+        replies.expire(
+            Instant::now() + OUTER_REPLY_PREFIX_TIMEOUT,
+            &mut passthrough,
+        );
+        assert_eq!(passthrough, b"\x1b");
+        assert!(replies.next_expiry().is_none());
+    }
+
+    #[test]
+    fn partial_graphics_reply_waits_longer_than_a_keyboard_escape() {
+        let mut replies = OuterImageReplies::default();
+        let mut passthrough = Vec::new();
+        replies.advance(b"\x1b_Gi=2147483648;", &mut passthrough);
+        replies.expire(
+            Instant::now() + OUTER_REPLY_PREFIX_TIMEOUT,
+            &mut passthrough,
+        );
+        assert!(passthrough.is_empty());
+        replies.advance(b"ENOENT\x1b\\", &mut passthrough);
+        assert!(passthrough.is_empty());
+    }
+
+    #[test]
+    fn outer_reply_filter_preserves_utf8_and_arrow_keys() {
+        let input = b"\xc3\x9f\x1b[D";
+        for split in 0..=input.len() {
+            let mut replies = OuterImageReplies::default();
+            let mut passthrough = Vec::new();
+            replies.advance(&input[..split], &mut passthrough);
+            replies.advance(&input[split..], &mut passthrough);
+            assert_eq!(passthrough, input);
+        }
+    }
 
     fn probe() -> GraphicsCapabilityProbe {
         GraphicsCapabilityProbe::new(NonZeroU32::new(31).unwrap())
