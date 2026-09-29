@@ -266,11 +266,11 @@ fn validate_viewport(viewport: PixelSize) -> Result<usize, SnapshotError> {
 fn rasterize_placement(
     store: &ImageStore,
     image_id: u32,
+    dimensions: Option<(u32, u32)>,
     cell: CellPixelSize,
     pixel_layout: impl FnOnce(u32, u32, CellPixelSize) -> Option<PlacementPixelLayout>,
 ) -> Result<(PlacementPixelLayout, ResampledPlacement), SnapshotError> {
     let image = store.get(image_id).ok_or(SnapshotError::MissingImage)?;
-    let dimensions = store.known_image_dimensions(image_id);
     if matches!(image.format, ImageFormat::RgbZlib | ImageFormat::RgbaZlib)
         && let Some((width, height)) = dimensions
     {
@@ -305,6 +305,21 @@ fn rasterize_placement(
     Ok((layout, pixels))
 }
 
+#[derive(Default)]
+struct SnapshotState {
+    dimensions: BTreeMap<u32, Option<(u32, u32)>>,
+    input_bytes: usize,
+}
+
+impl SnapshotState {
+    fn image_dimensions(&mut self, store: &ImageStore, image_id: u32) -> Option<(u32, u32)> {
+        *self
+            .dimensions
+            .entry(image_id)
+            .or_insert_with(|| store.validated_image_dimensions(image_id))
+    }
+}
+
 fn collect_visible_clips(
     store: &ImageStore,
     screen: Option<&Screen>,
@@ -314,7 +329,7 @@ fn collect_visible_clips(
     include_z: impl Fn(i32) -> bool,
 ) -> Result<Vec<(u32, i32, ClippedPlacement)>, SnapshotError> {
     let mut clipped = Vec::new();
-    let mut input_bytes = 0usize;
+    let mut state = SnapshotState::default();
     for placement in store.placements() {
         let Some(geometry) = placement.geometry else {
             continue;
@@ -329,7 +344,7 @@ fn collect_visible_clips(
             image.format,
             ImageFormat::RgbZlib | ImageFormat::RgbaZlib | ImageFormat::Png
         ) && let Some((width, height)) =
-            store.known_image_dimensions(placement.image_id)
+            state.image_dimensions(store, placement.image_id)
         {
             let layout = geometry
                 .pixel_layout(width, height, cell)
@@ -376,16 +391,20 @@ fn collect_visible_clips(
                 None
             }
         } else {
-            let (_, pixels) =
-                rasterize_placement(store, placement.image_id, cell, |width, height, cell| {
-                    geometry.pixel_layout(width, height, cell)
-                })?;
+            let (_, pixels) = rasterize_placement(
+                store,
+                placement.image_id,
+                state.image_dimensions(store, placement.image_id),
+                cell,
+                |width, height, cell| geometry.pixel_layout(width, height, cell),
+            )?;
             pixels
                 .clip_to_viewport_with_scroll_clip(geometry, cell, viewport)
                 .map_err(SnapshotError::Clip)?
         };
         if let Some(visible) = visible {
-            input_bytes = input_bytes
+            state.input_bytes = state
+                .input_bytes
                 .checked_add(visible.pixels.len())
                 .filter(|&total| total <= MAX_COMPOSITE_INPUT_BYTES)
                 .ok_or(SnapshotError::Composite(CompositeError::InputLimit))?;
@@ -404,7 +423,7 @@ fn collect_visible_clips(
             cell,
             &include_z,
             &mut clipped,
-            &mut input_bytes,
+            &mut state,
         )?;
     }
     Ok(clipped)
@@ -417,7 +436,7 @@ fn collect_placeholder_clips(
     cell: CellPixelSize,
     include_z: &impl Fn(i32) -> bool,
     clipped: &mut Vec<(u32, i32, ClippedPlacement)>,
-    input_bytes: &mut usize,
+    state: &mut SnapshotState,
 ) -> Result<(), SnapshotError> {
     let (rows, columns) = screen.dimensions();
     if (rows as u128) * u128::from(cell.height()) != u128::from(viewport.height)
@@ -455,7 +474,7 @@ fn collect_placeholder_clips(
         if image.format != ImageFormat::Png {
             return false;
         }
-        let Some((width, height)) = store.known_image_dimensions(placement.image_id) else {
+        let Some((width, height)) = state.image_dimensions(store, placement.image_id) else {
             return false;
         };
         u128::from(width) * u128::from(height) * 4 > MAX_DECODED_IMAGE_BYTES as u128
@@ -489,7 +508,7 @@ fn collect_placeholder_clips(
                     continue;
                 }
                 if known_layouts[index].is_none()
-                    && let Some((width, height)) = store.known_image_dimensions(placement.image_id)
+                    && let Some((width, height)) = state.image_dimensions(store, placement.image_id)
                 {
                     known_layouts[index] = Some(
                         layout
@@ -551,7 +570,7 @@ fn collect_placeholder_clips(
                 continue;
             }
             if extents[index].is_none()
-                && let Some((width, height)) = store.known_image_dimensions(placement.image_id)
+                && let Some((width, height)) = state.image_dimensions(store, placement.image_id)
             {
                 let pixel_layout = layout
                     .pixel_layout(width, height, cell)
@@ -614,8 +633,8 @@ fn collect_placeholder_clips(
                                         * u128::from(pixel_layout.destination.height)
                                         * 4
                                         > MAX_DECODED_IMAGE_BYTES as u128
-                                        || store
-                                            .known_image_dimensions(placement.image_id)
+                                        || state
+                                            .image_dimensions(store, placement.image_id)
                                             .is_some_and(|(width, height)| {
                                                 u128::from(width) * u128::from(height) * 4
                                                     > MAX_DECODED_IMAGE_BYTES as u128
@@ -647,6 +666,7 @@ fn collect_placeholder_clips(
                         rasterize_placement(
                             store,
                             placement.image_id,
+                            state.image_dimensions(store, placement.image_id),
                             cell,
                             |width, height, cell| layout.pixel_layout(width, height, cell),
                         )?
@@ -675,7 +695,8 @@ fn collect_placeholder_clips(
             if let Some(tile) =
                 clip_virtual_cell(raster, reference.row, reference.column, row, column, cell)?
             {
-                *input_bytes = input_bytes
+                state.input_bytes = state
+                    .input_bytes
                     .checked_add(tile.pixels.len())
                     .filter(|&total| total <= MAX_COMPOSITE_INPUT_BYTES)
                     .ok_or(SnapshotError::Composite(CompositeError::InputLimit))?;
@@ -864,5 +885,75 @@ mod placeholder_tests {
             ),
             raster.destination
         );
+    }
+}
+
+#[cfg(test)]
+mod deferred_snapshot_tests {
+    use super::*;
+    use crate::{graphics_store::CellAnchor, graphics_transfer::DirectTransferAssembler};
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use flate2::{Compression, write::ZlibEncoder};
+    use std::io::Write;
+
+    #[test]
+    fn deferred_large_png_and_zlib_raw_render_without_sized_upload() {
+        let width = 3072;
+        let height = 3072;
+        let pixels = [17, 23, 31, 255].repeat(width * height);
+        for format in [ImageFormat::Png, ImageFormat::RgbaZlib] {
+            let (controls, data) = if format == ImageFormat::Png {
+                let mut data = Vec::new();
+                {
+                    let mut encoder = png::Encoder::new(&mut data, width as u32, height as u32);
+                    encoder.set_color(png::ColorType::Rgba);
+                    encoder.set_depth(png::BitDepth::Eight);
+                    let mut writer = encoder.write_header().unwrap();
+                    writer.write_image_data(&pixels).unwrap();
+                    writer.finish().unwrap();
+                }
+                (format!("f=100,s={width},v={height}"), data)
+            } else {
+                let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+                encoder.write_all(&pixels).unwrap();
+                (
+                    format!("f=32,o=z,s={width},v={height}"),
+                    encoder.finish().unwrap(),
+                )
+            };
+            let upload = |data: &[u8]| {
+                let command = format!(
+                    "\x1b_Ga=T,i=7,c=2,r=2,{controls};{}\x1b\\",
+                    STANDARD.encode(data)
+                );
+                DirectTransferAssembler::new()
+                    .accept(command.as_bytes())
+                    .unwrap()
+            };
+            let mut store = ImageStore::new();
+            store
+                .insert_at(upload(&data), CellAnchor::default())
+                .unwrap();
+            assert_eq!(store.known_image_dimensions(7), None);
+            let viewport = PixelSize {
+                width: 2,
+                height: 2,
+            };
+            let cell = CellPixelSize::new(1, 1).unwrap();
+            let snapshot = compose_store_snapshot(&store, false, viewport, cell).unwrap();
+            assert_eq!(snapshot.pixels, [17, 23, 31, 255].repeat(4));
+            // Read-only composition does not change the store's validation cache.
+            assert_eq!(store.known_image_dimensions(7), None);
+
+            let mut corrupt = data;
+            *corrupt.last_mut().unwrap() ^= 1;
+            store
+                .insert_at(upload(&corrupt), CellAnchor::default())
+                .unwrap();
+            assert!(matches!(
+                compose_store_snapshot(&store, false, viewport, cell),
+                Err(SnapshotError::Decode(_))
+            ));
+        }
     }
 }

@@ -141,6 +141,11 @@ placements to infer dimensions even when full RGBA expansion exceeds 32 MiB.
 Plain raw data reuses its assembler-checked dimensions. Validation results are
 cached until the image is replaced or removed; a corrupt stream cannot supply
 dimensions from its header alone.
+If an opt-in caller creates a placement without cell pixels, image-only
+snapshots resolve missing dimensions through that validation as needed. A
+snapshot reuses the result across its placements without changing the store's
+deferred state. Large PNG and compressed raw images can then be sampled into
+their visible region without expanding a full RGBA source buffer.
 
 The opt-in store now tracks placement *references* for `a=T` and a strict
 `a=p` subset with either `i=<id>` or `I=<number>`, and optional `p=<id>`.

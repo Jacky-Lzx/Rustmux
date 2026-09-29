@@ -966,17 +966,25 @@ impl ImageStore {
         if let Some(&cached) = self.decoded_dimensions.get(&image_id) {
             return cached;
         }
-        let decoded = self.images.get(&image_id).and_then(|image| {
-            // A placement needs dimensions, not a full RGBA raster. Only
-            // assembled plain raw data may use its declared dimensions;
-            // PNG and compressed raw data must pass complete validation.
-            image
-                .validated_assembled_dimensions()
-                .ok()?
-                .or_else(|| image.declared_width.zip(image.declared_height))
-        });
+        let decoded = self.validated_image_dimensions(image_id);
         self.decoded_dimensions.insert(image_id, decoded);
         decoded
+    }
+
+    /// Resolve deferred dimensions for a read-only snapshot. The store cannot
+    /// cache this result through an immutable reference; the snapshot caches
+    /// it for the duration of its own composition instead.
+    pub(crate) fn validated_image_dimensions(&self, image_id: u32) -> Option<(u32, u32)> {
+        if let Some(&cached) = self.decoded_dimensions.get(&image_id) {
+            return cached;
+        }
+        let image = self.images.get(&image_id)?;
+        if matches!(image.format, ImageFormat::Rgb | ImageFormat::Rgba) {
+            // The assembler has already checked plain raw byte counts.
+            return self.known_image_dimensions(image_id);
+        }
+        // PNG and compressed raw data must pass complete validation.
+        image.validated_assembled_dimensions().ok()?
     }
 
     /// Dimensions usable for a read-only layout preflight. Raw transfer sizes
