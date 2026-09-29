@@ -484,16 +484,17 @@ above text while preserving source-image order inside each band. Output is
 bounded by the frame queue; unchanged image revisions are not retransmitted.
 After the ordinary graphics probe, a separate one-pixel shared-memory query
 must receive `OK` before the outer shared-memory fast path is enabled. A
-single, uncompressed RGB or RGBA image in the above-text band can bypass
+single RGB, RGBA, or validated PNG image in the above-text band can bypass
 pane-sized RGBA composition and PNG encoding when its Unicode placeholders
 cover one complete contiguous rectangle and its source is neither cropped nor
-offset.
-Rustmux re-uploads the stored pixels, including alpha when present, through a
-new POSIX shared-memory object, remaps the image ID, and asks the outer terminal
-to fit it into the same `c` by `r` cell rectangle. The outer terminal unlinks
+offset. Rustmux re-uploads the stored raw pixels or original PNG bytes through a
+new POSIX shared-memory object and remaps the image ID. Raw previews fit the
+same `c` by `r` cell rectangle; natural-size PNG previews keep their source
+pixel dimensions. Without outer shared-memory support, eligible PNGs use a
+bounded direct-data transfer of the original bytes. The outer terminal unlinks
 the object after reading it; Rustmux retains linked objects until then,
 bounds outstanding objects to 64 MiB, and cleans them up on attachment exit.
-While a sole raw-pixel virtual placement has an incomplete placeholder
+While a sole eligible virtual placement has an incomplete placeholder
 rectangle, Rustmux waits for the next child update instead of repeatedly
 encoding partial composites. Complete rectangles take the fast path
 immediately. A rectangle still incomplete after 350 ms without changes uses

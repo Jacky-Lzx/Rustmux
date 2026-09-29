@@ -143,8 +143,15 @@ impl SharedPixels {
     ) -> Vec<u8> {
         let (width, height) = image_size;
         let (columns, rows) = cell_size;
+        // A natural-size PNG must not be stretched to the inferred cell box.
+        // Raw virtual previews retain their existing fit-to-cells behavior.
+        let fit = if format == 100 {
+            String::new()
+        } else {
+            format!(",c={columns},r={rows}")
+        };
         format!(
-            "\x1b_Ga=T,t=s,f={format},s={width},v={height},S={},i={image_id},c={columns},r={rows},z={z_index},C=1,q=2;{}\x1b\\",
+            "\x1b_Ga=T,t=s,f={format},s={width},v={height},S={},i={image_id}{fit},z={z_index},C=1,q=2;{}\x1b\\",
             self.len,
             STANDARD.encode(self.name.as_bytes())
         )
@@ -181,6 +188,10 @@ mod tests {
         assert!(
             rgba.placement_command(32, (1, 1), (1, 1), 43, 0)
                 .starts_with(b"\x1b_Ga=T,t=s,f=32,s=1,v=1,S=4,i=43,c=1,r=1,z=0,C=1,q=2;")
+        );
+        assert!(
+            rgba.placement_command(100, (1, 1), (2, 2), 44, 0)
+                .starts_with(b"\x1b_Ga=T,t=s,f=100,s=1,v=1,S=4,i=44,z=0,C=1,q=2;")
         );
         // SAFETY: the object name exists until consumed or dropped.
         let fd = unsafe { libc::shm_open(object.name.as_ptr(), libc::O_RDONLY, 0) };

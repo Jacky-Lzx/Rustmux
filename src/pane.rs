@@ -1,13 +1,13 @@
 //! Per-pane process and terminal state. Polling and rendering belong to the caller.
 
 #[cfg(test)]
-use crate::graphics_snapshot::RawPixelPlacement;
+use crate::graphics_snapshot::SourceImagePlacement;
 use crate::{
     graphics::{GraphicsEvent, GraphicsFramer},
     graphics_decode::DecodedImage,
     graphics_snapshot::{
-        ImageBand, ImagePlanes, RawPixelProgress, SnapshotError, compose_pane_band,
-        compose_pane_planes, compose_pane_snapshot, raw_pixel_pane_band_progress,
+        ImageBand, ImagePlanes, SnapshotError, SourceImageProgress, compose_pane_band,
+        compose_pane_planes, compose_pane_snapshot, source_image_pane_band_progress,
     },
     graphics_store::{CellAnchor, CellPixelSize, ImageStore, PixelSize},
     graphics_transfer::{AssembledDirectTransfer, DirectTransferAssembler},
@@ -563,13 +563,13 @@ impl Pane {
     }
 
     #[cfg(test)]
-    pub(crate) fn raw_pixel_image_band(
+    pub(crate) fn source_image_band(
         &self,
         cell_pixels: CellPixelSize,
         band: ImageBand,
-    ) -> Option<RawPixelPlacement<'_>> {
+    ) -> Option<SourceImagePlacement<'_>> {
         let viewport = self.image_viewport(cell_pixels).ok()?;
-        crate::graphics_snapshot::raw_pixel_pane_band(
+        crate::graphics_snapshot::source_image_pane_band(
             &self.image_store,
             &self.screen,
             viewport,
@@ -578,13 +578,19 @@ impl Pane {
         )
     }
 
-    pub(crate) fn raw_pixel_image_band_progress(
+    pub(crate) fn source_image_band_progress(
         &self,
         cell_pixels: CellPixelSize,
         band: ImageBand,
-    ) -> Option<RawPixelProgress<'_>> {
+    ) -> Option<SourceImageProgress<'_>> {
         let viewport = self.image_viewport(cell_pixels).ok()?;
-        raw_pixel_pane_band_progress(&self.image_store, &self.screen, viewport, cell_pixels, band)
+        source_image_pane_band_progress(
+            &self.image_store,
+            &self.screen,
+            viewport,
+            cell_pixels,
+            band,
+        )
     }
 
     /// Compose the z >= 0 band without decoding or allocating the two

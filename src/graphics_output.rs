@@ -73,25 +73,7 @@ impl EncodedKittyPng {
     }
 
     pub fn placement_len(&self, image_id: u32, z_index: i32) -> io::Result<usize> {
-        validate_id(image_id)?;
-        let chunks = self.bytes.chunks(RAW_CHUNK_BYTES);
-        let mut total = 0usize;
-        for (index, raw) in chunks.enumerate() {
-            let more = (index + 1) * RAW_CHUNK_BYTES < self.bytes.len();
-            let header_len = if index == 0 {
-                png_first_header(image_id, z_index, more).len()
-            } else if more {
-                MORE_HEADER.len()
-            } else {
-                FINAL_HEADER.len()
-            };
-            total = total
-                .checked_add(header_len + raw.len().div_ceil(3) * 4 + APC_END.len())
-                .ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::InvalidInput, "Kitty output length overflow")
-                })?;
-        }
-        Ok(total)
+        png_placement_len(&self.bytes, image_id, z_index)
     }
 
     /// Reject an over-budget placement before writing any bytes.
@@ -102,27 +84,90 @@ impl EncodedKittyPng {
         max_bytes: usize,
         output: &mut impl Write,
     ) -> io::Result<()> {
-        if self.placement_len(image_id, z_index)? > max_bytes {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "Kitty placement exceeds output budget",
-            ));
-        }
-        let mut chunks = self.bytes.chunks(RAW_CHUNK_BYTES).peekable();
-        let mut first = true;
-        while let Some(raw) = chunks.next() {
-            let more = chunks.peek().is_some();
-            if first {
-                output.write_all(png_first_header(image_id, z_index, more).as_bytes())?;
-                first = false;
-            } else {
-                output.write_all(if more { MORE_HEADER } else { FINAL_HEADER })?;
-            }
-            output.write_all(STANDARD.encode(raw).as_bytes())?;
-            output.write_all(APC_END)?;
-        }
-        Ok(())
+        write_png_with_limit(&self.bytes, image_id, z_index, max_bytes, output)
     }
+}
+
+/// Transmit already validated source PNG bytes at their natural pixel size
+/// without decoding or re-encoding.
+pub(crate) fn kitty_png_passthrough_len(
+    png: &[u8],
+    image_id: u32,
+    z_index: i32,
+) -> io::Result<usize> {
+    png_placement_len(png, image_id, z_index)
+}
+
+pub(crate) fn write_kitty_png_passthrough_with_limit(
+    png: &[u8],
+    image_id: u32,
+    z_index: i32,
+    max_bytes: usize,
+    output: &mut impl Write,
+) -> io::Result<()> {
+    write_png_with_limit(png, image_id, z_index, max_bytes, output)
+}
+
+fn png_placement_len(bytes: &[u8], image_id: u32, z_index: i32) -> io::Result<usize> {
+    validate_png_output(bytes, image_id)?;
+    let chunks = bytes.chunks(RAW_CHUNK_BYTES);
+    let mut total = 0usize;
+    for (index, raw) in chunks.enumerate() {
+        let more = (index + 1) * RAW_CHUNK_BYTES < bytes.len();
+        let header_len = if index == 0 {
+            png_first_header(image_id, z_index, more).len()
+        } else if more {
+            MORE_HEADER.len()
+        } else {
+            FINAL_HEADER.len()
+        };
+        total = total
+            .checked_add(header_len + raw.len().div_ceil(3) * 4 + APC_END.len())
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "Kitty output length overflow")
+            })?;
+    }
+    Ok(total)
+}
+
+fn write_png_with_limit(
+    bytes: &[u8],
+    image_id: u32,
+    z_index: i32,
+    max_bytes: usize,
+    output: &mut impl Write,
+) -> io::Result<()> {
+    if png_placement_len(bytes, image_id, z_index)? > max_bytes {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Kitty placement exceeds output budget",
+        ));
+    }
+    let mut chunks = bytes.chunks(RAW_CHUNK_BYTES).peekable();
+    let mut first = true;
+    while let Some(raw) = chunks.next() {
+        let more = chunks.peek().is_some();
+        if first {
+            output.write_all(png_first_header(image_id, z_index, more).as_bytes())?;
+            first = false;
+        } else {
+            output.write_all(if more { MORE_HEADER } else { FINAL_HEADER })?;
+        }
+        output.write_all(STANDARD.encode(raw).as_bytes())?;
+        output.write_all(APC_END)?;
+    }
+    Ok(())
+}
+
+fn validate_png_output(bytes: &[u8], image_id: u32) -> io::Result<()> {
+    validate_id(image_id)?;
+    if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid Kitty PNG placement",
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Default)]
