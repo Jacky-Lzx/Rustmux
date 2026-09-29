@@ -113,6 +113,10 @@ Bounded interlaced PNGs retain full decoding and clipping. Virtual placements
 also sample only placeholder-referenced PNG cells, including for small images;
 bounded interlaced images retain the full-decode fallback. PNG validation still
 reads through the final row and tail, including when only a fragment is visible.
+Uncompressed RGB/RGBA regular placements likewise sample only the visible
+destination pixels after bounded source decoding, so enlarging a small image
+beyond the 32 MiB placement limit does not prevent a small fragment from
+appearing in the viewport.
 Large `o=z` RGB/RGBA transfers also remain compressed in the pane store.
 Runtime upload validates their complete zlib stream, and a regular placement
 samples only its visible source-backed destination pixels; invisible pixels

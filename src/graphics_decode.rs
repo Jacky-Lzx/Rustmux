@@ -359,6 +359,16 @@ impl DecodedImage {
         &self,
         layout: PlacementPixelLayout,
     ) -> Result<ResampledPlacement, ResampleError> {
+        self.resample_placement_region(layout, layout.destination)
+    }
+
+    /// Sample only a rectangle within the destination while keeping the same
+    /// pixel-center coordinates as a full placement resample.
+    pub fn resample_placement_region(
+        &self,
+        layout: PlacementPixelLayout,
+        region: PixelRect,
+    ) -> Result<ResampledPlacement, ResampleError> {
         let expected = decoded_size(self.width, self.height).map_err(|error| match error {
             DecodeError::OutputLimit => ResampleError::OutputLimit,
             _ => ResampleError::InvalidPixels,
@@ -382,18 +392,32 @@ impl DecodedImage {
                 .is_none_or(|end| end > self.height)
             || destination.x.checked_add(destination.width).is_none()
             || destination.y.checked_add(destination.height).is_none()
+            || region.width == 0
+            || region.height == 0
+            || region.x < destination.x
+            || region.y < destination.y
+            || region
+                .x
+                .checked_add(region.width)
+                .is_none_or(|end| end > destination.x + destination.width)
+            || region
+                .y
+                .checked_add(region.height)
+                .is_none_or(|end| end > destination.y + destination.height)
         {
             return Err(ResampleError::InvalidLayout);
         }
-        let output_size = decoded_size(destination.width, destination.height)
-            .map_err(|_| ResampleError::OutputLimit)?;
+        let output_size =
+            decoded_size(region.width, region.height).map_err(|_| ResampleError::OutputLimit)?;
         let mut pixels = vec![0; output_size];
-        let output_width = usize::try_from(destination.width).unwrap();
+        let output_width = usize::try_from(region.width).unwrap();
         let input_width = usize::try_from(self.width).unwrap();
         for (y, row) in pixels.chunks_exact_mut(output_width * 4).enumerate() {
-            let source_y = source.y + nearest_sample(y, source.height, destination.height);
+            let output_y = usize::try_from(region.y - destination.y).unwrap() + y;
+            let source_y = source.y + nearest_sample(output_y, source.height, destination.height);
             for (x, rgba) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
-                let source_x = source.x + nearest_sample(x, source.width, destination.width);
+                let output_x = usize::try_from(region.x - destination.x).unwrap() + x;
+                let source_x = source.x + nearest_sample(output_x, source.width, destination.width);
                 let index = (usize::try_from(source_y).unwrap() * input_width
                     + usize::try_from(source_x).unwrap())
                     * 4;
@@ -401,7 +425,7 @@ impl DecodedImage {
             }
         }
         Ok(ResampledPlacement {
-            destination,
+            destination: region,
             pixels,
         })
     }
@@ -2100,6 +2124,99 @@ mod tests {
                 (6, 60),
                 (6, 60),
             ]
+        );
+    }
+
+    #[test]
+    fn resample_raw_region_matches_full_pixel_center_sampling() {
+        let mut pixels = Vec::new();
+        for y in 0..3u8 {
+            for x in 0..4u8 {
+                pixels.extend_from_slice(&[x, y, 7, 255]);
+            }
+        }
+        let image = DecodedImage {
+            width: 4,
+            height: 3,
+            pixels,
+        };
+        for (width, height) in [(7, 5), (2, 2)] {
+            let layout = PlacementPixelLayout {
+                source: PixelRect {
+                    x: 1,
+                    y: 0,
+                    width: 3,
+                    height: 3,
+                },
+                cell_bounds: PixelSize { width, height },
+                destination: PixelRect {
+                    x: 11,
+                    y: 13,
+                    width,
+                    height,
+                },
+            };
+            let region = PixelRect {
+                x: 12,
+                y: 14,
+                width: width - 1,
+                height: height - 1,
+            };
+            let full = image.resample_placement(layout).unwrap();
+            let visible = image.resample_placement_region(layout, region).unwrap();
+            assert_eq!(visible.destination, region);
+            for y in 0..region.height as usize {
+                let full_start = ((y + 1) * width as usize + 1) * 4;
+                let visible_start = y * region.width as usize * 4;
+                assert_eq!(
+                    &visible.pixels[visible_start..visible_start + region.width as usize * 4],
+                    &full.pixels[full_start..full_start + region.width as usize * 4]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn resample_raw_region_stays_bounded_for_oversized_destination() {
+        let image = DecodedImage {
+            width: 1,
+            height: 1,
+            pixels: vec![1, 2, 3, 4],
+        };
+        let layout = PlacementPixelLayout {
+            source: PixelRect {
+                x: 0,
+                y: 0,
+                width: 1,
+                height: 1,
+            },
+            cell_bounds: PixelSize {
+                width: 4096,
+                height: 4096,
+            },
+            destination: PixelRect {
+                x: 5,
+                y: 7,
+                width: 4096,
+                height: 4096,
+            },
+        };
+        assert_eq!(
+            image.resample_placement(layout),
+            Err(ResampleError::OutputLimit)
+        );
+        let region = PixelRect {
+            x: 4099,
+            y: 4101,
+            width: 2,
+            height: 2,
+        };
+        assert_eq!(
+            image.resample_placement_region(layout, region),
+            Ok(ResampledPlacement {
+                destination: region,
+                pixels: [1, 2, 3, 4].repeat(4),
+            })
         );
     }
 

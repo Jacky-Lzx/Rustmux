@@ -358,10 +358,7 @@ fn collect_visible_clips(
         let image = store
             .get(placement.image_id)
             .ok_or(SnapshotError::MissingImage)?;
-        let streamed_layout = if matches!(
-            image.format,
-            ImageFormat::RgbZlib | ImageFormat::RgbaZlib | ImageFormat::Png
-        ) && let Some((width, height)) =
+        let visible_layout = if let Some((width, height)) =
             state.image_dimensions(store, placement.image_id)
         {
             let layout = geometry
@@ -377,12 +374,23 @@ fn collect_visible_clips(
         } else {
             None
         };
-        let visible = if let Some((layout, oversized_png)) = streamed_layout {
+        let visible = if let Some((layout, oversized_png)) = visible_layout {
             if let Some((region, destination)) =
                 visible_placement_region(layout.destination, geometry, cell, viewport)
                     .map_err(SnapshotError::Clip)?
             {
                 match image.format {
+                    ImageFormat::Rgb | ImageFormat::Rgba => {
+                        let pixels = image
+                            .decode_rgba()
+                            .map_err(SnapshotError::Decode)?
+                            .resample_placement_region(layout, region)
+                            .map_err(SnapshotError::Resample)?;
+                        Some(ClippedPlacement {
+                            destination,
+                            pixels: pixels.pixels,
+                        })
+                    }
                     ImageFormat::RgbZlib | ImageFormat::RgbaZlib => {
                         let pixels = image
                             .resample_zlib_placement_region(layout, region)
@@ -420,7 +428,6 @@ fn collect_visible_clips(
                             return Err(SnapshotError::Resample(error));
                         }
                     },
-                    ImageFormat::Rgb | ImageFormat::Rgba => unreachable!(),
                 }
             } else {
                 None

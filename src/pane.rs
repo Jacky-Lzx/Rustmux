@@ -1296,6 +1296,39 @@ mod io_tests {
     }
 
     #[test]
+    fn runtime_samples_only_visible_part_of_oversized_raw_destination() {
+        for (format, source, expected) in [
+            (24, vec![3, 5, 7], [3, 5, 7, 255]),
+            (32, vec![3, 5, 7, 41], [3, 5, 7, 41]),
+        ] {
+            let mut pane = Pane::spawn("/bin/sh", 4, 4).unwrap();
+            let cell = CellPixelSize::new(1, 1).unwrap();
+            let mut replies = Vec::new();
+            let command = format!(
+                "\x1b_Ga=T,f={format},i=11,s=1,v=1,c=4096,r=4096,C=1;{}\x1b\\",
+                STANDARD.encode(source)
+            );
+            pane.process_output_for_runtime(
+                command.as_bytes(),
+                &mut |reply| replies.extend_from_slice(reply),
+                Some(cell),
+                true,
+            );
+            assert_eq!(replies, b"\x1b_Gi=11;OK\x1b\\");
+            let snapshot = pane.compose_image_snapshot(cell).unwrap();
+            assert_eq!(snapshot.pixels.len(), 4 * 4 * 4);
+            assert!(
+                snapshot
+                    .pixels
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .all(|pixel| *pixel == expected)
+            );
+        }
+    }
+
+    #[test]
     fn runtime_samples_visible_placeholder_without_full_virtual_png_raster() {
         let mut png = Vec::new();
         {
