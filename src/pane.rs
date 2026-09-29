@@ -620,8 +620,26 @@ impl Pane {
                             column,
                             alternate: self.screen.is_alternate(),
                         };
-                        let placed = if let Some(transfer) = self.graphics_transfer.accept(&command)
-                        {
+                        let transfer =
+                            self.graphics_transfer.accept(&command).map(Ok).or_else(|| {
+                                crate::graphics_transfer::shared_memory_transfer(&command)
+                            });
+                        let transfer = match transfer {
+                            Some(Err(())) => {
+                                if let Some(response) =
+                                    crate::graphics_reply::shared_memory_read_error_reply(
+                                        &command,
+                                        *answer_graphics,
+                                    )
+                                {
+                                    reply(&response);
+                                }
+                                continue;
+                            }
+                            Some(Ok(transfer)) => Some(transfer),
+                            None => None,
+                        };
+                        let placed = if let Some(transfer) = transfer {
                             if transfer.control(b'a') == Some(b"q".as_slice()) {
                                 if let Some(response) = crate::graphics_reply::direct_query_reply(
                                     transfer,
@@ -787,7 +805,89 @@ mod io_tests {
     use super::*;
     use crate::{parser::MAX_REPLY_BYTES, window::Windows};
     use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use nix::libc;
+    use std::ffi::CString;
     use std::{os::unix::process::ExitStatusExt, time::Duration};
+
+    fn pane_test_shm(suffix: &str, data: &[u8]) -> CString {
+        let name = CString::new(format!("/rustmux-pane-{}-{suffix}", std::process::id())).unwrap();
+        // SAFETY: name is a NUL-terminated POSIX SHM name.
+        let fd = unsafe {
+            libc::shm_open(
+                name.as_ptr(),
+                libc::O_CREAT | libc::O_EXCL | libc::O_RDWR,
+                0o600,
+            )
+        };
+        assert!(fd >= 0, "shm_open: {}", std::io::Error::last_os_error());
+        // SAFETY: the descriptor is valid and data fits off_t.
+        assert_eq!(unsafe { libc::ftruncate(fd, data.len() as libc::off_t) }, 0);
+        // SAFETY: the object was sized above and remains open through copy.
+        let mapped = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                data.len(),
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED,
+                fd,
+                0,
+            )
+        };
+        assert_ne!(mapped, libc::MAP_FAILED);
+        // SAFETY: the mapping has exactly data.len() writable bytes.
+        unsafe {
+            std::ptr::copy_nonoverlapping(data.as_ptr(), mapped.cast(), data.len());
+            libc::munmap(mapped, data.len());
+            libc::close(fd);
+        }
+        name
+    }
+
+    #[test]
+    fn runtime_shared_memory_query_and_quiet_upload() {
+        let mut pane = Pane::spawn("/bin/sh", 4, 4).unwrap();
+        let mut replies = Vec::new();
+        let probe = pane_test_shm("probe", &[1, 2, 3]);
+        let query = format!(
+            "\x1b_Ga=q,t=s,i=31,f=24,s=1,v=1,S=3;{}\x1b\\",
+            STANDARD.encode(probe.as_bytes())
+        );
+        pane.process_output_for_runtime(
+            query.as_bytes(),
+            &mut |reply| replies.extend_from_slice(reply),
+            None,
+            true,
+        );
+        assert_eq!(replies, b"\x1b_Gi=31;OK\x1b\\");
+        assert!(pane.image_store().get(31).is_none());
+
+        replies.clear();
+        let image = pane_test_shm("upload", &[4, 5, 6]);
+        let upload = format!(
+            "\x1b_Ga=t,t=s,i=32,f=24,s=1,v=1,S=3,q=2;{}\x1b\\",
+            STANDARD.encode(image.as_bytes())
+        );
+        pane.process_output_for_runtime(
+            upload.as_bytes(),
+            &mut |reply| replies.extend_from_slice(reply),
+            None,
+            true,
+        );
+        assert!(replies.is_empty());
+        assert_eq!(pane.image_store().get(32).unwrap().data, [4, 5, 6]);
+
+        let missing = format!(
+            "\x1b_Ga=q,t=s,i=33,f=24,s=1,v=1,S=3;{}\x1b\\",
+            STANDARD.encode(image.as_bytes())
+        );
+        pane.process_output_for_runtime(
+            missing.as_bytes(),
+            &mut |reply| replies.extend_from_slice(reply),
+            None,
+            true,
+        );
+        assert_eq!(replies, b"\x1b_Gi=33;EBADF:Failed to read image file\x1b\\");
+    }
 
     #[test]
     fn runtime_transmit_and_place_ack_follows_final_chunk_and_store_result() {

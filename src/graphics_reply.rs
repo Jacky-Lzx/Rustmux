@@ -1,4 +1,4 @@
-//! Child-facing replies for completed, supported Kitty direct-data commands.
+//! Child-facing replies for completed Kitty graphics data commands.
 //! Query replies do not insert or replace an image.
 
 use crate::{
@@ -6,10 +6,20 @@ use crate::{
     graphics_transfer::{AssembledDirectTransfer, unsupported_medium_controls},
 };
 
-/// A recognizable file/temporary-file/shared-memory request can be rejected
-/// promptly so a child may retry using direct data. Never access its path or
-/// disclose whether it exists. Commands without a usable identity stay silent.
+/// A recognizable file or temporary-file request can be rejected promptly so
+/// a child may retry using direct data. Never access its path or disclose
+/// whether it exists. Commands without a usable identity stay silent.
 pub(crate) fn unsupported_medium_reply(command: &[u8], can_display: bool) -> Option<Vec<u8>> {
+    medium_error_reply(command, can_display, "EINVAL:unsupported medium")
+}
+
+/// All shared-memory read failures use the same child-visible message. This
+/// prevents a child from using replies to probe the local SHM namespace.
+pub(crate) fn shared_memory_read_error_reply(command: &[u8], can_display: bool) -> Option<Vec<u8>> {
+    medium_error_reply(command, can_display, "EBADF:Failed to read image file")
+}
+
+fn medium_error_reply(command: &[u8], can_display: bool, message: &str) -> Option<Vec<u8>> {
     if !can_display {
         return None;
     }
@@ -36,7 +46,7 @@ pub(crate) fn unsupported_medium_reply(command: &[u8], can_display: bool) -> Opt
         id,
         image_number,
         placement_id,
-        "EINVAL:unsupported medium",
+        message,
     ))
 }
 
@@ -358,7 +368,7 @@ mod tests {
             b"\x1b_Gi=31;EINVAL:unsupported medium\x1b\\"
         );
         assert_eq!(unsupported_medium_reply(query, false), None);
-        let numbered = b"\x1b_Ga=T,t=s,I=13,p=9,f=100,q=1;L25hbWU=\x1b\\";
+        let numbered = b"\x1b_Ga=T,t=t,I=13,p=9,f=100,q=1;L25hbWU=\x1b\\";
         assert_eq!(
             unsupported_medium_reply(numbered, true).unwrap(),
             b"\x1b_GI=13,p=9;EINVAL:unsupported medium\x1b\\"

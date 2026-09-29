@@ -35,12 +35,17 @@ may expand to 32 MiB. Raw RGB/RGBA output must match its dimensions, and
 compressed PNG requires
 `S=<uncompressed-byte-count>`. Malformed streams, mismatched sizes,
 and trailing compressed bytes are discarded before they can replace an image.
-File, temporary-file and shared-memory media are not read. When outer graphics
-support is confirmed, a complete, syntactically recognizable request for one
-of these media with a usable image identity receives a bounded
-`EINVAL:unsupported medium` reply, allowing the child to try direct data.
-The path or shared-memory name is never opened or reflected in the reply;
-`q=2` and unidentifiable, malformed, or incomplete requests stay silent.
+POSIX shared-memory transfers (`t=s`) are read through a bounded mapping, then
+unlinked and closed. The Base64 payload must be a single POSIX shared-memory
+name; `S` and `O` select a byte range. RGB/RGBA without `S` uses its declared
+dimensions as the exact length, since macOS reports page-rounded shared-memory
+sizes. Shared-memory bytes then use the same image validation, storage and
+query rules as direct data. Compressed PNG over shared memory is not supported.
+Read failures use one `EBADF:Failed to read image file` reply so the child
+cannot probe whether a name exists. File and temporary-file media remain
+unsupported and receive `EINVAL:unsupported medium` when the request has a
+usable identity. Neither paths nor shared-memory names appear in replies;
+`q=2` and unidentifiable or incomplete requests stay silent.
 The chunk and continuation rules follow the
 [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
 
@@ -569,8 +574,9 @@ Completed transfers with invalid image data or unsupported controls
 receive a bounded error reply; `q=1` suppresses success and `q=2` suppresses
 all replies. A query never inserts or replaces an image. Without confirmed
 display support, or while detached, Rustmux stays silent on graphics queries;
-a following DA reply still reaches the child. File/shared-memory reads,
-malformed transfers and image-number references in queries remain unsupported.
+a following DA reply still reaches the child. File reads, malformed transfers
+and image-number references in queries remain unsupported. Shared-memory
+queries are answered only after their bytes and image have been validated.
 Numbered deletes use `d=n/N` as described above. Under the same attachment and
 sizing conditions, a completed direct-data `a=t` upload with an explicit
 nonzero `i` or a nonzero `I` receives one reply
