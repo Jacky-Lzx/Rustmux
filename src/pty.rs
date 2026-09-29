@@ -10,7 +10,7 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 
-use nix::pty::{Winsize, openpty};
+use nix::pty::{OpenptyResult, Winsize, openpty};
 use nix::unistd::{Pid, setsid, tcgetpgrp};
 
 /// Owns the master descriptor and the direct shell child.
@@ -67,7 +67,7 @@ impl PtyShell {
 
     fn spawn_command(mut command: Command, rows: u16, columns: u16) -> io::Result<Self> {
         let size = winsize(rows, columns, None)?;
-        let pair = openpty(Some(&size), None)?;
+        let pair = openpty_for_spawn(&size)?;
         // Move both descriptors above stderr even if the caller closed stdio.
         // CLOEXEC prevents master/slave copies surviving a successful exec.
         let master = private_fd(pair.master)?;
@@ -265,6 +265,37 @@ fn winsize(rows: u16, columns: u16, cell_pixels: Option<(u16, u16)>) -> io::Resu
         ws_xpixel,
         ws_ypixel,
     })
+}
+
+#[cfg(target_os = "macos")]
+fn openpty_for_spawn(size: &Winsize) -> io::Result<OpenptyResult> {
+    // XNU can return its internal EREDRIVEOPEN (-6) when concurrent PTY allocations
+    // choose the same minor number. nix maps that negative errno to UnknownErrno (0),
+    // so inspect the raw errno immediately after openpty fails.
+    const EREDRIVEOPEN: i32 = -6;
+    const MAX_ATTEMPTS: usize = 16;
+    for attempt in 0..MAX_ATTEMPTS {
+        match openpty(Some(size), None) {
+            Ok(pair) => return Ok(pair),
+            Err(error) => {
+                if nix::errno::Errno::last_raw() != EREDRIVEOPEN {
+                    return Err(error.into());
+                }
+                if attempt + 1 == MAX_ATTEMPTS {
+                    return Err(io::Error::other(format!(
+                        "openpty: macOS PTY allocation raced {MAX_ATTEMPTS} times (EREDRIVEOPEN)"
+                    )));
+                }
+                std::thread::yield_now();
+            }
+        }
+    }
+    unreachable!("the last attempt returns or succeeds")
+}
+
+#[cfg(not(target_os = "macos"))]
+fn openpty_for_spawn(size: &Winsize) -> io::Result<OpenptyResult> {
+    Ok(openpty(Some(size), None)?)
 }
 
 fn private_fd(fd: OwnedFd) -> io::Result<OwnedFd> {
