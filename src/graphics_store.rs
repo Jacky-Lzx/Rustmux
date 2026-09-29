@@ -29,16 +29,19 @@ pub struct StoredImage {
 }
 
 impl StoredImage {
-    /// Validate the image as the running pane does before accepting an upload.
+    /// Validate an assembled image before a pane upload or graphics query.
     /// The assembler has already checked uncompressed raw byte counts.
-    pub(crate) fn validated_pane_upload_dimensions(
-        &self,
-    ) -> Result<Option<(u32, u32)>, DecodeError> {
+    pub(crate) fn validated_assembled_dimensions(&self) -> Result<Option<(u32, u32)>, DecodeError> {
         match self.format {
             ImageFormat::Png => {
-                let dimensions = match self.decode_rgba() {
-                    Ok(decoded) => (decoded.width, decoded.height),
-                    Err(DecodeError::OutputLimit) => self.validated_png_dimensions()?,
+                let dimensions = match self.validated_png_dimensions() {
+                    Ok(dimensions) => dimensions,
+                    // The row decoder cannot sample Adam7 PNGs, but the full
+                    // decoder retains support when their RGBA output is bounded.
+                    Err(DecodeError::UnsupportedPng) => {
+                        let decoded = self.decode_rgba()?;
+                        (decoded.width, decoded.height)
+                    }
                     Err(error) => return Err(error),
                 };
                 Ok(Some(dimensions))
@@ -704,13 +707,11 @@ impl ImageStore {
         };
         // The runtime must not replace a displayable image with corrupt or
         // unsupported PNG or compressed raw bytes. Plain raw lengths were
-        // checked by the assembler.
-        // Cache successful dimensions so sized placement does not decode twice.
-        // When full expansion exceeds the limit, validate every PNG row and
-        // checksum through the bounded streaming decoder instead.
+        // checked by the assembler. Cache successful dimensions so sized
+        // placement does not decode twice.
         let decoded_dimensions = if validate_images {
             image
-                .validated_pane_upload_dimensions()
+                .validated_assembled_dimensions()
                 .map_err(|_| StoreError::InvalidData)?
         } else {
             None
@@ -1652,6 +1653,33 @@ mod tests {
 
     fn transfer(command: &[u8]) -> AssembledDirectTransfer {
         DirectTransferAssembler::new().accept(command).unwrap()
+    }
+
+    #[test]
+    fn runtime_validation_keeps_small_interlaced_png_support() {
+        let mut info = png::Info::with_size(1, 1);
+        info.color_type = png::ColorType::Rgba;
+        info.bit_depth = png::BitDepth::Eight;
+        info.interlaced = true;
+        let mut data = Vec::new();
+        png::Encoder::with_info(&mut data, info)
+            .unwrap()
+            .write_header()
+            .unwrap()
+            .write_image_data(&[1, 2, 3, 4])
+            .unwrap();
+        let image = StoredImage {
+            format: ImageFormat::Png,
+            data,
+            declared_width: None,
+            declared_height: None,
+        };
+        assert_eq!(
+            image.validated_png_dimensions(),
+            Err(DecodeError::UnsupportedPng)
+        );
+        assert_eq!(image.decode_rgba().unwrap().pixels, [1, 2, 3, 4]);
+        assert_eq!(image.validated_assembled_dimensions(), Ok(Some((1, 1))));
     }
 
     #[test]

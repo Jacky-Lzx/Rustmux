@@ -77,12 +77,7 @@ pub(crate) fn direct_query_reply(
                 declared_height,
                 data: transfer.data,
             };
-            match format {
-                ImageFormat::Rgb | ImageFormat::Rgba => image.decode_rgba().is_ok(),
-                ImageFormat::RgbZlib | ImageFormat::RgbaZlib | ImageFormat::Png => {
-                    image.validated_pane_upload_dimensions().is_ok()
-                }
-            }
+            image.validated_assembled_dimensions().is_ok()
         }
     });
     if valid && quiet == Some(b'1') {

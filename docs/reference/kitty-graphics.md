@@ -97,16 +97,17 @@ cache the decoded pixels or render them; callers must opt in to decoding.
 Color-profile conversion is not yet implemented.
 
 `StoredImage::decode_png_thumbnail(width, height)` is a separate opt-in
-boundary for non-interlaced static PNGs whose full RGBA expansion exceeds
-32 MiB. It validates the complete PNG while reading one transformed row at a
-time, samples into a caller-chosen nearest-neighbor thumbnail of at most
-32 MiB, and bounds decoder allocation and row size.
+boundary for non-interlaced static PNGs, including those whose full RGBA
+expansion exceeds 32 MiB. It validates the complete PNG while reading one
+transformed row at a time, samples into a caller-chosen nearest-neighbor
+thumbnail of at most 32 MiB, and bounds decoder allocation and row size.
 `StoredImage::resample_png_placement(layout)` uses the same bounded row decoder
 to sample an explicit source crop directly into destination pixels, including
 upscaling, without expanding the whole source image. Both paths validate the
-entire PNG, including its tail. Runtime upload now falls back to this bounded
-validation when full RGBA expansion exceeds 32 MiB, and regular and virtual
-placements use crop-aware streaming when such a validated PNG is composed.
+entire PNG, including its tail. Runtime upload validates non-interlaced PNGs
+through this bounded path first, without allocating full RGBA; bounded
+interlaced PNGs retain a full-decode fallback. Regular and virtual placements
+use crop-aware streaming when such a validated PNG is composed.
 Regular placements also sample only the viewport-visible part of an oversized
 PNG source or destination, so a small on-screen fragment does not require a
 full destination raster. PNG validation still reads through the final row and
@@ -543,9 +544,10 @@ using the same nonzero image ID. An uncompressed direct query may include an
 `S` byte count when it matches the payload, as `kitten icat` does. The reply is
 delivered through the pane's PTY
 before a subsequent primary-DA reply, so a child can detect this supported
-subset. Large PNG queries use the same bounded full-stream validation as pane
-uploads when RGBA expansion exceeds 32 MiB; large zlib-compressed raw queries
-also validate the entire decompressed stream without allocating its full image.
+subset. PNG queries and pane uploads first use bounded full-stream validation;
+small interlaced PNGs retain a full-decode fallback. Large zlib-compressed raw
+queries also validate the entire decompressed stream without allocating its
+full image.
 Completed transfers with invalid image data or unsupported controls
 receive a bounded error reply; `q=1` suppresses success and `q=2` suppresses
 all replies. A query never inserts or replaces an image. Without confirmed
