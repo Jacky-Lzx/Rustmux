@@ -2,6 +2,12 @@
 # rustmux-managed-hook
 set -eu
 
+if ! git diff --cached --name-only --diff-filter=ACMRD \
+    | grep -Eq '(^|/)(Cargo\.toml|Cargo\.lock|rust-toolchain(\.toml)?|[^/]+\.rs)$|^\.cargo/'; then
+    echo "No staged Rust changes; skipping Rust formatting and Clippy."
+    exit 0
+fi
+
 echo "Checking Rust formatting..."
 if ! cargo fmt --all -- --check; then
     echo "Formatting Rust code..."

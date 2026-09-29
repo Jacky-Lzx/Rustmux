@@ -49,5 +49,12 @@ labels are configured. Configure those separately when publishing this track.
 
 Run `./scripts/install-git-hooks.sh` once in any repository worktree. The
 installed pre-commit hook checks `cargo fmt` and runs Clippy with warnings
-denied before every commit. When rustfmt finds changes, it formats the working
-tree and blocks that commit so the result can be reviewed and staged explicitly.
+denied when staged files affect Rust code or its build configuration. Other
+commits skip these Rust checks. When rustfmt finds changes, it formats the
+working tree and blocks that commit so the result can be reviewed and staged
+explicitly. CI still runs the full Rust checks for every change.
+
+For a short edit cycle, run `cargo test --lib --locked` for model changes or
+`cargo test --test <target> --locked` for the affected integration test. Run
+`cargo test --all-targets --locked` before review; if local PTY tests conflict
+under parallel execution, add `-- --test-threads=1`.
