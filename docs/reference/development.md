@@ -5,12 +5,13 @@
 ```sh
 cargo fmt --all --check
 cargo build --locked
-cargo test --all-targets --locked
+cargo test --all-targets --locked -- --test-threads=4
 cargo clippy --all-targets --all-features --locked -- -D warnings
 ```
 
-The Rust CI workflow runs these checks on macOS and Linux. PTY integration tests
-start real shells and verify controlling-terminal setup, initial size, exit and
+The Rust CI workflow runs these checks on macOS and Linux, with at most four
+tests running concurrently per test binary. PTY integration tests start real
+shells and verify controlling-terminal setup, initial size, exit and
 resource cleanup. The input-loop harness requires Python 3 and creates an outer
 PTY to run the actual binary, checking keyboard forwarding and terminal recovery. They require permission to create PTYs and child processes.
 See [PTY lifecycle](pty-lifecycle.md) for the implementation and review boundaries.

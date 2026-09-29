@@ -58,6 +58,6 @@ For a short edit cycle, run `cargo test --lib --locked` for model changes or
 `cargo test --test <target> --locked` for the affected integration test. For
 example, `cargo test --test terminal_loop graphics --locked` runs only the
 graphics PTY scenarios; `cargo test --test terminal_loop -- --list` shows the
-other scenario names. Before review, run `cargo test --all-targets --locked`;
-if local PTY tests conflict under parallel execution, add
-`-- --test-threads=1`.
+other scenario names. Before review, run
+`cargo test --all-targets --locked -- --test-threads=4`, matching CI's bounded
+parallel PTY coverage.

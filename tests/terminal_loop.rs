@@ -1,12 +1,4 @@
-use std::sync::Mutex;
-
-// Keep PTY scenarios serial even when libtest runs its test functions in parallel.
-static PTY_TEST_LOCK: Mutex<()> = Mutex::new(());
-
 fn run_scenario(name: &str) {
-    let _guard = PTY_TEST_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let script = format!(
         "{}/tests/terminal_loop_{name}.py",
         env!("CARGO_MANIFEST_DIR")
