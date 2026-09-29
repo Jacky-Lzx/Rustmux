@@ -1,17 +1,66 @@
-#[test]
-fn interactive_terminal_and_restoration() {
+use std::sync::Mutex;
+
+// Keep PTY scenarios serial even when libtest runs its test functions in parallel.
+static PTY_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+fn run_scenario(name: &str) {
+    let _guard = PTY_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let script = format!(
+        "{}/tests/terminal_loop_{name}.py",
+        env!("CARGO_MANIFEST_DIR")
+    );
     let output = std::process::Command::new("python3")
-        .arg(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/terminal_loop.py"
-        ))
+        .arg(script)
         .arg(env!("CARGO_BIN_EXE_rustmux"))
+        .env("PYTHONDONTWRITEBYTECODE", "1")
         .output()
         .expect("Python 3 is required for the nested-PTY integration harness");
     assert!(
         output.status.success(),
-        "stdout:\n{}\nstderr:\n{}",
+        "{name} failed:\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[test]
+fn graphics() {
+    run_scenario("graphics");
+}
+
+#[test]
+fn input() {
+    run_scenario("input");
+}
+
+#[test]
+fn notifications() {
+    run_scenario("notifications");
+}
+
+#[test]
+fn mouse_lifecycle() {
+    run_scenario("mouse_lifecycle");
+}
+
+#[test]
+fn windows() {
+    run_scenario("windows");
+}
+
+#[test]
+fn panes() {
+    run_scenario("panes");
+}
+
+#[test]
+fn history() {
+    run_scenario("history");
+}
+
+#[test]
+fn sessions() {
+    run_scenario("sessions");
 }

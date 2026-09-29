@@ -2,7 +2,8 @@
 
 This describes H02 input, H03 rendering integration and H04 resize handling. Read
 `src/main.rs`, then `src/terminal.rs`, its queue tests, and
-`tests/terminal_loop.py` (launched by `tests/terminal_loop.rs`).
+the `tests/terminal_loop_*.py` scenarios and shared PTY harness in
+`tests/terminal_loop_support.py` (launched by `tests/terminal_loop.rs`).
 
 ## Scope and data flow
 

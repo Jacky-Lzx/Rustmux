@@ -55,6 +55,9 @@ working tree and blocks that commit so the result can be reviewed and staged
 explicitly. CI still runs the full Rust checks for every change.
 
 For a short edit cycle, run `cargo test --lib --locked` for model changes or
-`cargo test --test <target> --locked` for the affected integration test. Run
-`cargo test --all-targets --locked` before review; if local PTY tests conflict
-under parallel execution, add `-- --test-threads=1`.
+`cargo test --test <target> --locked` for the affected integration test. For
+example, `cargo test --test terminal_loop graphics --locked` runs only the
+graphics PTY scenarios; `cargo test --test terminal_loop -- --list` shows the
+other scenario names. Before review, run `cargo test --all-targets --locked`;
+if local PTY tests conflict under parallel execution, add
+`-- --test-threads=1`.
