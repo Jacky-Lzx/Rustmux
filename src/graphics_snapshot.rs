@@ -14,7 +14,8 @@ use crate::{
     },
     graphics_placeholder::decode_row,
     graphics_store::{
-        CellPixelSize, ImageFormat, ImageStore, PixelRect, PixelSize, PlacementPixelLayout,
+        CellPixelSize, ImageFormat, ImageStore, PixelRect, PixelSize, PlacementGeometry,
+        PlacementPixelLayout,
     },
     screen::Screen,
 };
@@ -305,6 +306,23 @@ fn rasterize_placement(
     Ok((layout, pixels))
 }
 
+fn rasterize_visible_placement(
+    store: &ImageStore,
+    image_id: u32,
+    dimensions: Option<(u32, u32)>,
+    cell: CellPixelSize,
+    geometry: PlacementGeometry,
+    viewport: PixelSize,
+) -> Result<Option<ClippedPlacement>, SnapshotError> {
+    let (_, pixels) =
+        rasterize_placement(store, image_id, dimensions, cell, |width, height, cell| {
+            geometry.pixel_layout(width, height, cell)
+        })?;
+    pixels
+        .clip_to_viewport_with_scroll_clip(geometry, cell, viewport)
+        .map_err(SnapshotError::Clip)
+}
+
 #[derive(Default)]
 struct SnapshotState {
     dimensions: BTreeMap<u32, Option<(u32, u32)>>,
@@ -355,52 +373,67 @@ fn collect_visible_clips(
                         * u128::from(layout.destination.height)
                         * 4
                         > MAX_DECODED_IMAGE_BYTES as u128);
-            if image.format != ImageFormat::Png || oversized_png {
-                Some(layout)
-            } else {
-                None
-            }
+            Some((layout, oversized_png))
         } else {
             None
         };
-        let visible = if let Some(layout) = streamed_layout {
+        let visible = if let Some((layout, oversized_png)) = streamed_layout {
             if let Some((region, destination)) =
                 visible_placement_region(layout.destination, geometry, cell, viewport)
                     .map_err(SnapshotError::Clip)?
             {
-                let pixels = match image.format {
-                    ImageFormat::RgbZlib | ImageFormat::RgbaZlib => image
-                        .resample_zlib_placement_region(layout, region)
-                        .map_err(|error| match error {
-                            StreamZlibError::Decode(error) => SnapshotError::Decode(error),
-                            StreamZlibError::Resample(error) => SnapshotError::Resample(error),
-                        })?,
-                    ImageFormat::Png => image
-                        .resample_png_placement_region(layout, region)
-                        .map_err(|error| match error {
-                            StreamPngError::Decode(error) => SnapshotError::Decode(error),
-                            StreamPngError::Resample(error) => SnapshotError::Resample(error),
-                        })?,
+                match image.format {
+                    ImageFormat::RgbZlib | ImageFormat::RgbaZlib => {
+                        let pixels = image
+                            .resample_zlib_placement_region(layout, region)
+                            .map_err(|error| match error {
+                                StreamZlibError::Decode(error) => SnapshotError::Decode(error),
+                                StreamZlibError::Resample(error) => SnapshotError::Resample(error),
+                            })?;
+                        Some(ClippedPlacement {
+                            destination,
+                            pixels: pixels.pixels,
+                        })
+                    }
+                    ImageFormat::Png => match image.resample_png_placement_region(layout, region) {
+                        Ok(pixels) => Some(ClippedPlacement {
+                            destination,
+                            pixels: pixels.pixels,
+                        }),
+                        Err(StreamPngError::Decode(DecodeError::UnsupportedPng))
+                            if !oversized_png =>
+                        {
+                            // Adam7 needs the bounded full-frame decoder.
+                            rasterize_visible_placement(
+                                store,
+                                placement.image_id,
+                                state.image_dimensions(store, placement.image_id),
+                                cell,
+                                geometry,
+                                viewport,
+                            )?
+                        }
+                        Err(StreamPngError::Decode(error)) => {
+                            return Err(SnapshotError::Decode(error));
+                        }
+                        Err(StreamPngError::Resample(error)) => {
+                            return Err(SnapshotError::Resample(error));
+                        }
+                    },
                     ImageFormat::Rgb | ImageFormat::Rgba => unreachable!(),
-                };
-                Some(ClippedPlacement {
-                    destination,
-                    pixels: pixels.pixels,
-                })
+                }
             } else {
                 None
             }
         } else {
-            let (_, pixels) = rasterize_placement(
+            rasterize_visible_placement(
                 store,
                 placement.image_id,
                 state.image_dimensions(store, placement.image_id),
                 cell,
-                |width, height, cell| geometry.pixel_layout(width, height, cell),
-            )?;
-            pixels
-                .clip_to_viewport_with_scroll_clip(geometry, cell, viewport)
-                .map_err(SnapshotError::Clip)?
+                geometry,
+                viewport,
+            )?
         };
         if let Some(visible) = visible {
             state.input_bytes = state
@@ -895,6 +928,78 @@ mod deferred_snapshot_tests {
     use base64::{Engine as _, engine::general_purpose::STANDARD};
     use flate2::{Compression, write::ZlibEncoder};
     use std::io::Write;
+
+    #[test]
+    fn small_png_samples_only_visible_source_crop() {
+        let pixels: Vec<u8> = vec![
+            1, 2, 3, 255, 11, 12, 13, 255, 21, 22, 23, 255, 31, 32, 33, 255, 4, 5, 6, 255, 14, 15,
+            16, 255, 24, 25, 26, 255, 34, 35, 36, 255,
+        ];
+        let expected = vec![
+            11, 12, 13, 255, 21, 22, 23, 255, 14, 15, 16, 255, 24, 25, 26, 255,
+        ];
+        let mut data = Vec::new();
+        let mut encoder = png::Encoder::new(&mut data, 4, 2);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder
+            .write_header()
+            .unwrap()
+            .write_image_data(&pixels)
+            .unwrap();
+        let command = format!(
+            "\x1b_Ga=T,f=100,i=7,x=1,y=0,w=3,h=2,c=3,r=2;{}\x1b\\",
+            STANDARD.encode(data)
+        );
+        let transfer = DirectTransferAssembler::new()
+            .accept(command.as_bytes())
+            .unwrap();
+        let mut store = ImageStore::new();
+        store.insert_at(transfer, CellAnchor::default()).unwrap();
+        let snapshot = compose_store_snapshot(
+            &store,
+            false,
+            PixelSize {
+                width: 2,
+                height: 2,
+            },
+            CellPixelSize::new(1, 1).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(snapshot.pixels, expected);
+    }
+
+    #[test]
+    fn small_interlaced_png_retains_full_decode_fallback() {
+        let mut info = png::Info::with_size(1, 1);
+        info.color_type = png::ColorType::Rgba;
+        info.bit_depth = png::BitDepth::Eight;
+        info.interlaced = true;
+        let mut data = Vec::new();
+        png::Encoder::with_info(&mut data, info)
+            .unwrap()
+            .write_header()
+            .unwrap()
+            .write_image_data(&[11, 12, 13, 255])
+            .unwrap();
+        let command = format!("\x1b_Ga=T,f=100,i=7;{}\x1b\\", STANDARD.encode(data));
+        let transfer = DirectTransferAssembler::new()
+            .accept(command.as_bytes())
+            .unwrap();
+        let mut store = ImageStore::new();
+        store.insert_at(transfer, CellAnchor::default()).unwrap();
+        let snapshot = compose_store_snapshot(
+            &store,
+            false,
+            PixelSize {
+                width: 1,
+                height: 1,
+            },
+            CellPixelSize::new(1, 1).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(snapshot.pixels, [11, 12, 13, 255]);
+    }
 
     #[test]
     fn deferred_large_png_and_zlib_raw_render_without_sized_upload() {

@@ -106,12 +106,12 @@ to sample an explicit source crop directly into destination pixels, including
 upscaling, without expanding the whole source image. Both paths validate the
 entire PNG, including its tail. Runtime upload validates non-interlaced PNGs
 through this bounded path first, without allocating full RGBA; bounded
-interlaced PNGs retain a full-decode fallback. Regular and virtual placements
-use crop-aware streaming when such a validated PNG is composed.
-Regular placements also sample only the viewport-visible part of an oversized
-PNG source or destination, so a small on-screen fragment does not require a
-full destination raster. PNG validation still reads through the final row and
-tail, including when only a fragment is visible.
+interlaced PNGs retain a full-decode fallback. Regular placements sample only
+their viewport-visible PNG pixels, including for small images, so a small
+on-screen fragment does not require a full source or destination raster.
+Bounded interlaced PNGs retain full decoding and clipping. Virtual placements
+use crop-aware streaming for oversized PNGs. PNG validation still reads through
+the final row and tail, including when only a fragment is visible.
 Large `o=z` RGB/RGBA transfers also remain compressed in the pane store.
 Runtime upload validates their complete zlib stream, and a regular placement
 samples only its visible source-backed destination pixels; invisible pixels
