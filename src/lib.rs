@@ -5,16 +5,14 @@ pub mod cli;
 mod closed_pane;
 pub mod config;
 pub mod graphics;
-pub mod graphics_capability;
-pub mod graphics_composite;
-pub mod graphics_decode;
-pub mod graphics_output;
-pub mod graphics_placeholder;
-mod graphics_reply;
-mod graphics_shared_memory_output;
-pub mod graphics_snapshot;
-pub mod graphics_store;
-pub mod graphics_transfer;
+pub use graphics::{
+    capability as graphics_capability, composite as graphics_composite, decode as graphics_decode,
+    output as graphics_output, placeholder as graphics_placeholder, snapshot as graphics_snapshot,
+    store as graphics_store, transfer as graphics_transfer,
+};
+pub(crate) use graphics::{
+    reply as graphics_reply, shared_memory_output as graphics_shared_memory_output,
+};
 mod history_view;
 pub mod layout;
 pub mod pane;

@@ -1,7 +1,15 @@
-//! Bounded framing of Kitty graphics APC commands in a child output stream.
-//!
-//! This module only frames input; image display and conditional capability
-//! replies are handled by later runtime stages.
+//! Kitty graphics framing, storage, composition, and terminal output.
+
+pub mod capability;
+pub mod composite;
+pub mod decode;
+pub mod output;
+pub mod placeholder;
+pub(crate) mod reply;
+pub(crate) mod shared_memory_output;
+pub mod snapshot;
+pub mod store;
+pub mod transfer;
 
 /// Kitten icat sends up to 128 KiB of encoded data per APC, even though the
 /// published protocol specifies 4096 bytes. Reserve bounded control space.

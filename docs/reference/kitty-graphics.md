@@ -644,7 +644,7 @@ format-specific 16/32 MiB bounds, a valid PNG above the raw-transfer limit
 reaching the validated pane store, unsupported media and recovery. Pane tests
 cover interleaved text, per-pane
 isolation and command-output filtering. Run `cargo test --lib graphics::tests`,
-`cargo test --lib graphics_transfer::tests` and `cargo test --test panes`.
+`cargo test --lib graphics::transfer::tests` and `cargo test --test panes`.
 Store tests also cover replacement, isolation, transient/unplaced quota eviction,
 numbered-image fallback, explicit removal, named and anonymous references,
 and soft versus hard deletion.
