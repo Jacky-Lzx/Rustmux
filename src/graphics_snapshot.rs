@@ -47,6 +47,11 @@ pub(crate) struct RawRgbPlacement<'a> {
     pub row: usize,
 }
 
+pub(crate) enum RawRgbProgress<'a> {
+    Complete(RawRgbPlacement<'a>),
+    Incomplete,
+}
+
 impl ImageBand {
     pub const ALL: [Self; 3] = [Self::BehindBackground, Self::BehindText, Self::AboveText];
 
@@ -67,6 +72,7 @@ impl ImageBand {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn raw_rgb_pane_band<'a>(
     store: &'a ImageStore,
     screen: &Screen,
@@ -74,6 +80,19 @@ pub(crate) fn raw_rgb_pane_band<'a>(
     cell: CellPixelSize,
     band: ImageBand,
 ) -> Option<RawRgbPlacement<'a>> {
+    match raw_rgb_pane_band_progress(store, screen, viewport, cell, band)? {
+        RawRgbProgress::Complete(placement) => Some(placement),
+        RawRgbProgress::Incomplete => None,
+    }
+}
+
+pub(crate) fn raw_rgb_pane_band_progress<'a>(
+    store: &'a ImageStore,
+    screen: &Screen,
+    viewport: PixelSize,
+    cell: CellPixelSize,
+    band: ImageBand,
+) -> Option<RawRgbProgress<'a>> {
     if band != ImageBand::AboveText {
         return None;
     }
@@ -165,13 +184,16 @@ pub(crate) fn raw_rgb_pane_band<'a>(
         }
     }
     let (column, row) = origin?;
-    if seen != expected
-        || column.checked_add(columns)? > screen_columns
-        || row.checked_add(rows)? > screen_rows
-    {
+    if column.checked_add(columns)? > screen_columns || row.checked_add(rows)? > screen_rows {
         return None;
     }
-    Some(RawRgbPlacement {
+    if seen > expected {
+        return None;
+    }
+    if seen < expected {
+        return Some(RawRgbProgress::Incomplete);
+    }
+    Some(RawRgbProgress::Complete(RawRgbPlacement {
         pixels: &image.data,
         width,
         height,
@@ -179,7 +201,7 @@ pub(crate) fn raw_rgb_pane_band<'a>(
         rows: u32::try_from(rows).ok()?,
         column,
         row,
-    })
+    }))
 }
 
 #[derive(Debug, Eq, PartialEq)]

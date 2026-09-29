@@ -491,9 +491,13 @@ Rustmux re-uploads the stored RGB pixels through a new POSIX shared-memory
 object, remaps the image ID, and asks the outer terminal to fit it into the
 same `c` by `r` cell rectangle. The outer terminal unlinks the object after
 reading it; Rustmux retains linked objects until then, bounds outstanding
-objects to 64 MiB, and cleans them up on attachment exit. Incomplete
-placeholders, overlapping placements, unsupported media, failed shared-memory
-creation, or an unsuccessful outer query keep the composed PNG/raw fallback.
+objects to 64 MiB, and cleans them up on attachment exit. While a sole RGB
+virtual placement has an incomplete placeholder rectangle, Rustmux waits for
+the next child update instead of repeatedly encoding partial composites. A
+complete rectangle takes the fast path immediately; a rectangle still
+incomplete after 350 ms without changes uses the composed PNG/raw fallback.
+Overlapping placements, unsupported media, failed shared-memory creation, or
+an unsuccessful outer query also use that fallback.
 A band or tile that fits an empty frame but misses the current frame budget is
 retried on the next frame without resending uploads that already succeeded.
 Switching windows, moving/resizing panes, deleting placements, or opening an

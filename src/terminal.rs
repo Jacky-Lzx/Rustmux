@@ -29,7 +29,7 @@ use crate::{
         write_kitty_rgb_placement_with_limit, write_kitty_rgba_placement_with_limit,
     },
     graphics_shared_memory_output::SharedRgb,
-    graphics_snapshot::ImageBand,
+    graphics_snapshot::{ImageBand, RawRgbProgress},
     graphics_store::CellPixelSize,
     layout::{Direction, PaneId, Rect, SplitAxis},
     pane_set::PaneSet,
@@ -60,6 +60,9 @@ const SYNC_TIMEOUT: Duration = Duration::from_secs(1);
 const FRAME_INTERVAL: Duration = Duration::from_millis(6);
 const PANE_DRAG_RESIZE_INTERVAL: Duration = Duration::from_millis(33);
 const GRAPHICS_PROBE_TIMEOUT: Duration = Duration::from_millis(500);
+// Yazi paints virtual-image placeholders over several PTY reads. Give an
+// incomplete rectangle time to finish before composing an expensive PNG.
+const INCOMPLETE_VIRTUAL_QUIET: Duration = Duration::from_millis(350);
 const GRAPHICS_PROBE_IMAGE_ID: std::num::NonZeroU32 = std::num::NonZeroU32::new(31).unwrap();
 const SHM_PROBE_IMAGE_ID: std::num::NonZeroU32 = std::num::NonZeroU32::new(32).unwrap();
 
@@ -617,10 +620,23 @@ struct PendingPngTile {
     placement_len: usize,
 }
 
+struct IncompleteVirtual {
+    window: WindowId,
+    pane: PaneId,
+    revision: u64,
+    placeholder_revision: u64,
+    rect: Rect,
+    cell: CellPixelSize,
+    alternate: bool,
+    last_change: Instant,
+    waiting: bool,
+}
+
 struct KittyOverlays {
     entries: Vec<KittyOverlay>,
     pending_delete: VecDeque<u32>,
     pending_png: Option<PendingPngTile>,
+    incomplete_virtual: Vec<IncompleteVirtual>,
     next_id: u32,
     pending_retry: bool,
     pending_shm: Vec<SharedRgb>,
@@ -766,6 +782,7 @@ impl Default for KittyOverlays {
             entries: Vec::new(),
             pending_delete: VecDeque::new(),
             pending_png: None,
+            incomplete_virtual: Vec::new(),
             next_id: 0x8000_0000,
             pending_retry: false,
             pending_shm: Vec::new(),
@@ -775,6 +792,38 @@ impl Default for KittyOverlays {
 }
 
 impl KittyOverlays {
+    fn defer_incomplete_virtual(&mut self, candidate: IncompleteVirtual) -> bool {
+        let now = candidate.last_change;
+        if let Some(state) = self
+            .incomplete_virtual
+            .iter_mut()
+            .find(|state| state.window == candidate.window && state.pane == candidate.pane)
+        {
+            if state.revision != candidate.revision
+                || state.placeholder_revision != candidate.placeholder_revision
+                || state.rect != candidate.rect
+                || state.cell != candidate.cell
+                || state.alternate != candidate.alternate
+            {
+                *state = candidate;
+            }
+            if state.waiting && now.duration_since(state.last_change) >= INCOMPLETE_VIRTUAL_QUIET {
+                state.waiting = false;
+            }
+            return state.waiting;
+        }
+        self.incomplete_virtual.push(candidate);
+        true
+    }
+
+    fn next_deferred_retry(&self) -> Option<Instant> {
+        self.incomplete_virtual
+            .iter()
+            .filter(|state| state.waiting)
+            .map(|state| state.last_change + INCOMPLETE_VIRTUAL_QUIET)
+            .min()
+    }
+
     fn render(
         &mut self,
         window: WindowId,
@@ -788,6 +837,20 @@ impl KittyOverlays {
         let retry_missing = self.pending_retry;
         self.pending_retry = false;
         let visible = panes.layout().content_geometry().panes;
+        self.incomplete_virtual.retain(|state| {
+            state.window == window
+                && state.cell == cell
+                && visible.iter().any(|(id, rect)| {
+                    *id == state.pane
+                        && *rect == state.rect
+                        && panes.get(*id).is_some_and(|pane| {
+                            pane.image_store().revision() == state.revision
+                                && pane.virtual_placeholder_revision() == state.placeholder_revision
+                                && pane.screen().is_alternate() == state.alternate
+                                && pane.image_store().placements().next().is_some()
+                        })
+                })
+        });
         // A deferred PNG belongs to the same scene revision as its tile. Drop
         // it before considering output if that scene has changed meanwhile.
         if self.pending_png.as_ref().is_some_and(|pending| {
@@ -845,8 +908,27 @@ impl KittyOverlays {
             let column = usize::from(rect.column) + 1;
             let restore = format!("\x1b[{};{}H", cursor.0 + 1, cursor.1 + 1);
             for band in ImageBand::ALL {
+                let raw_progress = pane.raw_rgb_image_band_progress(cell, band);
+                if matches!(&raw_progress, Some(RawRgbProgress::Incomplete)) {
+                    if self.defer_incomplete_virtual(IncompleteVirtual {
+                        window,
+                        pane: id,
+                        revision: pane.image_store().revision(),
+                        placeholder_revision: pane.virtual_placeholder_revision(),
+                        rect,
+                        cell,
+                        alternate: pane.screen().is_alternate(),
+                        last_change: Instant::now(),
+                        waiting: true,
+                    }) {
+                        continue;
+                    }
+                } else if band == ImageBand::AboveText {
+                    self.incomplete_virtual
+                        .retain(|state| state.window != window || state.pane != id);
+                }
                 if self.shm_supported
-                    && let Some(raw) = pane.raw_rgb_image_band(cell, band)
+                    && let Some(RawRgbProgress::Complete(raw)) = raw_progress
                 {
                     let image_id = self.next_id;
                     let position = format!("\x1b[{};{}H", row + raw.row, column + raw.column);
@@ -1036,6 +1118,7 @@ impl KittyOverlays {
     fn clear(&mut self, output: &mut VecDeque<u8>) -> io::Result<()> {
         self.pending_retry = false;
         self.pending_png = None;
+        self.incomplete_virtual.clear();
         for entry in self.entries.drain(..) {
             self.pending_delete.push_back(entry.image_id);
         }
@@ -2533,14 +2616,17 @@ fn forward(
                     force_redraw = true;
                 }
                 active_paused = paused;
+                let deferred_due = kitty_overlays
+                    .next_deferred_retry()
+                    .is_some_and(|due| Instant::now() >= due);
                 if close_requested.is_none()
                     && !session_manager_requested
                     && !detach_requested
-                    && (dirty || force_redraw || bar_dirty)
+                    && (dirty || force_redraw || bar_dirty || deferred_due)
                     && pane_resize_pending.is_none()
                     && (!paused || force_redraw)
                     && to_terminal.is_empty()
-                    && (eof || force_redraw || Instant::now() >= next_frame)
+                    && (eof || force_redraw || deferred_due || Instant::now() >= next_frame)
                 {
                     let historical = history.as_ref().map(|view| view.render()).transpose()?;
                     let screens: Vec<_> = panes
@@ -3411,6 +3497,13 @@ fn forward(
                     .clamp(1, u128::from(POLL_TIMEOUT_MILLIS)) as u16,
             );
         }
+        if !active_paused && let Some(due) = kitty_overlays.next_deferred_retry() {
+            timeout = timeout.min(
+                due.saturating_duration_since(Instant::now())
+                    .as_millis()
+                    .clamp(1, u128::from(POLL_TIMEOUT_MILLIS)) as u16,
+            );
+        }
         let mut interests = Vec::new();
         let (outer, events) = {
             let mut fds = vec![PollFd::new(frontend.poll_fd(), outer_events)];
@@ -3876,8 +3969,9 @@ mod tests {
             .unwrap();
         assert!(output.is_empty());
 
-        // A missing placeholder changes the visible picture. It must use the
-        // normal clipped composition path instead of displaying hidden pixels.
+        // An incomplete rectangle must not queue a provisional composite while
+        // the child is still painting it. A stable sparse scene still falls
+        // back to the normal clipped composition after the quiet period.
         panes
             .active_mut()
             .process_output_with_image_store_sized(b"\x1b[2;3H ", &mut |_| {}, cell);
@@ -3887,6 +3981,23 @@ mod tests {
                 .raw_rgb_image_band(cell, ImageBand::AboveText)
                 .is_none()
         );
+        cache
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        assert_eq!(
+            output.drain(..).collect::<Vec<_>>(),
+            b"\x1b_Ga=d,d=I,i=2147483648,q=2\x1b\\"
+        );
+        assert!(!cache.pending_retry);
+        assert!(cache.next_deferred_retry().is_some());
+        cache.incomplete_virtual[0].last_change -= INCOMPLETE_VIRTUAL_QUIET;
+        cache
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        let fallback: Vec<_> = output.drain(..).collect();
+        assert!(fallback.windows(6).any(|window| window == b"\x1b_Ga=T"));
+        assert!(!cache.pending_retry);
+        assert!(cache.next_deferred_retry().is_none());
         panes.active_mut().process_output_with_image_store_sized(
             "\x1b[2;3H\u{10eeee}\u{0305}\u{030d}".as_bytes(),
             &mut |_| {},
