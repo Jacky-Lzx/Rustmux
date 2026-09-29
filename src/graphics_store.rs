@@ -966,18 +966,22 @@ impl ImageStore {
         if let Some(&cached) = self.decoded_dimensions.get(&image_id) {
             return cached;
         }
-        let decoded = self
-            .images
-            .get(&image_id)
-            .and_then(|image| image.decode_rgba().ok())
-            .map(|image| (image.width, image.height));
+        let decoded = self.images.get(&image_id).and_then(|image| {
+            // A placement needs dimensions, not a full RGBA raster. Only
+            // assembled plain raw data may use its declared dimensions;
+            // PNG and compressed raw data must pass complete validation.
+            image
+                .validated_assembled_dimensions()
+                .ok()?
+                .or_else(|| image.declared_width.zip(image.declared_height))
+        });
         self.decoded_dimensions.insert(image_id, decoded);
         decoded
     }
 
     /// Dimensions usable for a read-only layout preflight. Raw transfer sizes
     /// were checked by the assembler; PNG dimensions are trusted only after a
-    /// successful decode, never merely because the upload declared `s`/`v`.
+    /// successful validation, never merely because the upload declared `s`/`v`.
     pub(crate) fn known_image_dimensions(&self, image_id: u32) -> Option<(u32, u32)> {
         let image = self.images.get(&image_id)?;
         match image.format {
@@ -1680,6 +1684,11 @@ mod tests {
         );
         assert_eq!(image.decode_rgba().unwrap().pixels, [1, 2, 3, 4]);
         assert_eq!(image.validated_assembled_dimensions(), Ok(Some((1, 1))));
+
+        let mut store = ImageStore::new();
+        store.images.insert(1, image);
+        assert_eq!(store.image_dimensions(1), Some((1, 1)));
+        assert_eq!(store.known_image_dimensions(1), Some((1, 1)));
     }
 
     #[test]
@@ -2261,6 +2270,100 @@ mod tests {
             )
             .unwrap();
         assert_eq!(store.known_image_dimensions(2), Some((1, 1)));
+    }
+
+    #[test]
+    fn deferred_large_image_dimensions_support_regular_and_virtual_placements() {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        use flate2::{Compression, write::ZlibEncoder};
+        use std::io::Write;
+
+        let width = 3072;
+        let height = 3072;
+        let anchor = CellAnchor::default();
+        let cell = Some(CellPixelSize::new(16, 16).unwrap());
+        for format in [
+            ImageFormat::Png,
+            ImageFormat::RgbZlib,
+            ImageFormat::RgbaZlib,
+        ] {
+            let channels = if format == ImageFormat::RgbZlib { 3 } else { 4 };
+            let pixels = vec![0; width * height * channels];
+            let (controls, data) = if format == ImageFormat::Png {
+                let mut data = Vec::new();
+                {
+                    let mut encoder = png::Encoder::new(&mut data, width as u32, height as u32);
+                    encoder.set_color(png::ColorType::Rgba);
+                    encoder.set_depth(png::BitDepth::Eight);
+                    let mut writer = encoder.write_header().unwrap();
+                    writer.write_image_data(&pixels).unwrap();
+                    writer.finish().unwrap();
+                }
+                (format!("f=100,s={width},v={height}"), data)
+            } else {
+                let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+                encoder.write_all(&pixels).unwrap();
+                (
+                    format!("f={},o=z,s={width},v={height}", channels * 8),
+                    encoder.finish().unwrap(),
+                )
+            };
+            let upload = |data: &[u8]| {
+                let command = format!("\x1b_Ga=t,i=7,{controls};{}\x1b\\", STANDARD.encode(data));
+                transfer(command.as_bytes())
+            };
+            let mut store = ImageStore::new();
+            store.insert(upload(&data)).unwrap();
+            assert_eq!(store.get(7).unwrap().format, format);
+            assert_eq!(
+                store.get(7).unwrap().decode_rgba(),
+                Err(DecodeError::OutputLimit)
+            );
+            assert_eq!(store.known_image_dimensions(7), None);
+
+            // Regular placement infers extents without allocating the full
+            // source; a later virtual placement can reuse verified dimensions.
+            let (_, geometry) = store
+                .accept_control_for_pane(b"\x1b_Ga=p,i=7,p=1\x1b\\", anchor, cell, (24, 80))
+                .unwrap();
+            let geometry = geometry.unwrap();
+            assert_eq!((geometry.columns, geometry.rows), (Some(192), Some(192)));
+            assert_eq!(store.known_image_dimensions(7), Some((3072, 3072)));
+            store
+                .accept_control_for_pane(b"\x1b_Ga=p,i=7,p=2,U=1\x1b\\", anchor, cell, (24, 80))
+                .unwrap();
+            let layout = store.placements().last().unwrap().virtual_layout.unwrap();
+            assert_eq!((layout.columns, layout.rows), (192, 192));
+
+            // Replacing an image drops its cached dimensions. A corrupt tail
+            // cannot infer geometry from an otherwise valid header or s/v.
+            let mut corrupt = data.clone();
+            *corrupt.last_mut().unwrap() ^= 1;
+            store.insert(upload(&corrupt)).unwrap();
+            assert_eq!(store.known_image_dimensions(7), None);
+            let revision = store.revision();
+            assert_eq!(
+                store.accept_control_for_pane(
+                    b"\x1b_Ga=p,i=7,p=2,U=1\x1b\\",
+                    anchor,
+                    cell,
+                    (24, 80),
+                ),
+                Err(StoreError::InvalidPlacement)
+            );
+            assert_eq!(store.placements().count(), 0);
+            assert_eq!(store.revision(), revision);
+            assert_eq!(store.known_image_dimensions(7), None);
+
+            // A cached validation failure must also be cleared on replacement.
+            store.insert(upload(&data)).unwrap();
+            store
+                .accept_control_for_pane(b"\x1b_Ga=p,i=7,p=2,U=1\x1b\\", anchor, cell, (24, 80))
+                .unwrap();
+            assert_eq!(store.known_image_dimensions(7), Some((3072, 3072)));
+            let layout = store.placements().last().unwrap().virtual_layout.unwrap();
+            assert_eq!((layout.columns, layout.rows), (192, 192));
+        }
     }
 
     #[test]

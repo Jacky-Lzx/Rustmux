@@ -134,6 +134,13 @@ PNG dimensions are cached for sized placement inference, avoiding a second
 decode at insertion time. Raw transfers were already byte-count checked by the
 assembler. The public opt-in image-store methods retain their earlier
 deferred-decoding behavior for callers that only need the original bytes.
+When those callers later request inferred placement extents, dimension lookup
+uses the same complete streaming validation for PNG and compressed raw data,
+with the bounded interlaced-PNG fallback. This allows regular and virtual
+placements to infer dimensions even when full RGBA expansion exceeds 32 MiB.
+Plain raw data reuses its assembler-checked dimensions. Validation results are
+cached until the image is replaced or removed; a corrupt stream cannot supply
+dimensions from its header alone.
 
 The opt-in store now tracks placement *references* for `a=T` and a strict
 `a=p` subset with either `i=<id>` or `I=<number>`, and optional `p=<id>`.
