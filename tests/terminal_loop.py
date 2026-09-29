@@ -400,8 +400,10 @@ try:
         os.path.join(os.path.dirname(__file__), "kitty_child_id_range_delete.py")
     )
     s.send(f"python3 {child_id_range_delete}\n".encode())
+    # The outer renderer can split the first few cells of this marker across
+    # frames while Kitty image uploads are being painted beside it.
     deadline = time.monotonic() + 8
-    while b"CHILD_ID_RANGE_DELETE_OK" not in s.output:
+    while b"ID_RANGE_DELETE_OK" not in s.output:
         s.read()
         assert time.monotonic() < deadline, bytes(s.output[-1000:])
     s.output.clear()
