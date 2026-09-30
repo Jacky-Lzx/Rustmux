@@ -1,4 +1,6 @@
-//! Full-frame and changed-cell ANSI output. No event loop or output queue here.
+//! Full-frame and changed-cell ANSI output with bounded frame queuing.
+
+pub(crate) mod frame;
 
 use std::io::{self, Write};
 

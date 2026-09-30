@@ -3,6 +3,7 @@
 pub mod capability;
 pub mod composite;
 pub mod decode;
+pub(crate) mod outer;
 pub mod output;
 pub mod placeholder;
 pub(crate) mod reply;
