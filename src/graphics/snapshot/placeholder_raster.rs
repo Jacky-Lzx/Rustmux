@@ -1,7 +1,10 @@
 //! Rasterize virtual placements referenced by Unicode placeholder cells.
 //! Bounded and sparse source regions share snapshot validation and input budgets.
 
-use super::{SnapshotError, SnapshotState, rasterize_placement};
+use super::{
+    SnapshotError,
+    raster::{SnapshotState, rasterize_placement},
+};
 use crate::{
     graphics::{
         composite::{CompositeError, MAX_COMPOSITE_INPUT_BYTES},

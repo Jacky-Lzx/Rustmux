@@ -393,6 +393,14 @@ The returned canvas is transparent where no image is placed; the store is
 unchanged. It remains image-only; normal runtime rendering uses the separate
 stacking-band path.
 
+The private `graphics::snapshot::raster` module collects visible placement
+pixels before composition. It owns ordinary viewport sampling and scroll
+clipping, the shared dimension-validation cache and cumulative input budget,
+and invokes placeholder rasterization with that same state. The common
+full-placement helper retains streamed zlib and large-PNG sampling as well as
+bounded full decoding. `graphics::snapshot` keeps the existing snapshot and
+stacking-band entry points, viewport validation, and composition.
+
 `Pane::compose_image_planes` provides an alternate opt-in snapshot that keeps
 Kitty's three stacking bands separate: `z < -1073741824` is behind non-default
 cell backgrounds, `-1073741824 <= z < 0` is behind text but above backgrounds,
