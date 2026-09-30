@@ -36,7 +36,7 @@ with tempfile.TemporaryDirectory(prefix="rustmux-file-child-") as directory:
         b"\x1b_Gi=401,p=4;EINVAL:invalid image\x1b\\"
         b"\x1b_Gi=402;EBADF:Failed to read image file\x1b\\"
         b"\x1b_Gi=402;EBADF:Failed to read image file\x1b\\"
-        b"\x1b_Gi=402;EINVAL:unsupported medium\x1b\\"
+        b"\x1b_Gi=402;EINVAL:invalid image\x1b\\"
         b"\x1b_Gi=401,p=4;OK\x1b\\"
         b"\x1b[?1;0c"
     )

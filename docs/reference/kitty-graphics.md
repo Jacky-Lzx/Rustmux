@@ -52,8 +52,9 @@ without `S` uses its declared dimensions as the exact length, since macOS
 reports page-rounded shared-memory
 sizes. Shared-memory bytes then use the same image validation, storage and
 query rules as direct data. Compressed PNG over shared memory is not supported.
-The pane store also accepts regular-file transfers (`t=f`). The Base64 payload
-is a filesystem path; symlinks are resolved before opening, and only regular
+The pane store also accepts regular-file (`t=f`) and temporary-file (`t=t`)
+transfers. The Base64 payload is a filesystem path; symlinks are resolved before
+opening, and only regular
 files are read. The file is opened without blocking on a replaced FIFO and its
 descriptor type is checked again. `O` is the byte offset and optional positive
 `S` selects the stored byte count; without `S`, the rest of the file is read.
@@ -62,8 +63,17 @@ Zlib raw data retains the existing expanded-size bounds; zlib PNG expansion is
 separately bounded to 32 MiB. File bytes reuse the image-validation, query,
 storage and placement paths, and `t=f` never removes the source file.
 Read failures for both media use one `EBADF:Failed to read image file` reply.
-Temporary-file media (`t=t`) remain unsupported and receive
-`EINVAL:unsupported medium` when the request has a usable identity.
+For `t=t`, an opened regular file is cleaned up after reading, including range,
+read, decompression, and later image-validation failures. Cleanup requires the
+resolved path to contain `tty-graphics-protocol` and be under a recognized
+temporary directory (`TMPDIR`/the platform temporary directory, `/tmp`,
+`/var/tmp`, or `/dev/shm`). Directory membership uses path components rather
+than string prefixes. Final symlinks and their targets are retained; unmarked
+or out-of-directory files may still be read but are not removed. Malformed
+commands and files that were never opened are not removed. Cleanup pins the
+parent directory and checks the entry's device/inode before unlinking, retaining
+a replacement detected after reading. Cleanup failure does not turn a valid
+image transfer into a failure.
 Neither paths nor shared-memory names appear in replies;
 `q=2` and unidentifiable or incomplete requests stay silent.
 The chunk and continuation rules follow the
@@ -738,9 +748,13 @@ isolation and command-output filtering. Run `cargo test --lib graphics::tests`,
 unlinking after success or read failure, and malformed names.
 `cargo test --lib graphics::transfer::file::tests` covers file ranges, source
 retention, symlinks, special-file rejection, size limits, and compressed streams.
+It also covers temporary-file cleanup after failed reads, directory/marker
+eligibility, canonical path escapes, replacement inodes and renamed parents.
 The child-PTY graphics scenario checks file queries/uploads, reply ordering,
 failed replacement, uniform read errors, and quiet modes. The installed-kitten
-smoke also exercises `--transfer-mode=file` with Unicode placeholders.
+smoke also exercises `--transfer-mode=file` with Unicode placeholders, and a
+mirrored image that emits `t=t`; captured Kitten commands confirm that temporary
+transfers are used and their sources are removed while the input PNG is retained.
 `cargo test --lib graphics::command::tests` checks framing spellings, separator
 rules, malformed/duplicate fields, quiet validation, and independent size limits.
 `cargo test --lib graphics::geometry::tests` covers exact cell grids, source

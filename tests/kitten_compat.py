@@ -5,9 +5,11 @@ both with Unicode placeholders and with its default command, including a
 multi-chunk image. It does not require a GUI terminal or a home config.
 """
 
+import base64
 import fcntl
 import hashlib
 import os
+import re
 import shlex
 import shutil
 import struct
@@ -62,6 +64,7 @@ def run_case(
     terminal_size=(24, 80, 960, 480),
     timeout=20,
     verify_complete_tiles=False,
+    verify_temporary_transfer=False,
 ):
     config.mkdir()
     master, slave = os.openpty()
@@ -76,6 +79,10 @@ def run_case(
         BASH_ENV="",
         XDG_CONFIG_HOME=str(config),
     )
+    if verify_temporary_transfer:
+        temporary_directory = config / "temp"
+        temporary_directory.mkdir()
+        environment["TMPDIR"] = str(temporary_directory)
 
     def child_setup():
         os.setsid()
@@ -106,6 +113,12 @@ def run_case(
         )
         output.clear()
         command = f"{shlex.quote(kitten)} icat {options}{shlex.quote(str(image))}\n"
+        if verify_temporary_transfer:
+            # Capture the real kitten commands, then deliver them unchanged to
+            # the pane. This proves t=t was used and lets us check its sources.
+            captured = config / "child-graphics"
+            quoted = shlex.quote(str(captured))
+            command = command.rstrip("\n") + f" > {quoted} && cat {quoted}\n"
         os.write(master, command.encode())
         try:
             wait_for(
@@ -168,6 +181,20 @@ def run_case(
                 )
             else:
                 assert_fixture_pixels(width, height, pixels, expected_colors)
+        if verify_temporary_transfer:
+            wait_for(
+                master, output, lambda data: b"KITTEN_COMPAT_READY>" in data,
+                process, timeout, "shell prompt after temporary-file transfer",
+            )
+            sources = []
+            commands = re.findall(rb"\x1b_G([^;]*);(.*?)\x1b\\", captured.read_bytes(), re.DOTALL)
+            for controls, payload in commands:
+                if b"t=t" in controls.split(b","):
+                    padded = payload + b"=" * (-len(payload) % 4)
+                    sources.append(Path(os.fsdecode(base64.b64decode(padded, validate=True))))
+            assert sources, "kitten did not emit a t=t transfer"
+            assert all(not path.exists() for path in sources), "kitten temporary source was not removed"
+            assert not list(temporary_directory.iterdir()), "kitten left temporary files behind"
         print(f"PASS: installed kitten icat {label} composited")
     finally:
         os.close(master)
@@ -234,6 +261,17 @@ def main(binary, custom_image=None):
             FIRST_COLORS,
         )
         assert small.exists(), "regular-file transfer must retain its source"
+        run_case(
+            binary,
+            kitten,
+            small,
+            root / "temp-file-config",
+            "--transfer-mode=file --mirror=horizontal --unicode-placeholder --place=2x2@0x0 --stdin=no --image-id=49 ",
+            "temporary-file mirrored image",
+            {name: FIRST_COLORS[name] for name in ("green", "red", "white", "blue")},
+            verify_temporary_transfer=True,
+        )
+        assert small.exists(), "temporary transmission must retain the original input image"
         large = root / "multi-chunk.png"
         multichunk_png(large)
         run_case(
