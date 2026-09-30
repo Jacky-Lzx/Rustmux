@@ -1,9 +1,9 @@
 //! Bounded image data and placement references for one pane. Optional cell
 //! anchors are recorded, but no pixels are rendered here.
 
+use super::command::{Controls, parse_control_command};
 use crate::{
-    graphics::MAX_GRAPHICS_COMMAND_BYTES, graphics_decode::DecodeError,
-    graphics_transfer::AssembledDirectTransfer, screen::ScrollEvent,
+    graphics_decode::DecodeError, graphics_transfer::AssembledDirectTransfer, screen::ScrollEvent,
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -1421,48 +1421,6 @@ impl ImageStore {
     }
 }
 
-pub(crate) type Controls = BTreeMap<u8, Vec<u8>>;
-
-/// Parse control-only APCs identically for store mutation and child replies.
-pub(crate) fn parse_control_command(command: &[u8]) -> Option<Controls> {
-    if command.len() > MAX_GRAPHICS_COMMAND_BYTES {
-        return None;
-    }
-    let body = if let Some(bytes) = command.strip_prefix(b"\x1b_G") {
-        bytes.strip_suffix(b"\x1b\\")?
-    } else {
-        let bytes = command.strip_prefix(&[0x9f, b'G'])?;
-        bytes
-            .strip_suffix(&[0x9c])
-            .or_else(|| bytes.strip_suffix(b"\x1b\\"))?
-    };
-    let body = body.strip_suffix(b";").unwrap_or(body);
-    if body.is_empty() || body.contains(&b';') {
-        return None;
-    }
-    let mut controls = Controls::new();
-    for pair in body.split(|&byte| byte == b',') {
-        let equals = pair.iter().position(|&byte| byte == b'=')?;
-        let (key, with_equals) = pair.split_at(equals);
-        let value = &with_equals[1..];
-        if key.len() != 1
-            || !key[0].is_ascii_alphabetic()
-            || value.is_empty()
-            || !value.iter().all(u8::is_ascii_graphic)
-            || controls.insert(key[0], value.to_vec()).is_some()
-        {
-            return None;
-        }
-    }
-    if controls
-        .get(&b'q')
-        .is_some_and(|q| !matches!(q.as_slice(), b"0" | b"1" | b"2"))
-    {
-        return None;
-    }
-    Some(controls)
-}
-
 fn only_keys(controls: &Controls, allowed: &[u8]) -> bool {
     controls.keys().all(|key| allowed.contains(key))
 }
@@ -1661,7 +1619,7 @@ fn parse_geometry<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graphics_transfer::DirectTransferAssembler;
+    use crate::{graphics::MAX_GRAPHICS_COMMAND_BYTES, graphics_transfer::DirectTransferAssembler};
 
     fn transfer(command: &[u8]) -> AssembledDirectTransfer {
         DirectTransferAssembler::new().accept(command).unwrap()

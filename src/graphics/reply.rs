@@ -1,8 +1,9 @@
 //! Child-facing replies for completed Kitty graphics data commands.
 //! Query replies do not insert or replace an image.
 
+use super::command::parse_control_command;
 use crate::{
-    graphics_store::{ImageFormat, StoreError, StoredImage, parse_control_command},
+    graphics_store::{ImageFormat, StoreError, StoredImage},
     graphics_transfer::{AssembledDirectTransfer, unsupported_medium_controls},
 };
 

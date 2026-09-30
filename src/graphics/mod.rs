@@ -1,6 +1,7 @@
 //! Kitty graphics framing, storage, composition, and terminal output.
 
 pub mod capability;
+pub(crate) mod command;
 pub mod composite;
 pub mod decode;
 pub(crate) mod outer;

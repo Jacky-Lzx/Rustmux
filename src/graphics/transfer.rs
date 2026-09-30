@@ -3,21 +3,19 @@
 //! This is a data boundary, not an image decoder or a graphics capability
 //! implementation. Callers validate assembled blobs before display or replies.
 
-use crate::graphics::MAX_GRAPHICS_COMMAND_BYTES;
+use super::command::{Controls, parse_command, valid_quiet};
 use base64::{
     Engine as _,
     engine::general_purpose::{STANDARD, STANDARD_NO_PAD},
 };
 use flate2::bufread::ZlibDecoder;
 use nix::libc;
-use std::collections::BTreeMap;
 use std::ffi::CString;
 use std::fs::File;
 use std::io::Read;
 use std::os::fd::FromRawFd;
 
-/// Kitten icat's largest observed encoded chunk; larger APCs remain bounded.
-pub const MAX_ENCODED_CHUNK_BYTES: usize = 128 * 1024;
+pub use super::command::MAX_ENCODED_CHUNK_BYTES;
 /// Cap one in-progress image independently of its number of chunks.
 pub const MAX_DIRECT_TRANSFER_BYTES: usize = 16 * 1024 * 1024;
 /// PNG file bytes may use the pane's larger stored-image budget. Raw pixel
@@ -26,8 +24,6 @@ pub const MAX_DIRECT_PNG_TRANSFER_BYTES: usize = 32 * 1024 * 1024;
 /// Bound the declared expanded size of a compressed raw image. Such transfers
 /// remain compressed in the store and are decoded a row at a time.
 pub const MAX_STREAMED_RAW_BYTES: usize = 256 * 1024 * 1024;
-
-type Controls = BTreeMap<u8, Vec<u8>>;
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct AssembledDirectTransfer {
@@ -334,42 +330,6 @@ fn decode_base64(encoded: &[u8]) -> Option<Vec<u8>> {
     }
 }
 
-fn parse_command(command: &[u8]) -> Option<(Controls, &[u8])> {
-    if command.len() > MAX_GRAPHICS_COMMAND_BYTES {
-        return None;
-    }
-    let body = if let Some(bytes) = command.strip_prefix(b"\x1b_G") {
-        bytes.strip_suffix(b"\x1b\\")?
-    } else {
-        let bytes = command.strip_prefix(&[0x9f, b'G'])?;
-        bytes
-            .strip_suffix(&[0x9c])
-            .or_else(|| bytes.strip_suffix(b"\x1b\\"))?
-    };
-    let separator = body.iter().position(|&byte| byte == b';')?;
-    let encoded = &body[separator + 1..];
-    if encoded.len() > MAX_ENCODED_CHUNK_BYTES {
-        return None;
-    }
-    let mut controls = Controls::new();
-    if separator > 0 {
-        for pair in body[..separator].split(|&byte| byte == b',') {
-            let equals = pair.iter().position(|&byte| byte == b'=')?;
-            let (key, with_equals) = pair.split_at(equals);
-            let value = &with_equals[1..];
-            if key.len() != 1
-                || !key[0].is_ascii_alphabetic()
-                || value.is_empty()
-                || !value.iter().all(u8::is_ascii_graphic)
-                || controls.insert(key[0], value.to_vec()).is_some()
-            {
-                return None;
-            }
-        }
-    }
-    Some((controls, encoded))
-}
-
 /// Recognize a complete non-direct transfer for a child-facing error reply.
 /// This validates only framing and metadata; the decoded path/name is never
 /// opened or otherwise inspected. Incomplete chunks and malformed commands
@@ -435,13 +395,6 @@ fn valid_first(controls: &Controls) -> bool {
         && controls
             .get(&b'I')
             .is_none_or(|value| parse_decimal(value).is_some())
-}
-
-fn valid_quiet(controls: &Controls) -> bool {
-    matches!(
-        controls.get(&b'q').map(Vec::as_slice),
-        None | Some(b"0" | b"1" | b"2")
-    )
 }
 
 fn parse_positive(value: &[u8]) -> Option<u32> {

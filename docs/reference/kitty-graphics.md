@@ -13,6 +13,13 @@ incorrectly terminated or unfinished graphics command is discarded without expos
 payload as terminal text. The framer does not concatenate separate Kitty
 transfer chunks; each APC is one event.
 
+The crate-private `graphics::command` module shares complete-command framing
+and control-field parsing between the assembler, store, and child replies.
+Data commands require a semicolon separating controls from payload; control-only
+commands allow one trailing semicolon but no payload. Duplicate fields and
+malformed keys or values are rejected. Action, format, identity, and geometry
+validation remain with the corresponding consumers.
+
 `DirectTransferAssembler` is the next, separate data boundary. It parses
 complete APC G commands, decodes Base64 direct-data chunks, and combines them
 until the final chunk (`m=0` or an omitted `m`). Subsequent chunks may contain
@@ -650,6 +657,8 @@ reaching the validated pane store, unsupported media and recovery. Pane tests
 cover interleaved text, per-pane
 isolation and command-output filtering. Run `cargo test --lib graphics::tests`,
 `cargo test --lib graphics::transfer::tests` and `cargo test --test panes`.
+`cargo test --lib graphics::command::tests` checks framing spellings, separator
+rules, malformed/duplicate fields, quiet validation, and independent size limits.
 `cargo test --lib graphics::outer::tests` covers crop/encoding decisions, cache
 reuse, frame-budget retries, stacking bands, and image/placement cleanup.
 Store tests also cover replacement, isolation, transient/unplaced quota eviction,
