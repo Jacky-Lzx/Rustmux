@@ -5,13 +5,14 @@ mod placement;
 mod png_reader;
 mod raw_reader;
 mod sampling;
+mod stream_placement;
 
 pub(crate) use placement::visible_placement_region;
 pub use placement::{ClipError, ClippedPlacement, ResampleError, ResampledPlacement};
+pub use stream_placement::{StreamPngError, StreamZlibError};
 
-use self::png_reader::{decode_png, decode_png_regions, decode_png_sampled, decode_png_thumbnail};
-use self::raw_reader::{decode_raw, decode_zlib_regions, decode_zlib_sampled};
-use super::geometry::{PixelRect, PlacementPixelLayout};
+use self::png_reader::{decode_png, decode_png_sampled, decode_png_thumbnail};
+use self::raw_reader::{decode_raw, decode_zlib_sampled};
 use crate::graphics_store::{ImageFormat, StoredImage};
 
 pub const MAX_DECODED_IMAGE_BYTES: usize = 32 * 1024 * 1024;
@@ -23,18 +24,6 @@ pub struct DecodedImage {
     pub height: u32,
     /// Row-major, eight-bit RGBA pixels.
     pub pixels: Vec<u8>,
-}
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub enum StreamPngError {
-    Decode(DecodeError),
-    Resample(ResampleError),
-}
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub enum StreamZlibError {
-    Decode(DecodeError),
-    Resample(ResampleError),
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -98,243 +87,6 @@ impl StoredImage {
         decode_zlib_sampled(self, 1, 1, None, None)?;
         Ok((width, height))
     }
-
-    /// Sample a source crop of a compressed raw image into bounded placement
-    /// pixels while expanding only one source row at a time.
-    pub fn resample_zlib_placement(
-        &self,
-        layout: PlacementPixelLayout,
-    ) -> Result<ResampledPlacement, StreamZlibError> {
-        if !matches!(self.format, ImageFormat::RgbZlib | ImageFormat::RgbaZlib) {
-            return Err(StreamZlibError::Decode(DecodeError::UnsupportedFormat));
-        }
-        if !valid_stream_layout(layout) {
-            return Err(StreamZlibError::Resample(ResampleError::InvalidLayout));
-        }
-        let image = decode_zlib_sampled(
-            self,
-            layout.destination.width,
-            layout.destination.height,
-            Some(layout.source),
-            None,
-        )
-        .map_err(StreamZlibError::Decode)?;
-        Ok(ResampledPlacement {
-            destination: layout.destination,
-            pixels: image.pixels,
-        })
-    }
-
-    /// Sample only a visible subrectangle of the full destination. Sampling
-    /// coordinates still refer to the original destination so clipping does
-    /// not change nearest-neighbor pixel selection.
-    pub fn resample_zlib_placement_region(
-        &self,
-        layout: PlacementPixelLayout,
-        region: PixelRect,
-    ) -> Result<ResampledPlacement, StreamZlibError> {
-        if !matches!(self.format, ImageFormat::RgbZlib | ImageFormat::RgbaZlib) {
-            return Err(StreamZlibError::Decode(DecodeError::UnsupportedFormat));
-        }
-        if !valid_stream_layout(layout) {
-            return Err(StreamZlibError::Resample(ResampleError::InvalidLayout));
-        }
-        let relative = PixelRect {
-            x: region
-                .x
-                .checked_sub(layout.destination.x)
-                .ok_or(StreamZlibError::Resample(ResampleError::InvalidLayout))?,
-            y: region
-                .y
-                .checked_sub(layout.destination.y)
-                .ok_or(StreamZlibError::Resample(ResampleError::InvalidLayout))?,
-            width: region.width,
-            height: region.height,
-        };
-        let image = decode_zlib_sampled(
-            self,
-            layout.destination.width,
-            layout.destination.height,
-            Some(layout.source),
-            Some(relative),
-        )
-        .map_err(StreamZlibError::Decode)?;
-        Ok(ResampledPlacement {
-            destination: region,
-            pixels: image.pixels,
-        })
-    }
-
-    /// Sample disjoint destination rectangles during one complete zlib pass.
-    /// The aggregate RGBA output, rather than their enclosing box, is bounded.
-    pub(crate) fn resample_zlib_placement_regions(
-        &self,
-        layout: PlacementPixelLayout,
-        regions: &[PixelRect],
-    ) -> Result<Vec<ResampledPlacement>, StreamZlibError> {
-        if !matches!(self.format, ImageFormat::RgbZlib | ImageFormat::RgbaZlib) {
-            return Err(StreamZlibError::Decode(DecodeError::UnsupportedFormat));
-        }
-        if !valid_stream_layout(layout) {
-            return Err(StreamZlibError::Resample(ResampleError::InvalidLayout));
-        }
-        let relative: Vec<_> = regions
-            .iter()
-            .map(|region| {
-                Some(PixelRect {
-                    x: region.x.checked_sub(layout.destination.x)?,
-                    y: region.y.checked_sub(layout.destination.y)?,
-                    width: region.width,
-                    height: region.height,
-                })
-            })
-            .collect::<Option<_>>()
-            .ok_or(StreamZlibError::Resample(ResampleError::InvalidLayout))?;
-        let images = decode_zlib_regions(
-            self,
-            layout.destination.width,
-            layout.destination.height,
-            Some(layout.source),
-            &relative,
-        )
-        .map_err(StreamZlibError::Decode)?;
-        Ok(regions
-            .iter()
-            .copied()
-            .zip(images)
-            .map(|(destination, image)| ResampledPlacement {
-                destination,
-                pixels: image.pixels,
-            })
-            .collect())
-    }
-
-    /// Decode and scale a PNG source crop directly into a placement without
-    /// materializing the full RGBA source. The layout must use dimensions
-    /// obtained from this image's validated PNG metadata.
-    pub fn resample_png_placement(
-        &self,
-        layout: PlacementPixelLayout,
-    ) -> Result<ResampledPlacement, StreamPngError> {
-        if self.format != ImageFormat::Png {
-            return Err(StreamPngError::Decode(DecodeError::UnsupportedPng));
-        }
-        if !valid_stream_layout(layout) {
-            return Err(StreamPngError::Resample(ResampleError::InvalidLayout));
-        }
-        let (_, image) = decode_png_sampled(
-            self,
-            layout.destination.width,
-            layout.destination.height,
-            Some(layout.source),
-            None,
-        )
-        .map_err(StreamPngError::Decode)?;
-        Ok(ResampledPlacement {
-            destination: layout.destination,
-            pixels: image.pixels,
-        })
-    }
-
-    /// Sample only a visible rectangle of the full PNG destination while
-    /// retaining the original pixel-center coordinates for nearest sampling.
-    pub fn resample_png_placement_region(
-        &self,
-        layout: PlacementPixelLayout,
-        region: PixelRect,
-    ) -> Result<ResampledPlacement, StreamPngError> {
-        if self.format != ImageFormat::Png {
-            return Err(StreamPngError::Decode(DecodeError::UnsupportedPng));
-        }
-        if !valid_stream_layout(layout) {
-            return Err(StreamPngError::Resample(ResampleError::InvalidLayout));
-        }
-        let relative = PixelRect {
-            x: region
-                .x
-                .checked_sub(layout.destination.x)
-                .ok_or(StreamPngError::Resample(ResampleError::InvalidLayout))?,
-            y: region
-                .y
-                .checked_sub(layout.destination.y)
-                .ok_or(StreamPngError::Resample(ResampleError::InvalidLayout))?,
-            width: region.width,
-            height: region.height,
-        };
-        let (_, image) = decode_png_sampled(
-            self,
-            layout.destination.width,
-            layout.destination.height,
-            Some(layout.source),
-            Some(relative),
-        )
-        .map_err(StreamPngError::Decode)?;
-        Ok(ResampledPlacement {
-            destination: region,
-            pixels: image.pixels,
-        })
-    }
-
-    /// Sample disjoint PNG destination rectangles in a single row-decoder
-    /// pass, with an aggregate RGBA output bound and complete tail validation.
-    pub(crate) fn resample_png_placement_regions(
-        &self,
-        layout: PlacementPixelLayout,
-        regions: &[PixelRect],
-    ) -> Result<Vec<ResampledPlacement>, StreamPngError> {
-        if self.format != ImageFormat::Png {
-            return Err(StreamPngError::Decode(DecodeError::UnsupportedPng));
-        }
-        if !valid_stream_layout(layout) {
-            return Err(StreamPngError::Resample(ResampleError::InvalidLayout));
-        }
-        let relative: Vec<_> = regions
-            .iter()
-            .map(|region| {
-                Some(PixelRect {
-                    x: region.x.checked_sub(layout.destination.x)?,
-                    y: region.y.checked_sub(layout.destination.y)?,
-                    width: region.width,
-                    height: region.height,
-                })
-            })
-            .collect::<Option<_>>()
-            .ok_or(StreamPngError::Resample(ResampleError::InvalidLayout))?;
-        let (_, images) = decode_png_regions(
-            self,
-            layout.destination.width,
-            layout.destination.height,
-            Some(layout.source),
-            &relative,
-        )
-        .map_err(StreamPngError::Decode)?;
-        Ok(regions
-            .iter()
-            .copied()
-            .zip(images)
-            .map(|(destination, image)| ResampledPlacement {
-                destination,
-                pixels: image.pixels,
-            })
-            .collect())
-    }
-}
-
-fn valid_stream_layout(layout: PlacementPixelLayout) -> bool {
-    layout.source.width != 0
-        && layout.source.height != 0
-        && layout.destination.width != 0
-        && layout.destination.height != 0
-        && layout
-            .destination
-            .x
-            .checked_add(layout.destination.width)
-            .is_some()
-        && layout
-            .destination
-            .y
-            .checked_add(layout.destination.height)
-            .is_some()
 }
 
 fn decoded_size(width: u32, height: u32) -> Result<usize, DecodeError> {
@@ -357,7 +109,8 @@ mod tests {
     use super::sampling::MAX_SAMPLED_REGIONS;
     use super::*;
     use crate::{
-        graphics::geometry::PixelSize, graphics_store::ImageStore,
+        graphics::geometry::{PixelRect, PixelSize, PlacementPixelLayout},
+        graphics_store::ImageStore,
         graphics_transfer::DirectTransferAssembler,
     };
     use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -391,6 +144,194 @@ mod tests {
         let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
         encoder.write_all(bytes).unwrap();
         encoder.finish().unwrap()
+    }
+
+    #[test]
+    fn streamed_regions_preserve_coordinates_and_error_classification() {
+        let rgba = [1, 0, 0, 10, 2, 0, 0, 20, 3, 0, 0, 30, 4, 0, 0, 40];
+        let mut data = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut data, 2, 2);
+            encoder.set_color(ColorType::Rgba);
+            encoder.set_depth(BitDepth::Eight);
+            let mut writer = encoder.write_header().unwrap();
+            writer.write_image_data(&rgba).unwrap();
+            writer.finish().unwrap();
+        }
+        let png = stored("f=100,i=1", &data);
+        let zlib = StoredImage {
+            format: ImageFormat::RgbaZlib,
+            data: zlib_bytes(&rgba),
+            declared_width: Some(2),
+            declared_height: Some(2),
+        };
+        let layout = PlacementPixelLayout {
+            source: PixelRect {
+                x: 0,
+                y: 0,
+                width: 2,
+                height: 2,
+            },
+            cell_bounds: PixelSize {
+                width: 2,
+                height: 2,
+            },
+            destination: PixelRect {
+                x: 10,
+                y: 20,
+                width: 2,
+                height: 2,
+            },
+        };
+        let regions = [
+            PixelRect {
+                x: 11,
+                y: 21,
+                width: 1,
+                height: 1,
+            },
+            PixelRect {
+                x: 10,
+                y: 20,
+                width: 1,
+                height: 1,
+            },
+        ];
+        let expected = vec![
+            ResampledPlacement {
+                destination: regions[0],
+                pixels: rgba[12..16].to_vec(),
+            },
+            ResampledPlacement {
+                destination: regions[1],
+                pixels: rgba[..4].to_vec(),
+            },
+        ];
+        assert_eq!(
+            png.resample_png_placement_regions(layout, &regions),
+            Ok(expected)
+        );
+        assert_eq!(
+            zlib.resample_zlib_placement_regions(layout, &regions)
+                .unwrap(),
+            png.resample_png_placement_regions(layout, &regions)
+                .unwrap()
+        );
+        for (region, origin_invalid) in [
+            (PixelRect { x: 9, ..regions[0] }, true),
+            (
+                PixelRect {
+                    y: 19,
+                    ..regions[0]
+                },
+                true,
+            ),
+            (
+                PixelRect {
+                    x: 12,
+                    ..regions[0]
+                },
+                false,
+            ),
+            (
+                PixelRect {
+                    width: 0,
+                    ..regions[0]
+                },
+                false,
+            ),
+        ] {
+            let png_error = if origin_invalid {
+                StreamPngError::Resample(ResampleError::InvalidLayout)
+            } else {
+                StreamPngError::Decode(DecodeError::InvalidDimensions)
+            };
+            let zlib_error = if origin_invalid {
+                StreamZlibError::Resample(ResampleError::InvalidLayout)
+            } else {
+                StreamZlibError::Decode(DecodeError::InvalidDimensions)
+            };
+            assert_eq!(
+                png.resample_png_placement_region(layout, region),
+                Err(png_error)
+            );
+            assert_eq!(
+                png.resample_png_placement_regions(layout, &[region]),
+                Err(png_error)
+            );
+            assert_eq!(
+                zlib.resample_zlib_placement_region(layout, region),
+                Err(zlib_error)
+            );
+            assert_eq!(
+                zlib.resample_zlib_placement_regions(layout, &[region]),
+                Err(zlib_error)
+            );
+        }
+        let invalid_layout = PlacementPixelLayout {
+            destination: PixelRect {
+                x: u32::MAX,
+                ..layout.destination
+            },
+            ..layout
+        };
+        assert_eq!(
+            png.resample_png_placement(invalid_layout),
+            Err(StreamPngError::Resample(ResampleError::InvalidLayout))
+        );
+        assert_eq!(
+            zlib.resample_zlib_placement(invalid_layout),
+            Err(StreamZlibError::Resample(ResampleError::InvalidLayout))
+        );
+        assert_eq!(
+            png.resample_zlib_placement(invalid_layout),
+            Err(StreamZlibError::Decode(DecodeError::UnsupportedFormat))
+        );
+        assert_eq!(
+            zlib.resample_png_placement(invalid_layout),
+            Err(StreamPngError::Decode(DecodeError::UnsupportedPng))
+        );
+    }
+
+    #[test]
+    fn empty_streamed_regions_still_validate_complete_source() {
+        let rgba = [3, 5, 7, 9];
+        let mut png = stored("f=100,i=1", &png_bytes(ColorType::Rgba, &rgba));
+        let mut zlib = StoredImage {
+            format: ImageFormat::RgbaZlib,
+            data: zlib_bytes(&rgba),
+            declared_width: Some(1),
+            declared_height: Some(1),
+        };
+        let rect = PixelRect {
+            x: 0,
+            y: 0,
+            width: 1,
+            height: 1,
+        };
+        let layout = PlacementPixelLayout {
+            source: rect,
+            cell_bounds: PixelSize {
+                width: 1,
+                height: 1,
+            },
+            destination: rect,
+        };
+        assert_eq!(png.resample_png_placement_regions(layout, &[]), Ok(vec![]));
+        assert_eq!(
+            zlib.resample_zlib_placement_regions(layout, &[]),
+            Ok(vec![])
+        );
+        *png.data.last_mut().unwrap() ^= 1;
+        *zlib.data.last_mut().unwrap() ^= 1;
+        assert_eq!(
+            png.resample_png_placement_regions(layout, &[]),
+            Err(StreamPngError::Decode(DecodeError::InvalidData))
+        );
+        assert_eq!(
+            zlib.resample_zlib_placement_regions(layout, &[]),
+            Err(StreamZlibError::Decode(DecodeError::InvalidData))
+        );
     }
 
     #[test]

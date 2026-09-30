@@ -164,6 +164,12 @@ coordinates, sparse row scheduling, row-to-RGBA conversion, and bounded output
 allocation. PNG and zlib readers retain their source-bound checks and complete
 stream validation. Decoded RGBA placement sampling uses the same pixel-center
 coordinate function.
+The private `graphics::decode::stream_placement` module coordinates PNG and
+zlib placement requests, sharing destination-relative region conversion and
+result wrapping. Existing `StoredImage::resample_*` methods and stream error
+type paths remain available. Format checks still precede layout checks, region
+results retain request order and destination coordinates, and empty region
+requests still validate the complete source stream.
 An optional local-file check is
 `RUSTMUX_COMPAT_IMAGE=/absolute/path/to/image.png cargo test --lib user_png_streams_to_thumbnail -- --ignored`.
 
@@ -715,6 +721,8 @@ cover all four clipped edges,
 negative and disjoint anchors, malformed buffers, and oversized geometry.
 `cargo test --lib graphics::decode::sampling::tests` checks incremental sample
 coordinates at extreme source and destination extents.
+`cargo test --lib streamed_regions` covers offset region coordinates, existing
+error classification, and complete-source validation for empty requests.
 Runtime upload tests cover atomic rejection of corrupt PNG replacements and
 acceptance of valid PNG with inferred placement extent.
 Scroll-clip tests verify top/bottom pixel rows and a pane-driven margin scroll.
