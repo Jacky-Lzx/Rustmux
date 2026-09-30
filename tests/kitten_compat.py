@@ -224,6 +224,16 @@ def main(binary, custom_image=None):
             "automatic-size Unicode-placeholder PNG",
             FIRST_COLORS,
         )
+        run_case(
+            binary,
+            kitten,
+            small,
+            root / "file-config",
+            "--transfer-mode=file --unicode-placeholder --place=2x2@0x0 --stdin=no --image-id=48 ",
+            "file-transfer Unicode-placeholder PNG",
+            FIRST_COLORS,
+        )
+        assert small.exists(), "regular-file transfer must retain its source"
         large = root / "multi-chunk.png"
         multichunk_png(large)
         run_case(

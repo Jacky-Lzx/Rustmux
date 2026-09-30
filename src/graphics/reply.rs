@@ -7,16 +7,16 @@ use crate::{
     graphics_transfer::{AssembledDirectTransfer, unsupported_medium_controls},
 };
 
-/// A recognizable file or temporary-file request can be rejected promptly so
+/// A recognizable unsupported medium can be rejected promptly so
 /// a child may retry using direct data. Never access its path or disclose
 /// whether it exists. Commands without a usable identity stay silent.
 pub(crate) fn unsupported_medium_reply(command: &[u8], can_display: bool) -> Option<Vec<u8>> {
     medium_error_reply(command, can_display, "EINVAL:unsupported medium")
 }
 
-/// All shared-memory read failures use the same child-visible message. This
-/// prevents a child from using replies to probe the local SHM namespace.
-pub(crate) fn shared_memory_read_error_reply(command: &[u8], can_display: bool) -> Option<Vec<u8>> {
+/// File and shared-memory read failures use the same child-visible message,
+/// without exposing paths, names, or the reason for an I/O failure.
+pub(crate) fn medium_read_error_reply(command: &[u8], can_display: bool) -> Option<Vec<u8>> {
     medium_error_reply(command, can_display, "EBADF:Failed to read image file")
 }
 

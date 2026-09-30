@@ -39,7 +39,7 @@ declared expansion exceeds 16 MiB is kept compressed and validated a
 row at a time, up to 256 MiB expanded and a 32 MiB row budget; smaller raw
 transfers retain the 16 MiB expansion limit, while compressed PNG file bytes
 may expand to 32 MiB. Raw RGB/RGBA output must match its dimensions, and
-compressed PNG requires
+compressed direct PNG requires
 `S=<uncompressed-byte-count>`. Malformed streams, mismatched sizes,
 and trailing compressed bytes are discarded before they can replace an image.
 The private `graphics::transfer::shared_memory` module owns POSIX shared-memory
@@ -52,10 +52,19 @@ without `S` uses its declared dimensions as the exact length, since macOS
 reports page-rounded shared-memory
 sizes. Shared-memory bytes then use the same image validation, storage and
 query rules as direct data. Compressed PNG over shared memory is not supported.
-Read failures use one `EBADF:Failed to read image file` reply so the child
-cannot probe whether a name exists. File and temporary-file media remain
-unsupported and receive `EINVAL:unsupported medium` when the request has a
-usable identity. Neither paths nor shared-memory names appear in replies;
+The pane store also accepts regular-file transfers (`t=f`). The Base64 payload
+is a filesystem path; symlinks are resolved before opening, and only regular
+files are read. The file is opened without blocking on a replaced FIFO and its
+descriptor type is checked again. `O` is the byte offset and optional positive
+`S` selects the stored byte count; without `S`, the rest of the file is read.
+Reads are bounded to 16 MiB for raw/compressed-raw data and 32 MiB for PNG data.
+Zlib raw data retains the existing expanded-size bounds; zlib PNG expansion is
+separately bounded to 32 MiB. File bytes reuse the image-validation, query,
+storage and placement paths, and `t=f` never removes the source file.
+Read failures for both media use one `EBADF:Failed to read image file` reply.
+Temporary-file media (`t=t`) remain unsupported and receive
+`EINVAL:unsupported medium` when the request has a usable identity.
+Neither paths nor shared-memory names appear in replies;
 `q=2` and unidentifiable or incomplete requests stay silent.
 The chunk and continuation rules follow the
 [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
@@ -679,8 +688,8 @@ Completed transfers with invalid image data or unsupported controls
 receive a bounded error reply; `q=1` suppresses success and `q=2` suppresses
 all replies. A query never inserts or replaces an image. Without confirmed
 display support, or while detached, Rustmux stays silent on graphics queries;
-a following DA reply still reaches the child. File reads, malformed transfers
-and image-number references in queries remain unsupported. Shared-memory
+a following DA reply still reaches the child. Malformed transfers
+and image-number references in queries remain unsupported. File and shared-memory
 queries are answered only after their bytes and image have been validated.
 Numbered deletes use `d=n/N` as described above. Under the same attachment and
 sizing conditions, a completed direct-data `a=t` upload with an explicit
@@ -727,6 +736,11 @@ isolation and command-output filtering. Run `cargo test --lib graphics::tests`,
 `cargo test --lib graphics::transfer::tests` and `cargo test --test panes`.
 `cargo test --lib graphics::transfer::shared_memory::tests` covers bounded reads,
 unlinking after success or read failure, and malformed names.
+`cargo test --lib graphics::transfer::file::tests` covers file ranges, source
+retention, symlinks, special-file rejection, size limits, and compressed streams.
+The child-PTY graphics scenario checks file queries/uploads, reply ordering,
+failed replacement, uniform read errors, and quiet modes. The installed-kitten
+smoke also exercises `--transfer-mode=file` with Unicode placeholders.
 `cargo test --lib graphics::command::tests` checks framing spellings, separator
 rules, malformed/duplicate fields, quiet validation, and independent size limits.
 `cargo test --lib graphics::geometry::tests` covers exact cell grids, source

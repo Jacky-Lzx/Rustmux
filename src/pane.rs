@@ -656,11 +656,12 @@ impl Pane {
                         let transfer =
                             self.graphics_transfer.accept(&command).map(Ok).or_else(|| {
                                 crate::graphics_transfer::shared_memory_transfer(&command)
+                                    .or_else(|| crate::graphics_transfer::file_transfer(&command))
                             });
                         let transfer = match transfer {
                             Some(Err(())) => {
                                 if let Some(response) =
-                                    crate::graphics_reply::shared_memory_read_error_reply(
+                                    crate::graphics_reply::medium_read_error_reply(
                                         &command,
                                         *answer_graphics,
                                     )
@@ -923,6 +924,77 @@ mod io_tests {
     }
 
     #[test]
+    fn runtime_file_query_upload_and_failed_replacement_preserve_state() {
+        use std::{io::Write, os::unix::ffi::OsStrExt};
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(&[4, 5, 6]).unwrap();
+        let name = STANDARD.encode(file.path().as_os_str().as_bytes());
+        let mut pane = Pane::spawn("/bin/sh", 4, 4).unwrap();
+        let cell = CellPixelSize::new(1, 1).unwrap();
+        let mut replies = Vec::new();
+        let mut send = |pane: &mut Pane, controls: &str| {
+            let command = format!("\x1b_G{controls};{name}\x1b\\\x1b[c");
+            pane.process_output_for_runtime(
+                command.as_bytes(),
+                &mut |reply| replies.extend_from_slice(reply),
+                Some(cell),
+                true,
+            );
+            std::mem::take(&mut replies)
+        };
+        assert_eq!(
+            send(&mut pane, "a=q,t=f,i=31,f=24,s=1,v=1"),
+            b"\x1b_Gi=31;OK\x1b\\\x1b[?1;0c"
+        );
+        assert!(pane.image_store().is_empty());
+        assert_eq!(
+            send(&mut pane, "a=T,t=f,i=31,p=9,f=24,s=1,v=1,C=1"),
+            b"\x1b_Gi=31,p=9;OK\x1b\\\x1b[?1;0c"
+        );
+        assert_eq!(pane.image_store().get(31).unwrap().data, [4, 5, 6]);
+        assert_eq!(
+            pane.compose_image_snapshot(cell).unwrap().pixels[..4],
+            [4, 5, 6, 255]
+        );
+        let revision = pane.image_store().revision();
+        let cursor = pane.screen().cursor();
+        std::fs::write(file.path(), [7, 8, 9]).unwrap();
+        assert_eq!(
+            send(&mut pane, "a=q,t=f,i=31,f=24,s=1,v=1,q=1"),
+            b"\x1b[?1;0c"
+        );
+        assert_eq!(pane.image_store().get(31).unwrap().data, [4, 5, 6]);
+        assert_eq!(pane.image_store().revision(), revision);
+        // Read failure, invalid image and invalid placement all leave the
+        // previous image, references and cursor intact.
+        for (controls, expected) in [
+            (
+                "a=T,t=f,i=31,p=9,f=24,s=1,v=1,S=4",
+                "EBADF:Failed to read image file",
+            ),
+            ("a=T,t=f,i=31,p=9,f=100", "EINVAL:invalid image"),
+            (
+                "a=T,t=f,i=31,p=9,f=24,s=1,v=1,X=1",
+                "EINVAL:invalid placement",
+            ),
+        ] {
+            assert_eq!(
+                send(&mut pane, controls),
+                format!("\x1b_Gi=31,p=9;{expected}\x1b\\\x1b[?1;0c").as_bytes()
+            );
+            assert_eq!(pane.image_store().get(31).unwrap().data, [4, 5, 6]);
+            assert_eq!(pane.image_store().revision(), revision);
+            assert_eq!(pane.screen().cursor(), cursor);
+            assert_eq!(pane.image_store().placements().count(), 1);
+        }
+        assert_eq!(
+            send(&mut pane, "a=T,t=f,i=31,p=9,f=24,s=1,v=1,S=4,q=2"),
+            b"\x1b[?1;0c"
+        );
+        assert!(file.path().exists());
+    }
+
+    #[test]
     fn runtime_transmit_and_place_ack_follows_final_chunk_and_store_result() {
         let mut pane = Pane::spawn("/bin/sh", 4, 4).unwrap();
         let cell = CellPixelSize::new(1, 1).unwrap();
@@ -1010,7 +1082,7 @@ mod io_tests {
     }
 
     #[test]
-    fn runtime_rejects_unsupported_media_without_reading_or_mutating() {
+    fn runtime_rejects_unreadable_media_without_mutating() {
         let mut pane = Pane::spawn("/bin/sh", 4, 4).unwrap();
         let cell = CellPixelSize::new(1, 1).unwrap();
         let mut replies = Vec::new();
@@ -1029,7 +1101,7 @@ mod io_tests {
         );
         assert_eq!(
             replies,
-            b"\x1b_Gi=7,p=2;EINVAL:unsupported medium\x1b\\\x1b[?1;0c"
+            b"\x1b_Gi=7,p=2;EBADF:Failed to read image file\x1b\\\x1b[?1;0c"
         );
         assert_eq!(pane.image_store().revision(), revision);
         assert_eq!(pane.image_store().get(7).unwrap().data, [1, 2, 3, 4]);

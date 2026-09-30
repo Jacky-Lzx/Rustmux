@@ -3,8 +3,10 @@
 //! This is a data boundary, not an image decoder or a graphics capability
 //! implementation. Callers validate assembled blobs before display or replies.
 
+mod file;
 mod shared_memory;
 
+pub(crate) use file::file_transfer;
 pub(crate) use shared_memory::shared_memory_transfer;
 
 use super::command::{Controls, parse_command, valid_quiet};

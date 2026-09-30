@@ -91,6 +91,9 @@ try:
     s.send(f"python3 {child_query}\n".encode())
     expected_replies = b"\x1b_Gi=41;OK\x1b\\\x1b[?1;0c"
     s.expect(b"CHILD_GRAPHICS_REPLY:" + expected_replies.hex().encode())
+    child_file = shlex.quote(os.path.join(os.path.dirname(__file__), "kitty_child_file.py"))
+    s.send(f"python3 {child_file}\n".encode())
+    s.expect(b"CHILD_FILE_TRANSFER_OK")
     child_upload = shlex.quote(os.path.join(os.path.dirname(__file__), "kitty_child_upload.py"))
     s.send(f"python3 {child_upload}\n".encode())
     s.expect(b"CHILD_UPLOAD_REPLIES_OK")
