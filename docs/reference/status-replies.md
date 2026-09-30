@@ -59,17 +59,25 @@ and numeric overflow produce no reply. CSI-like bytes inside OSC/DCS payloads
 are not interpreted.
 
 OSC 10, 11 and 12 report Rustmux's current pane foreground, background and cursor
-colors. Their initial values are Catppuccin Mocha text `rgb:cdcd/d6d6/f4f4`, base
-`rgb:1e1e/1e1e/2e2e` and rosewater `rgb:f5f5/e0e0/dcdc`. Pane cells using SGR
+colors. At each foreground startup or named-session attachment, Rustmux queries
+the outer terminal's 256 palette entries and its foreground, background and
+cursor colors. These inherited values are shared by existing and newly created
+panes. Discovery precedes the first frame and child color-query replies, uses
+the graphics probe's existing primary-DA barrier, and falls back after at most
+500 ms once requests are sent. Missing or malformed replies retain the built-in
+XTerm palette and Catppuccin Mocha text `rgb:cdcd/d6d6/f4f4`, base
+`rgb:1e1e/1e1e/2e2e` and rosewater `rgb:f5f5/e0e0/dcdc` defaults. Pane cells using SGR
 39/49 or the initial default style are rendered with those same text colors. The
 active pane's cursor color is synchronized to the outer terminal, so replies
-match visible state rather than the attaching terminal's theme. Replies preserve
+match its visible state, including pane-local overrides. Replies preserve
 the query's BEL or ST terminator.
 
 OSC 10/11/12 setters accept `#RRGGBB` and X-style `rgb:R/G/B`, with one to four hex
 digits per component. The values are normalized to eight-bit RGB and remain local
 to the pane across alternate-screen changes, resize, detach/attach and RIS. OSC
-110/111/112 restore the initial Mocha defaults. Existing cells retain symbolic
+110/111/112 restore the currently inherited outer-terminal defaults. Explicit
+pane overrides survive reattachment, even when the next terminal uses a different
+theme. Existing cells retain symbolic
 default colors, so changing a text default recolors them on the next frame;
 explicitly indexed or RGB-colored cells are unchanged.
 
@@ -81,9 +89,11 @@ extra values make the entire operation an atomic no-op, including suppressing
 any query replies.
 
 OSC 4 accepts decimal indices from 0 through 255 paired with a color or `?` value.
-The initial table uses XTerm's conventional 16 ANSI colors, 6x6x6 color cube and
+The initial table inherits the outer terminal's palette. Entries without a valid
+outer reply use XTerm's conventional 16 ANSI colors, 6x6x6 color cube and
 24 grayscale entries. Setters use the same RGB formats as OSC 10/11. OSC 104
-resets each supplied index, or the entire table when no index is supplied. Palette
+resets each supplied index to its inherited color, or removes all pane overrides
+when no index is supplied. Palette
 changes are pane-local and recolor existing indexed foreground, background and
 underline colors on the next frame. OSC 4 operations execute in parameter order,
 so a later query can observe an earlier setter for the same index. The whole

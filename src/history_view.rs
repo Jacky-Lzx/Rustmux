@@ -151,6 +151,13 @@ pub(crate) struct HistoryView {
 }
 
 impl HistoryView {
+    pub(crate) fn inherit_colors(
+        &mut self,
+        colors: &std::sync::Arc<crate::terminal_colors::TerminalColors>,
+    ) -> bool {
+        self.source.inherit_colors(colors)
+    }
+
     pub fn new(source: &Screen) -> Option<Self> {
         if source.is_alternate() {
             return None;

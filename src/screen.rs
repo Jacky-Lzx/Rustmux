@@ -1,6 +1,6 @@
 //! A resizable text grid, independent of PTY I/O and escape-sequence parsing.
 
-use std::{collections::VecDeque, io};
+use std::{collections::VecDeque, io, sync::Arc};
 
 mod reflow;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -140,9 +140,10 @@ pub struct Screen {
     origin_mode: bool,
     auto_wrap: bool,
     character_sets: CharacterSets,
-    default_foreground: (u8, u8, u8),
-    default_background: (u8, u8, u8),
-    cursor_color: (u8, u8, u8),
+    inherited_colors: Arc<crate::terminal_colors::TerminalColors>,
+    default_foreground: Option<(u8, u8, u8)>,
+    default_background: Option<(u8, u8, u8)>,
+    cursor_color: Option<(u8, u8, u8)>,
     palette: [Option<(u8, u8, u8)>; 256],
 }
 
@@ -312,52 +313,55 @@ impl Screen {
             origin_mode: false,
             auto_wrap: true,
             character_sets: CharacterSets::default(),
-            default_foreground: crate::theme::DEFAULT_FOREGROUND_RGB,
-            default_background: crate::theme::DEFAULT_BACKGROUND_RGB,
-            cursor_color: crate::theme::DEFAULT_CURSOR_RGB,
+            inherited_colors: Arc::new(crate::terminal_colors::TerminalColors::default()),
+            default_foreground: None,
+            default_background: None,
+            cursor_color: None,
             palette: [None; 256],
         })
     }
 
     pub(crate) fn default_foreground(&self) -> (u8, u8, u8) {
         self.default_foreground
+            .unwrap_or(self.inherited_colors.foreground)
     }
 
     pub(crate) fn default_background(&self) -> (u8, u8, u8) {
         self.default_background
+            .unwrap_or(self.inherited_colors.background)
     }
 
     pub(crate) fn set_default_foreground(&mut self, color: (u8, u8, u8)) {
-        self.default_foreground = color;
+        self.default_foreground = Some(color);
     }
 
     pub(crate) fn set_default_background(&mut self, color: (u8, u8, u8)) {
-        self.default_background = color;
+        self.default_background = Some(color);
     }
 
     pub(crate) fn reset_default_foreground(&mut self) {
-        self.default_foreground = crate::theme::DEFAULT_FOREGROUND_RGB;
+        self.default_foreground = None;
     }
 
     pub(crate) fn reset_default_background(&mut self) {
-        self.default_background = crate::theme::DEFAULT_BACKGROUND_RGB;
+        self.default_background = None;
     }
 
     pub fn cursor_color(&self) -> (u8, u8, u8) {
-        self.cursor_color
+        self.cursor_color.unwrap_or(self.inherited_colors.cursor)
     }
 
     pub(crate) fn set_cursor_color(&mut self, color: (u8, u8, u8)) {
-        self.cursor_color = color;
+        self.cursor_color = Some(color);
     }
 
     pub(crate) fn reset_cursor_color(&mut self) {
-        self.cursor_color = crate::theme::DEFAULT_CURSOR_RGB;
+        self.cursor_color = None;
     }
 
     pub(crate) fn palette_color(&self, index: u8) -> (u8, u8, u8) {
         self.palette[usize::from(index)]
-            .unwrap_or_else(|| crate::theme::default_palette_color(index))
+            .unwrap_or(self.inherited_colors.palette[usize::from(index)])
     }
 
     pub(crate) fn set_palette_color(&mut self, index: u8, color: (u8, u8, u8)) {
@@ -372,7 +376,19 @@ impl Screen {
         self.palette.fill(None);
     }
 
+    pub(crate) fn inherit_colors(
+        &mut self,
+        colors: &Arc<crate::terminal_colors::TerminalColors>,
+    ) -> bool {
+        if Arc::ptr_eq(&self.inherited_colors, colors) {
+            return false;
+        }
+        self.inherited_colors = Arc::clone(colors);
+        true
+    }
+
     pub(crate) fn copy_dynamic_colors(&mut self, source: &Self) {
+        self.inherited_colors = Arc::clone(&source.inherited_colors);
         self.default_foreground = source.default_foreground;
         self.default_background = source.default_background;
         self.cursor_color = source.cursor_color;
@@ -612,6 +628,7 @@ impl Screen {
         resized.origin_mode = self.origin_mode;
         resized.auto_wrap = self.auto_wrap;
         resized.character_sets = self.character_sets;
+        resized.inherited_colors = Arc::clone(&self.inherited_colors);
         resized.default_foreground = self.default_foreground;
         resized.default_background = self.default_background;
         resized.cursor_color = self.cursor_color;
@@ -788,14 +805,14 @@ impl Screen {
     // resolving the pane's symbolic default and indexed colors.
     pub(crate) fn copy_display_cells(&mut self, source_screen: &Screen, row: usize, column: usize) {
         let default_foreground = crate::style::Color::Rgb(
-            source_screen.default_foreground.0,
-            source_screen.default_foreground.1,
-            source_screen.default_foreground.2,
+            source_screen.default_foreground().0,
+            source_screen.default_foreground().1,
+            source_screen.default_foreground().2,
         );
         let default_background = crate::style::Color::Rgb(
-            source_screen.default_background.0,
-            source_screen.default_background.1,
-            source_screen.default_background.2,
+            source_screen.default_background().0,
+            source_screen.default_background().1,
+            source_screen.default_background().2,
         );
         for offset in 0..source_screen.rows {
             let start = (row + offset) * self.columns + column;

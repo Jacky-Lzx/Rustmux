@@ -37,6 +37,7 @@ use crate::{
         frontend::{ConnectionState, ServerFrontend},
         handshake::{self, ServerPeer},
     },
+    terminal_colors::{ColorProbe, TerminalColors},
     terminal_device::{TerminalDevice, window_size},
     window::{WindowId, Windows},
 };
@@ -158,6 +159,7 @@ struct TerminalSession {
     outer_rows: u16,
     cell_pixels: Option<CellPixelSize>,
     graphics_support: Option<GraphicsSupport>,
+    inherited_colors: Arc<TerminalColors>,
     notifications: crate::config::Notifications,
     scrollback_lines: usize,
     shortcuts: crate::config::Shortcuts,
@@ -176,6 +178,7 @@ struct SessionContext<'a> {
 struct AttachmentCapabilities<'a> {
     cell_pixels: &'a mut Option<CellPixelSize>,
     graphics_support: &'a mut Option<GraphicsSupport>,
+    inherited_colors: &'a mut Arc<TerminalColors>,
 }
 
 impl TerminalSession {
@@ -208,6 +211,7 @@ impl TerminalSession {
             outer_rows: rows,
             cell_pixels: None,
             graphics_support: None,
+            inherited_colors: Arc::new(TerminalColors::default()),
             notifications,
             scrollback_lines,
             shortcuts,
@@ -239,6 +243,7 @@ impl TerminalSession {
             AttachmentCapabilities {
                 cell_pixels: &mut self.cell_pixels,
                 graphics_support: &mut self.graphics_support,
+                inherited_colors: &mut self.inherited_colors,
             },
             &mut self.closed,
         )
@@ -1725,6 +1730,7 @@ fn forward(
     let AttachmentCapabilities {
         cell_pixels,
         graphics_support,
+        inherited_colors,
     } = capabilities;
     let SessionContext {
         shell_path,
@@ -1738,6 +1744,9 @@ fn forward(
     let mut outer_image_replies = OuterImageReplies::default();
     let mut graphics_ready = false;
     let mut to_terminal = VecDeque::new();
+    let mut color_probe = Some(ColorProbe::new());
+    *inherited_colors = color_probe.as_ref().unwrap().colors();
+    to_terminal.extend(color_probe.as_ref().unwrap().request_bytes());
     let probe = GraphicsCapabilityProbe::new(GRAPHICS_PROBE_IMAGE_ID);
     to_terminal.extend(probe.request_bytes());
     let mut graphics_probe = Some(probe);
@@ -1786,6 +1795,12 @@ fn forward(
         }
         let old_input_len = input.len();
         frontend.drain_input(&mut input);
+        filter_color_probe_input(
+            &mut color_probe,
+            &mut input,
+            old_input_len,
+            inherited_colors,
+        );
         filter_graphics_probe_input(
             &mut graphics_probe,
             &mut input,
@@ -1793,6 +1808,8 @@ fn forward(
             graphics_support,
         );
         filter_graphics_probe_input(&mut shm_probe, &mut input, old_input_len, &mut shm_support);
+        finish_color_probe_at_barrier(&mut color_probe, &graphics_probe, &mut input);
+        force_redraw |= inherit_pane_colors(windows, closed, history.as_mut(), inherited_colors);
         if !graphics_ready && *graphics_support == Some(GraphicsSupport::Supported) {
             graphics_ready = true;
             force_redraw = true;
@@ -2029,7 +2046,8 @@ fn forward(
         }
         // Service the hidden undo pane after consuming an outer resize, so it
         // never interprets new graphics output using stale physical cells.
-        if let Some(saved) = closed.as_mut()
+        if color_probe.is_none()
+            && let Some(saved) = closed.as_mut()
             && !saved.service(*cell_pixels)?
         {
             *closed = None;
@@ -2103,7 +2121,8 @@ fn forward(
                 let deferred_due = kitty_overlays
                     .next_deferred_retry()
                     .is_some_and(|due| Instant::now() >= due);
-                if close_requested.is_none()
+                if color_probe.is_none()
+                    && close_requested.is_none()
                     && !session_manager_requested
                     && !detach_requested
                     && (dirty || force_redraw || bar_dirty || deferred_due)
@@ -2956,7 +2975,8 @@ fn forward(
             return Ok(exit);
         }
         // A changed focus needs a frame before returning to a blocking poll.
-        if (force_redraw || close_requested.is_some())
+        if color_probe.is_none()
+            && (force_redraw || close_requested.is_some())
             && to_terminal.is_empty()
             && pane_resize_pending.is_none()
         {
@@ -2981,7 +3001,10 @@ fn forward(
         if connection == ConnectionState::Attached && !to_terminal.is_empty() {
             outer_events |= PollFlags::POLLOUT;
         }
-        let mut timeout = if (active_dirty || bar_dirty) && !active_paused && to_terminal.is_empty()
+        let mut timeout = if color_probe.is_none()
+            && (active_dirty || bar_dirty)
+            && !active_paused
+            && to_terminal.is_empty()
         {
             next_frame
                 .saturating_duration_since(Instant::now())
@@ -3018,7 +3041,10 @@ fn forward(
                 for (pane_id, pane) in window.content().iter() {
                     let state = pane.io();
                     let mut flags = PollFlags::empty();
-                    if state.reply_read_limit() != 0
+                    // Child startup color queries must observe the inherited
+                    // table, not race the outer-terminal discovery replies.
+                    if color_probe.is_none()
+                        && state.reply_read_limit() != 0
                         && (window.id() != active || to_terminal.is_empty())
                     {
                         flags |= PollFlags::POLLIN;
@@ -3041,7 +3067,7 @@ fn forward(
             if let Some(saved) = closed.as_ref() {
                 let pane = saved.pane.as_ref().unwrap();
                 let mut flags = PollFlags::empty();
-                if pane.io().reply_read_limit() > 0 {
+                if color_probe.is_none() && pane.io().reply_read_limit() > 0 {
                     flags |= PollFlags::POLLIN;
                 }
                 if !pane.io().to_shell.is_empty() {
@@ -3076,6 +3102,12 @@ fn forward(
         {
             let old_input_len = input.len();
             connection = frontend.receive(&mut input)?;
+            filter_color_probe_input(
+                &mut color_probe,
+                &mut input,
+                old_input_len,
+                inherited_colors,
+            );
             filter_graphics_probe_input(
                 &mut graphics_probe,
                 &mut input,
@@ -3088,6 +3120,9 @@ fn forward(
                 old_input_len,
                 &mut shm_support,
             );
+            finish_color_probe_at_barrier(&mut color_probe, &graphics_probe, &mut input);
+            force_redraw |=
+                inherit_pane_colors(windows, closed, history.as_mut(), inherited_colors);
             if input.len() > old_input_len {
                 let raw: Vec<_> = input.drain(old_input_len..).collect();
                 let mut passthrough = Vec::new();
@@ -3137,6 +3172,64 @@ fn forward(
                 to_terminal.push_back(7);
             }
         }
+    }
+}
+
+fn inherit_pane_colors(
+    windows: &mut Windows<PaneSet<Pane>>,
+    closed: &mut Option<crate::closed_pane::ClosedPane>,
+    history: Option<&mut crate::history_view::HistoryView>,
+    colors: &Arc<TerminalColors>,
+) -> bool {
+    let mut changed = false;
+    for window in windows.iter_mut() {
+        for (_, pane) in window.content_mut().iter_mut() {
+            let (_, _, screen, state) = pane.parts_mut();
+            if screen.inherit_colors(colors) {
+                state.dirty = true;
+                changed = true;
+            }
+        }
+    }
+    if let Some(pane) = closed.as_mut().and_then(|closed| closed.pane.as_mut()) {
+        pane.parts_mut().2.inherit_colors(colors);
+    }
+    if let Some(history) = history {
+        changed |= history.inherit_colors(colors);
+    }
+    changed
+}
+
+fn filter_color_probe_input(
+    probe: &mut Option<ColorProbe>,
+    input: &mut VecDeque<u8>,
+    old_len: usize,
+    colors: &mut Arc<TerminalColors>,
+) {
+    let Some(probe) = probe.as_mut() else {
+        return;
+    };
+    let raw: Vec<_> = input.drain(old_len..).collect();
+    let mut forwarded = Vec::with_capacity(raw.len());
+    if probe.advance(&raw, &mut forwarded) {
+        *colors = probe.colors();
+    }
+    input.extend(forwarded);
+}
+
+fn finish_color_probe_at_barrier(
+    color_probe: &mut Option<ColorProbe>,
+    graphics_probe: &Option<GraphicsCapabilityProbe>,
+    input: &mut VecDeque<u8>,
+) {
+    if graphics_probe
+        .as_ref()
+        .is_none_or(GraphicsCapabilityProbe::complete)
+        && let Some(mut probe) = color_probe.take()
+    {
+        let mut released = Vec::new();
+        probe.finish(&mut released);
+        input.extend(released);
     }
 }
 
@@ -3547,10 +3640,38 @@ mod tests {
             &mut second_client,
             &[ClientMessage::Input(b"exit\n".to_vec())],
         );
+        // Real clients read queries and redraws concurrently with shell input.
+        let drain = drain_client_output(second_client);
         assert_eq!(
             session.attach(&mut second_frontend, &signals).unwrap(),
             ForwardExit::Process(0)
         );
+        drop(second_frontend);
+        drain.join().unwrap();
+    }
+
+    fn drain_client_output(mut client: ClientPeer) -> thread::JoinHandle<Vec<ServerMessage>> {
+        thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let mut messages = Vec::new();
+            let mut bytes = [0; 8192];
+            loop {
+                assert!(Instant::now() < deadline, "client output did not finish");
+                match client.stream_mut().read(&mut bytes) {
+                    Ok(0) => return messages,
+                    Ok(count) => messages.extend(client.decode(&bytes[..count]).unwrap()),
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                        ) =>
+                    {
+                        thread::sleep(Duration::from_millis(1));
+                    }
+                    Err(error) => panic!("client read failed: {error}"),
+                }
+            }
+        })
     }
 
     #[test]
@@ -3565,6 +3686,7 @@ mod tests {
         let endpoint = SessionEndpoint::bind(&name).unwrap();
         let (mut client, server) = socket_peers(24, 80);
         send_client_messages(&mut client, &[ClientMessage::Input(b"exit 7\n".to_vec())]);
+        let drain = drain_client_output(client);
 
         assert_eq!(
             serve_session(
@@ -3579,23 +3701,12 @@ mod tests {
             .unwrap(),
             7
         );
-        let mut status = None;
-        let mut bytes = [0; 8192];
-        loop {
-            match client.stream_mut().read(&mut bytes) {
-                Ok(0) => break,
-                Ok(count) => {
-                    for message in client.decode(&bytes[..count]).unwrap() {
-                        if let ServerMessage::Exit { status: value } = message {
-                            status = Some(value);
-                        }
-                    }
-                }
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => continue,
-                Err(error) => panic!("client read failed: {error}"),
-            }
-        }
-        assert_eq!(status, Some(7));
+        let messages = drain.join().unwrap();
+        assert!(
+            messages
+                .iter()
+                .any(|message| matches!(message, ServerMessage::Exit { status: 7 }))
+        );
     }
 
     #[test]

@@ -29,6 +29,7 @@ pub mod session;
 mod shortcut_help;
 pub mod style;
 pub mod terminal;
+mod terminal_colors;
 mod terminal_device;
 mod theme;
 

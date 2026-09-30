@@ -71,3 +71,8 @@ fn frame_reconstruction() {
 fn config() {
     run_scenario("config");
 }
+
+#[test]
+fn colors() {
+    run_scenario("colors");
+}

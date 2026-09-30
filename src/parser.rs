@@ -1006,7 +1006,7 @@ impl Parser {
     }
 }
 
-fn parse_color(value: &str) -> Option<(u8, u8, u8)> {
+pub(crate) fn parse_color(value: &str) -> Option<(u8, u8, u8)> {
     if let Some(hex) = value.strip_prefix('#').filter(|value| value.len() == 6) {
         return Some((
             u8::from_str_radix(&hex[..2], 16).ok()?,

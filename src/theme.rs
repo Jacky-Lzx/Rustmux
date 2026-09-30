@@ -1,4 +1,4 @@
-//! Shared colors for Rustmux-owned chrome and pane defaults.
+//! Shared colors for Rustmux-owned chrome and fallback pane defaults.
 
 use crate::style::Color;
 
