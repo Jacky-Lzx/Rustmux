@@ -1,4 +1,5 @@
 //! Read-only navigation over a frozen primary-screen snapshot.
+use crate::config::{HistoryAction, HistoryKey, HistoryMode, Shortcuts};
 use crate::screen::{MouseTracking, Screen};
 use crate::style::Cell;
 use base64::Engine;
@@ -125,6 +126,9 @@ pub(crate) fn export_text(source: &Screen) -> String {
 }
 
 pub(crate) struct HistoryView {
+    shortcuts: Shortcuts,
+    session_available: bool,
+    mode_pending: Option<HistoryMode>,
     source: Screen,
     offset: usize,
     escape: Vec<u8>,
@@ -152,6 +156,9 @@ impl HistoryView {
             return None;
         }
         Some(Self {
+            shortcuts: Shortcuts::default(),
+            session_available: false,
+            mode_pending: None,
             source: source.clone(),
             offset: source.history_len().min(source.dimensions().0),
             escape: Vec::new(),
@@ -174,6 +181,33 @@ impl HistoryView {
         })
     }
 
+    pub fn set_shortcuts(&mut self, shortcuts: Shortcuts, session_available: bool) {
+        self.shortcuts = shortcuts;
+        self.session_available = session_available;
+    }
+
+    pub fn take_mode(&mut self) -> Option<HistoryMode> {
+        self.mode_pending.take()
+    }
+
+    fn configured_action(&mut self, action: HistoryAction) -> bool {
+        match action {
+            HistoryAction::SwitchMode(HistoryMode::Session) if !self.session_available => false,
+            HistoryAction::SwitchMode(mode) => {
+                self.mode_pending = Some(mode);
+                true
+            }
+            HistoryAction::Key(HistoryKey::Byte(byte)) => self.feed_raw(byte, false),
+            HistoryAction::Key(key) => {
+                let mut exited = false;
+                for &byte in key.sequence() {
+                    exited |= self.feed_raw(byte, false);
+                }
+                exited
+            }
+        }
+    }
+
     // Zero-based outer-terminal origin, including the window bar when present.
     pub fn set_origin(&mut self, row: usize, column: usize) {
         self.origin = (row, column);
@@ -187,8 +221,8 @@ impl HistoryView {
         self.editor.as_ref().map(|editor| editor.display(columns).1)
     }
 
-    pub fn footer_hints(&self) -> &'static [(&'static str, &'static str)] {
-        if self.editor.is_some() {
+    pub fn footer_hints(&self) -> Vec<(String, String)> {
+        let hints = if self.editor.is_some() {
             SEARCH_FOOTER_HINTS
         } else if self.copy_status.is_some() {
             COPY_FOOTER_HINTS
@@ -196,7 +230,65 @@ impl HistoryView {
             SELECTION_FOOTER_HINTS
         } else {
             BROWSE_FOOTER_HINTS
+        };
+        // Query editing is text input, independent of History mode keybindings.
+        if self.editor.is_some()
+            || (!self.shortcuts.clear_defaults()
+                && self.shortcuts.history_bindings().next().is_none())
+        {
+            return hints
+                .iter()
+                .map(|(key, label)| ((*key).into(), (*label).into()))
+                .collect();
         }
+        let mut result = Vec::new();
+        for &(key, label) in hints {
+            let bytes: &[u8] = match key {
+                "/?" => b"/?",
+                "n/N" => b"nN",
+                "q" => b"q",
+                "y/Enter" => b"y\r",
+                "v" => b"v",
+                "h/j/k/l" => b"hjkl",
+                "b/e" => b"be",
+                _ => &[],
+            };
+            let keys: Vec<_> = bytes
+                .iter()
+                .filter_map(|&byte| {
+                    let canonical = HistoryKey::Byte(byte);
+                    self.shortcuts
+                        .history_bindings()
+                        .find_map(|(key, action)| {
+                            (action == HistoryAction::Key(canonical)).then_some(key.label())
+                        })
+                        .or_else(|| {
+                            (!self.shortcuts.clear_defaults()
+                                && self.shortcuts.history_binding(canonical).is_none())
+                            .then(|| canonical.label())
+                        })
+                })
+                .collect();
+            if !keys.is_empty() {
+                result.push((keys.join("/"), label.to_owned()));
+            }
+        }
+        for (key, action) in self.shortcuts.history_bindings() {
+            if let HistoryAction::SwitchMode(mode) = action {
+                let label = match mode {
+                    HistoryMode::Locked => "Exit",
+                    HistoryMode::Normal => "Normal",
+                    HistoryMode::Pane => "Pane",
+                    HistoryMode::Resize => "Resize",
+                    HistoryMode::Move => "Move",
+                    HistoryMode::Tab => "Tab",
+                    HistoryMode::Session if self.session_available => "Session",
+                    HistoryMode::Session => continue,
+                };
+                result.push((key.label(), label.into()));
+            }
+        }
+        result
     }
 
     pub fn footer_status(&self, columns: usize) -> (String, Option<usize>) {
@@ -317,14 +409,30 @@ impl HistoryView {
             self.hits.clear();
             self.selected = None;
             false
+        } else if standalone {
+            if let Some(action) = self.shortcuts.history_binding(HistoryKey::Byte(27)) {
+                self.configured_action(action)
+            } else {
+                !self.shortcuts.clear_defaults()
+            }
         } else {
-            standalone
+            false
         }
     }
 
     pub fn label(&self, columns: usize) -> String {
         if let Some(editor) = &self.editor {
             return editor.label(columns);
+        }
+        if self.shortcuts.clear_defaults() || self.shortcuts.history_bindings().next().is_some() {
+            let (status, _) = self.footer_status(columns);
+            let hints = self
+                .footer_hints()
+                .into_iter()
+                .map(|(key, label)| format!("{key}:{label}"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            return format!("History {status} · {hints}");
         }
         if let Some(status) = self.copy_status {
             return match status {
@@ -384,6 +492,10 @@ impl HistoryView {
     // Return true only on an explicit exit key. Consume escape sequences and paste
     // locally so their payload cannot become navigation or reach a child shell.
     pub fn feed(&mut self, byte: u8) -> bool {
+        self.feed_raw(byte, true)
+    }
+
+    fn feed_raw(&mut self, byte: u8, configurable: bool) -> bool {
         if self.discard_escape {
             self.discard_escape = !(0x40..=0x7e).contains(&byte);
             return false;
@@ -408,6 +520,21 @@ impl HistoryView {
                 let mouse = self.mouse();
                 if !mouse {
                     self.clear_mouse_selection();
+                }
+                if configurable
+                    && !mouse
+                    && !self.paste
+                    && self.editor.is_none()
+                    && !matches!(self.escape.as_slice(), b"\x1b[200~" | b"\x1b[201~")
+                {
+                    let action = HistoryKey::from_sequence(&self.escape)
+                        .and_then(|key| self.shortcuts.history_binding(key));
+                    if action.is_some() || self.shortcuts.clear_defaults() {
+                        self.escape.clear();
+                        self.escape_since = None;
+                        self.escape_started_in_search = false;
+                        return action.is_some_and(|action| self.configured_action(action));
+                    }
                 }
                 match self.escape.as_slice() {
                     b"\x1b[200~" => self.paste = true,
@@ -572,6 +699,14 @@ impl HistoryView {
                 _ => self.editor.as_mut().unwrap().feed(byte),
             }
             return false;
+        }
+        if configurable {
+            if let Some(action) = self.shortcuts.history_binding(HistoryKey::Byte(byte)) {
+                return self.configured_action(action);
+            }
+            if self.shortcuts.clear_defaults() {
+                return false;
+            }
         }
         if self.keyboard_selection() {
             let height = self.source.dimensions().0.max(1) as isize;
@@ -1325,7 +1460,13 @@ mod tests {
         assert_eq!(view.offset, 0);
         assert!(view.label(80).starts_with("History 0/0"));
         assert_eq!(view.footer_status(80), ("0/0".into(), None));
-        assert_eq!(view.footer_hints(), BROWSE_FOOTER_HINTS);
+        assert_eq!(
+            view.footer_hints(),
+            BROWSE_FOOTER_HINTS
+                .iter()
+                .map(|(key, label)| ((*key).to_owned(), (*label).to_owned()))
+                .collect::<Vec<_>>()
+        );
         assert_eq!(view.render().unwrap().row(0).unwrap()[0].character, 's');
         type_bytes(&mut view, b"\x1b[<0;1;1M\x1b[<32;5;1M\x1b[<0;5;1m");
         assert_eq!(view.take_copy().unwrap(), osc52("short").unwrap());
@@ -1385,7 +1526,13 @@ mod tests {
             view.footer_status(80),
             ("Copy sent to terminal".into(), None)
         );
-        assert_eq!(view.footer_hints(), COPY_FOOTER_HINTS);
+        assert_eq!(
+            view.footer_hints(),
+            COPY_FOOTER_HINTS
+                .iter()
+                .map(|(key, label)| ((*key).to_owned(), (*label).to_owned()))
+                .collect::<Vec<_>>()
+        );
         assert!(view.expire_copy_status(deadline));
         assert!(view.label(80).starts_with("History "));
         assert!(view.copy_status_until.is_none());
@@ -1617,7 +1764,13 @@ mod tests {
 
         assert!(view.label(100).contains("arrows/hjkl:extend"));
         assert_eq!(view.footer_status(100), ("Select 1:1–1:2".into(), None));
-        assert_eq!(view.footer_hints(), SELECTION_FOOTER_HINTS);
+        assert_eq!(
+            view.footer_hints(),
+            SELECTION_FOOTER_HINTS
+                .iter()
+                .map(|(key, label)| ((*key).to_owned(), (*label).to_owned()))
+                .collect::<Vec<_>>()
+        );
         assert!(view.label(48).contains("hjkl b/e 0/$ o y/Enter v"));
         assert_eq!(view.label(24), "Sel 1:1–1:2 · y/Enter v");
         assert_eq!(view.label(11), "Sel 1:1–1:2");
@@ -2124,7 +2277,13 @@ mod tests {
         let mut view = HistoryView::new(&source).unwrap();
         type_bytes(&mut view, b"g/XX");
         assert_eq!(view.footer_status(24), ("Search /XX".into(), Some(10)));
-        assert_eq!(view.footer_hints(), SEARCH_FOOTER_HINTS);
+        assert_eq!(
+            view.footer_hints(),
+            SEARCH_FOOTER_HINTS
+                .iter()
+                .map(|(key, label)| ((*key).to_owned(), (*label).to_owned()))
+                .collect::<Vec<_>>()
+        );
         type_bytes(&mut view, b"\r");
         assert_eq!(view.selected, Some(0));
         assert_eq!(view.hits.len(), 3);
@@ -2343,5 +2502,93 @@ mod tests {
         assert!(!row[3].style.inverse);
         assert_eq!(row[1].width, 0);
         assert_eq!(row[2].combining, vec!['\u{301}']);
+    }
+    fn configured_history(source: &Screen) -> HistoryView {
+        let shortcuts = Shortcuts::test_from_config(
+            r#"
+clear_defaults = true
+[keybinds.locked]
+"Ctrl b" = { actions = [{ action = "switch-mode", mode = "normal" }] }
+[keybinds.history]
+u = { actions = ["scroll-page-up"] }
+d = { actions = ["scroll-page-down"] }
+up = { actions = ["scroll-top"] }
+down = { actions = ["scroll-bottom"] }
+f = { actions = ["history-search-forward"] }
+c = { actions = ["copy-history"] }
+v = { actions = ["toggle-history-selection"] }
+l = { actions = ["history-selection-right"] }
+x = { actions = [{ action = "switch-mode", mode = "normal" }] }
+s = { actions = [{ action = "switch-mode", mode = "session" }] }
+esc = { actions = [{ action = "switch-mode", mode = "locked" }] }
+"#,
+        );
+        let mut view = HistoryView::new(source).unwrap();
+        view.set_shortcuts(shortcuts, false);
+        view
+    }
+
+    #[test]
+    fn history_bindings_navigate_copy_and_leave_to_the_configured_mode() {
+        let mut source = Screen::new(2, 12).unwrap();
+        Parser::new().advance(&mut source, b"zero\r\none\r\ntwo\r\nthree\r\nfour");
+        let mut view = configured_history(&source);
+        let initial = view.offset;
+        type_bytes(&mut view, b"qjkG\x03\x1b[5~");
+        assert_eq!(view.offset, initial); // clear_defaults disables all legacy keys.
+        type_bytes(&mut view, b"d");
+        assert_eq!(view.offset, 0);
+        type_bytes(&mut view, b"u");
+        assert_eq!(view.offset, 2);
+        type_bytes(&mut view, b"\x1bOA");
+        assert_eq!(view.offset, source.history_len());
+        type_bytes(&mut view, b"\x1b[B");
+        assert_eq!(view.offset, 0);
+        type_bytes(&mut view, b"c");
+        assert!(view.take_copy().is_some());
+        assert!(!view.feed(b's')); // SESSION is unavailable in an unnamed run.
+        assert!(view.take_mode().is_none());
+        assert!(view.feed(b'x'));
+        assert_eq!(view.take_mode(), Some(HistoryMode::Normal));
+        view.set_shortcuts(view.shortcuts, true);
+        assert!(view.feed(b's'));
+        assert_eq!(view.take_mode(), Some(HistoryMode::Session));
+    }
+
+    #[test]
+    fn history_bindings_do_not_dispatch_from_query_or_bracketed_paste() {
+        let mut source = Screen::new(2, 12).unwrap();
+        Parser::new().advance(&mut source, b"zero\r\none\r\ntwo");
+        let mut view = configured_history(&source);
+        let initial = view.offset;
+        type_bytes(&mut view, b"\x1b[200~xd\x1b[A\x1b[201~");
+        assert!(view.take_mode().is_none());
+        assert_eq!(view.offset, initial);
+        type_bytes(&mut view, b"fxxd\x1b[200~u\x1b[201~\r");
+        assert_eq!(view.query, "xxdu");
+        assert!(view.take_mode().is_none());
+        assert_eq!(view.offset, initial);
+        type_bytes(&mut view, b"\x1b");
+        assert!(!view.expire_escape()); // Esc first cancels the submitted search.
+        type_bytes(&mut view, b"\x1b");
+        assert!(view.expire_escape());
+        assert_eq!(view.take_mode(), Some(HistoryMode::Locked));
+    }
+
+    #[test]
+    fn history_selection_and_footer_use_configured_keys() {
+        let mut source = Screen::new(2, 12).unwrap();
+        Parser::new().advance(&mut source, b"sample");
+        let mut view = configured_history(&source);
+        let hints = view.footer_hints();
+        assert!(hints.contains(&("f".into(), "Search".into())));
+        assert!(hints.contains(&("x".into(), "Normal".into())));
+        assert!(!hints.iter().any(|(key, _)| key == "q" || key == "s"));
+        type_bytes(&mut view, b"vlc");
+        assert_eq!(view.take_copy().unwrap(), osc52("sa").unwrap());
+        assert!(view.selection.is_none());
+        type_bytes(&mut view, b"v\x1b");
+        assert!(!view.expire_escape()); // Esc cancels selection before mode exit.
+        assert!(view.selection.is_none());
     }
 }

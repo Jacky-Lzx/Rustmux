@@ -145,6 +145,10 @@ changed under `[shortcuts]` in `config.toml`; see the quick start. A single
 from its Ctrl-B default. The running named session sends that key to each
 attached client in the handshake, so a newer client config cannot silently
 remap the server's prefix.
+`switch-mode history` opens the [History snapshot browser](history-view.md#configuring-history-mode)
+from NORMAL or another configured mode; `[keybinds.history]` configures its
+commands and exit target. LOCKED also accepts direct Ctrl-letter History entries.
+
 Main-style `[keybinds.normal]` can override the supported operations listed
 in the quick start. `clear_defaults = true` removes implicit NORMAL commands
 and the attached client's legacy prefix-`d`/prefix-Ctrl-W shortcuts; a

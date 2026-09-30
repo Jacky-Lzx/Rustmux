@@ -643,6 +643,7 @@ enum InputMode {
     Move,
     Tab,
     Session,
+    History,
 }
 
 #[derive(Default)]
@@ -680,6 +681,35 @@ struct PaneDrag {
     separator: usize,
     axis: SplitAxis,
     position: usize,
+}
+
+impl From<crate::config::HistoryMode> for InputMode {
+    fn from(mode: crate::config::HistoryMode) -> Self {
+        use crate::config::HistoryMode;
+        match mode {
+            HistoryMode::Locked => Self::Locked,
+            HistoryMode::Normal => Self::Normal,
+            HistoryMode::Pane => Self::Pane,
+            HistoryMode::Resize => Self::Resize,
+            HistoryMode::Move => Self::Move,
+            HistoryMode::Tab => Self::Tab,
+            HistoryMode::Session => Self::Session,
+        }
+    }
+}
+
+fn history_exit_input(
+    view: &mut crate::history_view::HistoryView,
+    shortcuts: crate::config::Shortcuts,
+) -> WindowInput {
+    WindowInput {
+        mode: view
+            .take_mode()
+            .unwrap_or(crate::config::HistoryMode::Locked)
+            .into(),
+        shortcuts,
+        ..WindowInput::default()
+    }
 }
 
 impl WindowInput {
@@ -760,6 +790,16 @@ impl WindowInput {
                 }
                 return;
             }
+            if self.mode == InputMode::Locked
+                && key
+                    .shortcut_byte()
+                    .is_some_and(|byte| self.shortcuts.enters_history_locked(byte))
+            {
+                if key.event_type != 3 {
+                    output.push(WindowKey::History);
+                }
+                return;
+            }
             if self.mode != InputMode::Locked {
                 if key.event_type == 3 {
                     return;
@@ -772,6 +812,7 @@ impl WindowInput {
                         InputMode::Move => self.move_shortcut(byte, output),
                         InputMode::Tab => self.tab_shortcut(byte, output),
                         InputMode::Session => self.session_shortcut(byte, output),
+                        InputMode::History => {} // HistoryView owns local input while the snapshot is open.
                         InputMode::Locked => unreachable!(),
                     }
                 } else {
@@ -1042,6 +1083,10 @@ impl WindowInput {
                 InputMode::Move => self.move_shortcut(byte, output),
                 InputMode::Tab => self.tab_shortcut(byte, output),
                 InputMode::Session => self.session_shortcut(byte, output),
+                InputMode::History => {} // HistoryView consumes all snapshot input.
+                InputMode::Locked if self.shortcuts.enters_history_locked(byte) => {
+                    output.push(WindowKey::History);
+                }
                 InputMode::Locked if byte == self.shortcuts.locked_entry_key() => {
                     self.mode = InputMode::Normal;
                 }
@@ -1141,6 +1186,7 @@ impl WindowInput {
             PaneAction::Next => output.push(WindowKey::NextPane),
             PaneAction::Zoom => output.push(WindowKey::ToggleZoom),
             PaneAction::Close => output.push(WindowKey::ClosePane),
+            PaneAction::History => output.push(WindowKey::History),
             PaneAction::Normal => self.mode = InputMode::Normal,
             PaneAction::Resize => self.mode = InputMode::Resize,
             PaneAction::Move => self.mode = InputMode::Move,
@@ -1169,6 +1215,7 @@ impl WindowInput {
         use crate::config::ResizeAction;
         match action {
             ResizeAction::Resize(direction) => output.push(WindowKey::ResizePane(direction)),
+            ResizeAction::History => output.push(WindowKey::History),
             ResizeAction::Normal => self.mode = InputMode::Normal,
             ResizeAction::Pane => self.mode = InputMode::Pane,
             ResizeAction::Move => self.mode = InputMode::Move,
@@ -1197,6 +1244,7 @@ impl WindowInput {
         use crate::config::MoveAction;
         match action {
             MoveAction::Move(direction) => output.push(WindowKey::MovePane(direction)),
+            MoveAction::History => output.push(WindowKey::History),
             MoveAction::Normal => self.mode = InputMode::Normal,
             MoveAction::Pane => self.mode = InputMode::Pane,
             MoveAction::Resize => self.mode = InputMode::Resize,
@@ -1243,6 +1291,7 @@ impl WindowInput {
             TabAction::Close => output.push(WindowKey::Close),
             TabAction::Select(index) => output.push(WindowKey::Select(index - 1)),
             TabAction::Help => output.push(WindowKey::Help),
+            TabAction::History => output.push(WindowKey::History),
             TabAction::Normal => self.mode = InputMode::Normal,
             TabAction::Pane => self.mode = InputMode::Pane,
             TabAction::Resize => self.mode = InputMode::Resize,
@@ -1268,6 +1317,7 @@ impl WindowInput {
                 output.push(WindowKey::SessionManager);
             }
             SessionAction::Help => output.push(WindowKey::Help),
+            SessionAction::History => output.push(WindowKey::History),
             SessionAction::Normal => self.mode = InputMode::Normal,
             SessionAction::Pane => self.mode = InputMode::Pane,
             SessionAction::Resize => self.mode = InputMode::Resize,
@@ -1866,10 +1916,14 @@ fn forward(
             .as_ref()
             .is_some_and(|view| view.escape_expired(Instant::now()))
         {
-            let exited = history.as_mut().unwrap().expire_escape();
+            let view = history.as_mut().unwrap();
+            let exited = view.expire_escape();
+            if let Some(copy) = view.take_copy() {
+                to_terminal.extend(copy);
+            }
             if exited {
+                keys = history_exit_input(history.as_mut().unwrap(), shortcuts);
                 history = None;
-                keys = WindowInput::default();
             }
             renderer.invalidate();
             force_redraw = true;
@@ -2098,7 +2152,7 @@ fn forward(
                             InputMode::Move => FooterMode::Move,
                             InputMode::Tab => FooterMode::Tab,
                             InputMode::Session => FooterMode::Session,
-                            InputMode::Locked => FooterMode::Locked,
+                            InputMode::Locked | InputMode::History => FooterMode::Locked,
                         },
                         shortcuts,
                     )?;
@@ -2128,7 +2182,12 @@ fn forward(
                     if let Some(history) = &history {
                         let (rows, columns) = view.dimensions();
                         if footer_enabled(*outer_rows) {
-                            let hints = history.footer_hints();
+                            let owned_hints = history.footer_hints();
+                            let hints: Vec<_> = owned_hints
+                                .iter()
+                                .map(|(key, label)| (key.as_str(), label.as_str()))
+                                .collect();
+                            let hints = hints.as_slice();
                             let status_columns =
                                 crate::chrome::history_footer_status_columns(columns, hints);
                             let (status, cursor) = history.footer_status(status_columns);
@@ -2305,8 +2364,10 @@ fn forward(
                 let exited = view.feed(input.pop_front().unwrap());
                 let copy = view.take_copy();
                 if exited {
+                    keys = history_exit_input(view, shortcuts);
                     history = None;
-                    keys = WindowInput::default();
+                    renderer.invalidate();
+                    bar_dirty = true;
                 }
                 if let Some(sequence) = copy {
                     to_terminal.extend(sequence);
@@ -2497,7 +2558,7 @@ fn forward(
                         InputMode::Move => FooterMode::Move,
                         InputMode::Tab => FooterMode::Tab,
                         InputMode::Session => FooterMode::Session,
-                        InputMode::Locked => FooterMode::Locked,
+                        InputMode::Locked | InputMode::History => FooterMode::Locked,
                     },
                     session_name.is_some(),
                     shortcuts,
@@ -2603,8 +2664,17 @@ fn forward(
                         if let Some(view) = &mut history {
                             view.set_origin(keys.pane_top, keys.pane_left);
                         }
-                        keys = WindowInput::default();
-                        if history.is_some() {
+                        keys = WindowInput {
+                            mode: if history.is_some() {
+                                InputMode::History
+                            } else {
+                                InputMode::Locked
+                            },
+                            shortcuts,
+                            ..WindowInput::default()
+                        };
+                        if let Some(view) = &mut history {
+                            view.set_shortcuts(shortcuts, session_name.is_some());
                             renderer.invalidate();
                             force_redraw = true;
                         }
@@ -5257,5 +5327,64 @@ m = { actions = ["switch-session", { action = "switch-mode", mode = "locked" }],
         assert!(output.is_empty());
         assert!(motion_has_button(b"\x1b[<32;50;5M"));
         assert!(!motion_has_button(b"\x1b[<35;50;5M"));
+    }
+    #[test]
+    fn history_entries_are_local_in_each_mode_and_kitty_locked_input() {
+        let source = r#"
+[keybinds.locked]
+"Ctrl s" = { actions = [{ action = "switch-mode", mode = "history" }] }
+[keybinds.normal]
+enter = { actions = [{ action = "switch-mode", mode = "history" }] }
+s = { actions = [{ action = "switch-mode", mode = "history" }] }
+[keybinds.pane]
+s = { actions = [{ action = "switch-mode", mode = "history" }] }
+[keybinds.resize]
+s = { actions = [{ action = "switch-mode", mode = "history" }] }
+[keybinds.move]
+s = { actions = [{ action = "switch-mode", mode = "history" }] }
+[keybinds.tab]
+s = { actions = [{ action = "switch-mode", mode = "history" }] }
+[keybinds.session]
+s = { actions = [{ action = "switch-mode", mode = "history" }] }
+"#;
+        let shortcuts = crate::config::Shortcuts::test_from_config(source);
+        for (mode, bytes) in [
+            (InputMode::Locked, &b"\x13"[..]),
+            (InputMode::Normal, &b"\r"[..]),
+            (InputMode::Normal, &b"s"[..]),
+            (InputMode::Pane, &b"s"[..]),
+            (InputMode::Resize, &b"s"[..]),
+            (InputMode::Move, &b"s"[..]),
+            (InputMode::Tab, &b"s"[..]),
+            (InputMode::Session, &b"s"[..]),
+            (InputMode::Locked, &b"\x1b[115;5u"[..]),
+        ] {
+            let mut keys = WindowInput {
+                mode,
+                shortcuts,
+                session_available: true,
+                kitty_keyboard_flags: 1,
+                ..WindowInput::default()
+            };
+            let mut actions = Vec::new();
+            for &byte in bytes {
+                keys.feed(byte, &mut actions);
+            }
+            assert_eq!(actions, [WindowKey::History], "{mode:?}");
+        }
+        let mut keys = WindowInput {
+            shortcuts,
+            kitty_keyboard_flags: 1,
+            ..WindowInput::default()
+        };
+        let mut actions = Vec::new();
+        for &byte in b"\x1b[115;5:3u" {
+            keys.feed(byte, &mut actions);
+        }
+        assert!(actions.is_empty()); // Kitty release events cannot open a snapshot.
+        for &byte in b"\x1b[200~\x13\x02s\x1b[201~" {
+            keys.feed(byte, &mut actions);
+        }
+        assert!(!actions.contains(&WindowKey::History));
     }
 }

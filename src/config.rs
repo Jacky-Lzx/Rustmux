@@ -15,6 +15,85 @@ const DEFAULT_SHORTCUT_KEYS: [u8; 3] = *b"c%\"";
 const FIXED_SHORTCUT_KEYS: &[u8] = b"np\t&x<> {}!moZz[Ee?hjkl,1234567890dq";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// The mode resumed after closing a History snapshot.
+pub enum HistoryMode {
+    Locked,
+    Normal,
+    Pane,
+    Resize,
+    Move,
+    Tab,
+    Session,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HistoryKey {
+    Byte(u8),
+    Up,
+    Down,
+    Left,
+    Right,
+    PageUp,
+    PageDown,
+    Home,
+    End,
+}
+
+impl HistoryKey {
+    pub(crate) fn sequence(self) -> &'static [u8] {
+        match self {
+            Self::Byte(_) => &[],
+            Self::Up => b"\x1b[A",
+            Self::Down => b"\x1b[B",
+            Self::Left => b"\x1b[D",
+            Self::Right => b"\x1b[C",
+            Self::PageUp => b"\x1b[5~",
+            Self::PageDown => b"\x1b[6~",
+            Self::Home => b"\x1b[H",
+            Self::End => b"\x1b[F",
+        }
+    }
+
+    pub(crate) fn from_sequence(sequence: &[u8]) -> Option<Self> {
+        Some(match sequence {
+            b"\x1b[A" | b"\x1bOA" => Self::Up,
+            b"\x1b[B" | b"\x1bOB" => Self::Down,
+            b"\x1b[D" | b"\x1bOD" => Self::Left,
+            b"\x1b[C" | b"\x1bOC" => Self::Right,
+            b"\x1b[5~" => Self::PageUp,
+            b"\x1b[6~" => Self::PageDown,
+            b"\x1b[H" | b"\x1bOH" | b"\x1b[1~" | b"\x1b[7~" => Self::Home,
+            b"\x1b[F" | b"\x1bOF" | b"\x1b[4~" | b"\x1b[8~" => Self::End,
+            _ => return None,
+        })
+    }
+
+    pub(crate) fn label(self) -> String {
+        match self {
+            Self::Byte(27) => "Esc".into(),
+            Self::Byte(13) => "Enter".into(),
+            Self::Byte(9) => "Tab".into(),
+            Self::Byte(byte @ 1..=26) => format!("Ctrl-{}", char::from(b'A' + byte - 1)),
+            Self::Byte(byte) => char::from(byte).to_string(),
+            Self::Up => "↑".into(),
+            Self::Down => "↓".into(),
+            Self::Left => "←".into(),
+            Self::Right => "→".into(),
+            Self::PageUp => "PgUp".into(),
+            Self::PageDown => "PgDn".into(),
+            Self::Home => "Home".into(),
+            Self::End => "End".into(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HistoryAction {
+    Key(HistoryKey),
+    SwitchMode(HistoryMode),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PaneAction {
     Break,
     MovePreviousWindow,
@@ -34,6 +113,7 @@ pub enum PaneAction {
     Tab,
     Session,
     Locked,
+    History,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -59,6 +139,7 @@ pub enum ResizeAction {
     Tab,
     Session,
     Locked,
+    History,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -77,6 +158,7 @@ pub enum MoveAction {
     Tab,
     Session,
     Locked,
+    History,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -103,6 +185,7 @@ pub enum TabAction {
     Move,
     Session,
     Locked,
+    History,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -124,6 +207,7 @@ pub enum SessionAction {
     Move,
     Tab,
     Locked,
+    History,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -140,6 +224,9 @@ pub struct Shortcuts {
     locked_configured: bool,
     keys: [u8; 3],
     legacy_configured: [bool; 3],
+    locked_history: [Option<u8>; 8],
+    history_bindings: [Option<(HistoryKey, HistoryAction)>; 48],
+    history_binding_len: usize,
     normal_actions: [Option<(u8, u8)>; 48],
     normal_action_len: usize,
     pane_enter: Option<u8>,
@@ -173,6 +260,9 @@ impl Default for Shortcuts {
             locked_configured: false,
             keys: DEFAULT_SHORTCUT_KEYS,
             legacy_configured: [false; 3],
+            locked_history: [None; 8],
+            history_bindings: [None; 48],
+            history_binding_len: 0,
             normal_actions: [None; 48],
             normal_action_len: 0,
             pane_enter: None,
@@ -268,6 +358,7 @@ impl Shortcuts {
             .iter()
             .flatten()
             .any(|(_, action)| *action == key)
+            && !(key == b'[' && !self.clear_defaults)
         {
             return None;
         }
@@ -294,6 +385,24 @@ impl Shortcuts {
 
     pub fn exits_normal(self, key: u8) -> bool {
         self.normal_exit[..self.normal_exit_len].contains(&key)
+    }
+
+    pub fn enters_history_locked(self, key: u8) -> bool {
+        self.locked_history.contains(&Some(key))
+    }
+
+    pub fn history_binding(self, key: HistoryKey) -> Option<HistoryAction> {
+        self.history_bindings[..self.history_binding_len]
+            .iter()
+            .flatten()
+            .find_map(|(configured, action)| (*configured == key).then_some(*action))
+    }
+
+    pub(crate) fn history_bindings(self) -> impl Iterator<Item = (HistoryKey, HistoryAction)> {
+        self.history_bindings
+            .into_iter()
+            .take(self.history_binding_len)
+            .flatten()
     }
 
     pub fn enters_pane(self, key: u8) -> bool {
@@ -658,7 +767,19 @@ fn parse_keybinds(
                             })
                         })
                 });
-            if enters_normal {
+            if history_switch(binding) {
+                let byte = parse_mode_key(key)
+                    .filter(|byte| (1..=26).contains(byte))
+                    .ok_or_else(|| {
+                        format!("keybinds.locked.{key} must be Ctrl A through Ctrl Z")
+                    })?;
+                let slot = shortcuts
+                    .locked_history
+                    .iter_mut()
+                    .find(|slot| slot.is_none())
+                    .ok_or("too many keybinds.locked history-mode entry keys")?;
+                *slot = Some(byte);
+            } else if enters_normal {
                 let byte = parse_mode_key(key)
                     .filter(|byte| (1..=26).contains(byte))
                     .ok_or_else(|| {
@@ -707,7 +828,16 @@ fn parse_keybinds(
                     })
                 })
                 .collect();
-            if let Some(index) = names
+            if history_switch(binding) {
+                let byte = parse_mode_key(key).ok_or_else(|| {
+                    format!("keybinds.normal.{key} must be a supported history-mode key")
+                })?;
+                if shortcuts.normal_action_len == shortcuts.normal_actions.len() {
+                    return Err("too many supported keybinds.normal actions".to_owned());
+                }
+                shortcuts.normal_actions[shortcuts.normal_action_len] = Some((byte, b'['));
+                shortcuts.normal_action_len += 1;
+            } else if let Some(index) = names
                 .iter()
                 .position(|name| matches!(*name, "new-window" | "new-pane-right" | "new-pane-down"))
             {
@@ -929,7 +1059,13 @@ fn parse_keybinds(
     parse_move_bindings(keybinds.get("move"), &mut shortcuts)?;
     parse_tab_bindings(keybinds.get("tab"), &mut shortcuts)?;
     parse_session_bindings(keybinds.get("session"), &mut shortcuts)?;
+    parse_history_bindings(keybinds.get("history"), &mut shortcuts)?;
     let locked_enter = shortcuts.locked_entry_key();
+    if shortcuts.enters_history_locked(locked_enter) {
+        return Err(
+            "keybinds.locked history-mode entry conflicts with the normal-mode entry".into(),
+        );
+    }
     if shortcuts.exits_normal(locked_enter)
         || [
             shortcuts.pane_enter,
@@ -942,7 +1078,7 @@ fn parse_keybinds(
     {
         return Err("keybinds.locked entry key conflicts with a NORMAL-mode shortcut".to_owned());
     }
-    for (key, _) in shortcuts.normal_actions[..shortcuts.normal_action_len]
+    for (key, action) in shortcuts.normal_actions[..shortcuts.normal_action_len]
         .iter()
         .flatten()
     {
@@ -954,6 +1090,15 @@ fn parse_keybinds(
                 configured == key
                     && (!shortcuts.clear_defaults || shortcuts.legacy_configured[index])
             })
+            || (*action == b'['
+                && [
+                    shortcuts.pane_enter,
+                    shortcuts.resize_enter,
+                    shortcuts.move_enter,
+                    shortcuts.tab_enter,
+                    shortcuts.session_enter,
+                ]
+                .contains(&Some(*key)))
             || shortcuts.exits_normal(*key)
             || *key == locked_enter
         {
@@ -985,6 +1130,104 @@ fn parse_keybinds(
     Ok(shortcuts)
 }
 
+fn history_switch(binding: &toml::Value) -> bool {
+    binding
+        .get("actions")
+        .and_then(toml::Value::as_array)
+        .is_some_and(|actions| {
+            matches!(actions.as_slice(), [action]
+            if action.get("action").and_then(toml::Value::as_str) == Some("switch-mode")
+            && action.get("mode").and_then(toml::Value::as_str) == Some("history"))
+        })
+}
+
+fn parse_history_bindings(
+    value: Option<&toml::Value>,
+    shortcuts: &mut Shortcuts,
+) -> Result<(), String> {
+    let Some(value) = value else {
+        return Ok(());
+    };
+    let table = value.as_table().ok_or("keybinds.history must be a table")?;
+    for (name, binding) in table {
+        let key = match name.as_str() {
+            "up" => HistoryKey::Up,
+            "down" => HistoryKey::Down,
+            "left" => HistoryKey::Left,
+            "right" => HistoryKey::Right,
+            "pageup" => HistoryKey::PageUp,
+            "pagedown" => HistoryKey::PageDown,
+            "home" => HistoryKey::Home,
+            "end" => HistoryKey::End,
+            _ => HistoryKey::Byte(
+                parse_mode_key(name)
+                    .ok_or_else(|| format!("unsupported keybinds.history key: {name}"))?,
+            ),
+        };
+        let actions = binding
+            .get("actions")
+            .and_then(toml::Value::as_array)
+            .ok_or_else(|| format!("keybinds.history.{name} requires actions"))?;
+        let [single] = actions.as_slice() else {
+            return Err(format!(
+                "keybinds.history.{name} requires exactly one action"
+            ));
+        };
+        let action = if single.get("action").and_then(toml::Value::as_str) == Some("switch-mode") {
+            let mode = match single.get("mode").and_then(toml::Value::as_str) {
+                Some("locked") => HistoryMode::Locked,
+                Some("normal") => HistoryMode::Normal,
+                Some("pane") => HistoryMode::Pane,
+                Some("resize") => HistoryMode::Resize,
+                Some("move") => HistoryMode::Move,
+                Some("tab") => HistoryMode::Tab,
+                Some("session") => HistoryMode::Session,
+                _ => {
+                    return Err(format!(
+                        "unsupported keybinds.history.{name} switch-mode target"
+                    ));
+                }
+            };
+            HistoryAction::SwitchMode(mode)
+        } else {
+            let key = match single.as_str() {
+                Some("scroll-up") => HistoryKey::Byte(b'k'),
+                Some("scroll-down") => HistoryKey::Byte(b'j'),
+                Some("scroll-page-up") => HistoryKey::PageUp,
+                Some("scroll-page-down") => HistoryKey::PageDown,
+                Some("scroll-half-page-up") => HistoryKey::Byte(21),
+                Some("scroll-half-page-down") => HistoryKey::Byte(4),
+                Some("scroll-top") => HistoryKey::Byte(b'g'),
+                Some("scroll-bottom") => HistoryKey::Byte(b'G'),
+                Some("history-search-forward") => HistoryKey::Byte(b'/'),
+                Some("history-search-backward") => HistoryKey::Byte(b'?'),
+                Some("history-next-match") => HistoryKey::Byte(b'n'),
+                Some("history-previous-match") => HistoryKey::Byte(b'N'),
+                Some("copy-history") => HistoryKey::Byte(b'y'),
+                Some("toggle-history-selection") => HistoryKey::Byte(b'v'),
+                Some("history-selection-left") => HistoryKey::Byte(b'h'),
+                Some("history-selection-right") => HistoryKey::Byte(b'l'),
+                Some("history-selection-previous-word") => HistoryKey::Byte(b'b'),
+                Some("history-selection-next-word") => HistoryKey::Byte(b'e'),
+                Some("history-selection-line-start") => HistoryKey::Byte(b'0'),
+                Some("history-selection-line-end") => HistoryKey::Byte(b'$'),
+                Some("history-selection-swap") => HistoryKey::Byte(b'o'),
+                _ => return Err(format!("unsupported keybinds.history.{name} action")),
+            };
+            HistoryAction::Key(key)
+        };
+        if shortcuts.history_binding(key).is_some() {
+            return Err(format!("duplicate keybinds.history key: {name}"));
+        }
+        if shortcuts.history_binding_len == shortcuts.history_bindings.len() {
+            return Err("too many keybinds.history bindings".into());
+        }
+        shortcuts.history_bindings[shortcuts.history_binding_len] = Some((key, action));
+        shortcuts.history_binding_len += 1;
+    }
+    Ok(())
+}
+
 fn parse_pane_bindings(
     value: Option<&toml::Value>,
     shortcuts: &mut Shortcuts,
@@ -1011,6 +1254,7 @@ fn parse_pane_bindings(
                     (value.get("action").and_then(toml::Value::as_str) == Some("switch-mode"))
                         .then(|| match value.get("mode").and_then(toml::Value::as_str) {
                             Some("normal") => Some((PaneAction::Normal, false)),
+                            Some("history") => Some((PaneAction::History, false)),
                             Some("resize") => Some((PaneAction::Resize, false)),
                             Some("move") => Some((PaneAction::Move, false)),
                             Some("tab") => Some((PaneAction::Tab, false)),
@@ -1094,6 +1338,7 @@ fn parse_resize_bindings(
                 (value.get("action").and_then(toml::Value::as_str) == Some("switch-mode"))
                     .then(|| match value.get("mode").and_then(toml::Value::as_str) {
                         Some("normal") => Some(ResizeAction::Normal),
+                        Some("history") => Some(ResizeAction::History),
                         Some("pane") => Some(ResizeAction::Pane),
                         Some("move") => Some(ResizeAction::Move),
                         Some("tab") => Some(ResizeAction::Tab),
@@ -1154,6 +1399,7 @@ fn parse_move_bindings(
                 (value.get("action").and_then(toml::Value::as_str) == Some("switch-mode"))
                     .then(|| match value.get("mode").and_then(toml::Value::as_str) {
                         Some("normal") => Some(MoveAction::Normal),
+                        Some("history") => Some(MoveAction::History),
                         Some("pane") => Some(MoveAction::Pane),
                         Some("resize") => Some(MoveAction::Resize),
                         Some("tab") => Some(MoveAction::Tab),
@@ -1234,6 +1480,7 @@ fn parse_tab_bindings(
                     Some("switch-mode") if stay => {
                         match value.get("mode").and_then(toml::Value::as_str) {
                             Some("normal") => Some(TabAction::Normal),
+                            Some("history") => Some(TabAction::History),
                             Some("pane") => Some(TabAction::Pane),
                             Some("resize") => Some(TabAction::Resize),
                             Some("move") => Some(TabAction::Move),
@@ -1294,6 +1541,7 @@ fn parse_session_bindings(
                     (value.get("action").and_then(toml::Value::as_str) == Some("switch-mode"))
                         .then(|| match value.get("mode").and_then(toml::Value::as_str) {
                             Some("normal") => Some(SessionAction::Normal),
+                            Some("history") => Some(SessionAction::History),
                             Some("pane") => Some(SessionAction::Pane),
                             Some("resize") => Some(SessionAction::Resize),
                             Some("move") => Some(SessionAction::Move),
@@ -2049,5 +2297,58 @@ long_command_bell = false
             config_path_from(None, Some("/home/user".into())),
             PathBuf::from("/home/user/.config/rustmux/config.toml")
         );
+    }
+
+    #[test]
+    fn history_mode_accepts_multiple_entries_and_navigation_bindings() {
+        let shortcuts = parse_config(
+            r#"
+[keybinds.locked]
+"Ctrl s" = { actions = [{ action = "switch-mode", mode = "history" }] }
+[keybinds.normal]
+enter = { actions = [{ action = "switch-mode", mode = "history" }] }
+s = { actions = [{ action = "switch-mode", mode = "history" }] }
+[keybinds.history]
+u = { actions = ["scroll-page-up"] }
+down = { actions = ["scroll-down"] }
+"/" = { actions = ["history-search-forward"] }
+p = { actions = [{ action = "switch-mode", mode = "pane" }] }
+"Ctrl g" = { actions = [{ action = "switch-mode", mode = "locked" }] }
+"#,
+        )
+        .unwrap()
+        .shortcuts;
+        assert!(shortcuts.enters_history_locked(19));
+        for key in [b'[', b's', 13] {
+            assert_eq!(shortcuts.resolve(key), Some(b'['));
+        }
+        assert_eq!(
+            shortcuts.history_binding(HistoryKey::Byte(b'u')),
+            Some(HistoryAction::Key(HistoryKey::PageUp))
+        );
+        assert_eq!(
+            shortcuts.history_binding(HistoryKey::Down),
+            Some(HistoryAction::Key(HistoryKey::Byte(b'j')))
+        );
+        assert_eq!(
+            shortcuts.history_binding(HistoryKey::Byte(b'p')),
+            Some(HistoryAction::SwitchMode(HistoryMode::Pane))
+        );
+    }
+
+    #[test]
+    fn history_mode_rejects_invalid_keys_actions_and_conflicting_entries() {
+        for source in [
+            "[keybinds.history]\nx = { actions = ['future-action'] }",
+            "[keybinds.history]\nx = { actions = ['scroll-up', 'scroll-down'] }",
+            "[keybinds.history]\n'Alt x' = { actions = ['scroll-up'] }",
+            "[keybinds.history]\nx = { actions = [{ action = 'switch-mode', mode = 'future' }] }",
+            "[keybinds.history]\nenter = { actions = ['scroll-up'] }\n'Ctrl m' = { actions = ['scroll-down'] }",
+            "[keybinds.locked]\n'Ctrl b' = { actions = [{ action = 'switch-mode', mode = 'history' }] }",
+        ] {
+            assert!(parse_config(source).is_err(), "accepted {source:?}");
+        }
+        let collision = "[keybinds.normal]\ns = { actions = [{ action = 'switch-mode', mode = 'history' }] }\nenter = { actions = [{ action = 'switch-mode', mode = 'history' }] }\n'Ctrl m' = { actions = [{ action = 'switch-mode', mode = 'move' }] }";
+        assert!(parse_config(collision).is_err());
     }
 }

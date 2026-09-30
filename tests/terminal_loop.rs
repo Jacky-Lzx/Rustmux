@@ -53,6 +53,11 @@ fn history() {
 }
 
 #[test]
+fn history_mode() {
+    run_scenario("history_mode");
+}
+
+#[test]
 fn sessions() {
     run_scenario("sessions");
 }

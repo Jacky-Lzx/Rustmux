@@ -17,6 +17,74 @@ query.
 History mode enables drag-event mouse reporting with SGR
 coordinates; exiting restores the live application's mouse modes.
 
+## Configuring History mode
+
+`history` is a configurable `switch-mode` target from `normal`, `pane`, `resize`,
+`move`, `tab`, and named-session `session`. A Ctrl-letter binding in `locked`
+can also open it directly. Default Ctrl-B `[` remains available when defaults
+are enabled. Multiple NORMAL entry keys may target History:
+
+```toml
+[keybinds.normal]
+enter = { actions = [{ action = "switch-mode", mode = "history" }] }
+s = { actions = [{ action = "switch-mode", mode = "history" }] }
+
+[keybinds.history]
+k = { actions = ["scroll-up"] }
+j = { actions = ["scroll-down"] }
+"/" = { actions = ["history-search-forward"] }
+y = { actions = ["copy-history"] }
+q = { actions = [{ action = "switch-mode", mode = "locked" }] }
+esc = { actions = [{ action = "switch-mode", mode = "locked" }] }
+r = { actions = [{ action = "switch-mode", mode = "normal" }] }
+```
+
+Use `mode = "history"` for this track's snapshot browser. `scroll` is not a
+supported mode here. These bindings are read at process/session startup.
+For direct entry, add a distinct key alongside your NORMAL prefix:
+
+```toml
+[keybinds.locked]
+"Ctrl b" = { actions = [{ action = "switch-mode", mode = "normal" }] }
+"Ctrl s" = { actions = [{ action = "switch-mode", mode = "history" }] }
+```
+
+`clear_defaults = true` disables the default History keyboard commands as well
+as the default NORMAL commands. Configure a History exit and every desired
+History command explicitly; the required explicit LOCKED-to-NORMAL prefix
+binding still applies. Without this setting, unbound default History keys keep
+working and explicit bindings override the same physical key.
+
+History keys accept one printable ASCII character, `Ctrl A` through `Ctrl Z`,
+`enter`, `esc`, `tab`, `up`, `down`, `left`, `right`, `pageup`, `pagedown`, `home`,
+and `end`. A binding contains exactly one action:
+
+| Action | Behavior |
+| --- | --- |
+| `scroll-up`, `scroll-down` | Move one row; extend an active keyboard selection vertically |
+| `scroll-page-up`, `scroll-page-down` | Move one pane height |
+| `scroll-half-page-up`, `scroll-half-page-down` | Move half a pane while browsing; one pane while selecting, matching the original Ctrl-U / Ctrl-D behavior |
+| `scroll-top`, `scroll-bottom` | Oldest row / snapshot bottom |
+| `history-search-forward`, `history-search-backward` | Open the literal query editor |
+| `history-next-match`, `history-previous-match` | Repeat in the search direction / opposite direction |
+| `copy-history` | Copy selection, current match, or visible snapshot through OSC 52 |
+| `toggle-history-selection` | Start or cancel keyboard selection |
+| `history-selection-left`, `history-selection-right` | Extend an active selection horizontally |
+| `history-selection-previous-word`, `history-selection-next-word` | Extend by word |
+| `history-selection-line-start`, `history-selection-line-end` | Extend to row boundaries |
+| `history-selection-swap` | Swap selection anchor and active end |
+| `{ action = "switch-mode", mode = "…" }` | Close the snapshot and enter `locked`, `normal`, `pane`, `resize`, `move`, `tab`, or `session` |
+
+SESSION transitions are ignored in unnamed runs. Search text editing and
+bracketed paste do not dispatch History bindings. Escape still cancels an active
+selection or search first; only an otherwise standalone Escape invokes its
+configured action. Mouse wheel/drag remain available with cleared defaults.
+The footer shows configured search, selection, and exit keys. Invalid History
+keys, unknown actions, duplicate physical keys (such as Enter / Ctrl-M), and
+conflicting entry keys report configuration errors.
+
+## Default History keys
+
 | Key in history mode | Action |
 | --- | --- |
 | `k` / `j`, Up / Down | One row older / newer |
@@ -49,7 +117,7 @@ events also scroll; horizontal wheel events are ignored. Legacy mouse reports
 are consumed as complete reports so their payload cannot become keypresses.
 
 Navigation stops at both ends. `G` stays in history mode; it does not resume the
-live display. Window/pane shortcuts are unavailable until exit. Other input is
+live display. Window/pane operations are unavailable until exit; configured `switch-mode` actions can close the snapshot and enter another mode. Other input is
 consumed locally. Bracketed paste is ignored while browsing; inside the query
 editor it inserts text as described below. Plain unbracketed paste cannot be distinguished from
 keypresses. Escape sequences are consumed with a 64-byte bound. A standalone Esc
