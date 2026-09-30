@@ -18,6 +18,29 @@ fn assert_grid(screen: &Screen, replay: &Screen) {
     assert_eq!(screen.cursor_color(), replay.cursor_color());
 }
 #[test]
+fn warning_emoji_erasure_covers_the_external_two_column_glyph() {
+    let mut source = Screen::new(2, 40).unwrap();
+    let mut physical = Screen::new(2, 40).unwrap();
+    let mut parser = Parser::new();
+    let mut outer = Parser::new();
+    let mut renderer = Renderer::default();
+    for input in ["⚠", "\u{fe0f}work", "\x1b[HOK\x1b[K"] {
+        parser.advance(&mut source, input.as_bytes());
+        let bytes = String::from_utf8(frame(&mut renderer, &source)).unwrap();
+        // Use a known two-column scalar in the external replay so that this
+        // regression cannot pass merely because both parsers share a width bug.
+        outer.advance(&mut physical, bytes.replace("⚠️", "中").as_bytes());
+    }
+    let row: String = physical
+        .row(0)
+        .unwrap()
+        .iter()
+        .map(|cell| cell.character)
+        .collect();
+    assert_eq!(row.trim_end(), "OK");
+}
+
+#[test]
 fn one_changed_row_and_cursor_only_frames_preserve_untouched_rows() {
     let mut renderer = Renderer::default();
     let mut screen = Screen::new(24, 80).unwrap();

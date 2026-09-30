@@ -3,7 +3,7 @@
 use std::{collections::VecDeque, io};
 
 mod reflow;
-use unicode_width::UnicodeWidthChar;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const MAX_COMBINING_SCALARS: usize = 16;
 const DEFAULT_TAB_WIDTH: usize = 8;
@@ -1268,8 +1268,12 @@ impl Screen {
             }
             if self.cells[index].combining.len() < MAX_COMBINING_SCALARS {
                 self.cells[index].combining.push(character);
-                self.used[self.row] = self.used[self.row]
-                    .max(index % self.columns + usize::from(self.cells[index].width));
+                if matches!(character, '\u{fe0e}' | '\u{fe0f}') {
+                    self.resize_selected_cell(index);
+                } else {
+                    self.used[self.row] = self.used[self.row]
+                        .max(index % self.columns + usize::from(self.cells[index].width));
+                }
             }
             return;
         }
@@ -1321,6 +1325,63 @@ impl Screen {
         } else {
             self.column += width;
         }
+    }
+
+    /// VS15/VS16 can change the preceding glyph's width after its base arrived.
+    /// Keep the cell span and delayed-wrap cursor consistent with the sequence.
+    fn resize_selected_cell(&mut self, mut index: usize) {
+        let mut cell = self.cells[index].clone();
+        let sequence: String = std::iter::once(cell.character)
+            .chain(cell.combining.iter().copied())
+            .collect();
+        let mut width = sequence.width();
+        let old_width = usize::from(cell.width);
+        if width == old_width || !matches!(width, 1 | 2) {
+            return;
+        }
+        let mut column = index % self.columns;
+        if width > self.columns {
+            // Match the single-column policy for a wide scalar.
+            cell.character = '\u{fffd}';
+            cell.combining.clear();
+            width = 1;
+        } else if column + width > self.columns {
+            if !self.auto_wrap {
+                // A late selector must not emit half a wide glyph at the edge.
+                self.cells[index].combining.pop();
+                return;
+            }
+            self.clear_range(index..index + old_width);
+            self.column = 0;
+            self.advance_line(true);
+            self.wrap_pending = false;
+            column = 0;
+            index = self.row * self.columns;
+            if self.insert_mode {
+                self.insert_characters(width);
+            }
+        } else if self.insert_mode && width > old_width {
+            // The base already inserted its original columns.
+            self.insert_characters(width - old_width);
+        }
+        self.clear_range(index..index + old_width.max(width));
+        cell.width = width as u8;
+        let style = cell.style;
+        self.cells[index] = cell;
+        if width == 2 {
+            self.cells[index + 1] = Cell {
+                width: 0,
+                style,
+                ..Cell::default()
+            };
+        }
+        self.used[self.row] = self.used[self.row].max(column + width);
+        self.wrap_pending = column + width == self.columns;
+        self.column = if self.wrap_pending {
+            self.columns - 1
+        } else {
+            column + width
+        };
     }
 
     // Any write or erase touching half a wide glyph clears both halves.

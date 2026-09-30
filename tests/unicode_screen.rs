@@ -63,6 +63,55 @@ fn parse(rows: usize, columns: usize, input: &[u8]) -> Screen {
 }
 
 #[test]
+fn emoji_selectors_update_width_cursor_and_preserve_style() {
+    let screen = parse(2, 16, "\x1b[31m⚠\x1b[32m\u{fe0f}work".as_bytes());
+    assert_eq!(screen.cursor(), (0, 6));
+    let cells = screen.row(0).unwrap();
+    assert_eq!(cells[0].width, 2);
+    assert_eq!(cells[1].width, 0);
+    assert_eq!(cells[0].combining, ['\u{fe0f}']);
+    assert_eq!(cells[0].style.foreground, Color::Indexed(1));
+    assert_eq!(cells[1].style, cells[0].style);
+    assert_eq!(cells[2].character, 'w');
+    assert_eq!(cells[2].style.foreground, Color::Indexed(2));
+
+    let screen = parse(2, 8, "☕\u{fe0e}X".as_bytes());
+    assert_eq!(screen.cursor(), (0, 2));
+    assert_eq!(screen.row(0).unwrap()[0].width, 1);
+    assert_eq!(screen.row(0).unwrap()[1].character, 'X');
+    let screen = parse(2, 8, "A\u{fe0f}中\u{fe0e}".as_bytes());
+    assert_eq!(screen.cursor(), (0, 3));
+    assert_eq!(screen.row(0).unwrap()[0].width, 1);
+    assert_eq!(screen.row(0).unwrap()[1].width, 2);
+}
+
+#[test]
+fn emoji_selector_growth_handles_margins_and_insert_mode() {
+    let screen = parse(2, 4, "ab⚠\u{fe0f}X".as_bytes());
+    assert_eq!(text(&screen, 0), "ab⚠\u{fe0f}");
+    assert_eq!(text(&screen, 1), "X   ");
+    let screen = parse(2, 4, "abc⚠\u{fe0f}X".as_bytes());
+    assert_eq!(text(&screen, 0), "abc ");
+    assert_eq!(text(&screen, 1), "⚠\u{fe0f}X ");
+    assert_eq!(screen.cursor(), (1, 3));
+    let screen = parse(2, 4, "\x1b[2;1Habc⚠\u{fe0f}X".as_bytes());
+    assert_eq!(text(&screen, 0), "abc ");
+    assert_eq!(text(&screen, 1), "⚠\u{fe0f}X ");
+    let screen = parse(2, 4, "\x1b[?7labc⚠\u{fe0f}".as_bytes());
+    assert_eq!(text(&screen, 0), "abc⚠");
+    assert_eq!(screen.row(0).unwrap()[3].width, 1);
+    let screen = parse(2, 1, "⚠\u{fe0f}".as_bytes());
+    assert_eq!(text(&screen, 0), "�");
+
+    let screen = parse(2, 8, "abcdef\r\x1b[4h⚠\u{fe0f}".as_bytes());
+    assert_eq!(text(&screen, 0), "⚠\u{fe0f}abcdef");
+    assert_eq!(screen.cursor(), (0, 2));
+    let screen = parse(2, 4, "ab☕\u{fe0e}X".as_bytes());
+    assert_eq!(text(&screen, 0), "ab☕\u{fe0e}X");
+    assert!(screen.wrap_pending());
+}
+
+#[test]
 fn utf8_scalars_and_wide_cells_preserve_styles() {
     let screen = parse(2, 8, "é\x1b[31m中😀\x1b[0mZ".as_bytes());
     assert_eq!(text(&screen, 0), "é中😀Z  ");

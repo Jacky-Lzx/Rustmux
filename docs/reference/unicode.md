@@ -34,8 +34,16 @@ text. The existing `write_ascii` API still rejects unsupported input atomically;
 A zero-width scalar attaches to the preceding cell in the current row, or the
 character at the pending-wrap position. A trailing placeholder resolves to its
 leader. At column zero with no pending wrap it is ignored. Suffixes retain the
-base cell's style and do not move the cursor. Beyond 16 scalars, suffix input is
-ignored to keep per-cell storage bounded.
+base cell's style. Ordinary suffixes do not move the cursor. Beyond 16 scalars,
+suffix input is ignored to keep per-cell storage bounded.
+
+VS15 (U+FE0E) and VS16 (U+FE0F) are exceptions: the retained base and suffix
+sequence is measured with `unicode-width`'s non-CJK string width. A valid text
+or emoji presentation sequence can change its cell span between one and two
+columns. The trailing placeholder, cursor and delayed wrap are updated together,
+even when the selector arrives in a later PTY read. Invalid selector/base pairs
+do not widen arbitrary text. Growing a glyph in insert mode inserts the additional
+column; shrinking releases the old trailing cell without shifting later text.
 
 ## Boundaries and editing
 
@@ -43,6 +51,10 @@ A two-column character wraps before writing if only one column remains, clearing
 the unused final cell. Filling the right edge sets delayed wrap as before. On a
 one-column screen, a wide character is replaced by U+FFFD; scalar widths greater
 than two use the same policy.
+
+A selector that widens a glyph at the final column moves the complete glyph to
+the next row with automatic wrap enabled. With wrapping disabled, that selector
+is ignored and the narrow base remains. A one-column screen uses U+FFFD instead.
 
 Writing or erasing either half of a wide character clears both halves, including
 when the cursor was explicitly positioned on the trailing cell. Erase can
@@ -53,8 +65,8 @@ existing active-background policy.
 ## Limits and verification
 
 This is scalar-width handling, not full grapheme-cluster shaping. Emoji ZWJ and
-modifier sequences, variation-selector width changes, flags, script ligatures
-and bidirectional layout are not implemented. Individual wide emoji scalars
+modifier sequences, flags, script ligatures and bidirectional layout are not
+implemented. Individual wide emoji scalars
 work, but complete emoji sequences may occupy a different width from an outer
 terminal. Normalization is not performed.
 
@@ -62,3 +74,7 @@ terminal. Normalization is not performed.
 feeds, cell-pair invariants, style preservation, wide wrap/scroll, partial erasure,
 combining limits, malformed UTF-8 and end-of-stream handling. Run
 `cargo test --test unicode_screen`.
+The selector cases also cover style retention, insert mode and right-edge
+policies. `tests/incremental_render.rs` independently models a two-column
+warning emoji to verify that erasing a shorter replacement leaves no trailing
+character in the external terminal.
