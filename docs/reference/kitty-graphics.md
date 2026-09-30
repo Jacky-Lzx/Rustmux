@@ -565,6 +565,14 @@ immediately. A rectangle still incomplete after 350 ms without changes uses
 the composed PNG/raw fallback.
 Overlapping placements, unsupported media, failed shared-memory creation, or
 an unsuccessful outer query also use that fallback.
+
+The private `graphics::snapshot::source_placement` module recognizes these
+complete and incomplete rectangles and checks source format, validated
+dimensions, crop, offset, and placement identity. After dimension validation,
+it returns borrowed source bytes without resampling or re-encoding them.
+`graphics::snapshot` retains the existing entry points; `graphics::outer`
+owns deferred retries, transmission, and caching.
+
 A band or tile that fits an empty frame but misses the current frame budget is
 retried on the next frame without resending uploads that already succeeded.
 Switching windows, moving/resizing panes, or deleting placements removes their
