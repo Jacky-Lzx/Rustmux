@@ -140,6 +140,13 @@ Uncompressed RGB/RGBA regular placements likewise sample only the visible
 destination pixels after bounded source decoding, so enlarging a small image
 beyond the 32 MiB placement limit does not prevent a small fragment from
 appearing in the viewport.
+
+The private `graphics::decode::raw_reader` module handles raw RGB/RGBA buffers
+and zlib-compressed pixel rows. It retains raw byte-count validation, expanded
+size and row limits, crop bounds, and rejection of truncated or trailing zlib
+data. Public `StoredImage` decoding and placement methods keep their existing
+entry points; zlib reading reuses the shared row sampler.
+
 Large `o=z` RGB/RGBA transfers also remain compressed in the pane store.
 Runtime upload validates their complete zlib stream, and a regular placement
 samples only its visible source-backed destination pixels; invisible pixels
