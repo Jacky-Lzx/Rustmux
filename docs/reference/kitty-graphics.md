@@ -42,10 +42,14 @@ may expand to 32 MiB. Raw RGB/RGBA output must match its dimensions, and
 compressed PNG requires
 `S=<uncompressed-byte-count>`. Malformed streams, mismatched sizes,
 and trailing compressed bytes are discarded before they can replace an image.
-POSIX shared-memory transfers (`t=s`) are read through a bounded mapping, then
-unlinked and closed. The Base64 payload must be a single POSIX shared-memory
-name; `S` and `O` select a byte range. RGB/RGBA without `S` uses its declared
-dimensions as the exact length, since macOS reports page-rounded shared-memory
+The private `graphics::transfer::shared_memory` module owns POSIX shared-memory
+input (`t=s`), including name validation, descriptor ownership, bounded mapping,
+and unlinking. The transfer module retains the crate-private entry point and
+common image-size and compression validation. Shared-memory transfers are read
+through a bounded mapping, then unlinked and closed. The Base64 payload must be
+a single POSIX shared-memory name; `S` and `O` select a byte range. RGB/RGBA
+without `S` uses its declared dimensions as the exact length, since macOS
+reports page-rounded shared-memory
 sizes. Shared-memory bytes then use the same image validation, storage and
 query rules as direct data. Compressed PNG over shared memory is not supported.
 Read failures use one `EBADF:Failed to read image file` reply so the child
@@ -657,6 +661,8 @@ reaching the validated pane store, unsupported media and recovery. Pane tests
 cover interleaved text, per-pane
 isolation and command-output filtering. Run `cargo test --lib graphics::tests`,
 `cargo test --lib graphics::transfer::tests` and `cargo test --test panes`.
+`cargo test --lib graphics::transfer::shared_memory::tests` covers bounded reads,
+unlinking after success or read failure, and malformed names.
 `cargo test --lib graphics::command::tests` checks framing spellings, separator
 rules, malformed/duplicate fields, quiet validation, and independent size limits.
 `cargo test --lib graphics::outer::tests` covers crop/encoding decisions, cache
