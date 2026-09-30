@@ -75,7 +75,17 @@ class Session:
                 self.frame_pending.extend(chunk)
                 # A frame ends in cursor positioning plus its visibility mode. Decode rows
                 # payloads independently of the Rust parser; SGR does not occupy cells.
-                while (match := re.search(rb"\x1b\[[0-9]+;[0-9]+H\x1b\[\?25[hl]", self.frame_pending)):
+                while True:
+                    # The renderer starts painting by hiding the cursor. A
+                    # preceding image cursor restore can form CUP + hide, which
+                    # resembles a frame end; search only after the initial hide.
+                    start = self.frame_pending.find(b"\x1b[?25l")
+                    if start < 0:
+                        break
+                    match = re.compile(rb"\x1b\[[0-9]+;[0-9]+H\x1b\[\?25[hl]").search(
+                        self.frame_pending, start + len(b"\x1b[?25l"))
+                    if match is None:
+                        break
                     end = match.end()
                     frame = bytes(self.frame_pending[:end])
                     del self.frame_pending[:end]
@@ -89,7 +99,11 @@ class Session:
                         self.cursor_shape = int(shape.group(1))
                     # Drawing CUPs replace cell spans. The final CUP only positions
                     # the cursor; retain all untouched cells and rows.
-                    positions = list(re.finditer(rb"\x1b\[([0-9]+);([0-9]+)H", frame))
+                    # Kitty APC commands carry image data, never display cells.
+                    # Retain the raw frame for graphics assertions, but remove
+                    # complete APCs before reconstructing the text plane.
+                    text_frame = re.sub(rb"\x1b_G[^\x1b]*\x1b\\", b"", frame)
+                    positions = list(re.finditer(rb"\x1b\[([0-9]+);([0-9]+)H", text_frame))
                     height = struct.unpack("HHHH", fcntl.ioctl(self.slave, termios.TIOCGWINSZ, b"\0" * 8))[0]
                     height = height or len(self.last_rows)
                     rows = (self.physical_rows + [b""] * height)[:height]
@@ -115,8 +129,10 @@ class Session:
                                             result.append(None)
                                 return result
                             column = int(pos.group(2)) - 1
-                            payload = frame[pos.end():following.start()]
-                            replacement = cells(re.sub(rb"\x1b\[[0-9;:]*m", b"", payload))
+                            payload = text_frame[pos.end():following.start()]
+                            # Image cursor restores can put visibility or other
+                            # CSI metadata between CUPs. Those bytes are not text.
+                            replacement = cells(re.sub(rb"\x1b\[[0-9;: ?]*[a-zA-Z]", b"", payload))
                             previous = cells(rows[row])
                             length = column + len(replacement)
                             previous += [" "] * max(0, length - len(previous))

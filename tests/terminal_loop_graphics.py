@@ -99,15 +99,10 @@ try:
     s.expect(b"CHILD_TEMP_FILE_TRANSFER_OK")
     child_shm_png = shlex.quote(os.path.join(os.path.dirname(__file__), "kitty_child_shm_png.py"))
     s.send(f"python3 {child_shm_png}\n".encode())
-    # Real SHM reads allow an outer image upload between child commands. The
-    # simplified row decoder does not interpret APC graphics; check the rendered
-    # marker in the output stream, as for the placement/deletion scenarios below.
-    deadline = time.monotonic() + 8
-    while b"CHILD_SHM_PNG_OK" not in s.output:
-        s.read()
-        assert time.monotonic() < deadline, bytes(s.output[-1000:])
-    s.output.clear()
-    s.frames.clear()
+    # Success markers are terminal text: incremental frames may only send a
+    # changed suffix while retaining earlier cells. Match reconstructed rows,
+    # not a contiguous marker in the raw graphics/text transport.
+    s.expect(b"CHILD_SHM_PNG_OK")
     child_upload = shlex.quote(os.path.join(os.path.dirname(__file__), "kitty_child_upload.py"))
     s.send(f"python3 {child_upload}\n".encode())
     s.expect(b"CHILD_UPLOAD_REPLIES_OK")
@@ -115,144 +110,72 @@ try:
         os.path.join(os.path.dirname(__file__), "kitty_child_placement.py")
     )
     s.send(f"python3 {child_placement}\n".encode())
-    deadline = time.monotonic() + 8
-    while b"CHILD_PLACEMENT_REPLIES_OK" not in s.output:
-        s.read()
-        assert time.monotonic() < deadline, bytes(s.output[-1000:])
-    s.output.clear()
-    s.frames.clear()
+    s.expect(b"CHILD_PLACEMENT_REPLIES_OK")
     child_transmit_place = shlex.quote(
         os.path.join(os.path.dirname(__file__), "kitty_child_transmit_place.py")
     )
     s.send(f"python3 {child_transmit_place}\n".encode())
-    deadline = time.monotonic() + 8
-    while b"CHILD_TRANSMIT_PLACE_REPLIES_OK" not in s.output:
-        s.read()
-        assert time.monotonic() < deadline, bytes(s.output[-1000:])
-    s.output.clear()
-    s.frames.clear()
+    s.expect(b"CHILD_TRANSMIT_PLACE_REPLIES_OK")
     child_visible_delete = shlex.quote(
         os.path.join(os.path.dirname(__file__), "kitty_child_visible_delete.py")
     )
     s.send(f"python3 {child_visible_delete}\n".encode())
-    deadline = time.monotonic() + 8
-    while b"CHILD_VISIBLE_DELETE_OK" not in s.output:
-        s.read()
-        assert time.monotonic() < deadline, bytes(s.output[-1000:])
-    s.output.clear()
-    s.frames.clear()
+    s.expect(b"CHILD_VISIBLE_DELETE_OK")
     child_cursor_delete = shlex.quote(
         os.path.join(os.path.dirname(__file__), "kitty_child_cursor_delete.py")
     )
     s.send(f"python3 {child_cursor_delete}\n".encode())
-    deadline = time.monotonic() + 8
-    while b"CHILD_CURSOR_DELETE_OK" not in s.output:
-        s.read()
-        assert time.monotonic() < deadline, bytes(s.output[-1000:])
-    s.output.clear()
-    s.frames.clear()
+    s.expect(b"CHILD_CURSOR_DELETE_OK")
     child_cell_delete = shlex.quote(
         os.path.join(os.path.dirname(__file__), "kitty_child_cell_delete.py")
     )
     s.send(f"python3 {child_cell_delete}\n".encode())
-    deadline = time.monotonic() + 8
-    while b"CHILD_CELL_DELETE_OK" not in s.output:
-        s.read()
-        assert time.monotonic() < deadline, bytes(s.output[-1000:])
-    s.output.clear()
-    s.frames.clear()
+    s.expect(b"CHILD_CELL_DELETE_OK")
     child_z_cell_delete = shlex.quote(
         os.path.join(os.path.dirname(__file__), "kitty_child_z_cell_delete.py")
     )
     s.send(f"python3 {child_z_cell_delete}\n".encode())
-    deadline = time.monotonic() + 8
-    while b"CHILD_Z_CELL_DELETE_OK" not in s.output:
-        s.read()
-        assert time.monotonic() < deadline, bytes(s.output[-1000:])
-    s.output.clear()
-    s.frames.clear()
+    s.expect(b"CHILD_Z_CELL_DELETE_OK")
     child_z_delete = shlex.quote(
         os.path.join(os.path.dirname(__file__), "kitty_child_z_delete.py")
     )
     s.send(f"python3 {child_z_delete}\n".encode())
-    deadline = time.monotonic() + 8
-    while b"CHILD_Z_DELETE_OK" not in s.output:
-        s.read()
-        assert time.monotonic() < deadline, bytes(s.output[-1000:])
-    s.output.clear()
-    s.frames.clear()
+    s.expect(b"CHILD_Z_DELETE_OK")
     child_column_delete = shlex.quote(
         os.path.join(os.path.dirname(__file__), "kitty_child_column_delete.py")
     )
     s.send(f"python3 {child_column_delete}\n".encode())
-    deadline = time.monotonic() + 8
-    while b"CHILD_COLUMN_DELETE_OK" not in s.output:
-        s.read()
-        assert time.monotonic() < deadline, bytes(s.output[-1000:])
-    s.output.clear()
-    s.frames.clear()
+    s.expect(b"CHILD_COLUMN_DELETE_OK")
     child_row_delete = shlex.quote(
         os.path.join(os.path.dirname(__file__), "kitty_child_row_delete.py")
     )
     s.send(f"python3 {child_row_delete}\n".encode())
-    deadline = time.monotonic() + 8
-    while b"CHILD_ROW_DELETE_OK" not in s.output:
-        s.read()
-        assert time.monotonic() < deadline, bytes(s.output[-1000:])
-    s.output.clear()
-    s.frames.clear()
+    s.expect(b"CHILD_ROW_DELETE_OK")
     child_id_range_delete = shlex.quote(
         os.path.join(os.path.dirname(__file__), "kitty_child_id_range_delete.py")
     )
     s.send(f"python3 {child_id_range_delete}\n".encode())
-    # The outer renderer can split the first few cells of this marker across
-    # frames while Kitty image uploads are being painted beside it.
-    deadline = time.monotonic() + 8
-    while b"ID_RANGE_DELETE_OK" not in s.output:
-        s.read()
-        assert time.monotonic() < deadline, bytes(s.output[-1000:])
-    s.output.clear()
-    s.frames.clear()
+    s.expect(b"CHILD_ID_RANGE_DELETE_OK")
     child_image_number_upload = shlex.quote(
         os.path.join(os.path.dirname(__file__), "kitty_child_image_number_upload.py")
     )
     s.send(f"python3 {child_image_number_upload}\n".encode())
-    deadline = time.monotonic() + 8
-    while b"NUMBERED_UPLOAD_OK" not in s.output:
-        s.read()
-        assert time.monotonic() < deadline, bytes(s.output[-1000:])
-    s.output.clear()
-    s.frames.clear()
+    s.expect(b"NUMBERED_UPLOAD_OK")
     child_numbered_placement = shlex.quote(
         os.path.join(os.path.dirname(__file__), "kitty_child_numbered_placement.py")
     )
     s.send(f"python3 {child_numbered_placement}\n".encode())
-    deadline = time.monotonic() + 8
-    while b"PLACE_BY_NUMBER_OK" not in s.output:
-        s.read()
-        assert time.monotonic() < deadline, bytes(s.output[-1000:])
-    s.output.clear()
-    s.frames.clear()
+    s.expect(b"PLACE_BY_NUMBER_OK")
     child_number_delete = shlex.quote(
         os.path.join(os.path.dirname(__file__), "kitty_child_number_delete.py")
     )
     s.send(f"python3 {child_number_delete}\n".encode())
-    deadline = time.monotonic() + 8
-    while b"NUMBER_DELETE_OK" not in s.output:
-        s.read()
-        assert time.monotonic() < deadline, bytes(s.output[-1000:])
-    s.output.clear()
-    s.frames.clear()
+    s.expect(b"NUMBER_DELETE_OK")
     child_zlib_direct = shlex.quote(
         os.path.join(os.path.dirname(__file__), "kitty_child_zlib_direct.py")
     )
     s.send(f"python3 {child_zlib_direct}\n".encode())
-    deadline = time.monotonic() + 8
-    while b"ZLIB_DIRECT_OK" not in s.output:
-        s.read()
-        assert time.monotonic() < deadline, bytes(s.output[-1000:])
-    s.output.clear()
-    s.frames.clear()
+    s.expect(b"ZLIB_DIRECT_OK")
     s.send(
         b"printf '\\033_Ga=T,f=32,s=1,v=1,i=5,p=1,c=1,r=1,z=-1073741825,C=1,q=2;AQIDBA==\\033\\\\"
         b"\\033_Ga=T,f=32,s=1,v=1,i=6,p=1,c=1,r=1,z=-1,C=1,q=2;AQIDBA==\\033\\\\"

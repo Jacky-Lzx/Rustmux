@@ -56,3 +56,8 @@ fn history() {
 fn sessions() {
     run_scenario("sessions");
 }
+
+#[test]
+fn frame_reconstruction() {
+    run_scenario("frames");
+}
