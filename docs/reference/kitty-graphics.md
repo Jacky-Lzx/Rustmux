@@ -159,6 +159,11 @@ directly. Both paths limit the aggregate RGBA output to 32 MiB and still
 validate the complete source stream. Adjacent output columns advance their
 pixel-center source coordinate by quotient and remainder, avoiding a 128-bit
 division for each sampled output pixel.
+The private `graphics::snapshot::placeholder_raster` module owns placeholder
+identity resolution, referenced-region collection, bounded or sparse raster
+selection, and per-cell clipping. It shares the snapshot's dimension cache
+and cumulative layer-input budget with ordinary placements, retaining
+insertion-order identity selection and the bounded Adam7 fallback.
 The private `graphics::decode::sampling` module owns these shared sample
 coordinates, sparse row scheduling, row-to-RGBA conversion, and bounded output
 allocation. PNG and zlib readers retain their source-bound checks and complete
@@ -720,6 +725,9 @@ rules, malformed/duplicate fields, quiet validation, and independent size limits
 intersection, aspect-ratio sizing, anchor overflow, and pixel-layout bounds.
 `cargo test --lib graphics::outer::tests` covers crop/encoding decisions, cache
 reuse, frame-budget retries, stacking bands, and image/placement cleanup.
+`cargo test --lib graphics::snapshot::placeholder_raster::tests` checks
+letterboxed source-cell clipping, destination coordinates, and bounded-region
+equivalence.
 Store tests also cover replacement, isolation, transient/unplaced quota eviction,
 numbered-image fallback, explicit removal, named and anonymous references,
 and soft versus hard deletion.
