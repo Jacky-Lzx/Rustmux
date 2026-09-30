@@ -438,6 +438,12 @@ pixels, converting only one Base64-sized chunk at a time. A tile containing
 any transparency retains `f=32`; both paths reject an over-budget transfer
 before writing. The runtime uses the shorter eligible raw transfer.
 
+The private `graphics::output::png_output` module owns PNG preparation,
+encoded-size preflight, and `f=100` chunked transmission, including the
+source-PNG passthrough path. `graphics::output` retains the existing entry
+points and owns raw RGB/RGBA transmission; both paths share the same chunk
+limits and image validation.
+
 `EncodedKittyPng::from_rgba` is a bounded output boundary. It
 validates the RGBA dimensions, encodes a static 8-bit PNG with a bounded
 32 MiB output buffer using fast compression, and retains it so callers can
