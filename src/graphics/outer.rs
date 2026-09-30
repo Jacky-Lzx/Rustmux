@@ -1,12 +1,36 @@
-//! Crop, tile, and encode images for the outer Kitty terminal.
+//! Render and retain Kitty image overlays for one outer-terminal attachment.
 
-use std::io;
+use std::collections::VecDeque;
+use std::hash::{Hash, Hasher};
+use std::io::{self, Write};
+use std::time::{Duration, Instant};
 
 use super::{
     decode::DecodedImage,
-    output::{EncodedKittyPng, kitty_rgb_placement_len, kitty_rgba_placement_len},
+    output::{
+        EncodedKittyPng, kitty_png_passthrough_len, kitty_rgb_placement_len,
+        kitty_rgba_placement_len, write_kitty_png_passthrough_with_limit,
+        write_kitty_rgb_placement_with_limit, write_kitty_rgba_placement_with_limit,
+    },
+    shared_memory_output::{SharedPixels, cached_placement_command},
+    snapshot::{ImageBand, SourceImagePlacement, SourceImageProgress},
     store::CellPixelSize,
 };
+use crate::{
+    layout::{PaneId, Rect},
+    pane::Pane,
+    pane_set::PaneSet,
+    render::frame::{FrameWriter, MAX_FRAME},
+    window::WindowId,
+};
+
+const MAX_PENDING_SHM_BYTES: usize = 64 * 1024 * 1024;
+const MAX_CACHED_OUTER_IMAGE_BYTES: usize = 32 * 1024 * 1024;
+const MAX_CACHED_OUTER_IMAGES: usize = 8;
+
+// Yazi paints virtual-image placeholders over several PTY reads. Give an
+// incomplete rectangle time to finish before composing an expensive PNG.
+const INCOMPLETE_VIRTUAL_QUIET: Duration = Duration::from_millis(350);
 
 // Preferred raw tile target; an indivisible larger cell gets exact frame preflight.
 const MAX_KITTY_TILE_RAW_BYTES: usize = 8 * 1024 * 1024;
@@ -17,7 +41,7 @@ const MIN_KITTY_PNG_CANDIDATE_BYTES: usize = 256 * 1024;
 /// Drop transparent pane-sized margins before encoding an outer placement.
 /// Keeping the crop aligned to cells lets the cursor represent its origin
 /// without introducing a separate pixel-offset protocol path.
-pub(crate) fn crop_overlay_to_visible_cells(
+fn crop_overlay_to_visible_cells(
     image: DecodedImage,
     cell: CellPixelSize,
 ) -> Option<(DecodedImage, usize, usize)> {
@@ -81,10 +105,7 @@ pub(crate) fn crop_overlay_to_visible_cells(
 
 /// Split a large image into cell-aligned rectangles. Keeping complete cells
 /// together avoids relying on Kitty's pixel-offset placement controls.
-pub(crate) fn overlay_tile_size(
-    image: &DecodedImage,
-    cell: CellPixelSize,
-) -> Option<(usize, usize)> {
+fn overlay_tile_size(image: &DecodedImage, cell: CellPixelSize) -> Option<(usize, usize)> {
     let cell_width = usize::from(cell.width());
     let cell_height = usize::from(cell.height());
     let cell_bytes = cell_width.checked_mul(cell_height)?.checked_mul(4)?;
@@ -104,7 +125,7 @@ pub(crate) fn overlay_tile_size(
     ))
 }
 
-pub(crate) fn overlay_tile(
+fn overlay_tile(
     image: &DecodedImage,
     x: usize,
     y: usize,
@@ -124,13 +145,13 @@ pub(crate) fn overlay_tile(
     })
 }
 
-pub(crate) enum OverlayPayload {
+enum OverlayPayload {
     Rgb,
     Rgba,
     Png(EncodedKittyPng),
 }
 
-pub(crate) fn prepare_overlay_payload(
+fn prepare_overlay_payload(
     image: &DecodedImage,
     image_id: u32,
     z_index: i32,
@@ -150,10 +171,709 @@ pub(crate) fn prepare_overlay_payload(
     Ok((raw_payload, raw_len))
 }
 
+// The outer alternate screen belongs to this attachment. Only delete IDs we
+// allocated here; deleting all images could erase another client's graphics.
+#[derive(Clone, Copy, Eq, PartialEq)]
+struct KittyOverlay {
+    window: WindowId,
+    pane: PaneId,
+    band: ImageBand,
+    revision: u64,
+    placeholder_revision: u64,
+    rect: Rect,
+    cell: CellPixelSize,
+    alternate: bool,
+    image_id: u32,
+    placement_id: Option<u32>,
+    column_offset: usize,
+    row_offset: usize,
+}
+
+struct CachedOuterImage {
+    image_id: u32,
+    format: u8,
+    width: u32,
+    height: u32,
+    fingerprint: u64,
+    data: Vec<u8>,
+    last_used: u64,
+}
+
+fn source_fingerprint(source: &SourceImagePlacement<'_>) -> u64 {
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    (source.format, source.width, source.height).hash(&mut hash);
+    source.data.hash(&mut hash);
+    hash.finish()
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OuterImageDelete {
+    Image(u32),
+    Placement { image_id: u32, placement_id: u32 },
+}
+
+struct PendingPngTile {
+    overlay: KittyOverlay,
+    png: EncodedKittyPng,
+    placement_len: usize,
+}
+
+struct IncompleteVirtual {
+    window: WindowId,
+    pane: PaneId,
+    revision: u64,
+    placeholder_revision: u64,
+    rect: Rect,
+    cell: CellPixelSize,
+    alternate: bool,
+    last_change: Instant,
+    waiting: bool,
+}
+
+pub(crate) struct KittyOverlays {
+    entries: Vec<KittyOverlay>,
+    pending_delete: VecDeque<OuterImageDelete>,
+    cached_images: Vec<CachedOuterImage>,
+    pending_png: Option<PendingPngTile>,
+    incomplete_virtual: Vec<IncompleteVirtual>,
+    next_id: u32,
+    next_placement_id: u32,
+    cache_clock: u64,
+    pending_retry: bool,
+    pending_shm: Vec<SharedPixels>,
+    shm_supported: bool,
+}
+
+impl Default for KittyOverlays {
+    fn default() -> Self {
+        Self {
+            entries: Vec::new(),
+            pending_delete: VecDeque::new(),
+            cached_images: Vec::new(),
+            pending_png: None,
+            incomplete_virtual: Vec::new(),
+            next_id: 0x8000_0000,
+            next_placement_id: 1,
+            cache_clock: 0,
+            pending_retry: false,
+            pending_shm: Vec::new(),
+            shm_supported: false,
+        }
+    }
+}
+
+impl KittyOverlays {
+    pub(crate) fn shared_memory_supported(&self) -> bool {
+        self.shm_supported
+    }
+
+    pub(crate) fn enable_shared_memory(&mut self, output: &mut VecDeque<u8>) -> io::Result<()> {
+        self.clear(output)?;
+        self.shm_supported = true;
+        Ok(())
+    }
+
+    pub(crate) fn needs_retry(&self) -> bool {
+        self.pending_retry
+    }
+
+    pub(crate) fn invalidate_cached_image(&mut self, image_id: u32) -> bool {
+        let Some(index) = self
+            .cached_images
+            .iter()
+            .position(|image| image.image_id == image_id)
+        else {
+            return false;
+        };
+        self.cached_images.remove(index);
+        self.entries.retain(|entry| entry.image_id != image_id);
+        self.pending_delete
+            .push_back(OuterImageDelete::Image(image_id));
+        self.pending_retry = true;
+        true
+    }
+
+    fn cached_source(&self, source: &SourceImagePlacement<'_>, fingerprint: u64) -> Option<usize> {
+        self.cached_images.iter().position(|cached| {
+            cached.fingerprint == fingerprint
+                && cached.format == source.format
+                && cached.width == source.width
+                && cached.height == source.height
+                && cached.data == source.data
+        })
+    }
+
+    fn make_cache_room(&mut self, size: usize, output: &mut VecDeque<u8>) -> io::Result<bool> {
+        if size > MAX_CACHED_OUTER_IMAGE_BYTES {
+            return Ok(false);
+        }
+        let mut room_available = true;
+        while self.cached_images.len() >= MAX_CACHED_OUTER_IMAGES
+            || self
+                .cached_images
+                .iter()
+                .map(|image| image.data.len())
+                .sum::<usize>()
+                > MAX_CACHED_OUTER_IMAGE_BYTES - size
+        {
+            let victim = self
+                .cached_images
+                .iter()
+                .enumerate()
+                .filter(|(_, image)| {
+                    !self
+                        .entries
+                        .iter()
+                        .any(|entry| entry.image_id == image.image_id)
+                })
+                .min_by_key(|(_, image)| image.last_used)
+                .map(|(index, _)| index);
+            let Some(victim) = victim else {
+                room_available = false;
+                break;
+            };
+            let image = self.cached_images.remove(victim);
+            self.pending_delete
+                .push_back(OuterImageDelete::Image(image.image_id));
+        }
+        self.flush_deletes(output)?;
+        if !self.pending_delete.is_empty() {
+            self.pending_retry = true;
+            return Ok(false);
+        }
+        Ok(room_available)
+    }
+
+    fn defer_incomplete_virtual(&mut self, candidate: IncompleteVirtual) -> bool {
+        let now = candidate.last_change;
+        if let Some(state) = self
+            .incomplete_virtual
+            .iter_mut()
+            .find(|state| state.window == candidate.window && state.pane == candidate.pane)
+        {
+            if state.revision != candidate.revision
+                || state.placeholder_revision != candidate.placeholder_revision
+                || state.rect != candidate.rect
+                || state.cell != candidate.cell
+                || state.alternate != candidate.alternate
+            {
+                *state = candidate;
+            }
+            if state.waiting && now.duration_since(state.last_change) >= INCOMPLETE_VIRTUAL_QUIET {
+                state.waiting = false;
+            }
+            return state.waiting;
+        }
+        self.incomplete_virtual.push(candidate);
+        true
+    }
+
+    pub(crate) fn next_deferred_retry(&self) -> Option<Instant> {
+        self.incomplete_virtual
+            .iter()
+            .filter(|state| state.waiting)
+            .map(|state| state.last_change + INCOMPLETE_VIRTUAL_QUIET)
+            .min()
+    }
+
+    pub(crate) fn render(
+        &mut self,
+        window: WindowId,
+        panes: &PaneSet<Pane>,
+        cell: CellPixelSize,
+        outer_rows: u16,
+        cursor: (usize, usize),
+        output: &mut VecDeque<u8>,
+    ) -> io::Result<()> {
+        self.pending_shm.retain(|object| !object.consumed());
+        let retry_missing = self.pending_retry;
+        self.pending_retry = false;
+        let visible = panes.layout().content_geometry().panes;
+        self.incomplete_virtual.retain(|state| {
+            state.window == window
+                && state.cell == cell
+                && visible.iter().any(|(id, rect)| {
+                    *id == state.pane
+                        && *rect == state.rect
+                        && panes.get(*id).is_some_and(|pane| {
+                            pane.image_store().revision() == state.revision
+                                && pane.virtual_placeholder_revision() == state.placeholder_revision
+                                && pane.screen().is_alternate() == state.alternate
+                                && pane.image_store().placements().next().is_some()
+                        })
+                })
+        });
+        // A deferred PNG belongs to the same scene revision as its tile. Drop
+        // it before considering output if that scene has changed meanwhile.
+        if self.pending_png.as_ref().is_some_and(|pending| {
+            let cached = pending.overlay;
+            cached.window != window
+                || cached.cell != cell
+                || !visible.iter().any(|(id, rect)| {
+                    *id == cached.pane
+                        && *rect == cached.rect
+                        && panes.get(*id).is_some_and(|pane| {
+                            pane.image_store().revision() == cached.revision
+                                && pane.virtual_placeholder_revision()
+                                    == cached.placeholder_revision
+                                && pane.screen().is_alternate() == cached.alternate
+                        })
+                })
+        }) {
+            self.pending_png = None;
+        }
+        let mut moved_cursor = false;
+        for old in std::mem::take(&mut self.entries) {
+            let current = visible.iter().find(|(id, _)| *id == old.pane);
+            let unchanged = old.window == window
+                && current.is_some_and(|(_, rect)| *rect == old.rect)
+                && panes.get(old.pane).is_some_and(|pane| {
+                    pane.image_store().revision() == old.revision
+                        && pane.virtual_placeholder_revision() == old.placeholder_revision
+                        && pane.screen().is_alternate() == old.alternate
+                })
+                && old.cell == cell;
+            if unchanged {
+                self.entries.push(old);
+            } else {
+                self.pending_delete.push_back(match old.placement_id {
+                    Some(placement_id) => OuterImageDelete::Placement {
+                        image_id: old.image_id,
+                        placement_id,
+                    },
+                    None => OuterImageDelete::Image(old.image_id),
+                });
+            }
+        }
+        self.flush_deletes(output)?;
+        if !self.pending_delete.is_empty() {
+            return Ok(());
+        }
+        for (id, rect) in visible {
+            if !retry_missing
+                && self
+                    .entries
+                    .iter()
+                    .any(|entry| entry.window == window && entry.pane == id)
+            {
+                continue;
+            }
+            let pane = panes.get(id).expect("visible pane has content");
+            if pane.image_store().placements().next().is_none() {
+                continue;
+            }
+            let row = usize::from(outer_rows > 1) + usize::from(rect.row) + 1;
+            let column = usize::from(rect.column) + 1;
+            let restore = format!("\x1b[{};{}H", cursor.0 + 1, cursor.1 + 1);
+            for band in ImageBand::ALL {
+                let source_progress = pane.source_image_band_progress(cell, band);
+                if matches!(&source_progress, Some(SourceImageProgress::Incomplete)) {
+                    if self.defer_incomplete_virtual(IncompleteVirtual {
+                        window,
+                        pane: id,
+                        revision: pane.image_store().revision(),
+                        placeholder_revision: pane.virtual_placeholder_revision(),
+                        rect,
+                        cell,
+                        alternate: pane.screen().is_alternate(),
+                        last_change: Instant::now(),
+                        waiting: true,
+                    }) {
+                        continue;
+                    }
+                } else if band == ImageBand::AboveText {
+                    self.incomplete_virtual
+                        .retain(|state| state.window != window || state.pane != id);
+                }
+                if self.shm_supported
+                    && let Some(SourceImageProgress::Complete(raw)) = &source_progress
+                {
+                    let position = format!("\x1b[{};{}H", row + raw.row, column + raw.column);
+                    if self.entries.iter().any(|entry| {
+                        entry.window == window && entry.pane == id && entry.band == band
+                    }) {
+                        continue;
+                    }
+                    let fingerprint = source_fingerprint(raw);
+                    if let Some(cached) = self.cached_source(raw, fingerprint)
+                        && let Some(next_placement_id) = self.next_placement_id.checked_add(1)
+                    {
+                        let image_id = self.cached_images[cached].image_id;
+                        let placement_id = self.next_placement_id;
+                        let command = cached_placement_command(
+                            raw.format,
+                            (raw.columns, raw.rows),
+                            image_id,
+                            placement_id,
+                            band.output_z(),
+                        );
+                        if position.len() + command.len() + restore.len() > MAX_FRAME - output.len()
+                        {
+                            self.pending_retry = true;
+                            continue;
+                        }
+                        let overlay = KittyOverlay {
+                            window,
+                            pane: id,
+                            band,
+                            revision: pane.image_store().revision(),
+                            placeholder_revision: pane.virtual_placeholder_revision(),
+                            rect,
+                            cell,
+                            alternate: pane.screen().is_alternate(),
+                            image_id,
+                            placement_id: Some(placement_id),
+                            column_offset: raw.column,
+                            row_offset: raw.row,
+                        };
+                        FrameWriter(output).write_all(position.as_bytes())?;
+                        FrameWriter(output).write_all(&command)?;
+                        moved_cursor = true;
+                        self.next_placement_id = next_placement_id;
+                        self.cache_clock = self.cache_clock.wrapping_add(1);
+                        self.cached_images[cached].last_used = self.cache_clock;
+                        self.entries.push(overlay);
+                        continue;
+                    }
+                    let image_id = self.next_id;
+                    if let Some(next_id) = image_id.checked_add(1) {
+                        let retained: usize = self.pending_shm.iter().map(SharedPixels::len).sum();
+                        if raw.data.len() <= MAX_PENDING_SHM_BYTES.saturating_sub(retained)
+                            && let Ok(object) = SharedPixels::create(raw.data)
+                        {
+                            let next_placement_id = self.next_placement_id.checked_add(1);
+                            let mut cached_data = if next_placement_id.is_some()
+                                && raw.data.len() <= MAX_CACHED_OUTER_IMAGE_BYTES
+                            {
+                                let mut copy = Vec::new();
+                                copy.try_reserve_exact(raw.data.len()).ok().map(|()| {
+                                    copy.extend_from_slice(raw.data);
+                                    copy
+                                })
+                            } else {
+                                None
+                            };
+                            let mut command = object.placement_command_with_id(
+                                raw.format,
+                                (raw.width, raw.height),
+                                (raw.columns, raw.rows),
+                                image_id,
+                                cached_data.as_ref().map(|_| self.next_placement_id),
+                                band.output_z(),
+                            );
+                            if position.len() + command.len() + restore.len()
+                                > MAX_FRAME - output.len()
+                            {
+                                self.pending_retry = true;
+                                continue;
+                            }
+                            if cached_data.is_some()
+                                && !self.make_cache_room(raw.data.len(), output)?
+                            {
+                                if self.pending_retry {
+                                    continue;
+                                }
+                                cached_data = None;
+                                command = object.placement_command(
+                                    raw.format,
+                                    (raw.width, raw.height),
+                                    (raw.columns, raw.rows),
+                                    image_id,
+                                    band.output_z(),
+                                );
+                            }
+                            if position.len() + command.len() + restore.len()
+                                > MAX_FRAME - output.len()
+                            {
+                                self.pending_retry = true;
+                                continue;
+                            }
+                            let placement_id = cached_data.as_ref().map(|_| self.next_placement_id);
+                            let overlay = KittyOverlay {
+                                window,
+                                pane: id,
+                                band,
+                                revision: pane.image_store().revision(),
+                                placeholder_revision: pane.virtual_placeholder_revision(),
+                                rect,
+                                cell,
+                                alternate: pane.screen().is_alternate(),
+                                image_id,
+                                placement_id,
+                                column_offset: raw.column,
+                                row_offset: raw.row,
+                            };
+                            FrameWriter(output).write_all(position.as_bytes())?;
+                            FrameWriter(output).write_all(&command)?;
+                            moved_cursor = true;
+                            self.next_id = next_id;
+                            self.entries.push(overlay);
+                            self.pending_shm.push(object);
+                            if let Some(data) = cached_data {
+                                self.next_placement_id =
+                                    next_placement_id.expect("cache ID checked");
+                                self.cache_clock = self.cache_clock.wrapping_add(1);
+                                self.cached_images.push(CachedOuterImage {
+                                    image_id,
+                                    format: raw.format,
+                                    width: raw.width,
+                                    height: raw.height,
+                                    fingerprint,
+                                    data,
+                                    last_used: self.cache_clock,
+                                });
+                            }
+                            continue;
+                        }
+                    }
+                }
+                if let Some(SourceImageProgress::Complete(source)) = &source_progress
+                    && source.format == 100
+                    && let Some(next_id) = self.next_id.checked_add(1)
+                    && !self.entries.iter().any(|entry| {
+                        entry.window == window && entry.pane == id && entry.band == band
+                    })
+                {
+                    let image_id = self.next_id;
+                    let position = format!("\x1b[{};{}H", row + source.row, column + source.column);
+                    if let Ok(payload_len) =
+                        kitty_png_passthrough_len(source.data, image_id, band.output_z())
+                    {
+                        let frame_len = position.len() + payload_len + restore.len();
+                        if frame_len <= MAX_FRAME {
+                            if frame_len > MAX_FRAME - output.len() {
+                                self.pending_retry = true;
+                                continue;
+                            }
+                            let overlay = KittyOverlay {
+                                window,
+                                pane: id,
+                                band,
+                                revision: pane.image_store().revision(),
+                                placeholder_revision: pane.virtual_placeholder_revision(),
+                                rect,
+                                cell,
+                                alternate: pane.screen().is_alternate(),
+                                image_id,
+                                placement_id: None,
+                                column_offset: source.column,
+                                row_offset: source.row,
+                            };
+                            FrameWriter(output).write_all(position.as_bytes())?;
+                            write_kitty_png_passthrough_with_limit(
+                                source.data,
+                                image_id,
+                                band.output_z(),
+                                MAX_FRAME - output.len() - restore.len(),
+                                &mut FrameWriter(output),
+                            )?;
+                            moved_cursor = true;
+                            self.next_id = next_id;
+                            self.entries.push(overlay);
+                            continue;
+                        }
+                    }
+                }
+                // A malformed or over-budget band must not suppress the other
+                // two or take down the terminal session.
+                let Ok(Some(image)) = pane.compose_image_band(cell, band) else {
+                    continue;
+                };
+                let Some((image, column_offset, row_offset)) =
+                    crop_overlay_to_visible_cells(image, cell)
+                else {
+                    continue;
+                };
+                let Some((tile_width, tile_height)) = overlay_tile_size(&image, cell) else {
+                    continue;
+                };
+                let width = usize::try_from(image.width).expect("validated image width");
+                let height = usize::try_from(image.height).expect("validated image height");
+                for y in (0..height).step_by(tile_height) {
+                    for x in (0..width).step_by(tile_width) {
+                        let tile_column = column_offset + x / usize::from(cell.width());
+                        let tile_row = row_offset + y / usize::from(cell.height());
+                        if self.entries.iter().any(|entry| {
+                            entry.window == window
+                                && entry.pane == id
+                                && entry.band == band
+                                && entry.column_offset == tile_column
+                                && entry.row_offset == tile_row
+                        }) {
+                            continue;
+                        }
+                        let tile_image =
+                            if x == 0 && y == 0 && tile_width >= width && tile_height >= height {
+                                None
+                            } else {
+                                let Some(tile) = overlay_tile(
+                                    &image,
+                                    x,
+                                    y,
+                                    tile_width.min(width - x),
+                                    tile_height.min(height - y),
+                                ) else {
+                                    continue;
+                                };
+                                Some(tile)
+                            };
+                        let tile = tile_image.as_ref().unwrap_or(&image);
+                        let position = format!("\x1b[{};{}H", row + tile_row, column + tile_column);
+                        let image_id = self.next_id;
+                        let Some(next_id) = image_id.checked_add(1) else {
+                            continue;
+                        };
+                        let overlay = KittyOverlay {
+                            window,
+                            pane: id,
+                            band,
+                            revision: pane.image_store().revision(),
+                            placeholder_revision: pane.virtual_placeholder_revision(),
+                            rect,
+                            cell,
+                            alternate: pane.screen().is_alternate(),
+                            image_id,
+                            placement_id: None,
+                            column_offset: tile_column,
+                            row_offset: tile_row,
+                        };
+                        let prepared = if self
+                            .pending_png
+                            .as_ref()
+                            .is_some_and(|pending| pending.overlay == overlay)
+                        {
+                            let pending = self.pending_png.take().expect("matching cached tile");
+                            Ok((OverlayPayload::Png(pending.png), pending.placement_len))
+                        } else {
+                            prepare_overlay_payload(tile, image_id, band.output_z())
+                        };
+                        let Ok((payload, payload_len)) = prepared else {
+                            continue;
+                        };
+                        let frame_len = position.len() + payload_len + restore.len();
+                        if frame_len > MAX_FRAME {
+                            continue;
+                        }
+                        if frame_len > MAX_FRAME - output.len() {
+                            self.pending_retry = true;
+                            if let OverlayPayload::Png(png) = payload
+                                && self.pending_png.is_none()
+                            {
+                                self.pending_png = Some(PendingPngTile {
+                                    overlay,
+                                    png,
+                                    placement_len: payload_len,
+                                });
+                            }
+                            continue;
+                        }
+                        FrameWriter(output).write_all(position.as_bytes())?;
+                        let remaining = MAX_FRAME - output.len() - restore.len();
+                        match payload {
+                            OverlayPayload::Rgb => write_kitty_rgb_placement_with_limit(
+                                tile,
+                                image_id,
+                                band.output_z(),
+                                remaining,
+                                &mut FrameWriter(output),
+                            )?,
+                            OverlayPayload::Rgba => write_kitty_rgba_placement_with_limit(
+                                tile,
+                                image_id,
+                                band.output_z(),
+                                remaining,
+                                &mut FrameWriter(output),
+                            )?,
+                            OverlayPayload::Png(png) => png.write_with_limit(
+                                image_id,
+                                band.output_z(),
+                                remaining,
+                                &mut FrameWriter(output),
+                            )?,
+                        }
+                        moved_cursor = true;
+                        self.next_id = next_id;
+                        self.entries.push(overlay);
+                    }
+                }
+            }
+        }
+        if moved_cursor {
+            write!(
+                FrameWriter(output),
+                "\x1b[{};{}H",
+                cursor.0 + 1,
+                cursor.1 + 1
+            )?;
+        }
+        if !self.pending_retry {
+            self.pending_png = None;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn clear(&mut self, output: &mut VecDeque<u8>) -> io::Result<()> {
+        self.pending_retry = false;
+        self.pending_png = None;
+        self.incomplete_virtual.clear();
+        for entry in self.entries.drain(..) {
+            if entry.placement_id.is_none() {
+                self.pending_delete
+                    .push_back(OuterImageDelete::Image(entry.image_id));
+            }
+        }
+        for image in self.cached_images.drain(..) {
+            self.pending_delete
+                .push_back(OuterImageDelete::Image(image.image_id));
+        }
+        self.flush_deletes(output)?;
+        Ok(())
+    }
+
+    fn flush_deletes(&mut self, output: &mut VecDeque<u8>) -> io::Result<()> {
+        while let Some(&delete) = self.pending_delete.front() {
+            let command = match delete {
+                OuterImageDelete::Image(image_id) => {
+                    format!("\x1b_Ga=d,d=I,i={image_id},q=2\x1b\\")
+                }
+                OuterImageDelete::Placement {
+                    image_id,
+                    placement_id,
+                } => format!("\x1b_Ga=d,d=i,i={image_id},p={placement_id},q=2\x1b\\"),
+            };
+            if command.len() > MAX_FRAME - output.len() {
+                self.pending_retry = true;
+                break;
+            }
+            FrameWriter(output).write_all(command.as_bytes())?;
+            self.pending_delete.pop_front();
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::render::frame::MAX_FRAME;
+    use crate::window::Windows;
+    use std::ffi::OsStr;
+
+    fn image_window(rows: u16, columns: u16) -> io::Result<PaneSet<Pane>> {
+        let content_rows = if rows >= 3 { rows - 2 } else { rows };
+        let content_columns = if columns >= 3 { columns - 2 } else { columns };
+        PaneSet::new(
+            rows,
+            columns,
+            Pane::spawn_in(
+                OsStr::new("/bin/sh"),
+                None,
+                content_rows,
+                content_columns,
+                crate::config::Notifications::default(),
+                crate::config::DEFAULT_SCROLLBACK_LINES,
+            )?,
+        )
+    }
 
     #[test]
     fn outer_image_crop_preserves_cell_aligned_origin_and_pixels() {
@@ -261,5 +981,782 @@ mod tests {
         let (payload, wire_len) = prepare_overlay_payload(&noise, 7, 0).unwrap();
         assert!(matches!(payload, OverlayPayload::Rgba));
         assert_eq!(wire_len, kitty_rgba_placement_len(&noise, 7, 0).unwrap());
+    }
+    #[test]
+    fn cached_outer_images_evict_the_oldest_inactive_source() {
+        let mut overlays = KittyOverlays::default();
+        for index in 0..MAX_CACHED_OUTER_IMAGES {
+            overlays.cached_images.push(CachedOuterImage {
+                image_id: 0x8000_0000 + index as u32,
+                format: 32,
+                width: 1,
+                height: 1,
+                fingerprint: index as u64,
+                data: vec![index as u8],
+                last_used: index as u64,
+            });
+        }
+        let mut output = VecDeque::new();
+        assert!(overlays.make_cache_room(1, &mut output).unwrap());
+        assert_eq!(overlays.cached_images.len(), MAX_CACHED_OUTER_IMAGES - 1);
+        assert!(
+            overlays
+                .cached_images
+                .iter()
+                .all(|image| image.image_id != 0x8000_0000)
+        );
+        assert_eq!(
+            output.into_iter().collect::<Vec<_>>(),
+            b"\x1b_Ga=d,d=I,i=2147483648,q=2\x1b\\"
+        );
+    }
+
+    #[test]
+    fn kitty_overlay_uploads_once_and_deletes_only_its_own_image() {
+        let cell = CellPixelSize::new(1, 1).unwrap();
+        let mut windows = Windows::default();
+        let window_id = windows
+            .create("image".into(), image_window(4, 4).unwrap())
+            .unwrap();
+        let panes = windows.active_mut().unwrap().content_mut();
+        panes.active_mut().process_output_with_image_store_sized(
+            b"\x1b_Ga=T,f=32,s=1,v=1,i=7,p=1,c=1,r=1,C=1;AQIDBA==\x1b\\",
+            &mut |_| {},
+            cell,
+        );
+        let mut cache = KittyOverlays::default();
+        let mut output = VecDeque::new();
+        cache
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        let upload: Vec<_> = output.drain(..).collect();
+        assert!(
+            upload.starts_with(b"\x1b[3;2H\x1b_Ga=T,f=32,s=1,v=1,i=2147483648,z=0,C=1,q=2,m=0;")
+        );
+        assert!(upload.ends_with(b"\x1b[4;3H"));
+        cache
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        assert!(
+            output.is_empty(),
+            "unchanged image must not be retransmitted"
+        );
+
+        panes.active_mut().image_store_mut().clear();
+        cache
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        assert_eq!(
+            output.drain(..).collect::<Vec<_>>(),
+            b"\x1b_Ga=d,d=I,i=2147483648,q=2\x1b\\"
+        );
+        assert!(cache.entries.is_empty());
+    }
+
+    #[test]
+    fn kitty_overlay_forwards_complete_virtual_rgb_without_compositing() {
+        use base64::Engine;
+
+        let cell = CellPixelSize::new(1, 1).unwrap();
+        let mut windows = Windows::default();
+        let window_id = windows
+            .create("raw preview".into(), image_window(6, 6).unwrap())
+            .unwrap();
+        let panes = windows.active_mut().unwrap().content_mut();
+        let pixels = [255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255];
+        let encoded = base64::engine::general_purpose::STANDARD.encode(pixels);
+        let child = format!(
+            "\x1b_Ga=T,f=24,s=2,v=2,i=7,p=1,U=1;{encoded}\x1b\\\
+             \x1b[38;5;7m\x1b[58;5;1m\
+             \x1b[2;2H\u{10eeee}\u{0305}\u{0305}\u{10eeee}\u{0305}\u{030d}\
+             \x1b[3;2H\u{10eeee}\u{030d}\u{0305}\u{10eeee}\u{030d}\u{030d}"
+        );
+        panes.active_mut().process_output_with_image_store_sized(
+            child.as_bytes(),
+            &mut |_| {},
+            cell,
+        );
+        let raw = panes
+            .active()
+            .source_image_band(cell, ImageBand::AboveText)
+            .unwrap();
+        assert_eq!((raw.column, raw.row, raw.columns, raw.rows), (1, 1, 2, 2));
+        assert_eq!(raw.data, pixels);
+        assert_eq!(raw.format, 24);
+        let mut cache = KittyOverlays {
+            shm_supported: true,
+            ..KittyOverlays::default()
+        };
+        let mut output = VecDeque::new();
+        cache
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        let upload: Vec<_> = output.drain(..).collect();
+        assert!(upload.starts_with(
+            b"\x1b[4;3H\x1b_Ga=T,t=s,f=24,s=2,v=2,S=12,i=2147483648,p=1,c=2,r=2,z=0,C=1,q=1;"
+        ));
+        assert!(upload.ends_with(b"\x1b[4;3H"));
+        assert_eq!(cache.entries.len(), 1);
+        assert_eq!(cache.pending_shm.len(), 1);
+        cache
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        assert!(output.is_empty());
+
+        // An incomplete rectangle must not queue a provisional composite while
+        // the child is still painting it. A stable sparse scene still falls
+        // back to the normal clipped composition after the quiet period.
+        panes
+            .active_mut()
+            .process_output_with_image_store_sized(b"\x1b[2;3H ", &mut |_| {}, cell);
+        assert!(
+            panes
+                .active()
+                .source_image_band(cell, ImageBand::AboveText)
+                .is_none()
+        );
+        cache
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        assert_eq!(
+            output.drain(..).collect::<Vec<_>>(),
+            b"\x1b_Ga=d,d=i,i=2147483648,p=1,q=2\x1b\\"
+        );
+        assert!(!cache.pending_retry);
+        assert!(cache.next_deferred_retry().is_some());
+        cache.incomplete_virtual[0].last_change -= INCOMPLETE_VIRTUAL_QUIET;
+        cache
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        let fallback: Vec<_> = output.drain(..).collect();
+        assert!(fallback.windows(6).any(|window| window == b"\x1b_Ga=T"));
+        assert!(!cache.pending_retry);
+        assert!(cache.next_deferred_retry().is_none());
+        panes.active_mut().process_output_with_image_store_sized(
+            "\x1b[2;3H\u{10eeee}\u{0305}\u{030d}".as_bytes(),
+            &mut |_| {},
+            cell,
+        );
+        assert!(
+            panes
+                .active()
+                .source_image_band(cell, ImageBand::AboveText)
+                .is_some()
+        );
+        panes.active_mut().process_output_with_image_store_sized(
+            b"\x1b_Ga=p,i=7,p=2,U=1,c=2,r=2;\x1b\\",
+            &mut |_| {},
+            cell,
+        );
+        assert!(
+            panes
+                .active()
+                .source_image_band(cell, ImageBand::AboveText)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn kitty_overlay_forwards_validated_virtual_png_bytes_without_reencoding() {
+        use base64::Engine;
+
+        let cell = CellPixelSize::new(1, 1).unwrap();
+        let mut windows = Windows::default();
+        let window_id = windows
+            .create("png preview".into(), image_window(6, 6).unwrap())
+            .unwrap();
+        let panes = windows.active_mut().unwrap().content_mut();
+        let pixels = [
+            255, 0, 0, 128, 0, 255, 0, 255, 0, 0, 255, 64, 255, 255, 255, 255,
+        ];
+        let mut png = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut png, 2, 2);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().unwrap();
+            writer.write_image_data(&pixels).unwrap();
+            writer.finish().unwrap();
+        }
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&png);
+        let child = format!(
+            "\x1b_Ga=T,f=100,s=2,v=2,i=9,p=1,U=1;{encoded}\x1b\\\
+             \x1b[38;5;9m\x1b[58;5;1m\
+             \x1b[2;2H\u{10eeee}\u{0305}\u{0305}\u{10eeee}\u{0305}\u{030d}\
+             \x1b[3;2H\u{10eeee}\u{030d}\u{0305}\u{10eeee}\u{030d}\u{030d}"
+        );
+        panes.active_mut().process_output_with_image_store_sized(
+            child.as_bytes(),
+            &mut |_| {},
+            cell,
+        );
+        let source = panes
+            .active()
+            .source_image_band(cell, ImageBand::AboveText)
+            .unwrap();
+        assert_eq!(source.data, png);
+        assert_eq!(source.format, 100);
+        assert_eq!(
+            (source.column, source.row, source.columns, source.rows),
+            (1, 1, 2, 2)
+        );
+
+        let mut direct = KittyOverlays::default();
+        let mut output = VecDeque::new();
+        direct
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        let upload: Vec<_> = output.drain(..).collect();
+        assert!(upload.starts_with(b"\x1b[4;3H\x1b_Ga=T,f=100,i=2147483648,z=0,C=1,q=2,m=0;"));
+        let commands = crate::graphics::GraphicsFramer::new().advance(&upload);
+        let mut assembler = crate::graphics_transfer::DirectTransferAssembler::new();
+        let transfer = commands
+            .into_iter()
+            .find_map(|event| match event {
+                crate::graphics::GraphicsEvent::Command(command) => assembler.accept(&command),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(transfer.data, png);
+        direct
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        assert!(output.is_empty(), "unchanged PNG must not be retransmitted");
+
+        let mut shared = KittyOverlays {
+            shm_supported: true,
+            ..KittyOverlays::default()
+        };
+        shared
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        let upload: Vec<_> = output.drain(..).collect();
+        let prefix = format!(
+            "\x1b[4;3H\x1b_Ga=T,t=s,f=100,s=2,v=2,S={},i=2147483648,p=1,z=0,C=1,q=1;",
+            png.len()
+        );
+        assert!(upload.starts_with(prefix.as_bytes()));
+        assert_eq!(shared.pending_shm.len(), 1);
+        let encoded_name = upload[prefix.len()..]
+            .split(|&byte| byte == 0x1b)
+            .next()
+            .unwrap();
+        let name = base64::engine::general_purpose::STANDARD
+            .decode(encoded_name)
+            .unwrap();
+        let name = std::ffi::CString::new(name).unwrap();
+        let fd = unsafe { nix::libc::shm_open(name.as_ptr(), nix::libc::O_RDONLY, 0) };
+        assert!(fd >= 0);
+        let mapped = unsafe {
+            nix::libc::mmap(
+                std::ptr::null_mut(),
+                png.len(),
+                nix::libc::PROT_READ,
+                nix::libc::MAP_SHARED,
+                fd,
+                0,
+            )
+        };
+        assert_ne!(mapped, nix::libc::MAP_FAILED);
+        assert_eq!(
+            unsafe { std::slice::from_raw_parts(mapped.cast::<u8>(), png.len()) },
+            png
+        );
+        unsafe {
+            nix::libc::munmap(mapped, png.len());
+            nix::libc::close(fd);
+            nix::libc::shm_unlink(name.as_ptr());
+        }
+    }
+
+    #[test]
+    fn kitty_overlay_forwards_translucent_virtual_rgba_without_compositing() {
+        use base64::Engine;
+
+        let cell = CellPixelSize::new(1, 1).unwrap();
+        let mut windows = Windows::default();
+        let window_id = windows
+            .create("rgba preview".into(), image_window(6, 6).unwrap())
+            .unwrap();
+        let panes = windows.active_mut().unwrap().content_mut();
+        let pixels = [
+            255, 0, 0, 128, 0, 255, 0, 0, 0, 0, 255, 64, 255, 255, 255, 255,
+        ];
+        let encoded = base64::engine::general_purpose::STANDARD.encode(pixels);
+        let child = format!(
+            "\x1b_Ga=T,f=32,s=2,v=2,i=8,p=1,U=1;{encoded}\x1b\\\
+             \x1b[38;5;8m\x1b[58;5;1m\
+             \x1b[2;2H\u{10eeee}\u{0305}\u{0305}\u{10eeee}\u{0305}\u{030d}\
+             \x1b[3;2H\u{10eeee}\u{030d}\u{0305}\u{10eeee}\u{030d}\u{030d}"
+        );
+        panes.active_mut().process_output_with_image_store_sized(
+            child.as_bytes(),
+            &mut |_| {},
+            cell,
+        );
+        let raw = panes
+            .active()
+            .source_image_band(cell, ImageBand::AboveText)
+            .unwrap();
+        assert_eq!(raw.data, pixels);
+        assert_eq!(raw.format, 32);
+
+        let mut cache = KittyOverlays {
+            shm_supported: true,
+            ..KittyOverlays::default()
+        };
+        let mut output = VecDeque::new();
+        cache
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        let upload: Vec<_> = output.drain(..).collect();
+        assert!(upload.starts_with(
+            b"\x1b[4;3H\x1b_Ga=T,t=s,f=32,s=2,v=2,S=16,i=2147483648,p=1,c=2,r=2,z=0,C=1,q=1;"
+        ));
+        assert_eq!(cache.entries.len(), 1);
+        assert_eq!(cache.pending_shm.len(), 1);
+        panes
+            .active_mut()
+            .process_output_with_image_store_sized(b"\x1b[2;3H ", &mut |_| {}, cell);
+        cache
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        assert_eq!(
+            output.drain(..).collect::<Vec<_>>(),
+            b"\x1b_Ga=d,d=i,i=2147483648,p=1,q=2\x1b\\"
+        );
+        assert!(cache.next_deferred_retry().is_some());
+    }
+
+    #[test]
+    fn kitty_overlay_retries_invalidation_delete_when_frame_is_full() {
+        let cell = CellPixelSize::new(1, 1).unwrap();
+        let mut windows = Windows::default();
+        let window_id = windows
+            .create("delete retry".into(), image_window(4, 4).unwrap())
+            .unwrap();
+        let panes = windows.active_mut().unwrap().content_mut();
+        panes.active_mut().process_output_with_image_store_sized(
+            b"\x1b_Ga=T,f=32,s=1,v=1,i=7,p=1,c=1,r=1,C=1;AQIDBA==\x1b\\",
+            &mut |_| {},
+            cell,
+        );
+        let mut cache = KittyOverlays::default();
+        let mut output = VecDeque::new();
+        cache
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        assert_eq!(cache.entries.len(), 1);
+        panes.active_mut().image_store_mut().clear();
+        panes.active_mut().process_output_with_image_store_sized(
+            b"\x1b_Ga=T,f=32,s=1,v=1,i=8,p=1,c=1,r=1,C=1;AQIDBA==\x1b\\",
+            &mut |_| {},
+            cell,
+        );
+        let delete = b"\x1b_Ga=d,d=I,i=2147483648,q=2\x1b\\";
+        output = VecDeque::from(vec![0; MAX_FRAME - delete.len() + 1]);
+        cache
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        assert_eq!(
+            cache.pending_delete.front(),
+            Some(&OuterImageDelete::Image(0x8000_0000))
+        );
+        assert!(cache.pending_retry);
+        assert!(cache.entries.is_empty());
+        output.clear();
+        cache
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        let refreshed: Vec<_> = output.into();
+        assert!(refreshed.starts_with(delete));
+        assert!(
+            refreshed
+                .windows(b"i=2147483649,z=0".len())
+                .any(|bytes| bytes == b"i=2147483649,z=0")
+        );
+        assert!(cache.pending_delete.is_empty());
+        assert!(!cache.pending_retry);
+        assert_eq!(cache.entries.len(), 1);
+    }
+
+    #[test]
+    fn kitty_overlay_follows_virtual_placeholder_appearance_and_erasure() {
+        let cell = CellPixelSize::new(1, 1).unwrap();
+        let mut windows = Windows::default();
+        let window_id = windows
+            .create("virtual".into(), image_window(4, 4).unwrap())
+            .unwrap();
+        let panes = windows.active_mut().unwrap().content_mut();
+        panes.active_mut().process_output_with_image_store_sized(
+            "\x1b_Ga=T,f=32,s=1,v=1,i=7,p=1,U=1,c=1,r=1;AQIDBA==\x1b\\\x1b[38;5;7m\u{10eeee}\u{0305}\u{0305}"
+                .as_bytes(),
+            &mut |_| {},
+            cell,
+        );
+        let mut cache = KittyOverlays::default();
+        let mut output = VecDeque::new();
+        cache
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        assert_eq!(cache.entries.len(), 1);
+        output.clear();
+        cache
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        assert!(output.is_empty());
+
+        panes
+            .active_mut()
+            .process_output_with_image_store_sized(b"\x1b[1;1H ", &mut |_| {}, cell);
+        cache
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        assert_eq!(
+            output.drain(..).collect::<Vec<_>>(),
+            b"\x1b_Ga=d,d=I,i=2147483648,q=2\x1b\\"
+        );
+        assert!(cache.entries.is_empty());
+
+        panes.active_mut().process_output_with_image_store_sized(
+            "\x1b[2;2H\u{10eeee}\u{0305}\u{0305}".as_bytes(),
+            &mut |_| {},
+            cell,
+        );
+        cache
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        assert_eq!(cache.entries.len(), 1);
+        assert!(
+            output
+                .iter()
+                .copied()
+                .collect::<Vec<_>>()
+                .windows(b"i=2147483649".len())
+                .any(|bytes| bytes == b"i=2147483649")
+        );
+    }
+
+    #[test]
+    fn kitty_overlay_refreshes_virtual_image_when_only_cell_pixels_change() {
+        use base64::Engine;
+
+        let cell = CellPixelSize::new(1, 1).unwrap();
+        let wider_cell = CellPixelSize::new(2, 1).unwrap();
+        let mut windows = Windows::default();
+        let window_id = windows
+            .create("virtual resize".into(), image_window(4, 4).unwrap())
+            .unwrap();
+        let panes = windows.active_mut().unwrap().content_mut();
+        let encoded = base64::engine::general_purpose::STANDARD.encode([255; 16]);
+        let output = format!(
+            "\x1b_Ga=T,f=32,s=2,v=2,i=7,p=1,U=1;{encoded}\x1b\\\x1b[38;5;7m\x1b[58;5;1m\u{10eeee}\u{0305}\u{0305}\u{10eeee}\u{0305}\u{030d}"
+        );
+        panes.active_mut().process_output_with_image_store_sized(
+            output.as_bytes(),
+            &mut |_| {},
+            cell,
+        );
+        let revision = panes.active().image_store().revision();
+        let mut cache = KittyOverlays::default();
+        let mut output = VecDeque::new();
+        cache
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        assert!(output.is_empty());
+        assert!(cache.next_deferred_retry().is_some());
+        cache.incomplete_virtual[0].last_change -= INCOMPLETE_VIRTUAL_QUIET;
+        cache
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        assert!(
+            output
+                .iter()
+                .copied()
+                .collect::<Vec<_>>()
+                .windows(b"a=T,f=24,s=2,v=1,i=2147483648".len())
+                .any(|bytes| bytes == b"a=T,f=24,s=2,v=1,i=2147483648"),
+            "{}",
+            String::from_utf8_lossy(&output.iter().copied().collect::<Vec<_>>())
+        );
+        output.clear();
+
+        cache
+            .render(window_id, panes, wider_cell, 6, (3, 2), &mut output)
+            .unwrap();
+        let refreshed: Vec<_> = output.drain(..).collect();
+        assert!(refreshed.starts_with(b"\x1b_Ga=d,d=I,i=2147483648,q=2\x1b\\"));
+        assert!(
+            refreshed
+                .windows(b"a=T,f=24,s=2,v=1,i=2147483649".len())
+                .any(|bytes| bytes == b"a=T,f=24,s=2,v=1,i=2147483649"),
+            "{}",
+            String::from_utf8_lossy(&refreshed)
+        );
+        assert_eq!(cache.entries.len(), 1);
+        assert_eq!(panes.active().image_store().revision(), revision);
+        let image = panes.active().compose_image_snapshot(wider_cell).unwrap();
+        assert_eq!(&image.pixels[0..4], &[255; 4]);
+        assert_eq!(&image.pixels[8..12], &[0; 4]);
+        cache
+            .render(window_id, panes, wider_cell, 6, (3, 2), &mut output)
+            .unwrap();
+        assert!(
+            output.is_empty(),
+            "unchanged resized image must not be resent"
+        );
+    }
+
+    #[test]
+    fn kitty_overlay_emits_all_stacking_bands_and_cleans_each_id() {
+        let cell = CellPixelSize::new(1, 1).unwrap();
+        let mut windows = Windows::default();
+        let window_id = windows
+            .create("layers".into(), image_window(4, 6).unwrap())
+            .unwrap();
+        let panes = windows.active_mut().unwrap().content_mut();
+        for (id, z) in [(1, i32::MIN / 2 - 1), (2, -1), (3, 0)] {
+            let command =
+                format!("\x1b_Ga=T,f=32,s=1,v=1,i={id},p=1,c=1,r=1,z={z},C=1;AQIDBA==\x1b\\");
+            panes.active_mut().process_output_with_image_store_sized(
+                command.as_bytes(),
+                &mut |_| {},
+                cell,
+            );
+        }
+        let mut cache = KittyOverlays::default();
+        let mut output = VecDeque::new();
+        cache
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        let upload: Vec<_> = output.drain(..).collect();
+        let headers = [
+            b"i=2147483648,z=-2147483648,C=1,q=2".as_slice(),
+            b"i=2147483649,z=-1,C=1,q=2",
+            b"i=2147483650,z=0,C=1,q=2",
+        ];
+        let positions: Vec<_> = headers
+            .iter()
+            .map(|header| {
+                upload
+                    .windows(header.len())
+                    .position(|bytes| bytes == *header)
+                    .unwrap()
+            })
+            .collect();
+        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+        assert_eq!(cache.entries.len(), 3);
+        cache
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        assert!(output.is_empty());
+
+        panes.active_mut().image_store_mut().clear();
+        cache
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        let deleted = output.drain(..).collect::<Vec<_>>();
+        for id in 2147483648_u64..=2147483650 {
+            let command = format!("\x1b_Ga=d,d=I,i={id},q=2\x1b\\");
+            assert!(
+                deleted
+                    .windows(command.len())
+                    .any(|bytes| bytes == command.as_bytes())
+            );
+        }
+        assert_eq!(cache.entries.len(), 0);
+    }
+
+    #[test]
+    fn kitty_overlay_retries_only_bands_that_missed_the_frame_budget() {
+        let cell = CellPixelSize::new(1, 1).unwrap();
+        let mut windows = Windows::default();
+        let window_id = windows
+            .create("budget".into(), image_window(4, 6).unwrap())
+            .unwrap();
+        let panes = windows.active_mut().unwrap().content_mut();
+        for (id, z) in [(1, i32::MIN), (2, -1), (3, 0)] {
+            let command =
+                format!("\x1b_Ga=T,f=32,s=1,v=1,i={id},p=1,c=1,r=1,z={z},C=1;AQIDBA==\x1b\\");
+            panes.active_mut().process_output_with_image_store_sized(
+                command.as_bytes(),
+                &mut |_| {},
+                cell,
+            );
+        }
+        let first = panes
+            .active()
+            .compose_image_band(cell, ImageBand::BehindBackground)
+            .unwrap()
+            .unwrap();
+        let (first, _, _) = crop_overlay_to_visible_cells(first, cell).unwrap();
+        let allowance = b"\x1b[3;2H".len()
+            + kitty_rgba_placement_len(&first, 0x8000_0000, i32::MIN).unwrap()
+            + b"\x1b[4;3H".len();
+        let mut output = VecDeque::from(vec![0; MAX_FRAME - allowance]);
+        let mut cache = KittyOverlays::default();
+        cache
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        assert_eq!(output.len(), MAX_FRAME);
+        assert_eq!(cache.entries.len(), 1);
+        assert!(cache.pending_retry);
+
+        output.clear();
+        cache
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        let retry: Vec<_> = output.drain(..).collect();
+        assert_eq!(cache.entries.len(), 3);
+        assert!(!cache.pending_retry);
+        assert!(
+            !retry
+                .windows(b"i=2147483648,z=".len())
+                .any(|w| w == b"i=2147483648,z=")
+        );
+        assert!(
+            retry
+                .windows(b"i=2147483649,z=-1".len())
+                .any(|w| w == b"i=2147483649,z=-1")
+        );
+        assert!(
+            retry
+                .windows(b"i=2147483650,z=0".len())
+                .any(|w| w == b"i=2147483650,z=0")
+        );
+    }
+
+    #[test]
+    fn kitty_overlay_compresses_large_tiles_and_deletes_every_tile() {
+        use base64::Engine;
+        use std::collections::BTreeSet;
+
+        let cell = CellPixelSize::new(10, 10).unwrap();
+        let mut png = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut png, 2600, 2000);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder
+                .write_header()
+                .unwrap()
+                .write_image_data(&vec![255; 2600 * 2000 * 4])
+                .unwrap();
+        }
+        let encoded = base64::engine::general_purpose::STANDARD.encode(png);
+        let mut windows = Windows::default();
+        let window_id = windows
+            .create("large image".into(), image_window(202, 262).unwrap())
+            .unwrap();
+        let panes = windows.active_mut().unwrap().content_mut();
+        let command = format!("\x1b_Ga=T,f=100,i=7,p=1,c=260,r=200,C=1;{encoded}\x1b\\");
+        panes.active_mut().process_output_with_image_store_sized(
+            command.as_bytes(),
+            &mut |_| {},
+            cell,
+        );
+        let full = panes
+            .active()
+            .compose_image_band(cell, ImageBand::AboveText)
+            .unwrap()
+            .unwrap();
+        let (full, _, _) = crop_overlay_to_visible_cells(full, cell).unwrap();
+        assert!(kitty_rgba_placement_len(&full, 0x8000_0000, 0).unwrap() > MAX_FRAME);
+        drop(full);
+        let mut cache = KittyOverlays::default();
+        // Force a frame-pressure retry before the normal upload. The first
+        // compressed tile should be retained instead of compressed again.
+        let mut output = VecDeque::from(vec![0; MAX_FRAME - 1]);
+        cache
+            .render(window_id, panes, cell, 204, (0, 0), &mut output)
+            .unwrap();
+        assert!(cache.pending_retry);
+        assert!(cache.entries.is_empty());
+        assert!(cache.pending_png.is_some());
+        output.clear();
+        cache
+            .render(window_id, panes, cell, 204, (0, 0), &mut output)
+            .unwrap();
+        assert!(!cache.entries.is_empty());
+        assert!(cache.pending_png.is_none());
+        assert!(output.len() <= MAX_FRAME);
+        let first_frame: Vec<_> = output.iter().copied().collect();
+        assert!(
+            first_frame
+                .windows(b"a=T,f=100".len())
+                .any(|bytes| bytes == b"a=T,f=100")
+        );
+        for _ in 0..8 {
+            if !cache.pending_retry {
+                break;
+            }
+            output.clear();
+            cache
+                .render(window_id, panes, cell, 204, (0, 0), &mut output)
+                .unwrap();
+            assert!(output.len() <= MAX_FRAME);
+        }
+        assert!(!cache.pending_retry);
+        assert!(cache.entries.len() > 1);
+        let ids: Vec<_> = cache.entries.iter().map(|entry| entry.image_id).collect();
+        assert_eq!(
+            ids.iter().copied().collect::<BTreeSet<_>>().len(),
+            ids.len()
+        );
+        let offsets: BTreeSet<_> = cache
+            .entries
+            .iter()
+            .map(|entry| (entry.column_offset, entry.row_offset))
+            .collect();
+        assert_eq!(offsets.len(), ids.len());
+
+        output.clear();
+        cache
+            .render(window_id, panes, cell, 204, (0, 0), &mut output)
+            .unwrap();
+        assert!(output.is_empty(), "unchanged tiles must not be resent");
+        let mut stale = cache.entries[0];
+        stale.revision += 1;
+        cache.pending_png = Some(PendingPngTile {
+            overlay: stale,
+            png: EncodedKittyPng::from_rgba(&DecodedImage {
+                width: 1,
+                height: 1,
+                pixels: vec![0; 4],
+            })
+            .unwrap(),
+            placement_len: 1,
+        });
+        cache
+            .render(window_id, panes, cell, 204, (0, 0), &mut output)
+            .unwrap();
+        assert!(
+            cache.pending_png.is_none(),
+            "stale scene must drop cached PNG"
+        );
+        assert!(output.is_empty());
+        let first_delete = format!("\x1b_Ga=d,d=I,i={},q=2\x1b\\", ids[0]);
+        output = VecDeque::from(vec![0; MAX_FRAME - first_delete.len()]);
+        cache.clear(&mut output).unwrap();
+        assert!(cache.pending_retry);
+        assert_eq!(cache.pending_delete.len(), ids.len() - 1);
+        let mut deletes: Vec<_> = output
+            .into_iter()
+            .skip(MAX_FRAME - first_delete.len())
+            .collect();
+        let mut output = VecDeque::new();
+        cache.clear(&mut output).unwrap();
+        deletes.extend(output);
+        assert!(cache.pending_delete.is_empty());
+        assert!(!cache.pending_retry);
+        for id in ids {
+            let command = format!("\x1b_Ga=d,d=I,i={id},q=2\x1b\\");
+            assert!(
+                deletes
+                    .windows(command.len())
+                    .any(|bytes| bytes == command.as_bytes())
+            );
+        }
+        assert!(cache.entries.is_empty());
     }
 }

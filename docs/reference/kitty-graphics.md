@@ -476,6 +476,11 @@ scrollback rendering remain out of scope. These choices follow the scrolling
 rules in the
 [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
 
+The crate-private `graphics::outer` module owns crop/encoding preparation and
+the attachment's image cache, deferred retries, shared-memory lifetimes, and
+placement deletion. `terminal` coordinates capability probes and PTY polling;
+both text and image output share the bounded queue in `render::frame`.
+
 The runtime probes Kitty graphics support separately for each outer-terminal
 attachment. When support and an exact physical cell size are known, it
 composites and displays populated image bands for visible panes. It uses
@@ -645,6 +650,8 @@ reaching the validated pane store, unsupported media and recovery. Pane tests
 cover interleaved text, per-pane
 isolation and command-output filtering. Run `cargo test --lib graphics::tests`,
 `cargo test --lib graphics::transfer::tests` and `cargo test --test panes`.
+`cargo test --lib graphics::outer::tests` covers crop/encoding decisions, cache
+reuse, frame-budget retries, stacking bands, and image/placement cleanup.
 Store tests also cover replacement, isolation, transient/unplaced quota eviction,
 numbered-image fallback, explicit removal, named and anonymous references,
 and soft versus hard deletion.
