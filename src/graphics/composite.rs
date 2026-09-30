@@ -1,9 +1,10 @@
 //! Opt-in, bounded image-only composition for clipped Kitty placements.
 //! Text/background ordering and terminal redraw are not handled here.
 
+use super::geometry::PixelSize;
 use crate::{
     graphics_decode::{ClippedPlacement, DecodedImage, MAX_DECODED_IMAGE_BYTES},
-    graphics_store::{MAX_PANE_PLACEMENTS, PixelSize},
+    graphics_store::MAX_PANE_PLACEMENTS,
     pane::MAX_CELLS,
 };
 

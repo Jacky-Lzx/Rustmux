@@ -4,6 +4,7 @@ pub mod capability;
 pub(crate) mod command;
 pub mod composite;
 pub mod decode;
+pub mod geometry;
 pub(crate) mod outer;
 pub mod output;
 pub mod placeholder;

@@ -3,6 +3,9 @@
 
 use std::collections::BTreeMap;
 
+use super::geometry::{
+    CellPixelSize, PixelRect, PixelSize, PlacementGeometry, PlacementPixelLayout, PlacementSizing,
+};
 use crate::{
     graphics_composite::{
         CompositeError, ImageLayer, MAX_COMPOSITE_INPUT_BYTES, compose_image_layers,
@@ -13,10 +16,7 @@ use crate::{
         visible_placement_region,
     },
     graphics_placeholder::decode_row,
-    graphics_store::{
-        CellPixelSize, ImageFormat, ImageStore, PixelRect, PixelSize, PlacementGeometry,
-        PlacementPixelLayout,
-    },
+    graphics_store::{ImageFormat, ImageStore},
     screen::Screen,
 };
 
@@ -131,7 +131,7 @@ pub(crate) fn source_image_pane_band_progress<'a>(
         ImageFormat::Png => (100, 0),
         _ => return None,
     };
-    if layout.sizing != crate::graphics_store::PlacementSizing::Natural
+    if layout.sizing != PlacementSizing::Natural
         || layout.cell_offset.x != 0
         || layout.cell_offset.y != 0
     {

@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use super::{
     decode::DecodedImage,
+    geometry::CellPixelSize,
     output::{
         EncodedKittyPng, kitty_png_passthrough_len, kitty_rgb_placement_len,
         kitty_rgba_placement_len, write_kitty_png_passthrough_with_limit,
@@ -14,7 +15,6 @@ use super::{
     },
     shared_memory_output::{SharedPixels, cached_placement_command},
     snapshot::{ImageBand, SourceImagePlacement, SourceImageProgress},
-    store::CellPixelSize,
 };
 use crate::{
     layout::{PaneId, Rect},

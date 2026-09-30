@@ -302,6 +302,12 @@ within the specified cell box. This distinction survives cell-extent inference
 so a future pixel renderer can choose the correct scaling behavior; it does
 not render or scale pixels yet.
 
+The `graphics::geometry` module owns cell/pixel types, source-rectangle
+intersection, extent inference, anchor conversion, and placement layout.
+The existing `graphics_store` type paths remain available through re-exports.
+Virtual-placement state and command validation remain in the store and reuse
+the pure geometry calculations.
+
 `PlacementGeometry::pixel_layout` now provides the next opt-in, pure layout
 step when a caller supplies decoded image dimensions and a verified physical
 cell size. It intersects the source crop, computes the current cell rectangle,
@@ -665,6 +671,8 @@ isolation and command-output filtering. Run `cargo test --lib graphics::tests`,
 unlinking after success or read failure, and malformed names.
 `cargo test --lib graphics::command::tests` checks framing spellings, separator
 rules, malformed/duplicate fields, quiet validation, and independent size limits.
+`cargo test --lib graphics::geometry::tests` covers exact cell grids, source
+intersection, aspect-ratio sizing, anchor overflow, and pixel-layout bounds.
 `cargo test --lib graphics::outer::tests` covers crop/encoding decisions, cache
 reuse, frame-budget retries, stacking bands, and image/placement cleanup.
 Store tests also cover replacement, isolation, transient/unplaced quota eviction,

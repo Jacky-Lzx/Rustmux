@@ -1,10 +1,10 @@
 //! Opt-in, bounded conversion of stored Kitty image data to RGBA pixels.
 //! Decoding does not place or render an image in a terminal.
 
-use crate::graphics_store::{
-    CellPixelSize, ImageFormat, PixelRect, PixelSize, PlacementGeometry, PlacementPixelLayout,
-    SignedPixelPoint, StoredImage,
+use super::geometry::{
+    CellPixelSize, PixelRect, PixelSize, PlacementGeometry, PlacementPixelLayout, SignedPixelPoint,
 };
+use crate::graphics_store::{ImageFormat, StoredImage};
 use crate::graphics_transfer::MAX_STREAMED_RAW_BYTES;
 use flate2::bufread::ZlibDecoder;
 use png::{BitDepth, ColorType, Decoder, Limits, Transformations};
