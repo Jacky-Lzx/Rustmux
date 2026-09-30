@@ -51,7 +51,14 @@ a single POSIX shared-memory name; `S` and `O` select a byte range. RGB/RGBA
 without `S` uses its declared dimensions as the exact length, since macOS
 reports page-rounded shared-memory
 sizes. Shared-memory bytes then use the same image validation, storage and
-query rules as direct data. Compressed PNG over shared memory is not supported.
+query rules as direct data. Shared memory also accepts zlib-compressed PNG
+(`t=s,f=100,o=z`). For local media, `S` selects the stored compressed byte count,
+and `O` selects its offset; use `S` to exclude page-rounded SHM padding.
+The selected compressed bytes and expanded PNG bytes are independently bounded
+to 32 MiB. The entire zlib stream must be valid, with no trailing bytes, before
+the ordinary PNG validation and image-store paths run. The object is unlinked
+after a completed read attempt even when range, decompression, or later image
+validation fails; queries and quiet modes follow the existing reply rules.
 The pane store also accepts regular-file (`t=f`) and temporary-file (`t=t`)
 transfers. The Base64 payload is a filesystem path; symlinks are resolved before
 opening, and only regular
@@ -745,7 +752,10 @@ cover interleaved text, per-pane
 isolation and command-output filtering. Run `cargo test --lib graphics::tests`,
 `cargo test --lib graphics::transfer::tests` and `cargo test --test panes`.
 `cargo test --lib graphics::transfer::shared_memory::tests` covers bounded reads,
-unlinking after success or read failure, and malformed names.
+unlinking after success or read failure, and malformed names. It also covers
+compressed PNG ranges, corrupt/truncated/trailing streams, and the expansion
+limit. Pane and child-PTY tests check compressed shared-memory PNG queries,
+uploads, pixel composition, quiet replies, source cleanup and failed replacements.
 `cargo test --lib graphics::transfer::file::tests` covers file ranges, source
 retention, symlinks, special-file rejection, size limits, and compressed streams.
 It also covers temporary-file cleanup after failed reads, directory/marker

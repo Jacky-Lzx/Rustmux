@@ -2,8 +2,8 @@
 //! Name validation, mappings, descriptors, and unlinking stay within this module.
 
 use super::{
-    AssembledDirectTransfer, Pending, decode_base64, finish, max_transfer_bytes, parse_positive,
-    valid_first,
+    AssembledDirectTransfer, Pending, decode_base64, finish_local_transfer, max_transfer_bytes,
+    parse_positive, valid_first,
 };
 use crate::graphics::command::parse_command;
 use nix::libc;
@@ -34,8 +34,6 @@ pub(crate) fn shared_memory_transfer(
         controls.insert(b't', b"d".to_vec());
         if !matches!(controls.get(&b'm').map(Vec::as_slice), None | Some(b"0"))
             || !valid_first(&controls)
-            || (controls.contains_key(&b'o')
-                && controls.get(&b'f').map(Vec::as_slice) == Some(b"100"))
         {
             return Err(());
         }
@@ -86,7 +84,7 @@ pub(crate) fn shared_memory_transfer(
                 return Err(());
             }
             let data = read_shared_memory_slice(fd, offset, bytes)?;
-            finish(Pending { controls, data }).ok_or(())
+            finish_local_transfer(Pending { controls, data }).ok_or(())
         })();
         // Kitty specifies that the terminal unlinks the object after reading.
         // SAFETY: `name` remains alive and NUL-terminated for this call.
@@ -146,6 +144,8 @@ fn parse_decimal_u64(value: &[u8]) -> Option<u64> {
 mod tests {
     use super::*;
     use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use flate2::{Compression, write::ZlibEncoder};
+    use std::io::Write;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT_SHM: AtomicU64 = AtomicU64::new(0);
@@ -197,6 +197,100 @@ mod tests {
             STANDARD.encode(name.as_bytes())
         )
         .into_bytes()
+    }
+
+    fn zlib(data: &[u8]) -> Vec<u8> {
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::fast());
+        encoder.write_all(data).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    fn assert_unlinked(name: &CString) {
+        // SAFETY: name is NUL-terminated; close any unexpectedly opened fd.
+        let fd = unsafe { libc::shm_open(name.as_ptr(), libc::O_RDONLY, 0) };
+        if fd >= 0 {
+            unsafe {
+                libc::close(fd);
+                libc::shm_unlink(name.as_ptr());
+            }
+        }
+        assert_eq!(fd, -1, "shared-memory source was not unlinked");
+    }
+
+    #[test]
+    fn shared_memory_compressed_png_reads_selected_range_and_unlinks() {
+        let mut png = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut png, 1, 1);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder
+                .write_header()
+                .unwrap()
+                .write_image_data(&[1, 2, 3, 4])
+                .unwrap();
+        }
+        let compressed = zlib(&png);
+        let mut data = b"prefix".to_vec();
+        data.extend_from_slice(&compressed);
+        data.extend_from_slice(b"unselected trailing bytes");
+        let name = make_shm(&data);
+        let command = shm_command(
+            &format!("a=q,t=s,f=100,o=z,S={},O=6,i=17", compressed.len()),
+            &name,
+        );
+        let transfer = shared_memory_transfer(&command).unwrap().unwrap();
+        assert_eq!(transfer.data, png);
+        assert_eq!(transfer.control(b'f'), Some(b"100".as_slice()));
+        for key in b"SoO" {
+            assert_eq!(transfer.control(*key), None);
+        }
+        assert_eq!(transfer.control(b't'), Some(b"d".as_slice()));
+        assert_unlinked(&name);
+    }
+
+    #[test]
+    fn shared_memory_compressed_png_rejects_incomplete_corrupt_or_trailing_streams() {
+        let good = zlib(b"PNG bytes are validated by the image decoder");
+        let mut corrupt = good.clone();
+        *corrupt.last_mut().unwrap() ^= 1;
+        let mut trailing = good.clone();
+        trailing.push(0);
+        for data in [
+            good[..good.len() - 1].to_vec(),
+            corrupt,
+            trailing,
+            zlib(b""),
+        ] {
+            let name = make_shm(&data);
+            let command = shm_command(&format!("a=q,t=s,f=100,o=z,S={},i=17", data.len()), &name);
+            assert!(shared_memory_transfer(&command).unwrap().is_err());
+            assert_unlinked(&name);
+        }
+        // A requested slice outside the object also releases its source.
+        let name = make_shm(&good);
+        let command = shm_command("a=q,t=s,f=100,o=z,S=1,O=18446744073709551615,i=17", &name);
+        assert!(shared_memory_transfer(&command).unwrap().is_err());
+        assert_unlinked(&name);
+    }
+
+    #[test]
+    fn shared_memory_compressed_png_bounds_expansion_and_unlinks_on_failure() {
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::fast());
+        let chunk = [0; 64 * 1024];
+        for _ in 0..super::super::MAX_DIRECT_PNG_TRANSFER_BYTES / chunk.len() {
+            encoder.write_all(&chunk).unwrap();
+        }
+        encoder.write_all(&[0]).unwrap();
+        let compressed = encoder.finish().unwrap();
+        assert!(compressed.len() < 1024 * 1024);
+        let name = make_shm(&compressed);
+        let command = shm_command(
+            &format!("a=q,t=s,f=100,o=z,S={},i=17", compressed.len()),
+            &name,
+        );
+        assert!(shared_memory_transfer(&command).unwrap().is_err());
+        assert_unlinked(&name);
     }
 
     #[test]

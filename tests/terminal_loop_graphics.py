@@ -97,6 +97,17 @@ try:
     child_temp_file = shlex.quote(os.path.join(os.path.dirname(__file__), "kitty_child_temp_file.py"))
     s.send(f"python3 {child_temp_file}\n".encode())
     s.expect(b"CHILD_TEMP_FILE_TRANSFER_OK")
+    child_shm_png = shlex.quote(os.path.join(os.path.dirname(__file__), "kitty_child_shm_png.py"))
+    s.send(f"python3 {child_shm_png}\n".encode())
+    # Real SHM reads allow an outer image upload between child commands. The
+    # simplified row decoder does not interpret APC graphics; check the rendered
+    # marker in the output stream, as for the placement/deletion scenarios below.
+    deadline = time.monotonic() + 8
+    while b"CHILD_SHM_PNG_OK" not in s.output:
+        s.read()
+        assert time.monotonic() < deadline, bytes(s.output[-1000:])
+    s.output.clear()
+    s.frames.clear()
     child_upload = shlex.quote(os.path.join(os.path.dirname(__file__), "kitty_child_upload.py"))
     s.send(f"python3 {child_upload}\n".encode())
     s.expect(b"CHILD_UPLOAD_REPLIES_OK")

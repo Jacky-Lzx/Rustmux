@@ -924,6 +924,113 @@ mod io_tests {
     }
 
     #[test]
+    fn runtime_compressed_shared_png_queries_and_failed_replacements_preserve_state() {
+        use flate2::{Compression, write::ZlibEncoder};
+        use std::io::Write;
+        let mut png = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut png, 1, 1);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder
+                .write_header()
+                .unwrap()
+                .write_image_data(&[9, 10, 11, 255])
+                .unwrap();
+        }
+        let compress = |data: &[u8]| {
+            let mut encoder = ZlibEncoder::new(Vec::new(), Compression::fast());
+            encoder.write_all(data).unwrap();
+            encoder.finish().unwrap()
+        };
+        let compressed = compress(&png);
+        let cell = CellPixelSize::new(1, 1).unwrap();
+        let send = |pane: &mut Pane, suffix: &str, controls: &str, bytes: &[u8]| {
+            let mut data = b"xx".to_vec();
+            data.extend_from_slice(bytes);
+            data.extend_from_slice(b"unselected tail");
+            let name = pane_test_shm(suffix, &data);
+            let command = format!(
+                "\x1b_G{controls},t=s,f=100,o=z,S={},O=2;{}\x1b\\\x1b[c",
+                bytes.len(),
+                STANDARD.encode(name.as_bytes())
+            );
+            let mut replies = Vec::new();
+            pane.process_output_for_runtime(
+                command.as_bytes(),
+                &mut |reply| replies.extend_from_slice(reply),
+                Some(cell),
+                true,
+            );
+            // SAFETY: name is a valid NUL-terminated name, and a failed open
+            // creates no descriptor. The completed transfer must have unlinked it.
+            assert_eq!(
+                unsafe { libc::shm_open(name.as_ptr(), libc::O_RDONLY, 0) },
+                -1
+            );
+            replies
+        };
+        let mut pane = Pane::spawn("/bin/sh", 4, 4).unwrap();
+        assert_eq!(
+            send(&mut pane, "pngq", "a=q,i=36", &compressed),
+            b"\x1b_Gi=36;OK\x1b\\\x1b[?1;0c"
+        );
+        assert!(pane.image_store().is_empty());
+        assert_eq!(
+            send(&mut pane, "pngT", "a=T,i=36,p=4,C=1", &compressed),
+            b"\x1b_Gi=36,p=4;OK\x1b\\\x1b[?1;0c"
+        );
+        assert_eq!(pane.image_store().get(36).unwrap().data, png);
+        assert_eq!(
+            pane.compose_image_snapshot(cell).unwrap().pixels[..4],
+            [9, 10, 11, 255]
+        );
+        let revision = pane.image_store().revision();
+        let cursor = pane.screen().cursor();
+        let mut malformed = compressed.clone();
+        malformed.push(0);
+        let invalid_image = compress(b"invalid PNG");
+        for (index, (controls, bytes, expected)) in [
+            (
+                "a=T,i=36,p=4",
+                malformed.as_slice(),
+                "EBADF:Failed to read image file",
+            ),
+            (
+                "a=T,i=36,p=4",
+                invalid_image.as_slice(),
+                "EINVAL:invalid image",
+            ),
+            (
+                "a=T,i=36,p=4,X=1",
+                compressed.as_slice(),
+                "EINVAL:invalid placement",
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert_eq!(
+                send(&mut pane, &format!("pngerr{index}"), controls, bytes),
+                format!("\x1b_Gi=36,p=4;{expected}\x1b\\\x1b[?1;0c").as_bytes()
+            );
+            assert_eq!(pane.image_store().get(36).unwrap().data, png);
+            assert_eq!(pane.image_store().revision(), revision);
+            assert_eq!(pane.screen().cursor(), cursor);
+            assert_eq!(pane.image_store().placements().count(), 1);
+        }
+        assert_eq!(
+            send(&mut pane, "pngquiet", "a=q,i=36,q=1", &compressed),
+            b"\x1b[?1;0c"
+        );
+        assert_eq!(
+            send(&mut pane, "pngfail", "a=T,i=36,p=4,q=2", &malformed),
+            b"\x1b[?1;0c"
+        );
+        assert_eq!(pane.image_store().revision(), revision);
+    }
+
+    #[test]
     fn runtime_file_query_upload_and_failed_replacement_preserve_state() {
         use std::{io::Write, os::unix::ffi::OsStrExt};
         let mut file = tempfile::NamedTempFile::new().unwrap();

@@ -300,6 +300,31 @@ fn append_bounded(data: &mut Vec<u8>, chunk: &[u8], limit: usize) -> bool {
     true
 }
 
+/// Local media use S for the selected stored bytes. Unlike direct transfers,
+/// compressed PNG expansion therefore needs its own independent size bound.
+fn finish_local_transfer(mut pending: Pending) -> Option<AssembledDirectTransfer> {
+    if pending.controls.get(&b'o').map(Vec::as_slice) == Some(b"z")
+        && pending.controls.get(&b'f').map(Vec::as_slice) == Some(b"100")
+    {
+        let limit = max_transfer_bytes(&pending.controls);
+        let mut decoder = ZlibDecoder::new(pending.data.as_slice());
+        let mut expanded = Vec::new();
+        (&mut decoder)
+            .take(limit as u64 + 1)
+            .read_to_end(&mut expanded)
+            .ok()?;
+        if expanded.is_empty()
+            || expanded.len() > limit
+            || decoder.total_in() != pending.data.len() as u64
+        {
+            return None;
+        }
+        pending.data = expanded;
+        pending.controls.remove(&b'o');
+    }
+    finish(pending)
+}
+
 fn finish(pending: Pending) -> Option<AssembledDirectTransfer> {
     let Pending { controls, data } = pending;
     let format = controls.get(&b'f').map(Vec::as_slice).unwrap_or(b"32");

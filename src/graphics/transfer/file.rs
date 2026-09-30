@@ -1,10 +1,10 @@
 //! Bounded Kitty file input. Only eligible `t=t` temporary files are removed.
 
 use super::{
-    AssembledDirectTransfer, Pending, decode_base64, finish, max_transfer_bytes, valid_first,
+    AssembledDirectTransfer, Pending, decode_base64, finish_local_transfer, max_transfer_bytes,
+    valid_first,
 };
 use crate::graphics::command::parse_command;
-use flate2::bufread::ZlibDecoder;
 use nix::libc;
 use std::{
     ffi::{CString, OsStr},
@@ -79,25 +79,7 @@ pub(crate) fn file_transfer(command: &[u8]) -> Option<Result<AssembledDirectTran
         file.seek(SeekFrom::Start(offset)).map_err(|_| ())?;
         let mut data = vec![0; usize::try_from(bytes).map_err(|_| ())?];
         file.read_exact(&mut data).map_err(|_| ())?;
-        if controls.contains_key(&b'o') && controls.get(&b'f').map(Vec::as_slice) == Some(b"100") {
-            // For file media S selects stored bytes, not the expanded PNG
-            // length. Bound expansion independently before normal PNG validation.
-            let mut decoder = ZlibDecoder::new(data.as_slice());
-            let mut expanded = Vec::new();
-            (&mut decoder)
-                .take(limit as u64 + 1)
-                .read_to_end(&mut expanded)
-                .map_err(|_| ())?;
-            if expanded.is_empty()
-                || expanded.len() > limit
-                || decoder.total_in() != data.len() as u64
-            {
-                return Err(());
-            }
-            data = expanded;
-            controls.remove(&b'o');
-        }
-        finish(Pending { controls, data }).ok_or(())
+        finish_local_transfer(Pending { controls, data }).ok_or(())
     })())
 }
 
