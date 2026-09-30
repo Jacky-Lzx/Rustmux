@@ -1,7 +1,8 @@
 //! Bounded sampling and clipping of already-decoded RGBA placement pixels.
 //! Stream decoding stays in the parent module and shares its sampling math.
 
-use super::{DecodeError, DecodedImage, decoded_size, nearest_sample};
+use super::sampling::nearest_sample;
+use super::{DecodeError, DecodedImage, decoded_size};
 use crate::graphics::geometry::{
     CellPixelSize, PixelRect, PixelSize, PlacementGeometry, PlacementPixelLayout, SignedPixelPoint,
 };

@@ -145,6 +145,11 @@ directly. Both paths limit the aggregate RGBA output to 32 MiB and still
 validate the complete source stream. Adjacent output columns advance their
 pixel-center source coordinate by quotient and remainder, avoiding a 128-bit
 division for each sampled output pixel.
+The private `graphics::decode::sampling` module owns these shared sample
+coordinates, sparse row scheduling, row-to-RGBA conversion, and bounded output
+allocation. PNG and zlib readers retain their source-bound checks and complete
+stream validation. Decoded RGBA placement sampling uses the same pixel-center
+coordinate function.
 An optional local-file check is
 `RUSTMUX_COMPAT_IMAGE=/absolute/path/to/image.png cargo test --lib user_png_streams_to_thumbnail -- --ignored`.
 
@@ -694,6 +699,8 @@ compressed RGB/RGBA regions against a separately resampled full RGBA image
 across crop, scaling, region-order and PNG color-type cases. Viewport tests
 cover all four clipped edges,
 negative and disjoint anchors, malformed buffers, and oversized geometry.
+`cargo test --lib graphics::decode::sampling::tests` checks incremental sample
+coordinates at extreme source and destination extents.
 Runtime upload tests cover atomic rejection of corrupt PNG replacements and
 acceptance of valid PNG with inferred placement extent.
 Scroll-clip tests verify top/bottom pixel rows and a pane-driven margin scroll.
