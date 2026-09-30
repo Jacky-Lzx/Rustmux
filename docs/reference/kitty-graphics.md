@@ -112,6 +112,13 @@ declared dimensions, rejects animation, and caps each decoded pixel buffer at
 cache the decoded pixels or render them; callers must opt in to decoding.
 Color-profile conversion is not yet implemented.
 
+The private `graphics::decode::png_reader` module owns complete PNG decoding
+and row-by-row PNG reads, including decoder allocation limits, transformations,
+dimension checks, and complete-tail validation. The public `StoredImage` methods
+retain their existing entry points. Both PNG reading paths keep their existing
+format rules, including bounded full decoding for interlaced PNGs and rejection
+of interlacing by the row reader.
+
 `StoredImage::decode_png_thumbnail(width, height)` is a separate opt-in
 boundary for non-interlaced static PNGs, including those whose full RGBA
 expansion exceeds 32 MiB. It validates the complete PNG while reading one
