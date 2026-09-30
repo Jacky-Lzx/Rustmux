@@ -320,6 +320,12 @@ rectangle. The calculation recomputes inferred extents for the supplied cell
 size and returns no layout for an empty crop, invalid offset, or overflowing
 pixel geometry. It does not decode, resample, clip, or composite pixels.
 
+The private `graphics::decode::placement` module handles already-decoded RGBA
+sampling, viewport intersection, and permanent scroll clipping. Placement
+types and errors remain available through `graphics_decode`, and the existing
+methods remain on `DecodedImage` and `ResampledPlacement`. Full-buffer and
+streamed decoders share the same pixel-center sampling math and size checks.
+
 After decoding, `DecodedImage::resample_placement` can now produce the cropped
 RGBA content for that layout with bounded nearest-neighbor sampling. It keeps
 the content's destination offset and alpha bytes, but does not allocate empty
@@ -681,7 +687,9 @@ and soft versus hard deletion.
 Decoder tests cover raw and PNG formats, palette transparency, corrupted PNGs,
 dimension checks and the output-size bound. Resampling tests cover cropped
 nearest-neighbor enlargement, reduction, alpha preservation, invalid geometry,
-and the raster output limit. A sparse-sampling regression compares PNG and
+and the raster output limit. Run
+`cargo test --lib graphics::decode::placement::tests` for the decoded-pixel
+sampling and clipping cases. A sparse-sampling regression compares PNG and
 compressed RGB/RGBA regions against a separately resampled full RGBA image
 across crop, scaling, region-order and PNG color-type cases. Viewport tests
 cover all four clipped edges,
