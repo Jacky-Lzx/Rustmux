@@ -7,6 +7,7 @@ pub mod decode;
 pub mod geometry;
 pub(crate) mod outer;
 pub mod output;
+mod passthrough;
 pub mod placeholder;
 pub(crate) mod reply;
 pub(crate) mod shared_memory_output;
@@ -29,6 +30,7 @@ pub enum GraphicsEvent {
 pub struct GraphicsFramer {
     state: State,
     utf8_continuations: u8,
+    passthrough: passthrough::TmuxPassthrough,
 }
 
 #[derive(Debug, Default)]
@@ -52,6 +54,9 @@ enum State {
         escape: bool,
         c1: bool,
     },
+    OtherDcs {
+        escape: bool,
+    },
 }
 
 impl GraphicsFramer {
@@ -64,6 +69,15 @@ impl GraphicsFramer {
     /// incorrectly terminated graphics commands are discarded.
     /// Non-graphics APCs pass through unchanged for the display parser.
     pub fn advance(&mut self, bytes: &[u8]) -> Vec<GraphicsEvent> {
+        // Ordinary ASCII text and unwrapped Base64 chunks need no transport copy.
+        if self.passthrough.can_bypass(bytes) {
+            return self.advance_unwrapped(bytes);
+        }
+        let bytes = self.passthrough.advance(bytes);
+        self.advance_unwrapped(&bytes)
+    }
+
+    fn advance_unwrapped(&mut self, bytes: &[u8]) -> Vec<GraphicsEvent> {
         let mut events = Vec::new();
         for &byte in bytes {
             if matches!(self.state, State::Ground) {
@@ -91,6 +105,10 @@ impl GraphicsFramer {
                 State::Ground => match byte {
                     0x1b => State::Escape,
                     0x9f => State::ApcPrefix { c1: true },
+                    0x90 => {
+                        terminal_byte(&mut events, byte);
+                        State::OtherDcs { escape: false }
+                    }
                     _ => {
                         terminal_byte(&mut events, byte);
                         State::Ground
@@ -98,6 +116,11 @@ impl GraphicsFramer {
                 },
                 State::Escape => match byte {
                     b'_' => State::ApcPrefix { c1: false },
+                    b'P' => {
+                        terminal_byte(&mut events, 0x1b);
+                        terminal_byte(&mut events, byte);
+                        State::OtherDcs { escape: false }
+                    }
                     0x1b => {
                         terminal_byte(&mut events, 0x1b);
                         State::Escape
@@ -198,6 +221,16 @@ impl GraphicsFramer {
                         }
                     }
                 }
+                State::OtherDcs { escape } => {
+                    terminal_byte(&mut events, byte);
+                    if matches!(byte, 0x18 | 0x1a | 0x9c) || (escape && byte == b'\\') {
+                        State::Ground
+                    } else {
+                        State::OtherDcs {
+                            escape: byte == 0x1b,
+                        }
+                    }
+                }
             };
         }
         events
@@ -206,7 +239,8 @@ impl GraphicsFramer {
     /// Flush an incomplete ordinary escape prefix at EOF; incomplete graphics
     /// commands are intentionally not emitted.
     pub fn finish(&mut self) -> Vec<GraphicsEvent> {
-        let mut events = Vec::new();
+        let bytes = self.passthrough.finish();
+        let mut events = self.advance_unwrapped(&bytes);
         match std::mem::take(&mut self.state) {
             State::Escape => terminal_byte(&mut events, 0x1b),
             State::ApcPrefix { c1: false } => {
@@ -232,6 +266,135 @@ fn terminal_byte(events: &mut Vec<GraphicsEvent>, byte: u8) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tmux_wrap(bytes: &[u8]) -> Vec<u8> {
+        let mut wrapper = b"\x1bPtmux;".to_vec();
+        for &byte in bytes {
+            wrapper.push(byte);
+            if byte == 0x1b {
+                wrapper.push(byte);
+            }
+        }
+        wrapper.extend_from_slice(b"\x1b\\");
+        wrapper
+    }
+
+    #[test]
+    fn tmux_commands_preserve_order_at_every_split() {
+        let command = b"\x1b_Gi=3,m=0;YWJj\x1b\\";
+        let mut input = "左\u{79d}left".as_bytes().to_vec();
+        input.extend(tmux_wrap(command));
+        input.extend_from_slice(b"right");
+        let expected = vec![
+            GraphicsEvent::Terminal("左\u{79d}left".as_bytes().to_vec()),
+            GraphicsEvent::Command(command.to_vec()),
+            GraphicsEvent::Terminal(b"right".to_vec()),
+        ];
+        for split in 0..=input.len() {
+            let mut framer = GraphicsFramer::new();
+            let mut events = framer.advance(&input[..split]);
+            events.extend(framer.advance(&input[split..]));
+            events.extend(framer.finish());
+            assert_eq!(coalesce(events), expected, "split {split}");
+        }
+        let mut framer = GraphicsFramer::new();
+        let mut events = Vec::new();
+        for byte in input {
+            events.extend(framer.advance(&[byte]));
+        }
+        events.extend(framer.finish());
+        assert_eq!(coalesce(events), expected);
+    }
+
+    #[test]
+    fn tmux_can_wrap_multiple_commands_and_fragments() {
+        let command = b"\x1b_Gi=3,m=0;YWJj\x1b\\";
+        let mut framer = GraphicsFramer::new();
+        assert!(framer.advance(&tmux_wrap(&command[..7])).is_empty());
+        assert_eq!(
+            framer.advance(&tmux_wrap(&command[7..])),
+            vec![GraphicsEvent::Command(command.to_vec())]
+        );
+        let mut two = command.to_vec();
+        two.extend_from_slice(b"text");
+        two.extend_from_slice(command);
+        assert_eq!(
+            framer.advance(&tmux_wrap(&two)),
+            vec![
+                GraphicsEvent::Command(command.to_vec()),
+                GraphicsEvent::Terminal(b"text".to_vec()),
+                GraphicsEvent::Command(command.to_vec()),
+            ]
+        );
+        assert_eq!(
+            framer.advance(&tmux_wrap(b"\x9fGi=3;YWJj\x9c")),
+            vec![GraphicsEvent::Command(b"\x9fGi=3;YWJj\x9c".to_vec())]
+        );
+    }
+
+    #[test]
+    fn tmux_requires_complete_valid_bounded_transport() {
+        let command = b"\x1b_Gi=3;YWJj\x1b\\";
+        let wrapper = tmux_wrap(command);
+        let mut framer = GraphicsFramer::new();
+        assert!(framer.advance(&wrapper[..wrapper.len() - 2]).is_empty());
+        assert!(framer.finish().is_empty());
+        let mut malformed = b"\x1bPtmux;\x1b_bad".to_vec();
+        malformed.extend_from_slice(&wrapper[7..]);
+        let mut cancelled = b"\x1bPtmux;".to_vec();
+        cancelled.extend_from_slice(&wrapper[7..wrapper.len() - 2]);
+        cancelled.push(0x18);
+        let mut invalid_tail = wrapper[..wrapper.len() - 2].to_vec();
+        invalid_tail.extend_from_slice(b"\x1b!\x1b\\");
+        for input in [
+            malformed,
+            cancelled,
+            invalid_tail,
+            tmux_wrap(&vec![b'x'; MAX_GRAPHICS_COMMAND_BYTES + 1]),
+        ] {
+            let mut framer = GraphicsFramer::new();
+            assert!(framer.advance(&input).is_empty());
+            assert_eq!(
+                framer.advance(command),
+                vec![GraphicsEvent::Command(command.to_vec())]
+            );
+            assert!(framer.finish().is_empty());
+        }
+        let mut framer = GraphicsFramer::new();
+        assert_eq!(
+            framer.advance(&tmux_wrap(&vec![b'x'; MAX_GRAPHICS_COMMAND_BYTES])),
+            vec![GraphicsEvent::Terminal(vec![
+                b'x';
+                MAX_GRAPHICS_COMMAND_BYTES
+            ])]
+        );
+    }
+
+    #[test]
+    fn ordinary_dcs_and_nested_wrappers_stay_opaque() {
+        let command = b"\x1b_Gi=3;YWJj\x1b\\";
+        for prefix in [b"\x1bPother;".as_slice(), b"\x90other;".as_slice()] {
+            let mut input = prefix.to_vec();
+            input.extend_from_slice(command);
+            let mut framer = GraphicsFramer::new();
+            assert_eq!(framer.advance(&input), vec![GraphicsEvent::Terminal(input)]);
+        }
+        let wrapped = tmux_wrap(command);
+        let mut framer = GraphicsFramer::new();
+        assert_eq!(
+            framer.advance(&tmux_wrap(&wrapped)),
+            vec![GraphicsEvent::Terminal(wrapped)]
+        );
+        for prefix in [b"\x1bP".as_slice(), b"\x1bPtm".as_slice()] {
+            let mut framer = GraphicsFramer::new();
+            let mut events = framer.advance(prefix);
+            events.extend(framer.finish());
+            assert_eq!(
+                coalesce(events),
+                vec![GraphicsEvent::Terminal(prefix.to_vec())]
+            );
+        }
+    }
 
     fn coalesce(events: impl IntoIterator<Item = GraphicsEvent>) -> Vec<GraphicsEvent> {
         let mut result = Vec::new();

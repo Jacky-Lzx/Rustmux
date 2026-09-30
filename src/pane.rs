@@ -1031,6 +1031,54 @@ mod io_tests {
     }
 
     #[test]
+    fn runtime_tmux_wrapped_queries_uploads_and_deletes_use_pane_store() {
+        let mut pane = Pane::spawn("/bin/sh", 4, 4).unwrap();
+        let cell = CellPixelSize::new(1, 1).unwrap();
+        let send = |pane: &mut Pane, command: &[u8]| {
+            let mut wrapper = b"\x1bPtmux;".to_vec();
+            for &byte in command {
+                wrapper.push(byte);
+                if byte == 0x1b {
+                    wrapper.push(byte);
+                }
+            }
+            wrapper.extend_from_slice(b"\x1b\\\x1b[c");
+            let mut replies = Vec::new();
+            for byte in wrapper {
+                pane.process_output_for_runtime(
+                    &[byte],
+                    &mut |reply| replies.extend_from_slice(reply),
+                    Some(cell),
+                    true,
+                );
+            }
+            replies
+        };
+        assert_eq!(
+            send(&mut pane, b"\x1b_Ga=q,i=38,f=24,s=1,v=1;BAUG\x1b\\"),
+            b"\x1b_Gi=38;OK\x1b\\\x1b[?1;0c"
+        );
+        assert!(pane.image_store().is_empty());
+        assert_eq!(
+            send(&mut pane, b"\x1b_Ga=T,i=38,p=4,f=24,s=1,v=1,C=1;BAUG\x1b\\"),
+            b"\x1b_Gi=38,p=4;OK\x1b\\\x1b[?1;0c"
+        );
+        assert_eq!(
+            pane.compose_image_snapshot(cell).unwrap().pixels[..4],
+            [4, 5, 6, 255]
+        );
+        let revision = pane.image_store().revision();
+        assert_eq!(
+            send(&mut pane, b"\x1b_Ga=T,i=38,f=24,s=1,v=1,q=2;invalid\x1b\\"),
+            b"\x1b[?1;0c"
+        );
+        assert_eq!(pane.image_store().revision(), revision);
+        assert_eq!(pane.image_store().get(38).unwrap().data, [4, 5, 6]);
+        assert_eq!(send(&mut pane, b"\x1b_Ga=d,d=I,i=38\x1b\\"), b"\x1b[?1;0c");
+        assert!(pane.image_store().is_empty());
+    }
+
+    #[test]
     fn runtime_file_query_upload_and_failed_replacement_preserve_state() {
         use std::{io::Write, os::unix::ffi::OsStrExt};
         let mut file = tempfile::NamedTempFile::new().unwrap();

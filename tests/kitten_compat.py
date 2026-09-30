@@ -65,6 +65,7 @@ def run_case(
     timeout=20,
     verify_complete_tiles=False,
     verify_temporary_transfer=False,
+    tmux_environment=None,
 ):
     config.mkdir()
     master, slave = os.openpty()
@@ -79,6 +80,8 @@ def run_case(
         BASH_ENV="",
         XDG_CONFIG_HOME=str(config),
     )
+    if tmux_environment is not None:
+        environment["TMUX"] = tmux_environment
     if verify_temporary_transfer:
         temporary_directory = config / "temp"
         temporary_directory.mkdir()
@@ -113,9 +116,9 @@ def run_case(
         )
         output.clear()
         command = f"{shlex.quote(kitten)} icat {options}{shlex.quote(str(image))}\n"
-        if verify_temporary_transfer:
+        if verify_temporary_transfer or tmux_environment is not None:
             # Capture the real kitten commands, then deliver them unchanged to
-            # the pane. This proves t=t was used and lets us check its sources.
+            # the pane. Inspect the actual transfer medium or tmux wrappers.
             captured = config / "child-graphics"
             quoted = shlex.quote(str(captured))
             command = command.rstrip("\n") + f" > {quoted} && cat {quoted}\n"
@@ -195,6 +198,10 @@ def run_case(
             assert sources, "kitten did not emit a t=t transfer"
             assert all(not path.exists() for path in sources), "kitten temporary source was not removed"
             assert not list(temporary_directory.iterdir()), "kitten left temporary files behind"
+        if tmux_environment is not None:
+            child_output = captured.read_bytes()
+            assert b"\x1bPtmux;\x1b\x1b_G" in child_output, "kitten did not emit tmux-wrapped graphics"
+            assert b"\x1bPtmux;" not in output, "child tmux wrapper leaked to the outer terminal"
         print(f"PASS: installed kitten icat {label} composited")
     finally:
         os.close(master)
@@ -274,6 +281,37 @@ def main(binary, custom_image=None):
         assert small.exists(), "temporary transmission must retain the original input image"
         large = root / "multi-chunk.png"
         multichunk_png(large)
+        tmux = shutil.which("tmux")
+        if tmux is None:
+            print("SKIP: tmux is not installed for kitten passthrough smoke")
+        else:
+            # Kitty checks tmux's allow-passthrough option. Supply an isolated
+            # server solely for that check; captured output proves the real
+            # icat encoder used tmux wrappers, without affecting a user server.
+            with tempfile.TemporaryDirectory(prefix="rustmux-tmux-", dir="/tmp") as directory:
+                socket = str(Path(directory) / "socket")
+                tmux_command = [tmux, "-S", socket, "-f", "/dev/null"]
+                tmux_env = dict(os.environ)
+                tmux_env.pop("TMUX", None)
+                try:
+                    subprocess.run(tmux_command + ["new-session", "-d", "-s", "compat", "sleep 120"],
+                                   env=tmux_env, check=True, capture_output=True)
+                    address = subprocess.check_output(
+                        tmux_command + ["display-message", "-p", "-t", "compat", "#{socket_path},#{pid},0"],
+                        env=tmux_env, text=True,
+                    ).strip()
+                    for image, colors, name in [(small, FIRST_COLORS, "small"), (large, None, "multi-chunk")]:
+                        run_case(
+                            binary, kitten, image, root / f"tmux-{name}-config",
+                            "--passthrough=tmux --transfer-mode=stream --unicode-placeholder "
+                            + ("--place=2x2@0x0 " if colors else "")
+                            + "--stdin=no --image-id=50 ",
+                            f"tmux-wrapped {name} image", colors,
+                            tmux_environment=address,
+                        )
+                finally:
+                    subprocess.run(tmux_command + ["kill-server"], env=tmux_env,
+                                   check=False, capture_output=True)
         run_case(
             binary,
             kitten,

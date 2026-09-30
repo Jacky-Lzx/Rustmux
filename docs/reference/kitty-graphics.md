@@ -13,6 +13,20 @@ incorrectly terminated or unfinished graphics command is discarded without expos
 payload as terminal text. The framer does not concatenate separate Kitty
 transfer chunks; each APC is one event.
 
+The framer also unwraps one layer of `ESC P tmux; ... ESC \\` transport,
+with doubled ESC bytes decoded before ordinary Kitty framing. This matches
+[Kitten's tmux encoder](https://github.com/kovidgoyal/kitty/blob/master/kittens/icat/transmit.go).
+Wrapped commands use the same pane-local transfer, image store, replies and
+composition as direct APCs; the wrapper is never forwarded to the outer
+terminal. Decoded commands and text retain their order, including commands
+split across wrappers and several commands inside one wrapper. A transport
+packet is buffered until its final ST and limited to the same 128 KiB + 4 KiB
+decoded-byte budget. Malformed ESC quoting, oversized packets, cancellation
+and unfinished wrappers discard the packet without applying an earlier command
+inside it. Ordinary DCS strings stay opaque to graphics framing and continue
+to the text parser; nested tmux wrappers are not recursively unwrapped.
+Ordinary ASCII text and unwrapped Base64 chunks bypass the transport buffer.
+
 The crate-private `graphics::command` module shares complete-command framing
 and control-field parsing between the assembler, store, and child replies.
 Data commands require a semicolon separating controls from payload; control-only
@@ -666,6 +680,13 @@ Rustmux writes the current pane's pixel dimensions to its child PTY, including
 after text-grid or cell-pixel changes. If that size is unknown or exceeds the
 PTY's 16-bit pixel fields, both pixel fields remain zero. This smoke covers these
 PNG paths, not all `kitten icat` features.
+
+When `tmux` is installed, the same smoke also runs the real
+`kitten icat --passthrough=tmux --transfer-mode=stream` encoder with small and
+multi-chunk images. An isolated tmux server supplies only the encoder's option
+check; captured child output must contain doubled-ESC tmux wrappers, and the
+outer uploads must contain the composed pixels without those wrappers. This
+does not test an interactive tmux session's own rendering or input routing.
 
 To test a specific local image after a viewer or image-format update, run
 `RUSTMUX_COMPAT_IMAGE=/absolute/path/to/image.png cargo compat`. Without that
