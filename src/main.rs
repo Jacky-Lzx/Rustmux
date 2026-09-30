@@ -6,7 +6,7 @@ use std::{
 use clap::Parser;
 
 fn main() -> ExitCode {
-    match execute(rustmux::cli::Cli::parse().command) {
+    match execute(rustmux::cli::Cli::parse()) {
         Ok(code) => ExitCode::from(code),
         Err(error) => {
             eprintln!("rustmux: {error}");
@@ -15,13 +15,15 @@ fn main() -> ExitCode {
     }
 }
 
-fn execute(command: Option<rustmux::cli::Command>) -> Result<u8, String> {
+fn execute(cli: rustmux::cli::Cli) -> Result<u8, String> {
+    let rustmux::cli::Cli { command, config } = cli;
+    let config_path = config.as_deref();
     if std::env::var_os(rustmux::RUSTMUX_ENV).is_some() && starts_interactive_session(&command) {
         return Err("nested Rustmux sessions are not supported".to_owned());
     }
     match command {
         None => {
-            let config = rustmux::config::load()?;
+            let config = rustmux::config::load_with_path(config_path)?;
             rustmux::terminal::run(
                 config.shell(),
                 config.notifications(),
@@ -31,7 +33,7 @@ fn execute(command: Option<rustmux::cli::Command>) -> Result<u8, String> {
             .map_err(|error| error.to_string())
         }
         Some(rustmux::cli::Command::New { name, detached }) => {
-            let config = rustmux::config::load()?;
+            let config = rustmux::config::load_with_path(config_path)?;
             rustmux::session::supervisor::create(
                 &name,
                 config.shell(),
@@ -39,16 +41,15 @@ fn execute(command: Option<rustmux::cli::Command>) -> Result<u8, String> {
                 config.scrollback_lines(),
                 config.shortcuts(),
                 detached,
+                config_path,
             )
             .map_err(|error| error.to_string())
         }
         Some(rustmux::cli::Command::Attach { name }) => match name {
-            Some(name) => {
-                rustmux::session::supervisor::attach(&name).map_err(|error| error.to_string())
-            }
-            None => {
-                rustmux::session::supervisor::choose_and_attach().map_err(|error| error.to_string())
-            }
+            Some(name) => rustmux::session::supervisor::attach(&name, config_path)
+                .map_err(|error| error.to_string()),
+            None => rustmux::session::supervisor::choose_and_attach(config_path)
+                .map_err(|error| error.to_string()),
         },
         Some(rustmux::cli::Command::List { long }) => {
             if long {

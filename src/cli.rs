@@ -1,5 +1,7 @@
 //! Command-line definitions for local and persistent sessions.
 
+use std::path::PathBuf;
+
 use clap::{Parser, Subcommand};
 
 use crate::session::SessionName;
@@ -7,6 +9,9 @@ use crate::session::SessionName;
 #[derive(Debug, Parser)]
 #[command(name = "rustmux", version, about = "A small terminal multiplexer")]
 pub struct Cli {
+    /// Load configuration from PATH instead of the default config file.
+    #[arg(short = 'c', long, global = true, value_name = "PATH")]
+    pub config: Option<PathBuf>,
     #[command(subcommand)]
     pub command: Option<Command>,
 }
@@ -131,6 +136,29 @@ mod tests {
         ] {
             assert!(Cli::try_parse_from(arguments).is_err(), "{arguments:?}");
         }
+    }
+
+    #[test]
+    fn config_path_is_optional_and_available_before_or_after_subcommands() {
+        assert!(Cli::try_parse_from(["rustmux"]).unwrap().config.is_none());
+        for arguments in [
+            vec!["rustmux", "--config", "configs/dev config.toml"],
+            vec!["rustmux", "-c", "configs/dev config.toml", "new", "work"],
+            vec![
+                "rustmux",
+                "new",
+                "work",
+                "--config",
+                "configs/dev config.toml",
+            ],
+            vec!["rustmux", "attach", "work", "-c", "configs/dev config.toml"],
+        ] {
+            assert_eq!(
+                Cli::try_parse_from(arguments).unwrap().config,
+                Some(PathBuf::from("configs/dev config.toml"))
+            );
+        }
+        assert!(Cli::try_parse_from(["rustmux", "--config"]).is_err());
     }
 
     #[test]

@@ -66,3 +66,8 @@ fn sessions() {
 fn frame_reconstruction() {
     run_scenario("frames");
 }
+
+#[test]
+fn config() {
+    run_scenario("config");
+}

@@ -5,6 +5,7 @@ use std::fs;
 use std::fs::OpenOptions;
 use std::io::{self, Read, Write};
 use std::os::fd::{AsFd, AsRawFd};
+use std::path::Path;
 use std::time::Duration;
 
 use nix::errno::Errno;
@@ -33,6 +34,7 @@ pub fn create(
     scrollback_lines: usize,
     shortcuts: crate::config::Shortcuts,
     detached: bool,
+    config_path: Option<&Path>,
 ) -> io::Result<u8> {
     let endpoint = SessionEndpoint::bind(name)?;
     // SAFETY: the CLI calls this during single-threaded startup, so the child
@@ -43,7 +45,7 @@ pub fn create(
             if detached {
                 start_detached(name)
             } else {
-                attach(name)
+                attach(name, config_path)
             }
         }
         ForkResult::Child => {
@@ -103,16 +105,18 @@ fn start_detached(name: &SessionName) -> io::Result<u8> {
 }
 
 /// Attach this terminal to an existing named session.
-pub fn attach(name: &SessionName) -> io::Result<u8> {
+pub fn attach(name: &SessionName, config_path: Option<&Path>) -> io::Result<u8> {
     let mut name = name.clone();
     loop {
         match attach_once(&name)? {
             client::ClientExit::Process(status) => return Ok(status),
             client::ClientExit::Detached => return Ok(0),
-            client::ClientExit::SessionManager => match manage_sessions(Some(&name), false)? {
-                Some(next) => name = next,
-                None => return Ok(0),
-            },
+            client::ClientExit::SessionManager => {
+                match manage_sessions(Some(&name), false, config_path)? {
+                    Some(next) => name = next,
+                    None => return Ok(0),
+                }
+            }
         }
     }
 }
@@ -123,9 +127,9 @@ fn attach_once(name: &SessionName) -> io::Result<client::ClientExit> {
 }
 
 /// Attach directly when one session exists, or ask the user to choose among several.
-pub fn choose_and_attach() -> io::Result<u8> {
-    match manage_sessions(None, true)? {
-        Some(name) => attach(&name),
+pub fn choose_and_attach(config_path: Option<&Path>) -> io::Result<u8> {
+    match manage_sessions(None, true, config_path)? {
+        Some(name) => attach(&name, config_path),
         None => Ok(0),
     }
 }
@@ -133,6 +137,7 @@ pub fn choose_and_attach() -> io::Result<u8> {
 fn manage_sessions(
     return_to: Option<&SessionName>,
     attach_single_directly: bool,
+    config_path: Option<&Path>,
 ) -> io::Result<Option<SessionName>> {
     let mut return_to = return_to.cloned();
     let mut changed = false;
@@ -155,7 +160,7 @@ fn manage_sessions(
         match super::picker::choose(&sessions, return_to.as_ref())? {
             super::picker::Choice::Attach(name) => return Ok(Some(name)),
             super::picker::Choice::Create(name) => {
-                let config = crate::config::load()
+                let config = crate::config::load_with_path(config_path)
                     .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
                 create(
                     &name,
@@ -164,6 +169,7 @@ fn manage_sessions(
                     config.scrollback_lines(),
                     config.shortcuts(),
                     true,
+                    config_path,
                 )?;
                 return Ok(Some(name));
             }

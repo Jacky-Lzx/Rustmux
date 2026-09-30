@@ -9,6 +9,12 @@ cargo build --locked
 ./target/debug/rustmux
 ```
 
+Use `--config PATH` (or `-c PATH`) to select a different configuration:
+
+```sh
+cargo run --locked -- --config "$HOME/.config/rustmux/config-dev.toml"
+```
+
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution and review rules.
 The [implementation plan and acceptance ledger](https://github.com/Jacky-Lzx/Rustmux/blob/main/docs/reference/human-review-plan.md) are maintained on `main` (the link becomes available after publication).
 

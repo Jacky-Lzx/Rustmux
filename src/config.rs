@@ -592,7 +592,16 @@ struct ParsedConfig {
 
 /// Load and validate the complete configuration used by a new session.
 pub fn load() -> Result<Config, String> {
-    let configured = load_config(&config_path())?;
+    load_with_path(None)
+}
+
+/// Load an explicit configuration file, or use the default discovery path.
+/// An explicitly selected file must exist; a missing default file is optional.
+pub fn load_with_path(path: Option<&Path>) -> Result<Config, String> {
+    let configured = match path {
+        Some(path) => load_config(path, false)?,
+        None => load_config(&config_path(), true)?,
+    };
     Ok(Config {
         shell: select_shell(
             env::var_os("RUSTMUX_SHELL"),
@@ -627,10 +636,10 @@ fn select_shell(
         .unwrap_or_else(|| OsString::from("/bin/sh"))
 }
 
-fn load_config(path: &Path) -> Result<ParsedConfig, String> {
+fn load_config(path: &Path, allow_missing: bool) -> Result<ParsedConfig, String> {
     let source = match fs::read_to_string(path) {
         Ok(source) => source,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+        Err(error) if allow_missing && error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(ParsedConfig::default());
         }
         Err(error) => return Err(format!("could not read {}: {error}", path.display())),
@@ -1671,6 +1680,34 @@ fn config_path_from(xdg: Option<OsString>, home: Option<OsString>) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_config_loads_selected_file_and_reports_path_errors() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("dev config.toml");
+        fs::write(
+            &path,
+            r#"scrollback_lines = 321
+clear_defaults = true
+[keybinds.locked]
+"Ctrl a" = { actions = [{ action = "switch-mode", mode = "normal" }] }
+"#,
+        )
+        .unwrap();
+        let config = load_with_path(Some(&path)).unwrap();
+        assert_eq!(config.scrollback_lines(), 321);
+        assert!(config.shortcuts().clear_defaults());
+
+        fs::write(&path, "shell = 123").unwrap();
+        let error = load_with_path(Some(&path)).err().unwrap();
+        assert!(error.contains(&format!("invalid {}:", path.display())));
+        assert!(error.contains("shell must be a string"));
+
+        fs::remove_file(&path).unwrap();
+        let error = load_with_path(Some(&path)).err().unwrap();
+        assert!(error.contains(&format!("could not read {}:", path.display())));
+        assert!(load_config(&path, true).is_ok());
+    }
 
     #[test]
     fn shell_precedence_keeps_environment_override_and_login_default() {

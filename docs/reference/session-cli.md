@@ -14,6 +14,28 @@ rustmux kill work
 rustmux kill-all --yes
 ```
 
+`--config PATH` (or `-c PATH`) selects the configuration for foreground startup
+and newly created named sessions. It can appear before or after a subcommand:
+
+```sh
+rustmux --config ~/.config/rustmux/config-dev.toml
+rustmux new work --config ./config-dev.toml
+rustmux --config ./config-dev.toml new --detached background
+rustmux attach work --config ./config-dev.toml
+```
+
+Relative paths resolve from the launching working directory. An explicit file
+must exist and contain valid supported configuration; read or validation errors
+include its path. Without this option, Rustmux uses
+`$XDG_CONFIG_HOME/rustmux/config.toml`, or `~/.config/rustmux/config.toml` when
+`XDG_CONFIG_HOME` is unset. A missing default file still uses built-in defaults.
+The option does not change `XDG_CONFIG_HOME` for pane processes.
+
+Existing named sessions keep the configuration loaded by their server at creation.
+An attaching client's `--config` selection applies when it creates a new session
+from the Session Manager; it also remains selected when switching between sessions.
+`list`, `kill` and `kill-all` do not read configuration files.
+
 `new` validates and binds the private endpoint before forking. The child creates
 a new session, leaves the launching terminal's process session with `setsid`,
 redirects its standard streams to `/dev/null`, closes inherited descriptors and
