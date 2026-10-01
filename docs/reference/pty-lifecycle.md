@@ -32,11 +32,13 @@ An explicit executable is required by the API; PATH lookup is handled by Command
 Invalid paths fail without fallback. Shell selection reads the top-level `shell`
 value from `$XDG_CONFIG_HOME/rustmux/config.toml` or
 `~/.config/rustmux/config.toml`; `RUSTMUX_SHELL` overrides it and `$SHELL`
-provides the default. The optional `[notifications]` table accepts a Boolean
-`long_command_bell` (default `true`) and a positive integer
-`command_duration_seconds` (default `5`). Unknown keys are ignored. Invalid
-supported values reject startup instead of silently changing behavior. A running
-named-session server retains the settings with which it was created.
+provides the default. The optional `[notifications]` table accepts Boolean
+`enabled` and `long_command_bell` values (both default `true`), a positive integer
+`command_duration_seconds` (default `5`), and `exclude_applications` (default
+`["yazi", "nvim", "lazygit"]`). See [Notification Filters](notification-filters.md).
+Unknown keys are ignored. Invalid supported values reject startup instead of
+silently changing behavior. Named-session servers apply valid configuration
+updates through [hot reload](config-reload.md).
 The parent drops every slave copy after spawn and retains only the master. On spawn
 failure, descriptor ownership unwinds automatically and Command reports the error
 after handling its failed child.

@@ -25,6 +25,7 @@ impl ClosedPane {
         if pane.shell_mut().try_wait()?.is_some() {
             return Ok(false);
         }
+        pane.track_command_application();
         pane.sync_pty_cell_pixels(cell_pixels)?;
         let limit = pane.io().reply_read_limit().min(MAX_REPLY_DRAIN_BYTES);
         if limit > 0 {

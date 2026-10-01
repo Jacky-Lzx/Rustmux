@@ -324,8 +324,12 @@ and enters the same pane-specific bell state. Short commands and the heuristic
 Enter-based output capture do not ring. A detached session retains the visual
 bell state but has no terminal on which to make the completion bell audible. The
 `[notifications]` configuration table can disable this behavior with
-`long_command_bell = false` or set a positive whole-second threshold with
-`command_duration_seconds`; the defaults are enabled and five seconds.
+`enabled = false` or `long_command_bell = false`, or set a positive whole-second
+threshold with `command_duration_seconds`; the defaults are enabled and five
+seconds. Commands with observed `yazi`, `nvim` or `lazygit` foreground processes
+are excluded by default. Configure `exclude_applications` to replace that list;
+see [Notification Filters](notification-filters.md). Ordinary application BEL
+markers are unaffected by these settings.
 The bar uses [Catppuccin Mocha](https://catppuccin.com/palette/) with explicit RGB
 colors. It draws dark badge text (`#11111b`) on Text (`#cdd6f4`) for inactive
 windows and Green (`#a6e3a1`) for the active window, with Powerline separators

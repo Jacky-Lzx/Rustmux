@@ -14,7 +14,7 @@ rustmux show-config -s work
 | Setting | Effect of a successful reload |
 | --- | --- |
 | Supported shortcuts and mode bindings | Update together at the next safe input boundary; footer and Help use the new bindings |
-| Notifications | Update existing panes, including the hidden pane retained for undo |
+| Notifications | Update existing panes, including the hidden pane retained for undo; running commands use the latest policy at completion |
 | `remain_on_exit` | Update the session policy; disabling it also removes already drained, exited panes that use this default. Explicit project/pane overrides still apply |
 | `shell` | Used when creating or respawning panes; existing child processes keep running |
 | `scrollback_lines` | Used by future panes and as the history limit for future saves; existing panes keep their current history capacity |
@@ -76,8 +76,13 @@ startup.
 | `pending` | Whether a valid newer configuration is waiting for a safe boundary |
 | `error` | Latest reload error, omitted when there is none |
 | `new_window_key` | Current preferred NORMAL-mode new-window key, omitted if that action is inactive |
-| `[settings]` | Applied scalar settings, using the same fields as configuration diagnostics |
+| `[settings]` | Applied settings, using the same fields as configuration diagnostics |
 | `[session_manager]` | Applied manager bindings on this server; the client-side manager uses its own selected source |
+
+`[settings].notifications_enabled` and
+`[settings].notification_excluded_applications` expose the applied notification
+switch and normalized application list. In-flight application observations survive
+a reload; see [Notification Filters](notification-filters.md).
 
 Pane-mode bindings are validated and applied but are not flattened into this report;
 Help displays their active definitions. The report describes the session's

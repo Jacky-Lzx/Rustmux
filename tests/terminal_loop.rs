@@ -88,6 +88,11 @@ fn notifications() {
 }
 
 #[test]
+fn notification_filter() {
+    run_scenario("notification_filter");
+}
+
+#[test]
 fn mouse_lifecycle() {
     run_scenario("mouse_lifecycle");
 }

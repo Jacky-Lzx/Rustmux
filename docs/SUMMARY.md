@@ -41,6 +41,7 @@
 - [Rendering Measurements](reference/rendering-performance.md)
 
 - [Windows](reference/windows.md)
+- [Notification Filters](reference/notification-filters.md)
 - [Shortcut Help](reference/shortcut-help.md)
 - [Session Endpoints](reference/session-endpoints.md)
 - [Session Protocol](reference/session-protocol.md)

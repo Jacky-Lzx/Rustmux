@@ -22,13 +22,9 @@ use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::{
-    collections::VecDeque,
-    ffi::OsStr,
-    io,
-    process::ExitStatus,
-    time::{Duration, Instant},
-};
+#[cfg(test)]
+use std::time::Duration;
+use std::{collections::VecDeque, ffi::OsStr, io, process::ExitStatus, time::Instant};
 use tempfile::{Builder, NamedTempFile};
 
 pub(crate) const INPUT_LIMIT: usize = 64 * 1024;
@@ -52,7 +48,7 @@ pub struct Pane {
     image_store: ImageStore,
     screen: Screen,
     io: PaneIo,
-    command_bell_after: Option<Duration>,
+    notifications: crate::config::Notifications,
     _temporary_file: Option<TemporaryFile>,
 }
 
@@ -315,7 +311,7 @@ impl Pane {
         self.control_id
     }
     pub(crate) fn configure_notifications(&mut self, notifications: crate::config::Notifications) {
-        self.command_bell_after = notifications.command_bell_after();
+        self.notifications = notifications;
     }
     pub(crate) fn read_output(&self, after: Option<u64>) -> io::Result<crate::pane_output::Chunk> {
         self.output.read(self.control_id, after, self.io.eof)
@@ -405,7 +401,7 @@ impl Pane {
             image_store: ImageStore::new(),
             screen,
             io,
-            command_bell_after: notifications.command_bell_after(),
+            notifications,
             _temporary_file: None,
         })
     }
@@ -447,7 +443,10 @@ impl Pane {
             image_store: ImageStore::new(),
             screen,
             io: PaneIo::default(),
-            command_bell_after: None,
+            notifications: crate::config::Notifications {
+                long_command_bell: false,
+                ..Default::default()
+            },
             _temporary_file: Some(temporary_file),
         })
     }
@@ -848,6 +847,7 @@ impl Pane {
         reply: &mut impl FnMut(&[u8]),
         mut graphics: GraphicsSink<'_>,
     ) {
+        self.track_command_application();
         self.output.append(bytes);
         self.io.dirty = true;
         let cell_pixels = match &graphics {
@@ -971,13 +971,34 @@ impl Pane {
             }
         }
         let completed_commands = self.io.semantic.take_completed_commands();
-        if self.command_bell_after.is_some_and(|threshold| {
-            completed_commands
-                .into_iter()
-                .any(|duration| duration >= threshold)
-        }) {
+        self.track_command_application();
+        if self
+            .notifications
+            .command_bell_after()
+            .is_some_and(|threshold| {
+                completed_commands.into_iter().any(|command| {
+                    command.duration >= threshold
+                        && !(command.applications_overflowed
+                            && !self.notifications.exclude_applications.is_empty())
+                        && !command
+                            .applications
+                            .iter()
+                            .any(|name| self.notifications.excludes_application(name))
+                })
+            })
+        {
             self.io.bell_pending = true;
             self.io.command_bell_pending = true;
+        }
+    }
+
+    pub(crate) fn track_command_application(&mut self) {
+        if self.io.semantic.command_running()
+            && !self.io.eof
+            && self.io.status.is_none()
+            && let Some(application) = self.shell.foreground_application()
+        {
+            self.io.semantic.observe_application(application);
         }
     }
 

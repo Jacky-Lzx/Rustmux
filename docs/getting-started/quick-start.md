@@ -31,8 +31,10 @@ scrollback_lines = 1000
 remain_on_exit = false
 
 [notifications]
+enabled = true
 long_command_bell = true
 command_duration_seconds = 5
+exclude_applications = ["yazi", "nvim", "lazygit"]
 
 [shortcuts]
 new_window = "N"
@@ -42,8 +44,13 @@ split_down = "D"
 
 `long_command_bell` controls whether an OSC 133-integrated command rings when it
 finishes, and `command_duration_seconds` sets the positive whole-second threshold.
-Both notification values are optional and default to `true` and `5`. Configuration
-is read at startup and checked for changes every 500 ms. `scrollback_lines`
+All notification values are optional. The defaults above suppress completion
+reminders for observed `yazi`, `nvim` and `lazygit` processes. Set
+`exclude_applications = []` to allow all applications, or `enabled = false` to
+disable automatic completion reminders. Ordinary application BEL markers still
+work. See [Notification Filters](../reference/notification-filters.md) for matching
+and process-observation limits. Configuration is read at startup and checked for
+changes every 500 ms. `scrollback_lines`
 is an optional nonnegative integer that defaults to `1000`; set it to `0` to
 disable retained history. The separate 65,536-cell cap remains fixed, so a large
 line limit cannot make history unbounded. New windows, splits and temporary editor

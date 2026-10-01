@@ -25,6 +25,8 @@ pub struct Settings {
     pub save_scrollback: bool,
     pub save_scrollback_colors: bool,
     pub long_command_bell: bool,
+    pub notifications_enabled: bool,
+    pub notification_excluded_applications: Vec<String>,
     pub command_duration_seconds: u64,
 }
 
@@ -71,6 +73,8 @@ impl From<&Config> for Settings {
             save_scrollback: config.persistence.save_scrollback,
             save_scrollback_colors: config.persistence.save_scrollback_colors,
             long_command_bell: config.notifications.long_command_bell,
+            notifications_enabled: config.notifications.enabled,
+            notification_excluded_applications: config.notifications.exclude_applications.to_vec(),
             command_duration_seconds: config.notifications.command_duration.as_secs(),
         }
     }
@@ -112,7 +116,10 @@ fn ignored_options(source: &str) -> Vec<String> {
         for key in notifications.keys() {
             if !matches!(
                 key.as_str(),
-                "long_command_bell" | "command_duration_seconds"
+                "enabled"
+                    | "long_command_bell"
+                    | "command_duration_seconds"
+                    | "exclude_applications"
             ) {
                 warnings.push(format!("ignored notifications option {key:?}"));
             }
@@ -175,8 +182,10 @@ save_scrollback = false
 save_scrollback_colors = false
 
 [notifications]
+enabled = true
 long_command_bell = true
 command_duration_seconds = {DEFAULT_COMMAND_DURATION_SECONDS}
+exclude_applications = ["yazi", "nvim", "lazygit"]
 
 [session_manager]
 up = ["k", "up"]

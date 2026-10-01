@@ -208,7 +208,7 @@ fn serve_inner(
     let (rows, columns) = peer.size();
     let shortcuts = context.shortcuts;
     let mut session = TerminalSession::from_snapshot(
-        context,
+        context.clone(),
         rows,
         columns,
         snapshot.as_ref(),
@@ -290,7 +290,7 @@ struct TerminalSession {
     reload: Option<crate::config::reload::Reload>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct SessionContext<'a> {
     shell_path: &'a OsStr,
     session_name: Option<&'a str>,
@@ -355,7 +355,7 @@ impl TerminalSession {
                 shell_path,
                 rows,
                 columns,
-                notifications,
+                notifications.clone(),
                 scrollback_lines,
                 restore_history,
             )?,
@@ -368,7 +368,7 @@ impl TerminalSession {
                         None,
                         pane_rows(rows),
                         columns,
-                        notifications,
+                        notifications.clone(),
                         scrollback_lines,
                     )?,
                 )?;
@@ -417,7 +417,7 @@ impl TerminalSession {
             SessionContext {
                 shell_path: &self.shell_path,
                 session_name: self.session_name.as_deref(),
-                notifications: self.notifications,
+                notifications: self.notifications.clone(),
                 scrollback_lines: self.scrollback_lines,
                 shortcuts: self.shortcuts,
             },
@@ -529,7 +529,7 @@ impl TerminalSession {
                         SessionContext {
                             shell_path: &self.shell_path,
                             session_name: self.session_name.as_deref(),
-                            notifications: self.notifications,
+                            notifications: self.notifications.clone(),
                             scrollback_lines: self.scrollback_lines,
                             shortcuts: self.shortcuts,
                         },
@@ -1988,6 +1988,7 @@ fn service_pane(
     cell_pixels: Option<CellPixelSize>,
     answer_graphics: bool,
 ) -> io::Result<()> {
+    pane.track_command_application();
     if ready.contains(PollFlags::POLLNVAL) {
         return Err(io::Error::new(
             io::ErrorKind::BrokenPipe,
@@ -2166,14 +2167,14 @@ fn forward(
             }
         }
         let shell_path = runtime.shell.as_os_str();
-        let notifications = runtime.notifications;
+        let notifications = runtime.notifications.clone();
         let scrollback_lines = runtime.scrollback_lines;
         let shortcuts = runtime.shortcuts;
         let remain_on_exit = runtime.remain_on_exit;
         let context = SessionContext {
             shell_path,
             session_name: session_name.as_deref(),
-            notifications,
+            notifications: notifications.clone(),
             scrollback_lines,
             shortcuts,
         };
@@ -2216,7 +2217,7 @@ fn forward(
                 control::handle(
                     request,
                     windows,
-                    context,
+                    context.clone(),
                     *outer_rows,
                     remain_on_exit,
                     reload.as_deref(),
@@ -3220,7 +3221,7 @@ fn forward(
                                 directory.as_deref(),
                                 rect.rows,
                                 rect.columns,
-                                notifications,
+                                notifications.clone(),
                                 scrollback_lines,
                             )
                         }) {
@@ -3453,7 +3454,13 @@ fn forward(
                     WindowKey::RespawnPane => {
                         let pane = windows.active_mut().unwrap().content_mut().active_mut();
                         if pane
-                            .respawn(shell_path, None, None, notifications, scrollback_lines)
+                            .respawn(
+                                shell_path,
+                                None,
+                                None,
+                                notifications.clone(),
+                                scrollback_lines,
+                            )
                             .is_err()
                         {
                             if to_terminal.is_empty() {
@@ -3540,7 +3547,7 @@ fn forward(
                             directory.as_deref(),
                             rows,
                             columns,
-                            notifications,
+                            notifications.clone(),
                             scrollback_lines,
                         ) {
                             Ok(pane) => {

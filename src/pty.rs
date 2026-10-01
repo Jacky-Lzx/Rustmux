@@ -129,6 +129,15 @@ impl PtyShell {
         self.master.as_ref().map(AsFd::as_fd)
     }
 
+    /// Best-effort executable name of the current foreground process group.
+    /// This also covers startup jobs that exec over the original shell process.
+    pub(crate) fn foreground_application(&self) -> Option<String> {
+        self.master_fd()
+            .and_then(|master| tcgetpgrp(master).ok())
+            .filter(|pid| pid.as_raw() > 0)
+            .and_then(process_name)
+    }
+
     /// Choose a directory for a shell created from this PTY.
     ///
     /// A valid OSC 7 path normally wins. Yazi changes its own directory without

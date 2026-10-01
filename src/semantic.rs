@@ -7,6 +7,14 @@ use std::time::{Duration, Instant};
 
 const MAX_OSC_BYTES: usize = 1024;
 const MAX_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
+const MAX_COMMAND_APPLICATIONS: usize = 64;
+
+#[derive(Debug)]
+pub(crate) struct CompletedCommand {
+    pub duration: Duration,
+    pub applications: Vec<String>,
+    pub applications_overflowed: bool,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PromptEvent {
@@ -25,7 +33,9 @@ pub(crate) struct SemanticOutput {
     current_directory: Option<PathBuf>,
     title: Option<String>,
     command_started_at: Option<Instant>,
-    completed_commands: Vec<Duration>,
+    command_applications: Vec<String>,
+    applications_overflowed: bool,
+    completed_commands: Vec<CompletedCommand>,
 }
 
 #[derive(Debug, Default)]
@@ -161,10 +171,32 @@ impl SemanticOutput {
         self.overflowed = false;
         self.current = Vec::new();
         self.command_started_at = None;
+        self.command_applications.clear();
+        self.applications_overflowed = false;
     }
 
-    pub(crate) fn take_completed_commands(&mut self) -> Vec<Duration> {
+    pub(crate) fn take_completed_commands(&mut self) -> Vec<CompletedCommand> {
         std::mem::take(&mut self.completed_commands)
+    }
+
+    pub(crate) fn command_running(&self) -> bool {
+        self.command_started_at.is_some()
+    }
+
+    pub(crate) fn observe_application(&mut self, application: String) {
+        if !self.command_running()
+            || self
+                .command_applications
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case(&application))
+        {
+            return;
+        }
+        if self.command_applications.len() == MAX_COMMAND_APPLICATIONS {
+            self.applications_overflowed = true;
+        } else {
+            self.command_applications.push(application);
+        }
     }
 
     /// Begin best-effort capture when input submits a command without OSC 133.
@@ -230,6 +262,8 @@ impl SemanticOutput {
                 self.semantic_boundaries = true;
                 self.overflowed = false;
                 self.command_started_at = Some(Instant::now());
+                self.command_applications.clear();
+                self.applications_overflowed = false;
                 Some(PromptEvent::End)
             }
             Some(b"A") => {
@@ -264,8 +298,14 @@ impl SemanticOutput {
         } else {
             Some(String::from_utf8_lossy(&std::mem::take(&mut self.current)).into_owned())
         };
+        if let Some(duration) = duration {
+            self.completed_commands.push(CompletedCommand {
+                duration,
+                applications: std::mem::take(&mut self.command_applications),
+                applications_overflowed: self.applications_overflowed,
+            });
+        }
         self.cancel_current();
-        self.completed_commands.extend(duration);
     }
 }
 
@@ -387,6 +427,49 @@ mod tests {
     }
 
     #[test]
+    fn completion_owns_observed_applications_without_leaking_into_the_next_command() {
+        let mut output = SemanticOutput::default();
+        output.observe_application("idle".into());
+        output.advance(b"\x1b]133;C\x07");
+        output.observe_application("Python".into());
+        output.observe_application("PYTHON".into());
+        output.observe_application("nvim".into());
+        output.advance(b"\x1b]133;D\x07\x1b]133;A\x07\x1b]133;C\x07");
+        output.observe_application("sleep".into());
+        output.advance(b"\x1b]133;D\x07");
+        let completed = output.take_completed_commands();
+        assert_eq!(completed.len(), 2);
+        assert_eq!(completed[0].applications, ["Python", "nvim"]);
+        assert_eq!(completed[1].applications, ["sleep"]);
+        assert!(!completed[0].applications_overflowed);
+        assert!(!output.command_running());
+    }
+
+    #[test]
+    fn application_observation_is_bounded_and_cancel_or_restart_clears_it() {
+        let mut output = SemanticOutput::default();
+        output.advance(b"\x1b]133;C\x07");
+        for id in 0..=MAX_COMMAND_APPLICATIONS {
+            output.observe_application(format!("app-{id}"));
+        }
+        output.advance(b"\x1b]133;A\x07");
+        let completed = output.take_completed_commands();
+        assert_eq!(completed[0].applications.len(), MAX_COMMAND_APPLICATIONS);
+        assert!(completed[0].applications_overflowed);
+        output.advance(b"\x1b]133;C\x07");
+        output.observe_application("discarded".into());
+        output.advance(b"\x1b]133;C\x07");
+        output.observe_application("fresh".into());
+        output.advance(b"\x1b]133;D\x07");
+        assert_eq!(output.take_completed_commands()[0].applications, ["fresh"]);
+        output.advance(b"\x1b]133;C\x07");
+        output.observe_application("canceled".into());
+        output.cancel_current();
+        assert!(output.command_applications.is_empty());
+        assert!(!output.command_running());
+    }
+
+    #[test]
     fn osc133_completion_reports_runtime_once_per_command() {
         let mut output = SemanticOutput::default();
         output.advance(b"\x1b]133;C\x07running");
@@ -394,7 +477,7 @@ mod tests {
         output.advance(b"\x1b]133;D;0\x07\x1b]133;A\x07");
         let completed = output.take_completed_commands();
         assert_eq!(completed.len(), 1);
-        assert!(completed[0] >= Duration::from_secs(6));
+        assert!(completed[0].duration >= Duration::from_secs(6));
 
         output.command_submitted();
         output.advance(b"fallback output");

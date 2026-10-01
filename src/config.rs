@@ -541,24 +541,38 @@ impl Shortcuts {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Notifications {
+    pub enabled: bool,
     pub long_command_bell: bool,
     pub command_duration: Duration,
+    pub exclude_applications: std::sync::Arc<[String]>,
 }
 
 impl Default for Notifications {
     fn default() -> Self {
         Self {
+            enabled: true,
             long_command_bell: true,
             command_duration: Duration::from_secs(DEFAULT_COMMAND_DURATION_SECONDS),
+            exclude_applications: ["yazi", "nvim", "lazygit"].map(str::to_owned).into(),
         }
     }
 }
 
 impl Notifications {
-    pub fn command_bell_after(self) -> Option<Duration> {
-        self.long_command_bell.then_some(self.command_duration)
+    pub fn command_bell_after(&self) -> Option<Duration> {
+        (self.enabled && self.long_command_bell).then_some(self.command_duration)
+    }
+
+    pub fn excludes_application(&self, application: &str) -> bool {
+        let name = Path::new(application)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(application);
+        self.exclude_applications
+            .iter()
+            .any(|excluded| excluded.eq_ignore_ascii_case(name))
     }
 }
 
@@ -597,7 +611,7 @@ impl Config {
     }
 
     pub fn notifications(&self) -> Notifications {
-        self.notifications
+        self.notifications.clone()
     }
 
     pub fn scrollback_lines(&self) -> usize {
@@ -1732,6 +1746,39 @@ fn parse_notifications(value: Option<&toml::Value>) -> Result<Notifications, Str
         .as_table()
         .ok_or_else(|| "notifications must be a table".to_owned())?;
     let mut notifications = Notifications::default();
+    if let Some(value) = table.get("enabled") {
+        notifications.enabled = value
+            .as_bool()
+            .ok_or("notifications.enabled must be a boolean")?;
+    }
+    if let Some(value) = table.get("exclude_applications") {
+        let values = value
+            .as_array()
+            .ok_or("notifications.exclude_applications must be an array of strings")?;
+        if values.len() > 256 {
+            return Err("notifications.exclude_applications accepts at most 256 entries".into());
+        }
+        let mut names = Vec::<String>::new();
+        for value in values {
+            let text = value
+                .as_str()
+                .ok_or("notifications.exclude_applications must be an array of strings")?
+                .trim();
+            let name = Path::new(text)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .filter(|name| {
+                    !name.is_empty() && name.len() <= 256 && !name.chars().any(char::is_control)
+                })
+                .ok_or(
+                    "notification application names must contain 1-256 bytes without controls",
+                )?;
+            if !names.iter().any(|known| known.eq_ignore_ascii_case(name)) {
+                names.push(name.to_owned());
+            }
+        }
+        notifications.exclude_applications = names.into();
+    }
     if let Some(value) = table.get("long_command_bell") {
         notifications.long_command_bell = value
             .as_bool()
@@ -2426,6 +2473,7 @@ future_option = "ignored"
             Notifications {
                 long_command_bell: true,
                 command_duration: Duration::from_secs(12),
+                ..Notifications::default()
             }
         );
         let disabled = parse_config(
@@ -2437,6 +2485,49 @@ long_command_bell = false
         .unwrap()
         .notifications;
         assert_eq!(disabled.command_bell_after(), None);
+    }
+
+    #[test]
+    fn notification_exclusions_normalize_names_and_can_clear_defaults() {
+        let defaults = Notifications::default();
+        assert!(defaults.excludes_application("/usr/bin/NVIM"));
+        assert!(!defaults.excludes_application("nvim-wrapper"));
+        let configured = parse_config("[notifications]\nexclude_applications=[' /usr/bin/Python ', 'PYTHON', 'sleep']\nenabled=false\n").unwrap().notifications;
+        assert_eq!(
+            configured.exclude_applications.as_ref(),
+            ["Python", "sleep"]
+        );
+        assert!(configured.excludes_application("/opt/bin/python"));
+        assert_eq!(configured.command_bell_after(), None);
+        let cleared = parse_config("[notifications]\nexclude_applications=[]\n")
+            .unwrap()
+            .notifications;
+        assert!(cleared.exclude_applications.is_empty());
+        assert!(cleared.command_bell_after().is_some());
+    }
+
+    #[test]
+    fn notification_exclusions_reject_invalid_or_unbounded_input() {
+        for source in [
+            "[notifications]\nenabled=1",
+            "[notifications]\nexclude_applications='nvim'",
+            "[notifications]\nexclude_applications=[1]",
+            "[notifications]\nexclude_applications=['']",
+            "[notifications]\nexclude_applications=['  ']",
+            "[notifications]\nexclude_applications=['/']",
+            "[notifications]\nexclude_applications=[\"bad\\nname\"]",
+        ] {
+            assert!(parse_config(source).is_err(), "accepted {source:?}");
+        }
+        let names = vec!["'nvim'"; 257].join(",");
+        assert!(parse_config(&format!("[notifications]\nexclude_applications=[{names}]")).is_err());
+        assert!(
+            parse_config(&format!(
+                "[notifications]\nexclude_applications=['{}']",
+                "a".repeat(257)
+            ))
+            .is_err()
+        );
     }
 
     #[test]

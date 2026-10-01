@@ -268,7 +268,7 @@ impl Snapshot {
                     saved.directory.as_deref(),
                     rect.rows,
                     rect.columns,
-                    notifications,
+                    notifications.clone(),
                     history_limit,
                     saved.command.as_deref(),
                 )?;
