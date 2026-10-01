@@ -59,6 +59,14 @@ pub enum Command {
         #[arg(short = 'w', long, value_parser = clap::value_parser!(u16).range(1..))]
         window: u16,
     },
+    /// Rename a window without changing focus; defaults to the active window.
+    RenameWindow {
+        #[command(flatten)]
+        target: Target,
+        #[arg(short = 'w', long, value_parser = clap::value_parser!(u16).range(1..))]
+        window: Option<u16>,
+        name: String,
+    },
     /// Create a window, focus it, and print the new pane ID.
     NewWindow {
         #[command(flatten)]
@@ -166,6 +174,10 @@ pub(crate) enum Request {
     SelectWindow {
         window: u16,
     },
+    RenameWindow {
+        window: Option<u16>,
+        name: String,
+    },
     NewWindow {
         name: Option<String>,
     },
@@ -246,6 +258,11 @@ impl Command {
             Self::ListPanes { target, toml } => (target, Request::ListPanes { toml }),
             Self::SelectPane { target, pane } => (target, Request::SelectPane { pane }),
             Self::SelectWindow { target, window } => (target, Request::SelectWindow { window }),
+            Self::RenameWindow {
+                target,
+                window,
+                name,
+            } => (target, Request::RenameWindow { window, name }),
             Self::NewWindow { target, name } => (target, Request::NewWindow { name }),
             Self::SplitPane { target, down } => (
                 target.target,
@@ -614,6 +631,7 @@ impl Service {
                                     Request::NewWindow { .. }
                                         | Request::SelectPane { .. }
                                         | Request::SelectWindow { .. }
+                                        | Request::RenameWindow { .. }
                                         | Request::SplitPane { .. }
                                         | Request::JoinPane { .. }
                                         | Request::BreakPane { .. }
@@ -692,6 +710,37 @@ impl Drop for Service {
 mod tests {
     use super::*;
     use clap::Parser;
+
+    #[test]
+    fn rename_window_uses_current_or_one_based_explicit_target() {
+        for (arguments, window) in [
+            (vec!["rustmux", "rename-window", "工作区"], None),
+            (
+                vec!["rustmux", "rename-window", "-w", "2", "工作区"],
+                Some(2),
+            ),
+        ] {
+            let cli = crate::cli::Cli::try_parse_from(arguments).unwrap();
+            assert_eq!(
+                cli.command,
+                Some(crate::cli::Command::Control(Command::RenameWindow {
+                    target: Target {
+                        session: SessionName::new("default").unwrap()
+                    },
+                    window,
+                    name: "工作区".into(),
+                }))
+            );
+        }
+        for arguments in [
+            &["rustmux", "rename-window"][..],
+            &["rustmux", "rename-window", "-w", "0", "name"][..],
+            &["rustmux", "rename-window", "-w", "65536", "name"][..],
+            &["rustmux", "rename-window", "-w", "-1", "name"][..],
+        ] {
+            assert!(crate::cli::Cli::try_parse_from(arguments).is_err());
+        }
+    }
 
     #[test]
     fn focus_commands_require_explicit_pane_ids_and_one_based_window_numbers() {

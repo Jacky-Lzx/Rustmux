@@ -56,6 +56,7 @@
 - [Session Snapshots and Restored History](reference/session-snapshots.md)
 - [Script Control](reference/script-control.md)
 - [Script Focus Control](reference/script-focus.md)
+- [Script Window Rename](reference/script-window-rename.md)
 - [Project Layouts](reference/project-layouts.md)
 - [Retained Panes and Respawn](reference/pane-lifecycle.md)
 - [Pane Output](reference/pane-output.md)

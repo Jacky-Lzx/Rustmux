@@ -47,11 +47,22 @@ fn target(windows: &Windows<PaneSet<Pane>>, id: Option<u64>) -> io::Result<(Wind
         Ok((window.id(), window.content().layout().active()))
     }
 }
-fn name(name: &Option<String>) -> io::Result<()> {
-    if name
-        .as_ref()
-        .is_some_and(|s| s.is_empty() || s.len() > 128 || s.chars().any(char::is_control))
-    {
+fn window_target(windows: &Windows<PaneSet<Pane>>, number: Option<u16>) -> io::Result<WindowId> {
+    match number {
+        Some(number) => usize::from(number)
+            .checked_sub(1)
+            .and_then(|position| windows.iter().nth(position))
+            .map(|window| window.id())
+            .ok_or_else(|| invalid("unknown window number")),
+        None => windows
+            .active()
+            .map(|window| window.id())
+            .ok_or_else(|| invalid("no active window")),
+    }
+}
+
+fn name(name: Option<&str>) -> io::Result<()> {
+    if name.is_some_and(|s| s.is_empty() || s.len() > 128 || s.chars().any(char::is_control)) {
         return Err(invalid(
             "window name must contain 1–128 bytes without controls",
         ));
@@ -83,12 +94,17 @@ pub(super) fn handle(
             Ok(String::new())
         }
         Request::SelectWindow { window } => {
-            let id = usize::from(window)
-                .checked_sub(1)
-                .and_then(|position| windows.iter().nth(position))
-                .map(|window| window.id())
-                .ok_or_else(|| invalid("unknown window number"))?;
+            let id = window_target(windows, Some(window))?;
             windows.select(id)?;
+            Ok(String::new())
+        }
+        Request::RenameWindow {
+            window,
+            name: window_name,
+        } => {
+            name(Some(&window_name))?;
+            let id = window_target(windows, window)?;
+            windows.rename(id, window_name)?;
             Ok(String::new())
         }
         Request::ListPanes { toml: as_toml } => {
@@ -218,7 +234,7 @@ pub(super) fn handle(
             Ok(String::new())
         }
         Request::NewWindow { name: window_name } => {
-            name(&window_name)?;
+            name(window_name.as_deref())?;
             if windows.iter().len() >= MAX_WINDOWS {
                 return Err(invalid("window limit reached"));
             }
@@ -355,7 +371,7 @@ pub(super) fn handle(
             pane,
             name: window_name,
         } => {
-            name(&window_name)?;
+            name(window_name.as_deref())?;
             let (source, id) = target(windows, pane)?;
             let set = windows.get(source).unwrap().content();
             if set.get(id).unwrap().is_temporary() {

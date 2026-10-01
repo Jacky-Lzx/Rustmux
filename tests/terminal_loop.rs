@@ -33,6 +33,11 @@ fn terminal_device() {
 }
 
 #[test]
+fn window_rename() {
+    run_scenario("window_rename");
+}
+
+#[test]
 fn notifications() {
     run_scenario("notifications");
 }

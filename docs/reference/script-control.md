@@ -9,6 +9,7 @@ rustmux show-config -s work
 rustmux list-panes -s work --toml
 rustmux select-pane -s work -p 0
 rustmux select-window -s work -w 2
+rustmux rename-window -s work -w 2 'build logs'
 rustmux new-window -s work --name logs
 rustmux split-pane -s work -p 0 --down
 rustmux send-keys -s work -p 0 --literal --enter 'printf "hello\n"'
@@ -32,6 +33,13 @@ an explicit target and print nothing on success. Window numbers follow display
 order and can change after window removal or reordering; runtime pane IDs remain
 stable. See [Script Focus Control](script-focus.md) for zoom, input and overlay
 behavior.
+
+`rename-window [-w NUMBER] NAME` changes a window label without selecting it.
+Omitting the number targets the active window. Names accept 1–128 UTF-8 bytes
+without control characters; duplicate names are allowed. Numbers follow display
+order. Successful requests redraw the bar and reset overlays and shortcuts like
+the other mutating script controls. See [Script Window Rename](script-window-rename.md)
+for validation, focus and snapshot behavior.
 
 `show-config` returns the running server's applied scalar settings and reload
 status as TOML without changing focus or dismissing overlays. See
