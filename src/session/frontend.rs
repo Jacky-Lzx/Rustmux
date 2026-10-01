@@ -361,9 +361,13 @@ mod tests {
                 Err(error) => panic!("handshake reply failed: {error}"),
             }
         }
+        // Receiving Attached does not guarantee the server has finished
+        // resetting its socket timeouts. Closing the peer during that cleanup
+        // can make setsockopt fail with EINVAL on macOS.
+        let peer = server.join().unwrap();
         drop(client_stream);
 
-        let mut frontend = ServerFrontend::new(server.join().unwrap());
+        let mut frontend = ServerFrontend::new(peer);
         assert_eq!(frontend.receive().unwrap(), ConnectionState::Attached);
         let mut input = VecDeque::new();
         frontend.drain_input(&mut input, MAX_FRAME_BYTES);
