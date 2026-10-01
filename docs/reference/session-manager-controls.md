@@ -33,8 +33,9 @@ errors. Ctrl-C remains an unconditional interrupt/close key and cannot be bound.
 Navigation and action hints follow the effective bindings and available width.
 During search or name editing, printable action keys remain text; use arrows or
 control keys for navigation, completion, confirmation, cancellation and saving.
-Ctrl-R opens a saved workspace name editor from the table or filtered results;
-see [Saved Workspace Rename](saved-session-rename.md).
+Ctrl-R opens the selected live or saved workspace name editor from the table or filtered results;
+see [Saved Workspace Rename](saved-session-rename.md) and
+[Live Session Rename](live-session-rename.md).
 Name entry supports confirmation, cancellation, backspace and saving.
 Hints in editors only show usable keys.
 The manager preserves the current search/name text during a valid reload.
@@ -52,7 +53,7 @@ deletion keeps the previous bindings; default-file deletion restores defaults.
 `check-config --toml` and `show-config` include a `[session_manager]` table of
 effective bindings. The former reads the selected file, while the latter reports
 the named server's applied configuration. `default-config` exports the manager
-defaults too. `rename` is supported for saved-only workspaces. Unimplemented
+defaults too. `rename` supports live and saved workspaces. Unimplemented
 manager actions, such as `disconnect` from the independent `main` track,
 remain ignored and are reported by
 `check-config`; `--strict` rejects those warnings.
@@ -95,8 +96,8 @@ Press the `delete` key twice consecutively to terminate a live session, keeping
 its snapshot, or to delete the snapshot of a saved-only workspace. Default `dd`
 requires confirmation in both cases. The footer distinguishes `Kill` from
 `Delete`. See [Saved Workspace Deletion](saved-session-delete.md) for behavior
-and safety checks. Saved-only workspace rename is available through Ctrl-R.
-Live session rename and disconnecting another client remain separate increments.
+and safety checks. Ctrl-R renames live or saved workspaces. Disconnecting
+another client remains a separate increment.
 
 Configuration reading and list/save operations use bounded mailboxes outside
 the input loop. Before returning a choice, the manager shuts down and joins its

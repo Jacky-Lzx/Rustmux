@@ -9,11 +9,12 @@ use std::thread::{self, JoinHandle};
 enum Request {
     Save(SessionName),
     Delete(SessionName),
-    Rename(SessionName, SessionName),
+    Rename(SessionName, SessionName, Option<i32>),
     Stop,
 }
 #[derive(Default)]
 pub(super) struct Updates {
+    pub current: Option<SessionName>,
     pub list: Option<Result<Vec<SessionInfo>, String>>,
     pub save: Option<(SessionName, Result<(), String>)>,
     pub delete: Option<(SessionName, Result<(), String>)>,
@@ -32,6 +33,14 @@ impl Worker {
         let thread = thread::Builder::new()
             .name("rustmux-manager".into())
             .spawn(move || {
+                use std::os::unix::fs::MetadataExt;
+                let mut current = current;
+                let socket = current
+                    .as_ref()
+                    .and_then(|name| {
+                        std::fs::symlink_metadata(super::super::session_socket_path(name)).ok()
+                    })
+                    .map(|m| (m.dev(), m.ino()));
                 loop {
                     let mut delete = None;
                     let mut rename = None;
@@ -50,9 +59,9 @@ impl Worker {
                             delete = Some((name, result));
                             None
                         }
-                        Ok(Request::Rename(old, new)) => {
-                            let result =
-                                super::super::rename_saved(&old, &new).map_err(|e| e.to_string());
+                        Ok(Request::Rename(old, new, server)) => {
+                            let result = super::super::rename::session(&old, &new, server)
+                                .map_err(|e| e.to_string());
                             rename = Some((old, new, result));
                             None
                         }
@@ -61,12 +70,25 @@ impl Worker {
                     };
                     let list = super::super::list_info()
                         .map(|mut sessions| {
+                            if let Some(identity) = socket {
+                                current = sessions
+                                    .iter()
+                                    .find(|s| {
+                                        std::fs::symlink_metadata(
+                                            super::super::session_socket_path(&s.name),
+                                        )
+                                        .is_ok_and(|m| (m.dev(), m.ino()) == identity)
+                                    })
+                                    .map(|s| s.name.clone())
+                                    .or(current.take());
+                            }
                             super::super::order_info(&mut sessions, current.as_ref());
                             sessions
                         })
                         .map_err(|e| e.to_string());
                     let mut slot = output.lock().expect("manager mailbox");
                     slot.list = Some(list);
+                    slot.current = current.clone();
                     if rename.is_some() {
                         slot.rename = rename;
                     }
@@ -90,8 +112,10 @@ impl Worker {
     pub fn delete(&self, name: SessionName) -> bool {
         self.requests.try_send(Request::Delete(name)).is_ok()
     }
-    pub fn rename(&self, old: SessionName, new: SessionName) -> bool {
-        self.requests.try_send(Request::Rename(old, new)).is_ok()
+    pub fn rename(&self, old: SessionName, new: SessionName, server: Option<i32>) -> bool {
+        self.requests
+            .try_send(Request::Rename(old, new, server))
+            .is_ok()
     }
     pub fn poll(&self) -> Updates {
         self.updates

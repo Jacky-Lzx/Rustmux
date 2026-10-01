@@ -482,7 +482,7 @@ pub(crate) fn rename(directory: &Path, old: &SessionName, new: &SessionName) -> 
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn rename_noreplace(
+pub(crate) fn rename_noreplace(
     directory: &fs::File,
     old: &std::ffi::CStr,
     new: &std::ffi::CStr,
@@ -516,7 +516,11 @@ fn rename_noreplace(
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn rename_noreplace(_: &fs::File, _: &std::ffi::CStr, _: &std::ffi::CStr) -> io::Result<()> {
+pub(crate) fn rename_noreplace(
+    _: &fs::File,
+    _: &std::ffi::CStr,
+    _: &std::ffi::CStr,
+) -> io::Result<()> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         "exclusive snapshot rename is supported on Linux and macOS",

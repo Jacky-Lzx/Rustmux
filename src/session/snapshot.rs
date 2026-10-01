@@ -113,6 +113,26 @@ impl SnapshotService {
         })
     }
 
+    pub(crate) fn rename_ready(&mut self) -> io::Result<()> {
+        self.poll_worker(false);
+        if self.running.is_some() || self.pending.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "snapshot write in progress; retry rename",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn directory(&self) -> &std::path::Path {
+        &self.directory
+    }
+
+    pub(crate) fn renamed(&mut self, name: &SessionName) {
+        self.name = name.clone();
+        self.socket = session_socket_path(name).with_extension("save");
+    }
+
     fn client_count(&self) -> usize {
         self.requests.len()
             + self.replies.len()
@@ -380,6 +400,29 @@ fn read_acknowledgement(stream: &mut UnixStream, timeout: Duration) -> io::Resul
 #[cfg(test)]
 mod acknowledgement_tests {
     use super::*;
+    #[test]
+    fn rename_waits_for_snapshot_writer_without_blocking_the_event_loop() {
+        super::super::ensure_private_directory(&super::super::session_directory()).unwrap();
+        let name = SessionName::new(format!("rename-busy-{}", std::process::id())).unwrap();
+        let mut service = SnapshotService::bind(&name, PersistenceOptions::default(), 100).unwrap();
+        let (release, wait) = std::sync::mpsc::channel();
+        service.running = Some(Running {
+            worker: std::thread::spawn(move || {
+                wait.recv().unwrap();
+                Ok(())
+            }),
+            clients: Vec::new(),
+        });
+        assert_eq!(
+            service.rename_ready().unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+        assert_eq!(service.name, name);
+        release.send(()).unwrap();
+        service.poll_worker(true);
+        service.rename_ready().unwrap();
+    }
+
     #[test]
     fn stalled_and_fragmented_replies_obey_the_acknowledgement_deadline() {
         let (mut client, _server) = UnixStream::pair().unwrap();

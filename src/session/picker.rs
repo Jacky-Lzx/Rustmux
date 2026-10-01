@@ -89,8 +89,8 @@ impl InputDecoder {
 pub(super) enum Choice {
     Attach(SessionName),
     Create(SessionName),
-    Kill(SessionName),
-    Cancel,
+    Kill(SessionName, Option<SessionName>),
+    Cancel(Option<SessionName>),
 }
 
 pub(super) fn choose(
@@ -127,6 +127,7 @@ fn run_picker(
     reload: &mut crate::config::reload::Reload,
     worker: &worker::Worker,
 ) -> io::Result<Choice> {
+    let mut current = initially_selected.cloned();
     let mut sessions = sessions.to_vec();
     let mut bindings = reload.current().manager().clone();
     let mut status = None;
@@ -135,7 +136,7 @@ fn run_picker(
     let mut saving = false;
     let mut deleting = false;
     let mut renaming = false;
-    let mut rename_source: Option<SessionName> = None;
+    let mut rename_source: Option<(SessionName, Option<i32>)> = None;
     let mut selected = initially_selected
         .and_then(|name| sessions.iter().position(|session| &session.name == name))
         .unwrap_or(0);
@@ -156,11 +157,15 @@ fn run_picker(
         }
 
         let updates = worker.poll();
+        if let Some(name) = updates.current {
+            current = Some(name);
+        }
         let operation_completed =
             updates.save.is_some() || updates.delete.is_some() || updates.rename.is_some();
         if let Some(list) = updates.list {
             match list {
-                Ok(next) => {
+                Ok(mut next) => {
+                    super::order_info(&mut next, current.as_ref());
                     if list_error.take().is_some() {
                         dirty = true;
                     }
@@ -203,7 +208,11 @@ fn run_picker(
             renaming = false;
             status = Some(match result {
                 Ok(()) => {
-                    if rename_source.as_ref() == Some(&old) {
+                    if current.as_ref() == Some(&old) {
+                        current = Some(new.clone());
+                    }
+                    super::order_info(&mut sessions, current.as_ref());
+                    if rename_source.as_ref().is_some_and(|(name, _)| name == &old) {
                         rename_source = None;
                         name_input = None;
                     }
@@ -251,7 +260,7 @@ fn run_picker(
                     renaming_name: rename_source.is_some(),
                     search_input: search_input.as_deref(),
                     delete_armed: delete_armed.as_ref().map(|(name, _)| name),
-                    current: initially_selected,
+                    current: current.as_ref(),
                     bindings: &bindings,
                     status: status
                         .as_deref()
@@ -276,13 +285,13 @@ fn run_picker(
         let mut keys = Vec::new();
         if event.contains(PollFlags::POLLIN) {
             match nix::unistd::read(terminal.file(), &mut input) {
-                Ok(0) => return Ok(Choice::Cancel),
+                Ok(0) => return Ok(Choice::Cancel(current.clone())),
                 Ok(count) => keys.extend(decoder.feed(&input[..count], Instant::now())),
                 Err(Errno::EINTR | Errno::EAGAIN) => {}
                 Err(error) => return Err(error.into()),
             }
         } else if event.intersects(PollFlags::POLLHUP | PollFlags::POLLERR) {
-            return Ok(Choice::Cancel);
+            return Ok(Choice::Cancel(current.clone()));
         }
         if let Some(key) = decoder.flush_due(Instant::now()) {
             keys.push(key);
@@ -290,7 +299,7 @@ fn run_picker(
 
         for key in keys {
             if key == Key::Byte(3) {
-                return Ok(Choice::Cancel);
+                return Ok(Choice::Cancel(current.clone()));
             }
             let editing = name_input.is_some() || search_input.is_some();
             let action = bindings.action(key, editing);
@@ -302,7 +311,7 @@ fn run_picker(
                 if !saving && !deleting && !renaming {
                     let target = save_target(
                         &sessions,
-                        initially_selected,
+                        current.as_ref(),
                         selected,
                         search_input.as_deref(),
                     );
@@ -324,14 +333,15 @@ fn run_picker(
                 match action {
                     Some(Action::Open) if !renaming => match SessionName::new(name.clone()) {
                         Ok(new) => {
-                            if let Some(old) = &rename_source {
+                            if let Some((old, server)) = &rename_source {
                                 if !saving && !deleting {
-                                    status = Some(if worker.rename(old.clone(), new.clone()) {
-                                        renaming = true;
-                                        format!("Renaming {old}…")
-                                    } else {
-                                        "Rename failed: worker unavailable".into()
-                                    });
+                                    status =
+                                        Some(if worker.rename(old.clone(), new.clone(), *server) {
+                                            renaming = true;
+                                            format!("Renaming {old}…")
+                                        } else {
+                                            "Rename failed: worker unavailable".into()
+                                        });
                                 }
                             } else {
                                 return Ok(Choice::Create(new));
@@ -368,12 +378,8 @@ fn run_picker(
             }
             if action == Some(Action::Rename) && !saving && !deleting && !renaming {
                 if let Some(session) = visible.get(selected) {
-                    if session.saved {
-                        rename_source = Some(session.name.clone());
-                        name_input = Some(session.name.as_str().into());
-                    } else {
-                        status = Some("Rename failed: stop the session before renaming".into());
-                    }
+                    rename_source = Some((session.name.clone(), session.server_pid));
+                    name_input = Some(session.name.as_str().into());
                 }
                 dirty = true;
                 continue;
@@ -421,7 +427,7 @@ fn run_picker(
                         let name = visible[selected].name.clone();
                         if armed.as_ref() == Some(&(name.clone(), visible[selected].saved)) {
                             if !visible[selected].saved {
-                                return Ok(Choice::Kill(name));
+                                return Ok(Choice::Kill(name, current.clone()));
                             }
                             status = Some(if worker.delete(name.clone()) {
                                 deleting = true;
@@ -433,7 +439,7 @@ fn run_picker(
                             delete_armed = Some((name, visible[selected].saved));
                         }
                     }
-                    Some(Action::Cancel) => return Ok(Choice::Cancel),
+                    Some(Action::Cancel) => return Ok(Choice::Cancel(current.clone())),
                     _ => {}
                 }
             }
@@ -936,13 +942,9 @@ fn picker_footer(view: &PickerView<'_>, compact: bool) -> String {
     if view.name_input.is_some() {
         hints.push(b.hint_in(Action::Cancel, "Cancel", true));
     } else if view.search_input.is_some() {
-        if saved {
-            hints.push(b.hint_in(Action::Rename, "Rename", true));
-        }
-        hints.extend([
-            b.hint_in(Action::Complete, "Complete", true),
-            b.hint_in(Action::Cancel, "Clear", true),
-        ]);
+        hints.push(b.hint_in(Action::Complete, "Complete", true));
+        hints.push(b.hint_in(Action::Rename, "Rename", true));
+        hints.extend([b.hint_in(Action::Cancel, "Clear", true)]);
     } else {
         hints.push(b.hint(Action::Create, "New"));
         let label = repeat_delete_label(b);
@@ -953,7 +955,7 @@ fn picker_footer(view: &PickerView<'_>, compact: bool) -> String {
             ));
         }
     }
-    if saved && !editing {
+    if !editing {
         hints.push(b.hint(Action::Rename, "Rename"));
     }
     if !saved || view.current.is_some() {

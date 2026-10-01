@@ -126,3 +126,8 @@ fn saved_delete() {
 fn saved_rename() {
     run_scenario("saved_rename");
 }
+
+#[test]
+fn live_rename() {
+    run_scenario("live_rename");
+}

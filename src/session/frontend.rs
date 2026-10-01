@@ -30,6 +30,7 @@ pub struct ServerFrontend {
     resize: Option<Winsize>,
     state: ConnectionState,
     outbound: Outbound,
+    queued_notice: Option<String>,
 }
 
 impl ServerFrontend {
@@ -42,6 +43,7 @@ impl ServerFrontend {
             resize: Some(winsize(rows, columns, pixel_width, pixel_height)),
             state: ConnectionState::Attached,
             outbound: Outbound::default(),
+            queued_notice: None,
         }
     }
 
@@ -156,6 +158,25 @@ impl ServerFrontend {
     /// Ask the attached client to restore its terminal and open the session manager.
     pub fn send_session_manager(&mut self) -> io::Result<()> {
         self.send_control(ServerMessage::OpenSessionManager)
+    }
+
+    /// Queue a bounded name notice without blocking a slow attached client.
+    pub fn send_renamed(&mut self, name: &str) -> io::Result<bool> {
+        if self.outbound.source_bytes != 0 {
+            return Ok(false);
+        }
+        if self.queued_notice.as_deref() != Some(name) {
+            if self.has_pending_output() {
+                return Ok(false);
+            }
+            self.outbound.bytes = ServerMessage::Renamed(name.into())
+                .encode()
+                .map_err(|e| invalid_data(e.to_string()))?;
+            self.queued_notice = Some(name.into());
+        }
+        self.outbound
+            .write_to(self.peer.stream_mut(), &mut VecDeque::new())?;
+        Ok(!self.has_pending_output())
     }
 
     /// Ask the attached client to restore its terminal and detach.
@@ -463,6 +484,53 @@ mod tests {
         assert_eq!(
             client.decode(&bytes[..count]).unwrap(),
             [ServerMessage::Detach]
+        );
+    }
+
+    #[test]
+    fn partial_name_notice_preserves_subsequent_output_through_backpressure() {
+        struct PausedWriter {
+            bytes: Vec<u8>,
+            blocked: bool,
+        }
+        impl Write for PausedWriter {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                if self.blocked {
+                    self.blocked = false;
+                    return Err(io::ErrorKind::WouldBlock.into());
+                }
+                self.blocked = true;
+                let count = bytes.len().min(3);
+                self.bytes.extend_from_slice(&bytes[..count]);
+                Ok(count)
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut outbound = Outbound {
+            bytes: ServerMessage::Renamed("new".into()).encode().unwrap(),
+            ..Outbound::default()
+        };
+        let mut writer = PausedWriter {
+            bytes: Vec::new(),
+            blocked: false,
+        };
+        let mut source = VecDeque::from(b"following output".to_vec());
+        while !outbound.bytes.is_empty() {
+            outbound.write_to(&mut writer, &mut source).unwrap();
+            assert_eq!(source, b"following output");
+        }
+        while !source.is_empty() {
+            outbound.write_to(&mut writer, &mut source).unwrap();
+        }
+        let mut decoder = crate::session::protocol::ServerDecoder::default();
+        assert_eq!(
+            decoder.push(&writer.bytes).unwrap(),
+            [
+                ServerMessage::Renamed("new".into()),
+                ServerMessage::Output(b"following output".to_vec()),
+            ]
         );
     }
 

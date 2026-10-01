@@ -220,7 +220,10 @@ fn serve_inner(
         context.scrollback_lines,
     )?);
     session.remain_on_exit = remain_on_exit;
-    session.control = Some(crate::control::Service::bind(name)?);
+    session.rename = Some(endpoint.rename_identity());
+    let mut control = crate::control::Service::bind(name)?;
+    control.track_identity(endpoint.rename_identity());
+    session.control = Some(control);
     session.reload = config
         .map(crate::config::reload::Reload::new)
         .transpose()?
@@ -283,6 +286,7 @@ struct TerminalSession {
     closed: Option<crate::closed_pane::ClosedPane>,
     persistence: Option<crate::session::snapshot::SnapshotService>,
     control: Option<crate::control::Service>,
+    rename: Option<crate::session::rename::Identity>,
     reload: Option<crate::config::reload::Reload>,
 }
 
@@ -299,6 +303,7 @@ struct AttachmentCapabilities<'a> {
     remain_on_exit: bool,
     reload: Option<&'a mut crate::config::reload::Reload>,
     control: Option<&'a mut crate::control::Service>,
+    rename: Option<&'a crate::session::rename::Identity>,
     persistence: Option<&'a mut crate::session::snapshot::SnapshotService>,
     cell_pixels: &'a mut Option<CellPixelSize>,
     graphics_support: &'a mut Option<GraphicsSupport>,
@@ -385,6 +390,7 @@ impl TerminalSession {
             closed: None,
             persistence: None,
             control: None,
+            rename: None,
             reload: None,
         })
     }
@@ -420,6 +426,7 @@ impl TerminalSession {
                 remain_on_exit: self.remain_on_exit,
                 reload: self.reload.as_mut(),
                 control: self.control.as_mut(),
+                rename: self.rename.as_ref(),
                 persistence: self.persistence.as_mut(),
                 cell_pixels: &mut self.cell_pixels,
                 graphics_support: &mut self.graphics_support,
@@ -427,6 +434,9 @@ impl TerminalSession {
             },
             &mut self.closed,
         );
+        if let Some(identity) = self.rename.as_ref() {
+            self.session_name = Some(identity.name().as_str().into());
+        }
         if let Some(config) = self.reload.as_ref().map(|reload| reload.current().clone()) {
             self.import_config(&config);
         }
@@ -467,6 +477,29 @@ impl TerminalSession {
             self.reload_detached();
             if let Some(service) = self.control.as_mut() {
                 service.tick(|request| {
+                    if let crate::control::Request::RenameSession {
+                        source,
+                        name,
+                        server_pid,
+                    } = request
+                    {
+                        if server_pid != std::process::id() as i32 {
+                            return Err(io::Error::other(
+                                "session server changed; refresh and retry",
+                            ));
+                        }
+                        return self
+                            .rename
+                            .as_ref()
+                            .ok_or_else(|| io::Error::other("rename unavailable"))?
+                            .rename(
+                                &source,
+                                &name,
+                                self.persistence
+                                    .as_mut()
+                                    .ok_or_else(|| io::Error::other("snapshots unavailable"))?,
+                            );
+                    }
                     control::handle(
                         request,
                         &mut self.windows,
@@ -482,6 +515,9 @@ impl TerminalSession {
                         self.reload.as_ref(),
                     )
                 });
+            }
+            if let Some(identity) = self.rename.as_ref() {
+                self.session_name = Some(identity.name().as_str().into());
             }
             if let Some(service) = self.persistence.as_mut() {
                 service.tick(&self.windows, self.outer_rows);
@@ -649,6 +685,9 @@ trait Frontend {
     fn send(&mut self, pending: &mut VecDeque<u8>) -> io::Result<()>;
     fn open_session_manager(&mut self) -> io::Result<bool>;
     fn detach_client(&mut self) -> io::Result<bool>;
+    fn renamed(&mut self, _name: &str) -> io::Result<bool> {
+        Ok(true)
+    }
 }
 
 struct LocalFrontend {
@@ -746,6 +785,9 @@ impl Frontend for ServerFrontend {
     fn detach_client(&mut self) -> io::Result<bool> {
         self.send_detach()?;
         Ok(true)
+    }
+    fn renamed(&mut self, name: &str) -> io::Result<bool> {
+        self.send_renamed(name)
     }
 }
 
@@ -2017,12 +2059,14 @@ fn forward(
         remain_on_exit,
         mut reload,
         mut control,
+        rename,
         mut persistence,
         cell_pixels,
         graphics_support,
         inherited_colors,
     } = capabilities;
-    let session_name = context.session_name;
+    let mut session_name = context.session_name.map(str::to_owned);
+    let mut renamed_notice: Option<String> = None;
     let mut runtime = RuntimeConfig {
         shell: context.shell_path.to_owned(),
         notifications: context.notifications,
@@ -2100,7 +2144,7 @@ fn forward(
         let remain_on_exit = runtime.remain_on_exit;
         let context = SessionContext {
             shell_path,
-            session_name,
+            session_name: session_name.as_deref(),
             notifications,
             scrollback_lines,
             shortcuts,
@@ -2108,6 +2152,27 @@ fn forward(
         if let Some(service) = control.as_mut() {
             let old = active_focus(windows);
             if service.tick(|request| {
+                if let crate::control::Request::RenameSession {
+                    source,
+                    name,
+                    server_pid,
+                } = request
+                {
+                    if server_pid != std::process::id() as i32 {
+                        return Err(io::Error::other(
+                            "session server changed; refresh and retry",
+                        ));
+                    }
+                    return rename
+                        .ok_or_else(|| io::Error::other("rename unavailable"))?
+                        .rename(
+                            &source,
+                            &name,
+                            persistence
+                                .as_deref_mut()
+                                .ok_or_else(|| io::Error::other("snapshots unavailable"))?,
+                        );
+                }
                 control::handle(
                     request,
                     windows,
@@ -2126,6 +2191,16 @@ fn forward(
                     ..WindowInput::default()
                 };
                 pane_resize_pending = None;
+                renderer.invalidate();
+                force_redraw = true;
+                bar_dirty = true;
+            }
+        }
+        if let Some(identity) = rename {
+            let latest = identity.name().as_str().to_owned();
+            if session_name.as_ref() != Some(&latest) {
+                session_name = Some(latest.clone());
+                renamed_notice = Some(latest);
                 renderer.invalidate();
                 force_redraw = true;
                 bar_dirty = true;
@@ -2554,7 +2629,7 @@ fn forward(
                     let mut view = compose_with_mode(
                         &content,
                         *outer_rows,
-                        session_name,
+                        session_name.as_deref(),
                         &names,
                         active_index,
                         match keys.mode {
@@ -2600,7 +2675,7 @@ fn forward(
                         && *outer_rows > 1
                         && let Some(column) = crate::chrome::active_window_name_cursor_column(
                             view.dimensions().1,
-                            session_name,
+                            session_name.as_deref(),
                             &names,
                             active_index,
                         )
@@ -3021,7 +3096,7 @@ fn forward(
                 let columns = windows.active().unwrap().content().layout().dimensions().1;
                 keys.window_hitboxes = crate::chrome::window_hitboxes(
                     usize::from(columns),
-                    session_name,
+                    session_name.as_deref(),
                     &names,
                     active_index,
                 );
@@ -3446,13 +3521,19 @@ fn forward(
                 }
             }
         }
-        if session_manager_requested && to_terminal.is_empty() {
+        if to_terminal.is_empty()
+            && let Some(name) = renamed_notice.as_deref()
+            && frontend.renamed(name)?
+        {
+            renamed_notice = None;
+        }
+        if session_manager_requested && renamed_notice.is_none() && to_terminal.is_empty() {
             if frontend.open_session_manager()? {
                 return Ok(ForwardExit::Detached);
             }
             session_manager_requested = false;
         }
-        if detach_requested && to_terminal.is_empty() {
+        if detach_requested && renamed_notice.is_none() && to_terminal.is_empty() {
             if frontend.detach_client()? {
                 return Ok(ForwardExit::Detached);
             }
@@ -3485,7 +3566,9 @@ fn forward(
         {
             outer_events |= PollFlags::POLLIN;
         }
-        if connection == ConnectionState::Attached && !to_terminal.is_empty() {
+        if connection == ConnectionState::Attached
+            && (!to_terminal.is_empty() || renamed_notice.is_some())
+        {
             outer_events |= PollFlags::POLLOUT;
         }
         let mut timeout = if color_probe.is_none()

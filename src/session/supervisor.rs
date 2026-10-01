@@ -140,7 +140,7 @@ fn start_detached(name: &SessionName, size: (u16, u16)) -> io::Result<u8> {
 pub fn attach(name: &SessionName, config_path: Option<&Path>) -> io::Result<u8> {
     let mut name = name.clone();
     loop {
-        match attach_once(&name)? {
+        match attach_once(&mut name)? {
             client::ClientExit::Process(status) => return Ok(status),
             client::ClientExit::Detached => return Ok(0),
             client::ClientExit::SessionManager => {
@@ -153,9 +153,23 @@ pub fn attach(name: &SessionName, config_path: Option<&Path>) -> io::Result<u8> 
     }
 }
 
-fn attach_once(name: &SessionName) -> io::Result<client::ClientExit> {
+fn attach_once(name: &mut SessionName) -> io::Result<client::ClientExit> {
+    use std::os::unix::fs::MetadataExt;
     let _lease = acquire_client(name)?;
-    client::run(connect(name)?, name)
+    let metadata = fs::symlink_metadata(session_socket_path(name))?;
+    let identity = (metadata.dev(), metadata.ino());
+    let result = client::run(connect(name)?, name);
+    // A local prefix shortcut can detach before an in-flight Renamed notice
+    // is read. Recover the same listener identity rather than reusing an alias.
+    if matches!(result, Ok(client::ClientExit::SessionManager))
+        && let Some(session) = super::list_info()?.into_iter().find(|s| {
+            fs::symlink_metadata(session_socket_path(&s.name))
+                .is_ok_and(|m| (m.dev(), m.ino()) == identity)
+        })
+    {
+        *name = session.name;
+    }
+    result
 }
 
 /// Attach directly when one session exists, or ask the user to choose among several.
@@ -208,15 +222,16 @@ fn manage_sessions(
                 create(&name, &config, true, config_path)?;
                 return Ok(Some(name));
             }
-            super::picker::Choice::Kill(name) => {
+            super::picker::Choice::Kill(name, current) => {
+                return_to = current;
                 kill(&name)?;
                 if return_to.as_ref() == Some(&name) {
                     return_to = None;
                 }
                 changed = true;
             }
-            super::picker::Choice::Cancel => {
-                return Ok(return_to.filter(|name| live_server_pid(name).is_ok()));
+            super::picker::Choice::Cancel(current) => {
+                return Ok(current.filter(|name| live_server_pid(name).is_ok()));
             }
         }
     }

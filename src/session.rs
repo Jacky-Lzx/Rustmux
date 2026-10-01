@@ -6,6 +6,7 @@ pub mod handshake;
 mod listing;
 mod picker;
 pub mod protocol;
+pub(crate) mod rename;
 pub mod snapshot;
 pub mod supervisor;
 
@@ -87,7 +88,7 @@ impl std::str::FromStr for SessionName {
 #[derive(Debug)]
 pub struct SessionEndpoint {
     listener: UnixListener,
-    path: PathBuf,
+    location: rename::Identity,
     identity: (u64, u64),
     unlink_on_drop: bool,
 }
@@ -102,8 +103,12 @@ impl SessionEndpoint {
         &self.listener
     }
 
-    pub fn path(&self) -> &Path {
-        &self.path
+    pub fn path(&self) -> PathBuf {
+        self.location.path()
+    }
+
+    pub(crate) fn rename_identity(&self) -> rename::Identity {
+        self.location.clone()
     }
 
     fn bind_in(directory: &Path, name: &SessionName) -> io::Result<Self> {
@@ -135,7 +140,7 @@ impl SessionEndpoint {
 
         Ok(Self {
             listener,
-            path,
+            location: rename::Identity::new(directory.to_owned(), name.clone(), identity),
             identity,
             unlink_on_drop: true,
         })
@@ -144,7 +149,7 @@ impl SessionEndpoint {
     /// Close this process's listener copy without unlinking a forked server's path.
     pub(crate) fn relinquish(mut self) -> PathBuf {
         self.unlink_on_drop = false;
-        self.path.clone()
+        self.path()
     }
 }
 
@@ -153,14 +158,15 @@ impl Drop for SessionEndpoint {
         if !self.unlink_on_drop {
             return;
         }
-        let owns_path = fs::symlink_metadata(&self.path)
+        let path = self.path();
+        let owns_path = fs::symlink_metadata(&path)
             .map(|metadata| (metadata.dev(), metadata.ino()) == self.identity)
             .unwrap_or(false);
         if owns_path {
-            let _ = fs::remove_file(&self.path);
-            let _ = fs::remove_file(self.path.with_extension("lock"));
-            let _ = fs::remove_file(self.path.with_extension("pid"));
-            let _ = fs::remove_file(self.path.with_extension("last"));
+            let _ = fs::remove_file(&path);
+            let _ = fs::remove_file(path.with_extension("lock"));
+            let _ = fs::remove_file(path.with_extension("pid"));
+            let _ = fs::remove_file(path.with_extension("last"));
         }
     }
 }
@@ -351,6 +357,7 @@ pub(crate) fn acquire_client(name: &SessionName) -> io::Result<ClientLease> {
 }
 
 fn acquire_client_in(directory: &Path, name: &SessionName) -> io::Result<ClientLease> {
+    let _workspace = acquire_workspace_in(directory, name)?;
     ensure_private_directory(directory)?;
     validate_socket(name, &socket_path_in(directory, name))?;
     let file = open_lock_file(directory, name)?;

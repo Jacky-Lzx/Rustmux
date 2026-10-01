@@ -34,13 +34,11 @@ a name. For example, `rename = ["r"]` acts in the table; Ctrl-R then becomes
 inactive. A control binding can enter rename from search. Hints follow available
 width; saved rows show Rename first in the table's navigation header.
 
-This increment handles saved-only workspaces. Invoking Rename on a live row
-shows `Rename failed: stop the session before renaming`. Running session rename
-requires a separate server/client identity and endpoint change. No CLI rename
-command is introduced here. Existing creation, saving, live termination and
-saved deletion remain available. Save, delete and rename share one pending
-operation slot in the manager; accepted work finishes before its workers join
-and the supervisor can fork a restored server.
+This page documents the saved-only operation. Live rows now use the separate
+server-owned [Live Session Rename](live-session-rename.md) operation through the
+same manager binding. No CLI rename command is introduced. Save, delete and
+rename share one pending operation slot; accepted work finishes before workers
+join and the supervisor can fork a restored server.
 
 ## Storage and failure handling
 

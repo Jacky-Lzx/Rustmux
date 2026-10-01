@@ -68,6 +68,7 @@ pub(super) fn handle(
     reload: Option<&crate::config::reload::Reload>,
 ) -> io::Result<String> {
     match request {
+        Request::RenameSession { .. } => Err(invalid("live rename is unavailable for this server")),
         Request::ShowConfig => reload
             .ok_or_else(|| invalid("configuration reload is unavailable"))
             .and_then(|reload| reload.status()),

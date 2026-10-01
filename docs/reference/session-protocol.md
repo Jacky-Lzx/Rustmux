@@ -26,8 +26,16 @@ The server-to-client messages are:
 - `OpenSessionManager`: a zero-payload terminal control request.
 - `Detach`: a zero-payload request for the client to restore its terminal and leave the session running.
 - `Rejected`: a UTF-8 reason limited to 1 KiB.
+- `Renamed`: the new session name, at most 64 ASCII letters, digits, hyphens or
+  underscores. It updates client identity while ordinary output continues.
 
-Protocol version 6 adds two 16-bit pixel dimensions to `Hello` and `Resize`.
+Protocol version 7 adds `Renamed`. Both peers must use version 7; older named
+servers must restart before attaching with the new binary or using live rename.
+The notice is queued without blocking behind a slow client and completes before
+server-requested manager or detach control frames. Names are validated during
+encoding and decoding.
+
+Protocol version 6 added two 16-bit pixel dimensions to `Hello` and `Resize`.
 The local client forwards `TIOCGWINSZ` values without guessing from row and
 column counts; the server preserves them in its frontend resize event. It does
 not yet distribute cell pixel sizes to panes or enable image rendering. Old

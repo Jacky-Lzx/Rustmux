@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-pub const PROTOCOL_VERSION: u16 = 6;
+pub const PROTOCOL_VERSION: u16 = 7;
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
 pub const MAX_ERROR_BYTES: usize = 1024;
 
@@ -17,6 +17,7 @@ const SERVER_EXIT: u8 = 130;
 const SERVER_REJECTED: u8 = 131;
 const SERVER_OPEN_SESSION_MANAGER: u8 = 132;
 const SERVER_DETACH: u8 = 133;
+const SERVER_RENAMED: u8 = 134;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ClientMessage {
@@ -88,6 +89,7 @@ pub enum ServerMessage {
         status: i32,
     },
     Rejected(String),
+    Renamed(String),
     OpenSessionManager,
     Detach,
 }
@@ -113,6 +115,11 @@ impl ServerMessage {
                     return Err(ProtocolError::ErrorMessageTooLong(message.len()));
                 }
                 encode_frame(SERVER_REJECTED, message.as_bytes())
+            }
+            Self::Renamed(name) => {
+                super::SessionName::new(name.clone())
+                    .map_err(|_| ProtocolError::InvalidSessionName)?;
+                encode_frame(SERVER_RENAMED, name.as_bytes())
             }
             Self::OpenSessionManager => encode_frame(SERVER_OPEN_SESSION_MANAGER, &[]),
             Self::Detach => encode_frame(SERVER_DETACH, &[]),
@@ -159,6 +166,7 @@ pub enum ProtocolError {
     InvalidTerminalSize,
     InvalidHandshakeFlags(u8),
     InvalidUtf8,
+    InvalidSessionName,
     TruncatedFrame(usize),
 }
 
@@ -192,6 +200,7 @@ impl fmt::Display for ProtocolError {
             Self::InvalidHandshakeFlags(flags) => {
                 write!(formatter, "invalid session handshake flags {flags}")
             }
+            Self::InvalidSessionName => formatter.write_str("invalid renamed session name"),
             Self::InvalidUtf8 => formatter.write_str("session error message is not UTF-8"),
             Self::TruncatedFrame(length) => {
                 write!(
@@ -353,6 +362,11 @@ fn decode_server(frame: Frame) -> Result<ServerMessage, ProtocolError> {
             require_length(&frame, 0)?;
             Ok(ServerMessage::OpenSessionManager)
         }
+        SERVER_RENAMED => {
+            let name = String::from_utf8(frame.payload).map_err(|_| ProtocolError::InvalidUtf8)?;
+            super::SessionName::new(name.clone()).map_err(|_| ProtocolError::InvalidSessionName)?;
+            Ok(ServerMessage::Renamed(name))
+        }
         SERVER_DETACH => {
             require_length(&frame, 0)?;
             Ok(ServerMessage::Detach)
@@ -384,6 +398,27 @@ fn validate_size(rows: u16, columns: u16) -> Result<(), ProtocolError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn renamed_names_are_bounded_and_validated_before_encoding_or_use() {
+        for name in ["", "../escape", "bad name", "bad\nname"] {
+            assert!(ServerMessage::Renamed(name.into()).encode().is_err());
+            let mut decoder = ServerDecoder::default();
+            assert!(
+                decoder
+                    .push(&encode_frame(SERVER_RENAMED, name.as_bytes()).unwrap())
+                    .is_err()
+            );
+        }
+        assert!(ServerMessage::Renamed("a".repeat(65)).encode().is_err());
+        let valid = ServerMessage::Renamed("a".repeat(64));
+        assert_eq!(
+            ServerDecoder::default()
+                .push(&valid.encode().unwrap())
+                .unwrap(),
+            vec![valid]
+        );
+    }
 
     #[test]
     fn client_messages_round_trip_across_every_byte_boundary() {
@@ -427,6 +462,7 @@ mod tests {
             },
             ServerMessage::Output(vec![b'\x1b', b'[', b'2', b'J', 0]),
             ServerMessage::Rejected("already attached".to_owned()),
+            ServerMessage::Renamed("renamed-session".into()),
             ServerMessage::OpenSessionManager,
             ServerMessage::Detach,
             ServerMessage::Exit { status: -15 },

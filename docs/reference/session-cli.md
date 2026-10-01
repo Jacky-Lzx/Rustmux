@@ -88,9 +88,10 @@ session prefix.
 Detailed listings label them `SAVED`; live and saved copies of the same name
 appear only once. `kill-all` ignores saved-only entries. The manager offers
 `Restore`, Ctrl-R rename and confirmed `dd` snapshot deletion for these entries.
-Rename edits the selected saved name, confirms with Enter and cancels with Esc.
+Rename edits the selected name, confirms with Enter and cancels with Esc.
 It updates the manager and `ls` without overwriting another saved or running
-workspace. Live session rename is a separate increment.
+workspace. [Live session rename](live-session-rename.md) also works on running
+rows, preserving their processes and attached client.
 
 `attach` validates the private runtime directory and requires the socket to be
 owned by the effective user with no group or other permissions. It then performs

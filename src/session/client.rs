@@ -25,18 +25,35 @@ const MAX_BUFFERED_OUTPUT_BYTES: usize = MAX_FRAME_BYTES + READ_BYTES;
 ///
 /// The terminal enters raw mode and the alternate screen only after the
 /// handshake succeeds. All return paths restore its termios and display modes.
-pub(crate) fn run(stream: UnixStream, name: &SessionName) -> io::Result<ClientExit> {
+pub(crate) fn run(stream: UnixStream, name: &mut SessionName) -> io::Result<ClientExit> {
     let file = TerminalDevice::open_controlling()?;
     let size = crate::terminal_device::window_size(&file)?;
+    let workspace = super::acquire_workspace(name)?;
     let peer = handshake::client_with_size(stream, size)?;
     record_connection(name)?;
+    drop(workspace);
     let signals = ClientSignals::install()?;
-    run_attached(file, peer, &signals)
+    let mut current = Some(name.clone());
+    let result = run_named_attached(file, peer, &signals, &mut current);
+    if let Some(current) = current {
+        *name = current;
+    }
+    result
 }
 
+#[cfg(test)]
 fn run_attached(file: File, peer: ClientPeer, signals: &ClientSignals) -> io::Result<ClientExit> {
+    run_named_attached(file, peer, signals, &mut None)
+}
+
+fn run_named_attached(
+    file: File,
+    peer: ClientPeer,
+    signals: &ClientSignals,
+    name: &mut Option<SessionName>,
+) -> io::Result<ClientExit> {
     let mut terminal = TerminalDevice::enter(file)?;
-    let result = bridge(&mut terminal, peer, signals);
+    let result = bridge(&mut terminal, peer, signals, name);
     let restored = terminal.restore();
     match result {
         Err(error) => Err(error),
@@ -48,6 +65,7 @@ fn bridge(
     terminal: &mut TerminalDevice,
     mut peer: ClientPeer,
     signals: &ClientSignals,
+    name: &mut Option<SessionName>,
 ) -> io::Result<ClientExit> {
     let mut outbound = Outbound::default();
     let mut to_terminal = VecDeque::new();
@@ -63,6 +81,7 @@ fn bridge(
         &mut to_terminal,
         &mut exit,
         &mut server_control,
+        name,
     )?;
     loop {
         let signal = signals.pending.load(Ordering::Relaxed);
@@ -191,6 +210,7 @@ fn bridge(
                     &mut to_terminal,
                     &mut exit,
                     &mut server_control,
+                    name,
                 )?,
                 Err(error)
                     if matches!(
@@ -211,6 +231,7 @@ fn apply_server_messages(
     output: &mut VecDeque<u8>,
     exit: &mut Option<i32>,
     server_control: &mut Option<ClientExit>,
+    name: &mut Option<SessionName>,
 ) -> io::Result<()> {
     for message in messages {
         if exit.is_some() || server_control.is_some() {
@@ -222,6 +243,9 @@ fn apply_server_messages(
                     return Err(invalid_data("session output buffer exceeded its limit"));
                 }
                 output.extend(bytes);
+            }
+            ServerMessage::Renamed(new) => {
+                *name = Some(SessionName::new(new).map_err(|e| invalid_data(e.to_string()))?);
             }
             ServerMessage::Exit { status } => *exit = Some(status),
             ServerMessage::OpenSessionManager => *server_control = Some(ClientExit::SessionManager),
@@ -467,6 +491,29 @@ mod tests {
     }
 
     #[test]
+    fn renamed_notice_updates_identity_without_stopping_input_or_reordering_output() {
+        let mut name = Some(SessionName::new("old").unwrap());
+        let mut output = VecDeque::new();
+        let mut exit = None;
+        let mut control = None;
+        apply_server_messages(
+            vec![
+                ServerMessage::Output(b"before".to_vec()),
+                ServerMessage::Renamed("new".into()),
+                ServerMessage::Output(b"after".to_vec()),
+            ],
+            &mut output,
+            &mut exit,
+            &mut control,
+            &mut name,
+        )
+        .unwrap();
+        assert_eq!(name.unwrap().as_str(), "new");
+        assert_eq!(output, b"beforeafter");
+        assert!(exit.is_none() && control.is_none());
+    }
+
+    #[test]
     fn bridges_input_output_resize_and_exit_then_restores_terminal() {
         let size = Winsize {
             ws_row: 24,
@@ -624,6 +671,7 @@ mod tests {
                 &mut output,
                 &mut exit,
                 &mut server_control,
+                &mut None,
             )
             .is_err()
         );
@@ -651,6 +699,7 @@ mod tests {
             &mut output,
             &mut exit,
             &mut server_control,
+            &mut None,
         )
         .unwrap();
         assert_eq!(output, b"last frame".to_vec());
@@ -661,6 +710,7 @@ mod tests {
                 &mut output,
                 &mut exit,
                 &mut server_control,
+                &mut None,
             )
             .is_err()
         );
@@ -679,6 +729,7 @@ mod tests {
             &mut output,
             &mut exit,
             &mut server_control,
+            &mut None,
         )
         .unwrap();
         assert_eq!(output, b"last frame".to_vec());
@@ -689,6 +740,7 @@ mod tests {
                 &mut output,
                 &mut exit,
                 &mut server_control,
+                &mut None,
             )
             .is_err()
         );

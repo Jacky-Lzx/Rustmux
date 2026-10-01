@@ -134,6 +134,11 @@ pub enum Command {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "action", rename_all = "kebab-case", deny_unknown_fields)]
 pub(crate) enum Request {
+    RenameSession {
+        source: String,
+        name: String,
+        server_pid: i32,
+    },
     ShowConfig,
     ListPanes {
         toml: bool,
@@ -408,6 +413,22 @@ fn frame(contents: &str) -> Vec<u8> {
     bytes
 }
 
+pub(crate) fn rename_session(
+    old: &SessionName,
+    new: &SessionName,
+    server_pid: i32,
+) -> io::Result<()> {
+    request_session(
+        old,
+        &Request::RenameSession {
+            source: old.as_str().into(),
+            name: new.as_str().into(),
+            server_pid,
+        },
+    )
+    .map(|_| ())
+}
+
 fn request_session(name: &SessionName, request: &Request) -> io::Result<String> {
     crate::session::live_server_pid(name)?;
     crate::session::ensure_private_directory(&crate::session::session_directory())?;
@@ -462,6 +483,7 @@ pub(crate) struct Service {
     socket: PathBuf,
     identity: (u64, u64),
     clients: Vec<Client>,
+    session_identity: Option<crate::session::rename::Identity>,
 }
 impl Service {
     pub(crate) fn bind(name: &SessionName) -> io::Result<Self> {
@@ -486,7 +508,12 @@ impl Service {
             socket,
             identity: (metadata.dev(), metadata.ino()),
             clients: Vec::new(),
+            session_identity: None,
         })
+    }
+
+    pub(crate) fn track_identity(&mut self, identity: crate::session::rename::Identity) {
+        self.session_identity = Some(identity);
     }
 
     /// Return true if requests were handled, so the frontend can refresh caches.
@@ -604,8 +631,13 @@ impl Service {
 }
 impl Drop for Service {
     fn drop(&mut self) {
-        if fs::symlink_metadata(&self.socket).is_ok_and(|m| (m.dev(), m.ino()) == self.identity) {
-            let _ = fs::remove_file(&self.socket);
+        let socket = self
+            .session_identity
+            .as_ref()
+            .map(|identity| identity.path().with_extension("control"))
+            .unwrap_or_else(|| self.socket.clone());
+        if fs::symlink_metadata(&socket).is_ok_and(|m| (m.dev(), m.ino()) == self.identity) {
+            let _ = fs::remove_file(&socket);
         }
     }
 }
