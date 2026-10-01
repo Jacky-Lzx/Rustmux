@@ -68,6 +68,11 @@ fn snapshots() {
 }
 
 #[test]
+fn control() {
+    run_scenario("control");
+}
+
+#[test]
 fn frame_reconstruction() {
     run_scenario("frames");
 }

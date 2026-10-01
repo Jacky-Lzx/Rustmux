@@ -165,6 +165,7 @@ fn serve_inner(
         options,
         context.scrollback_lines,
     )?);
+    session.control = Some(crate::control::Service::bind(name)?);
     let signals = Signals::install()?;
     let result = (|| {
         loop {
@@ -221,6 +222,7 @@ struct TerminalSession {
     shortcuts: crate::config::Shortcuts,
     closed: Option<crate::closed_pane::ClosedPane>,
     persistence: Option<crate::session::snapshot::SnapshotService>,
+    control: Option<crate::control::Service>,
 }
 
 #[derive(Clone, Copy)]
@@ -233,6 +235,7 @@ struct SessionContext<'a> {
 }
 
 struct AttachmentCapabilities<'a> {
+    control: Option<&'a mut crate::control::Service>,
     persistence: Option<&'a mut crate::session::snapshot::SnapshotService>,
     cell_pixels: &'a mut Option<CellPixelSize>,
     graphics_support: &'a mut Option<GraphicsSupport>,
@@ -317,6 +320,7 @@ impl TerminalSession {
             shortcuts,
             closed: None,
             persistence: None,
+            control: None,
         })
     }
 
@@ -348,6 +352,7 @@ impl TerminalSession {
             },
             &mut self.outer_rows,
             AttachmentCapabilities {
+                control: self.control.as_mut(),
                 persistence: self.persistence.as_mut(),
                 cell_pixels: &mut self.cell_pixels,
                 graphics_support: &mut self.graphics_support,
@@ -364,6 +369,22 @@ impl TerminalSession {
         signals: &Signals,
     ) -> io::Result<DetachedEvent> {
         loop {
+            if let Some(service) = self.control.as_mut() {
+                service.tick(|request| {
+                    control::handle(
+                        request,
+                        &mut self.windows,
+                        SessionContext {
+                            shell_path: &self.shell_path,
+                            session_name: self.session_name.as_deref(),
+                            notifications: self.notifications,
+                            scrollback_lines: self.scrollback_lines,
+                            shortcuts: self.shortcuts,
+                        },
+                        self.outer_rows,
+                    )
+                });
+            }
             if let Some(service) = self.persistence.as_mut() {
                 service.tick(&self.windows, self.outer_rows);
             }
@@ -1839,6 +1860,7 @@ fn forward(
     closed: &mut Option<crate::closed_pane::ClosedPane>,
 ) -> io::Result<ForwardExit> {
     let AttachmentCapabilities {
+        mut control,
         mut persistence,
         cell_pixels,
         graphics_support,
@@ -1888,6 +1910,23 @@ fn forward(
     let mut pending_outer_resize = None;
     let mut save_error = None;
     loop {
+        if let Some(service) = control.as_mut() {
+            let old = active_focus(windows);
+            if service.tick(|request| control::handle(request, windows, context, *outer_rows)) {
+                queue_focus_transition(windows, old, active_focus(windows));
+                history = None;
+                help = None;
+                prompt = None;
+                keys = WindowInput {
+                    shortcuts,
+                    ..WindowInput::default()
+                };
+                pane_resize_pending = None;
+                renderer.invalidate();
+                force_redraw = true;
+                bar_dirty = true;
+            }
+        }
         if let Some(service) = persistence.as_mut() {
             service.tick(windows, *outer_rows);
             let current = service.error().map(str::to_owned);
@@ -5646,3 +5685,4 @@ s = { actions = [{ action = "switch-mode", mode = "history" }] }
         assert!(!actions.contains(&WindowKey::History));
     }
 }
+mod control;

@@ -39,6 +39,7 @@ pub(crate) const MAX_REPLY_DRAIN_BYTES: usize = 8192;
 /// uses PtyShell's close/kill/reap behavior for the direct child.
 #[derive(Debug)]
 pub struct Pane {
+    control_id: u64,
     shell: PtyShell,
     parser: Parser,
     graphics_framer: GraphicsFramer,
@@ -48,6 +49,18 @@ pub struct Pane {
     io: PaneIo,
     command_bell_after: Option<Duration>,
     _temporary_file: Option<TemporaryFile>,
+}
+
+// Identity belongs to the owned Pane, so joins/breaks preserve it even when
+// the destination layout assigns a different local leaf ID.
+fn next_control_id() -> io::Result<u64> {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    NEXT.fetch_update(
+        std::sync::atomic::Ordering::Relaxed,
+        std::sync::atomic::Ordering::Relaxed,
+        |id| id.checked_add(1),
+    )
+    .map_err(|_| io::Error::other("control pane IDs exhausted"))
 }
 
 enum GraphicsSink<'a> {
@@ -166,6 +179,9 @@ impl PaneIo {
 }
 
 impl Pane {
+    pub(crate) fn control_id(&self) -> u64 {
+        self.control_id
+    }
     pub(crate) fn is_temporary(&self) -> bool {
         self._temporary_file.is_some()
     }
@@ -191,6 +207,7 @@ impl Pane {
         notifications: crate::config::Notifications,
         scrollback_lines: usize,
     ) -> io::Result<Self> {
+        let control_id = next_control_id()?;
         if usize::from(rows) * usize::from(columns) > MAX_CELLS {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -212,6 +229,7 @@ impl Pane {
             io.semantic.set_current_directory(directory.to_owned());
         }
         Ok(Self {
+            control_id,
             shell,
             parser: Parser::new(),
             graphics_framer: GraphicsFramer::new(),
@@ -231,6 +249,7 @@ impl Pane {
         columns: u16,
         scrollback_lines: usize,
     ) -> io::Result<Self> {
+        let control_id = next_control_id()?;
         if usize::from(rows) * usize::from(columns) > MAX_CELLS {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -248,6 +267,7 @@ impl Pane {
         let flags = OFlag::from_bits_truncate(fcntl(master, FcntlArg::F_GETFL)?);
         fcntl(master, FcntlArg::F_SETFL(flags | OFlag::O_NONBLOCK))?;
         Ok(Self {
+            control_id,
             shell,
             parser: Parser::new(),
             graphics_framer: GraphicsFramer::new(),

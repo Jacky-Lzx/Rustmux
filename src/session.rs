@@ -630,7 +630,7 @@ fn endpoint_client_state(directory: &Path, name: &SessionName, socket: &Path) ->
     }
 }
 
-fn ensure_private_directory(directory: &Path) -> io::Result<()> {
+pub(crate) fn ensure_private_directory(directory: &Path) -> io::Result<()> {
     let mut builder = fs::DirBuilder::new();
     builder.recursive(true).mode(0o700).create(directory)?;
     let metadata = fs::symlink_metadata(directory)?;

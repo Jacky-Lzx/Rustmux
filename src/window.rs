@@ -255,8 +255,22 @@ impl<T> Windows<crate::pane_set::PaneSet<T>> {
         target: WindowId,
         axis: crate::layout::SplitAxis,
     ) -> io::Result<bool> {
+        let source = self
+            .active()
+            .ok_or_else(|| io::Error::other("no active window"))?
+            .id();
+        self.join_pane_from(source, target, axis)
+    }
+
+    /// Transfer from an explicit window without changing global focus on failure.
+    pub(crate) fn join_pane_from(
+        &mut self,
+        source: WindowId,
+        target: WindowId,
+        axis: crate::layout::SplitAxis,
+    ) -> io::Result<bool> {
         let target_index = self.index(target)?;
-        let source_index = self.active;
+        let source_index = self.index(source)?;
         if source_index == target_index {
             return Ok(false);
         }

@@ -22,6 +22,10 @@ fn execute(cli: rustmux::cli::Cli) -> Result<u8, String> {
         return Err("nested Rustmux sessions are not supported".to_owned());
     }
     match command {
+        Some(rustmux::cli::Command::Control(command)) => {
+            print!("{}", command.run().map_err(|error| error.to_string())?);
+            Ok(0)
+        }
         None => {
             let config = rustmux::config::load_with_path(config_path)?;
             rustmux::terminal::run(

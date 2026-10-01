@@ -18,6 +18,8 @@ pub struct Cli {
 
 #[derive(Clone, Debug, Eq, PartialEq, Subcommand)]
 pub enum Command {
+    #[command(flatten)]
+    Control(crate::control::Command),
     /// Save a running session's layout and optional history to disk.
     #[command(name = "save-session", visible_alias = "save")]
     Save { name: SessionName },

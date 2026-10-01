@@ -4,6 +4,7 @@ mod chrome;
 pub mod cli;
 mod closed_pane;
 pub mod config;
+pub mod control;
 pub mod graphics;
 pub use graphics::{
     capability as graphics_capability, composite as graphics_composite, decode as graphics_decode,

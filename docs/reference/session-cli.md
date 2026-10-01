@@ -1,6 +1,6 @@
 # Named Session Commands
 
-Rustmux keeps its existing foreground mode when started without arguments. Six
+Rustmux keeps its existing foreground mode when started without arguments. Named-session
 `clap` subcommands expose persistent sessions:
 
 ```sh
@@ -19,6 +19,9 @@ rustmux save-session work
 server stops. History and autosave are optional. See [Session Snapshots](session-snapshots.md)
 for configuration, storage and the distinction between reattachment and starting
 fresh restored shells.
+
+Additional [script control commands](script-control.md) query panes, send input,
+capture text, create windows and splits, and move panes while preserving processes.
 
 `--config PATH` (or `-c PATH`) selects the configuration for foreground startup
 and newly created named sessions. It can appear before or after a subcommand:
