@@ -7,6 +7,7 @@ Rustmux keeps its existing foreground mode when started without arguments. Named
 rustmux new work
 rustmux new --detached background
 rustmux attach work
+rustmux attach work --create
 rustmux attach
 rustmux list
 rustmux list --long
@@ -19,6 +20,13 @@ rustmux save-session work
 server stops. History and autosave are optional. See [Session Snapshots](session-snapshots.md)
 for configuration, storage and the distinction between reattachment and starting
 fresh restored shells.
+
+`attach NAME --create` connects to a running server, restores a saved workspace
+when no server is running, or creates a fresh session if neither exists. It
+requires an explicit name and a usable terminal. `--create` has no short form:
+`-c PATH` continues to select configuration. Plain `attach NAME` still requires a
+running server; unnamed `attach` still chooses running and saved sessions.
+See [Attach or Create](session-attach-create.md) for behavior and failure handling.
 
 Additional [script control commands](script-control.md) query panes, send input,
 capture text, create windows and splits, and move panes while preserving processes.
@@ -46,8 +54,9 @@ The option does not change `XDG_CONFIG_HOME` for pane processes.
 
 Existing named sessions watch the configuration source selected at creation;
 see [Configuration Hot Reload](config-reload.md) for supported live updates.
-An attaching client's `--config` selection applies when it creates or restores a
-session from the Session Manager; it also remains selected when switching between sessions.
+An attaching client's `--config` selection applies when `--create` starts a
+server or when it creates or restores a session from the Session Manager; it
+also remains selected when switching between sessions.
 `list`, `kill` and `kill-all` do not read configuration files.
 
 `new` validates and binds the private endpoint before forking. The child creates

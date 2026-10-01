@@ -93,7 +93,12 @@ fn execute(cli: rustmux::cli::Cli) -> Result<u8, String> {
             };
             result.map_err(|error| error.to_string())
         }
-        Some(rustmux::cli::Command::Attach { name }) => match name {
+        Some(rustmux::cli::Command::Attach {
+            name: Some(name),
+            create: true,
+        }) => rustmux::session::supervisor::attach_or_create(&name, config_path)
+            .map_err(|error| error.to_string()),
+        Some(rustmux::cli::Command::Attach { name, .. }) => match name {
             Some(name) => rustmux::session::supervisor::attach(&name, config_path)
                 .map_err(|error| error.to_string()),
             None => rustmux::session::supervisor::choose_and_attach(config_path)
@@ -256,6 +261,11 @@ mod tests {
             }),
             Some(Command::Attach {
                 name: Some(name.clone()),
+                create: false,
+            }),
+            Some(Command::Attach {
+                name: Some(name.clone()),
+                create: true,
             }),
             Some(Command::New {
                 name: name.clone(),

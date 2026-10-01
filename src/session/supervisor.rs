@@ -136,6 +136,44 @@ fn start_detached(name: &SessionName, size: (u16, u16)) -> io::Result<u8> {
     Ok(0)
 }
 
+/// Attach to a live server, or start a fresh/restored workspace if it is absent.
+///
+/// Creation runs during single-threaded startup, as required by `create`.
+/// Only a missing server permits creation: unsafe endpoints and attachment
+/// errors must not replace an existing session. A concurrent creator can win
+/// the workspace lock or socket bind, in which case this attempt fails safely.
+pub fn attach_or_create(name: &SessionName, config_path: Option<&Path>) -> io::Result<u8> {
+    match live_server_pid(name) {
+        Ok(_) => attach(name, config_path),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            let config = crate::config::load_with_path(config_path)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+            // Verify the interactive terminal before binding/forking, avoiding
+            // an unattached server when this command runs without a terminal.
+            let file = crate::terminal_device::TerminalDevice::open_controlling()?;
+            let size = crate::terminal_device::window_size(&file)?;
+            drop(file);
+            if size.ws_row == 0 || size.ws_col == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "terminal rows and columns must be nonzero",
+                ));
+            }
+            // The real client performs the first handshake, so fresh and saved
+            // workspaces start at the attachment's current terminal dimensions.
+            create_with_bootstrap(
+                name,
+                &config,
+                false,
+                config_path,
+                Some((size.ws_row, size.ws_col)),
+                None,
+            )
+        }
+        Err(error) => Err(error),
+    }
+}
+
 /// Attach this terminal to an existing named session.
 pub fn attach(name: &SessionName, config_path: Option<&Path>) -> io::Result<u8> {
     let mut name = name.clone();

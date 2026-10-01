@@ -46,10 +46,13 @@ pub enum Command {
         #[arg(long)]
         layout: Option<PathBuf>,
     },
-    /// Attach to an existing named session.
+    /// Attach to a named session, or choose running and saved sessions.
     Attach {
-        /// Existing running session name; omit to choose running or saved sessions.
+        /// Session name; omit to choose running or saved sessions.
         name: Option<SessionName>,
+        /// Create or restore the named session when it is not running.
+        #[arg(long, requires = "name")]
+        create: bool,
     },
     /// List running sessions and saved workspaces.
     #[command(visible_alias = "ls")]
@@ -105,12 +108,16 @@ mod tests {
                 .unwrap()
                 .command,
             Some(Command::Attach {
-                name: Some(SessionName::new("work-2").unwrap())
+                name: Some(SessionName::new("work-2").unwrap()),
+                create: false,
             })
         );
         assert_eq!(
             Cli::try_parse_from(["rustmux", "attach"]).unwrap().command,
-            Some(Command::Attach { name: None })
+            Some(Command::Attach {
+                name: None,
+                create: false,
+            })
         );
         assert_eq!(
             Cli::try_parse_from(["rustmux", "list"]).unwrap().command,
@@ -186,6 +193,27 @@ mod tests {
     #[test]
     fn clap_definition_is_internally_consistent() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn attach_create_requires_a_name_and_preserves_the_config_short_option() {
+        for arguments in [
+            vec!["rustmux", "attach", "work", "--create", "-c", "dev.toml"],
+            vec!["rustmux", "-c", "dev.toml", "attach", "--create", "work"],
+        ] {
+            let cli = Cli::try_parse_from(arguments).unwrap();
+            assert_eq!(cli.config, Some(PathBuf::from("dev.toml")));
+            assert_eq!(
+                cli.command,
+                Some(Command::Attach {
+                    name: Some(SessionName::new("work").unwrap()),
+                    create: true,
+                })
+            );
+        }
+        assert!(Cli::try_parse_from(["rustmux", "attach", "--create"]).is_err());
+        assert!(Cli::try_parse_from(["rustmux", "attach", "--create", "../bad"]).is_err());
+        assert!(Cli::try_parse_from(["rustmux", "attach", "work", "-c"]).is_err());
     }
 
     #[test]

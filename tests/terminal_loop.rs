@@ -136,3 +136,8 @@ fn live_rename() {
 fn disconnect() {
     run_scenario("disconnect");
 }
+
+#[test]
+fn attach_create() {
+    run_scenario("attach_create");
+}

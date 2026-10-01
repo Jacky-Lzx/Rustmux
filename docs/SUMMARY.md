@@ -47,6 +47,7 @@
 - [Session Handshake](reference/session-handshake.md)
 - [Session Client Bridge](reference/session-client.md)
 - [Named Session Commands](reference/session-cli.md)
+- [Attach or Create](reference/session-attach-create.md)
 - [Session Manager Controls and Saving](reference/session-manager-controls.md)
 - [Saved Workspace Rename](reference/saved-session-rename.md)
 - [Live Session Rename](reference/live-session-rename.md)
