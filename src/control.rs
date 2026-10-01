@@ -123,6 +123,11 @@ pub enum Command {
         #[arg(long)]
         cwd: Option<PathBuf>,
     },
+    /// Close a pane and stop its process; the final session pane cannot be closed.
+    ClosePane {
+        #[command(flatten)]
+        target: PaneTarget,
+    },
     /// Send named keys or --literal text; optionally append Enter.
     SendKeys {
         #[command(flatten)]
@@ -236,6 +241,9 @@ pub(crate) enum Request {
         command: Option<String>,
         cwd: Option<PathBuf>,
     },
+    ClosePane {
+        pane: Option<u64>,
+    },
     SendKeys {
         pane: Option<u64>,
         bytes: Vec<u8>,
@@ -346,6 +354,7 @@ impl Command {
                     cwd,
                 },
             ),
+            Self::ClosePane { target } => (target.target, Request::ClosePane { pane: target.pane }),
             Self::CapturePane { target, history } => (
                 target.target,
                 Request::CapturePane {
@@ -709,6 +718,7 @@ impl Service {
                                         | Request::RenameWindow { .. }
                                         | Request::ResizePane { .. }
                                         | Request::SplitPane { .. }
+                                        | Request::ClosePane { .. }
                                         | Request::JoinPane { .. }
                                         | Request::BreakPane { .. }
                                         | Request::RespawnPane { .. }
@@ -786,6 +796,31 @@ impl Drop for Service {
 mod tests {
     use super::*;
     use clap::Parser;
+
+    #[test]
+    fn close_pane_accepts_active_default_or_explicit_runtime_id() {
+        for (arguments, pane) in [
+            (vec!["rustmux", "close-pane"], None),
+            (
+                vec!["rustmux", "close-pane", "-s", "work", "-p", "42"],
+                Some(42),
+            ),
+        ] {
+            let cli = crate::cli::Cli::try_parse_from(arguments).unwrap();
+            let Some(crate::cli::Command::Control(Command::ClosePane { target })) = cli.command
+            else {
+                panic!("expected close-pane");
+            };
+            assert_eq!(target.pane, pane);
+            assert_eq!(
+                target.target.session.as_str(),
+                if pane.is_some() { "work" } else { "default" }
+            );
+        }
+        assert!(
+            crate::cli::Cli::try_parse_from(["rustmux", "close-pane", "-p", "invalid"]).is_err()
+        );
+    }
 
     #[test]
     fn creation_arguments_preserve_startup_command_and_directory() {

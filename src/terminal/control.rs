@@ -138,6 +138,25 @@ pub(super) fn handle(
             // partially committed screen/PTY resize cannot safely continue.
             Ok(String::new())
         }
+        Request::ClosePane { pane } => {
+            let (window, id) = target(windows, pane)?;
+            let set = windows.get_mut(window).unwrap().content_mut();
+            if set.iter().len() > 1 {
+                // Transfer ownership out of the layout before dropping the
+                // process; scripted closure does not enter close-undo storage.
+                drop(set.close(id)?);
+            } else {
+                if windows.iter().len() == 1 {
+                    return Err(invalid(
+                        "cannot close the final session pane; use kill SESSION",
+                    ));
+                }
+                drop(windows.close(window)?);
+            }
+            // Event loops synchronize every surviving set and route the
+            // resulting focus transition through their normal refresh path.
+            Ok(String::new())
+        }
         Request::ListPanes { toml: as_toml } => {
             use std::os::unix::process::ExitStatusExt;
             let active = windows.active().map(|window| window.id());

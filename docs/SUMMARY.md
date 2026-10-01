@@ -59,6 +59,7 @@
 - [Script Window Rename](reference/script-window-rename.md)
 - [Script Pane Resize](reference/script-pane-resize.md)
 - [Script Pane Startup](reference/script-pane-startup.md)
+- [Script Pane Close](reference/script-pane-close.md)
 - [Project Layouts](reference/project-layouts.md)
 - [Retained Panes and Respawn](reference/pane-lifecycle.md)
 - [Pane Output](reference/pane-output.md)

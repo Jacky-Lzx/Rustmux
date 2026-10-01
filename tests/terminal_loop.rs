@@ -48,6 +48,11 @@ fn pane_startup() {
 }
 
 #[test]
+fn pane_close() {
+    run_scenario("pane_close");
+}
+
+#[test]
 fn notifications() {
     run_scenario("notifications");
 }
