@@ -40,6 +40,7 @@ pub(crate) const MAX_REPLY_DRAIN_BYTES: usize = 8192;
 #[derive(Debug)]
 pub struct Pane {
     control_id: u64,
+    output: crate::pane_output::Output,
     startup_command: Option<String>,
     spawn_directory: Option<PathBuf>,
     remain_on_exit: Option<bool>,
@@ -254,11 +255,16 @@ impl Pane {
         }
         replacement.control_id = self.control_id;
         replacement.remain_on_exit = self.remain_on_exit;
+        replacement.output = std::mem::take(&mut self.output);
+        replacement.output.restart();
         *self = replacement;
         Ok(())
     }
     pub(crate) fn control_id(&self) -> u64 {
         self.control_id
+    }
+    pub(crate) fn read_output(&self, after: Option<u64>) -> io::Result<crate::pane_output::Chunk> {
+        self.output.read(self.control_id, after, self.io.eof)
     }
     pub(crate) fn startup_command(&self) -> Option<&str> {
         self.startup_command.as_deref()
@@ -332,6 +338,7 @@ impl Pane {
         }
         Ok(Self {
             control_id,
+            output: crate::pane_output::Output::default(),
             startup_command: startup.map(str::to_owned),
             spawn_directory: directory
                 .map(Path::to_owned)
@@ -375,6 +382,7 @@ impl Pane {
         fcntl(master, FcntlArg::F_SETFL(flags | OFlag::O_NONBLOCK))?;
         Ok(Self {
             control_id,
+            output: crate::pane_output::Output::default(),
             startup_command: None,
             spawn_directory: None,
             remain_on_exit: Some(false),
@@ -786,6 +794,7 @@ impl Pane {
         reply: &mut impl FnMut(&[u8]),
         mut graphics: GraphicsSink<'_>,
     ) {
+        self.output.append(bytes);
         self.io.dirty = true;
         let cell_pixels = match &graphics {
             GraphicsSink::Store { cell_pixels, .. } => *cell_pixels,
@@ -2756,5 +2765,25 @@ mod lifecycle_tests {
             .is_err()
         );
         assert_eq!(pane.shell().id(), pid);
+    }
+}
+
+#[cfg(test)]
+mod raw_output_tests {
+    use super::*;
+    use base64::{Engine, engine::general_purpose::STANDARD};
+
+    #[test]
+    fn parser_and_graphics_framer_do_not_transform_or_duplicate_raw_bytes() {
+        let mut pane = Pane::spawn("/bin/sh", 8, 30).unwrap();
+        let raw = b"a\x1b_Ga=T;AAAA\x1b\\b\x1b[31mc\xe4\x1b_";
+        for bytes in raw.chunks(3) {
+            pane.process_output(bytes, &mut |_| {});
+        }
+        pane.finish_output();
+        let chunk = pane.read_output(Some(0)).unwrap();
+        assert!(chunk.complete);
+        assert_eq!(STANDARD.decode(chunk.bytes_base64).unwrap(), raw);
+        assert_eq!(chunk.next, raw.len() as u64);
     }
 }

@@ -49,6 +49,7 @@
 - [Script Control](reference/script-control.md)
 - [Project Layouts](reference/project-layouts.md)
 - [Retained Panes and Respawn](reference/pane-lifecycle.md)
+- [Pane Output](reference/pane-output.md)
 - [Session Frontend Adapter](reference/session-frontend.md)
 - [Session Runtime State](reference/session-runtime.md)
 - [Frontend I/O Boundary](reference/frontend-io.md)

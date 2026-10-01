@@ -72,7 +72,7 @@ process/ID behavior after joins and breaks.
 [Project layouts](project-layouts.md) cover startup files and recorded commands.
 Local cumulative verification on macOS, 2026-10-01:
 
-- `cargo test --all-targets --locked --offline -- --test-threads=4`: 854 passed,
+- `cargo test --all-targets --locked --offline -- --test-threads=4`: 860 passed,
   zero failed, six existing tests ignored by default.
 - Focused real PTY control and project scenarios passed, including server-side
   input rejection and fragmented requests.
@@ -80,3 +80,7 @@ Local cumulative verification on macOS, 2026-10-01:
 
 This review branch is implementation evidence; its final changes await the
 owner's review. Linux CI and installed-client validation were not performed.
+
+Raw PTY bytes are available through `read-pane-output`, `subscribe-pane` and
+`log-pane`. Continuous clients require retained panes and report buffer loss;
+see [pane output](pane-output.md) for cursors, bounds and lifecycle behavior.

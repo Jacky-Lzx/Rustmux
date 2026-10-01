@@ -1,8 +1,9 @@
 //! Bounded script requests, independent of the interactive session lease.
 
+use base64::{Engine, engine::general_purpose::STANDARD};
 use std::fs;
 use std::io::{self, Read, Write};
-use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
+use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -71,6 +72,31 @@ pub enum Command {
         #[arg(long)]
         history: bool,
     },
+    /// Read a bounded raw PTY tail as TOML with base64 bytes and a byte cursor.
+    ReadPaneOutput {
+        #[command(flatten)]
+        target: PaneTarget,
+        /// Omit to obtain the current cursor without replaying output.
+        #[arg(long)]
+        after: Option<u64>,
+    },
+    /// Stream future raw PTY bytes to stdout; requires remain_on_exit = true.
+    SubscribePane {
+        #[command(flatten)]
+        target: PaneTarget,
+        /// Resume from a byte cursor rather than starting at the current tail.
+        #[arg(long)]
+        after: Option<u64>,
+    },
+    /// Log raw PTY bytes into a new file until EOF; requires remain_on_exit = true.
+    LogPane {
+        #[command(flatten)]
+        target: PaneTarget,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long)]
+        after: Option<u64>,
+    },
     /// Restart an exited pane in place, preserving its runtime ID.
     RespawnPane {
         #[command(flatten)]
@@ -121,6 +147,12 @@ pub(crate) enum Request {
         pane: Option<u64>,
         history: bool,
     },
+    ReadPaneOutput {
+        pane: Option<u64>,
+        after: Option<u64>,
+        #[serde(default)]
+        require_retained: bool,
+    },
     RespawnPane {
         pane: Option<u64>,
         command: Option<String>,
@@ -147,6 +179,35 @@ struct Response {
 impl Command {
     pub fn run(self) -> io::Result<String> {
         let (target, request) = match self {
+            Self::SubscribePane { target, after } => {
+                let chunk = output_chunk(&target, after)?;
+                follow_output(&target, chunk, &mut io::stdout().lock())?;
+                return Ok(String::new());
+            }
+            Self::LogPane {
+                target,
+                output,
+                after,
+            } => {
+                let chunk = output_chunk(&target, after)?;
+                // Exclusive creation prevents overwriting files and following symlinks.
+                let mut file = fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .mode(0o600)
+                    .custom_flags(nix::libc::O_NOFOLLOW)
+                    .open(output)?;
+                follow_output(&target, chunk, &mut file)?;
+                return Ok(String::new());
+            }
+            Self::ReadPaneOutput { target, after } => (
+                target.target,
+                Request::ReadPaneOutput {
+                    pane: target.pane,
+                    after,
+                    require_retained: false,
+                },
+            ),
             Self::ListPanes { target, toml } => (target, Request::ListPanes { toml }),
             Self::NewWindow { target, name } => (target, Request::NewWindow { name }),
             Self::SplitPane { target, down } => (
@@ -211,6 +272,64 @@ impl Command {
             }
         };
         request_session(&target.session, &request)
+    }
+}
+
+fn output_chunk(target: &PaneTarget, after: Option<u64>) -> io::Result<crate::pane_output::Chunk> {
+    let text = request_session(
+        &target.target.session,
+        &Request::ReadPaneOutput {
+            pane: target.pane,
+            after,
+            require_retained: true,
+        },
+    )?;
+    toml::from_str(&text).map_err(io::Error::other)
+}
+
+fn write_chunk(chunk: &crate::pane_output::Chunk, output: &mut impl Write) -> io::Result<()> {
+    if chunk.dropped != 0 {
+        return Err(io::Error::other(format!(
+            "pane output lost {} bytes; next available cursor is {}",
+            chunk.dropped, chunk.start
+        )));
+    }
+    let bytes = STANDARD
+        .decode(&chunk.bytes_base64)
+        .map_err(io::Error::other)?;
+    output.write_all(&bytes)?;
+    output.flush()
+}
+
+fn follow_output(
+    target: &PaneTarget,
+    mut chunk: crate::pane_output::Chunk,
+    output: &mut impl Write,
+) -> io::Result<()> {
+    // Resolve active pane exactly once so focus changes cannot redirect a subscriber.
+    let pinned = PaneTarget {
+        target: target.target.clone(),
+        pane: Some(chunk.pane),
+    };
+    let generation = chunk.generation;
+    let server_pid = chunk.server_pid;
+    loop {
+        if chunk.server_pid != server_pid {
+            return Err(io::Error::other(
+                "session server changed; start a new output subscription",
+            ));
+        }
+        if chunk.generation != generation {
+            return Err(io::Error::other(
+                "pane was respawned; start a new output subscription",
+            ));
+        }
+        write_chunk(&chunk, output)?;
+        if chunk.complete {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(50));
+        chunk = output_chunk(&pinned, Some(chunk.next))?;
     }
 }
 
@@ -511,5 +630,38 @@ mod tests {
     fn unknown_wire_fields_and_actions_are_rejected() {
         assert!(toml::from_str::<Request>("action='list-panes'\ntoml=true\nextra=1").is_err());
         assert!(toml::from_str::<Request>("action='kill'").is_err());
+    }
+}
+
+#[cfg(test)]
+mod output_tests {
+    use super::*;
+    use crate::pane_output::{Chunk, Output};
+
+    #[test]
+    fn subscriber_rejects_gaps_before_writing() {
+        let mut output = Output::default();
+        output.append(&vec![b'x'; crate::pane_output::LIMIT + 1]);
+        let chunk = output.read(1, Some(0), false).unwrap();
+        let mut written = Vec::new();
+        assert!(write_chunk(&chunk, &mut written).is_err());
+        assert!(written.is_empty());
+    }
+
+    #[test]
+    fn write_errors_are_returned_and_raw_bytes_preserved() {
+        let mut output = Output::default();
+        output.append(b"\xff\x1b[31m");
+        let chunk = output.read(1, Some(0), false).unwrap();
+        let wire = toml::to_string(&chunk).unwrap();
+        let decoded: Chunk = toml::from_str(&wire).unwrap();
+        let mut written = Vec::new();
+        write_chunk(&decoded, &mut written).unwrap();
+        assert_eq!(written, b"\xff\x1b[31m");
+        let mut full = &mut [0u8; 1][..];
+        assert_eq!(
+            write_chunk(&decoded, &mut full).unwrap_err().kind(),
+            io::ErrorKind::WriteZero
+        );
     }
 }

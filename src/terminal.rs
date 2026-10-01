@@ -418,6 +418,7 @@ impl TerminalSession {
                             shortcuts: self.shortcuts,
                         },
                         self.outer_rows,
+                        self.remain_on_exit,
                     )
                 });
             }
@@ -1952,7 +1953,9 @@ fn forward(
     loop {
         if let Some(service) = control.as_mut() {
             let old = active_focus(windows);
-            if service.tick(|request| control::handle(request, windows, context, *outer_rows)) {
+            if service.tick(|request| {
+                control::handle(request, windows, context, *outer_rows, remain_on_exit)
+            }) {
                 queue_focus_transition(windows, old, active_focus(windows));
                 history = None;
                 help = None;

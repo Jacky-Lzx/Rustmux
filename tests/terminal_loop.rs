@@ -101,3 +101,8 @@ fn config() {
 fn colors() {
     run_scenario("colors");
 }
+
+#[test]
+fn output() {
+    run_scenario("output");
+}

@@ -64,6 +64,7 @@ pub(super) fn handle(
     windows: &mut Windows<PaneSet<Pane>>,
     context: SessionContext<'_>,
     rows: u16,
+    remain_on_exit: bool,
 ) -> io::Result<String> {
     match request {
         Request::ListPanes { toml: as_toml } => {
@@ -114,6 +115,21 @@ pub(super) fn handle(
                     })
                     .collect())
             }
+        }
+        Request::ReadPaneOutput {
+            pane,
+            after,
+            require_retained,
+        } => {
+            let (window, id) = target(windows, pane)?;
+            let pane = windows.get(window).unwrap().content().get(id).unwrap();
+            if require_retained && !pane.retain_after_exit(remain_on_exit) {
+                return Err(invalid(
+                    "output subscriptions require remain_on_exit = true",
+                ));
+            }
+            let chunk = pane.read_output(after)?;
+            toml::to_string(&chunk).map_err(io::Error::other)
         }
         Request::CapturePane { pane, history } => {
             let (window, id) = target(windows, pane)?;
