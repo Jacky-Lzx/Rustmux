@@ -1,0 +1,267 @@
+//! Configuration commands work with pipes, without a terminal or session server.
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
+use std::process::{Command, Output};
+
+fn command(root: &Path, arguments: &[&str]) -> Output {
+    base_command(root).args(arguments).output().unwrap()
+}
+fn base_command(root: &Path) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_rustmux"));
+    command
+        .env("XDG_CONFIG_HOME", root)
+        .env("XDG_STATE_HOME", root.join("state"))
+        .env("HOME", root)
+        .env("RUSTMUX", "1") // These read-only commands are allowed inside a pane.
+        .env_remove("RUSTMUX_SHELL")
+        .env_remove("SHELL");
+    command
+}
+fn report(output: &Output) -> toml::Table {
+    toml::from_str(std::str::from_utf8(&output.stdout).unwrap()).unwrap()
+}
+fn settings(report: &toml::Table) -> &toml::Table {
+    report["settings"].as_table().unwrap()
+}
+
+#[test]
+fn exported_defaults_round_trip_and_ignore_active_broken_config() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    fs::create_dir(root.join("rustmux")).unwrap();
+    fs::write(root.join("rustmux/config.toml"), "shell=[invalid").unwrap();
+    let first = command(root, &["default-config"]);
+    let alias = command(root, &["--config", "missing.toml", "dump-config"]);
+    assert!(first.status.success());
+    assert_eq!(alias.stdout, first.stdout);
+    assert!(alias.status.success());
+    let template = root.join("defaults.toml");
+    fs::write(&template, &first.stdout).unwrap();
+    let checked = command(
+        root,
+        &[
+            "check-config",
+            "--config",
+            template.to_str().unwrap(),
+            "--toml",
+            "--strict",
+        ],
+    );
+    assert!(checked.status.success(), "{checked:?}");
+    let checked = report(&checked);
+    assert!(checked["warnings"].as_array().unwrap().is_empty());
+    assert_eq!(
+        settings(&checked)["scrollback_lines"].as_integer(),
+        Some(1000)
+    );
+    assert_eq!(
+        settings(&checked)["autosave_interval_seconds"].as_integer(),
+        Some(0)
+    );
+    assert_eq!(settings(&checked)["save_scrollback"].as_bool(), Some(false));
+    assert_eq!(settings(&checked)["remain_on_exit"].as_bool(), Some(false));
+    assert!(!root.join("state").exists());
+    assert_eq!(
+        fs::read_to_string(root.join("rustmux/config.toml")).unwrap(),
+        "shell=[invalid"
+    );
+}
+
+#[test]
+fn discovered_missing_file_uses_defaults_but_explicit_missing_fails() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    let defaults = command(root, &["check-config", "--toml"]);
+    assert!(defaults.status.success());
+    let defaults = report(&defaults);
+    assert_eq!(defaults["file_loaded"].as_bool(), Some(false));
+    assert_eq!(defaults["explicit"].as_bool(), Some(false));
+    assert_eq!(defaults["shell_source"].as_str(), Some("fallback"));
+    assert_eq!(settings(&defaults)["shell"].as_str(), Some("/bin/sh"));
+    let missing = root.join("missing.toml");
+    let failed = command(
+        root,
+        &[
+            "--config",
+            missing.to_str().unwrap(),
+            "check-config",
+            "--toml",
+        ],
+    );
+    assert!(!failed.status.success());
+    assert!(failed.stdout.is_empty());
+    assert!(
+        String::from_utf8(failed.stderr)
+            .unwrap()
+            .contains("could not read")
+    );
+    assert!(!root.join("rustmux").exists());
+}
+
+#[test]
+fn reports_effective_settings_and_environment_shell_precedence_without_execution() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    let config = root.join("selected.toml");
+    let shell = root.join("shell-marker.sh");
+    let marker = root.join("executed");
+    fs::write(&shell, format!("#!/bin/sh\ntouch '{}'\n", marker.display())).unwrap();
+    fs::set_permissions(&shell, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::write(
+        &config,
+        format!(
+            r#"shell={:?}
+scrollback_lines=0
+remain_on_exit=true
+autosave_interval_seconds=12
+save_scrollback=true
+save_scrollback_colors=true
+[notifications]
+long_command_bell=false
+command_duration_seconds=9
+"#,
+            shell.to_str().unwrap()
+        ),
+    )
+    .unwrap();
+    let arguments = [
+        "check-config",
+        "--config",
+        config.to_str().unwrap(),
+        "--toml",
+    ];
+    let configured = command(root, &arguments);
+    assert!(configured.status.success());
+    let configured = report(&configured);
+    assert_eq!(configured["shell_source"].as_str(), Some("config"));
+    assert_eq!(
+        settings(&configured)["scrollback_lines"].as_integer(),
+        Some(0)
+    );
+    assert_eq!(
+        settings(&configured)["save_scrollback_colors"].as_bool(),
+        Some(true)
+    );
+    assert_eq!(
+        settings(&configured)["command_duration_seconds"].as_integer(),
+        Some(9)
+    );
+    let override_output = base_command(root)
+        .env("RUSTMUX_SHELL", "/override-shell")
+        .env("SHELL", "/login-shell")
+        .args(arguments)
+        .output()
+        .unwrap();
+    assert!(override_output.status.success());
+    let overridden = report(&override_output);
+    assert_eq!(overridden["shell_source"].as_str(), Some("RUSTMUX_SHELL"));
+    assert_eq!(
+        settings(&overridden)["shell"].as_str(),
+        Some("/override-shell")
+    );
+    fs::write(&config, "").unwrap();
+    let login_output = base_command(root)
+        .env("RUSTMUX_SHELL", "")
+        .env("SHELL", "/login-shell")
+        .args(arguments)
+        .output()
+        .unwrap();
+    let login = report(&login_output);
+    assert_eq!(login["shell_source"].as_str(), Some("SHELL"));
+    assert_eq!(settings(&login)["shell"].as_str(), Some("/login-shell"));
+    assert!(!marker.exists());
+    assert!(!root.join("state").exists());
+}
+
+#[test]
+fn ignored_options_warn_and_strict_failure_keeps_a_parseable_report() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    let path = root.join("mixed.toml");
+    fs::write(
+        &path,
+        r#"scrolback_lines=0
+theme="light"
+[keybinds.normal]
+X={actions=["toggle-floating-terminal"]}
+"#,
+    )
+    .unwrap();
+    let permissive = command(root, &["--config", path.to_str().unwrap(), "check-config"]);
+    assert!(permissive.status.success());
+    assert!(String::from_utf8_lossy(&permissive.stderr).contains("ignored binding"));
+    let strict = command(
+        root,
+        &[
+            "check-config",
+            "--config",
+            path.to_str().unwrap(),
+            "--strict",
+            "--toml",
+        ],
+    );
+    assert_eq!(strict.status.code(), Some(1));
+    assert!(strict.stderr.is_empty());
+    let strict = report(&strict);
+    assert_eq!(strict["warnings"].as_array().unwrap().len(), 3);
+    assert_eq!(
+        settings(&strict)["scrollback_lines"].as_integer(),
+        Some(1000)
+    );
+}
+
+#[test]
+fn rejects_invalid_supported_settings_and_conflicting_bindings() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    let path = root.join("invalid.toml");
+    for source in [
+        "scrollback_lines=-1",
+        "remain_on_exit='yes'",
+        "save_scrollback=1",
+        "clear_defaults=true",
+        "[notifications]\ncommand_duration_seconds=0",
+        "[shortcuts]\nnew_window='x'",
+        "[keybinds.history]\nx={actions=['unsupported']}",
+        "[broken",
+    ] {
+        fs::write(&path, source).unwrap();
+        let result = command(root, &["check-config", "--config", path.to_str().unwrap()]);
+        assert_eq!(result.status.code(), Some(1), "{source}: {result:?}");
+        assert!(result.stdout.is_empty());
+        assert!(
+            String::from_utf8_lossy(&result.stderr)
+                .contains(&format!("invalid {}", path.display()))
+        );
+    }
+}
+
+#[test]
+fn discovered_file_and_explicit_override_select_the_same_startup_paths() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    fs::create_dir(root.join("rustmux")).unwrap();
+    let discovered = root.join("rustmux/config.toml");
+    fs::write(&discovered, "remain_on_exit=true").unwrap();
+    let default = command(root, &["check-config", "--toml"]);
+    let default = report(&default);
+    assert_eq!(default["path"].as_str(), discovered.to_str());
+    assert_eq!(default["explicit"].as_bool(), Some(false));
+    let selected = root.join("selected.toml");
+    fs::write(&selected, "remain_on_exit=false").unwrap();
+    let result = command(
+        root,
+        &[
+            "check-config",
+            "--config",
+            selected.to_str().unwrap(),
+            "--toml",
+        ],
+    );
+    let explicit = report(&result);
+    assert_eq!(explicit["explicit"].as_bool(), Some(true));
+    assert_eq!(explicit["path"].as_str(), selected.to_str());
+    assert_eq!(settings(&explicit)["remain_on_exit"].as_bool(), Some(false));
+    assert_eq!(settings(&default)["remain_on_exit"].as_bool(), Some(true));
+}

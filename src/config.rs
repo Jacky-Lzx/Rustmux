@@ -8,6 +8,9 @@ use std::time::Duration;
 
 use crate::layout::Direction;
 
+mod diagnostics;
+pub use diagnostics::{Inspection, Settings, default_config, inspect};
+
 const DEFAULT_COMMAND_DURATION_SECONDS: u64 = 5;
 pub const DEFAULT_SCROLLBACK_LINES: usize = crate::screen::SCROLLBACK_MAX_LINES;
 const SHORTCUT_NAMES: [&str; 3] = ["new_window", "split_right", "split_down"];
@@ -621,7 +624,11 @@ pub fn load_with_path(path: Option<&Path>) -> Result<Config, String> {
         Some(path) => load_config(path, false)?,
         None => load_config(&config_path(), true)?,
     };
-    Ok(Config {
+    Ok(resolve_config(configured))
+}
+
+fn resolve_config(configured: ParsedConfig) -> Config {
+    Config {
         shell: select_shell(
             env::var_os("RUSTMUX_SHELL"),
             configured.shell.map(OsString::from),
@@ -634,7 +641,7 @@ pub fn load_with_path(path: Option<&Path>) -> Result<Config, String> {
         shortcuts: configured.shortcuts,
         persistence: configured.persistence,
         remain_on_exit: configured.remain_on_exit,
-    })
+    }
 }
 
 /// Select the shell used for initial, split and newly created panes.
@@ -658,14 +665,21 @@ fn select_shell(
 }
 
 fn load_config(path: &Path, allow_missing: bool) -> Result<ParsedConfig, String> {
-    let source = match fs::read_to_string(path) {
-        Ok(source) => source,
-        Err(error) if allow_missing && error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(ParsedConfig::default());
+    let source = read_config(path, allow_missing)?;
+    match source {
+        Some(source) => {
+            parse_config(&source).map_err(|error| format!("invalid {}: {error}", path.display()))
         }
-        Err(error) => return Err(format!("could not read {}: {error}", path.display())),
-    };
-    parse_config(&source).map_err(|error| format!("invalid {}: {error}", path.display()))
+        None => Ok(ParsedConfig::default()),
+    }
+}
+
+fn read_config(path: &Path, allow_missing: bool) -> Result<Option<String>, String> {
+    match fs::read_to_string(path) {
+        Ok(source) => Ok(Some(source)),
+        Err(error) if allow_missing && error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("could not read {}: {error}", path.display())),
+    }
 }
 
 fn parse_config(source: &str) -> Result<ParsedConfig, String> {

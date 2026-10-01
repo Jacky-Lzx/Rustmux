@@ -22,6 +22,51 @@ fn execute(cli: rustmux::cli::Cli) -> Result<u8, String> {
         return Err("nested Rustmux sessions are not supported".to_owned());
     }
     match command {
+        Some(rustmux::cli::Command::DefaultConfig) => {
+            print!("{}", rustmux::config::default_config());
+            Ok(0)
+        }
+        Some(rustmux::cli::Command::CheckConfig { toml, strict }) => {
+            let report = rustmux::config::inspect(config_path)?;
+            if toml {
+                print!(
+                    "{}",
+                    toml::to_string(&report).map_err(|error| error.to_string())?
+                );
+            } else {
+                println!(
+                    "configuration valid: {} ({})",
+                    report.path,
+                    if report.file_loaded {
+                        "file"
+                    } else {
+                        "built-in defaults"
+                    }
+                );
+                println!("shell: {} ({})", report.settings.shell, report.shell_source);
+                println!("scrollback_lines: {}", report.settings.scrollback_lines);
+                println!("remain_on_exit: {}", report.settings.remain_on_exit);
+                println!("clear_defaults: {}", report.settings.clear_defaults);
+                println!(
+                    "autosave_interval_seconds: {}",
+                    report.settings.autosave_interval_seconds
+                );
+                println!("save_scrollback: {}", report.settings.save_scrollback);
+                println!(
+                    "save_scrollback_colors: {}",
+                    report.settings.save_scrollback_colors
+                );
+                println!("long_command_bell: {}", report.settings.long_command_bell);
+                println!(
+                    "command_duration_seconds: {}",
+                    report.settings.command_duration_seconds
+                );
+                for warning in &report.warnings {
+                    eprintln!("rustmux: warning: {warning}");
+                }
+            }
+            Ok(u8::from(strict && !report.warnings.is_empty()))
+        }
         Some(rustmux::cli::Command::Control(command)) => {
             print!("{}", command.run().map_err(|error| error.to_string())?);
             Ok(0)

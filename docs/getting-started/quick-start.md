@@ -7,6 +7,17 @@ cargo build --locked
 ./target/debug/rustmux
 ```
 
+Check or export configuration before opening a terminal:
+
+```sh
+./target/debug/rustmux check-config
+./target/debug/rustmux --config ./project-config.toml check-config --strict
+./target/debug/rustmux default-config > ./rustmux-defaults.toml
+```
+
+[Configuration diagnostics](../reference/config-diagnostics.md) explain effective
+settings, ignored options and the machine-readable `--toml` report.
+
 Run inside a terminal with nonzero dimensions; stdin and stdout must refer to
 the same terminal. Rustmux opens one interactive shell, forwards keyboard input
 and displays its output. It uses `RUSTMUX_SHELL`, then the top-level `shell`

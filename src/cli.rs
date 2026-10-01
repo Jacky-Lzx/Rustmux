@@ -20,6 +20,18 @@ pub struct Cli {
 pub enum Command {
     #[command(flatten)]
     Control(crate::control::Command),
+    /// Print a TOML template of built-in settings without loading user configuration.
+    #[command(name = "default-config", visible_alias = "dump-config")]
+    DefaultConfig,
+    /// Validate the selected config and report settings used by newly started sessions.
+    CheckConfig {
+        /// Print a machine-readable inspection report.
+        #[arg(long)]
+        toml: bool,
+        /// Treat ignored fields and bindings as errors.
+        #[arg(long)]
+        strict: bool,
+    },
     /// Save a running session's layout and optional history to disk.
     #[command(name = "save-session", visible_alias = "save")]
     Save { name: SessionName },
