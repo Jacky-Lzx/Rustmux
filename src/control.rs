@@ -51,6 +51,13 @@ impl From<ResizeDirection> for crate::layout::Direction {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WindowMoveDirection {
+    Left,
+    Right,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Subcommand)]
 pub enum Command {
     /// Show the server's active settings and configuration reload status as TOML.
@@ -93,6 +100,15 @@ pub enum Command {
         target: Target,
         #[arg(short = 'w', long, value_parser = clap::value_parser!(u16).range(1..))]
         window: Option<u16>,
+    },
+    /// Move a window one position in the bar, wrapping at edges and preserving focus.
+    MoveWindow {
+        #[command(flatten)]
+        target: Target,
+        #[arg(short = 'w', long, value_parser = clap::value_parser!(u16).range(1..))]
+        window: Option<u16>,
+        #[arg(long, value_enum)]
+        direction: WindowMoveDirection,
     },
     /// Move a pane's nearest separator, preserving focus; defaults to the active pane.
     ResizePane {
@@ -244,6 +260,10 @@ pub(crate) enum Request {
     CloseWindow {
         window: Option<u16>,
     },
+    MoveWindow {
+        window: Option<u16>,
+        direction: WindowMoveDirection,
+    },
     ResizePane {
         pane: Option<u64>,
         direction: ResizeDirection,
@@ -346,6 +366,11 @@ impl Command {
                 name,
             } => (target, Request::RenameWindow { window, name }),
             Self::CloseWindow { target, window } => (target, Request::CloseWindow { window }),
+            Self::MoveWindow {
+                target,
+                window,
+                direction,
+            } => (target, Request::MoveWindow { window, direction }),
             Self::ResizePane {
                 target,
                 direction,
@@ -754,6 +779,7 @@ impl Service {
                                         | Request::SelectWindow { .. }
                                         | Request::RenameWindow { .. }
                                         | Request::CloseWindow { .. }
+                                        | Request::MoveWindow { .. }
                                         | Request::ResizePane { .. }
                                         | Request::ZoomPane { .. }
                                         | Request::SplitPane { .. }
@@ -835,6 +861,53 @@ impl Drop for Service {
 mod tests {
     use super::*;
     use clap::Parser;
+
+    #[test]
+    fn move_window_accepts_default_or_positive_target_and_horizontal_direction() {
+        for (arguments, window, direction) in [
+            (
+                vec!["rustmux", "move-window", "--direction", "left"],
+                None,
+                WindowMoveDirection::Left,
+            ),
+            (
+                vec![
+                    "rustmux",
+                    "move-window",
+                    "-s",
+                    "work",
+                    "-w",
+                    "2",
+                    "--direction",
+                    "right",
+                ],
+                Some(2),
+                WindowMoveDirection::Right,
+            ),
+        ] {
+            let cli = crate::cli::Cli::try_parse_from(arguments).unwrap();
+            let Some(crate::cli::Command::Control(Command::MoveWindow {
+                target,
+                window: parsed,
+                direction: parsed_direction,
+            })) = cli.command
+            else {
+                panic!("expected move-window");
+            };
+            assert_eq!((parsed, parsed_direction), (window, direction));
+            assert_eq!(
+                target.session.as_str(),
+                if window.is_some() { "work" } else { "default" }
+            );
+        }
+        for arguments in [
+            vec!["rustmux", "move-window"],
+            vec!["rustmux", "move-window", "--direction", "up"],
+            vec!["rustmux", "move-window", "-w", "0", "--direction", "right"],
+        ] {
+            assert!(crate::cli::Cli::try_parse_from(arguments).is_err());
+        }
+    }
 
     #[test]
     fn zoom_pane_accepts_default_toggle_or_exclusive_explicit_state() {

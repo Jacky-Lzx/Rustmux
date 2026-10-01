@@ -58,6 +58,7 @@
 - [Script Focus Control](reference/script-focus.md)
 - [Script Window Rename](reference/script-window-rename.md)
 - [Script Window Close](reference/script-window-close.md)
+- [Script Window Move](reference/script-window-move.md)
 - [Script Pane Resize](reference/script-pane-resize.md)
 - [Script Pane Startup](reference/script-pane-startup.md)
 - [Script Pane Close](reference/script-pane-close.md)

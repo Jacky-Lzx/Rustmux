@@ -155,33 +155,48 @@ impl<T> Windows<T> {
     /// At the left edge, move to the end while preserving the other windows' order.
     /// Returns false only for empty or single-window collections.
     pub fn move_active_left(&mut self) -> bool {
-        if self.entries.len() <= 1 {
+        let Some(id) = self.active().map(Window::id) else {
             return false;
-        }
-        if self.active == 0 {
-            self.entries.rotate_left(1);
-            self.active = self.entries.len() - 1;
-        } else {
-            self.entries.swap(self.active, self.active - 1);
-            self.active -= 1;
-        }
-        true
+        };
+        self.move_left(id).expect("active window exists")
     }
 
     /// Move the active window one position right, wrapping from the end to the start.
     /// Window contents, focus identity and last-window history remain attached.
     pub fn move_active_right(&mut self) -> bool {
-        if self.entries.len() <= 1 {
+        let Some(id) = self.active().map(Window::id) else {
             return false;
+        };
+        self.move_right(id).expect("active window exists")
+    }
+
+    /// Move a known window left, wrapping at the edge. Preserve active identity
+    /// and last-window history even when the target is inactive.
+    pub fn move_left(&mut self, id: WindowId) -> io::Result<bool> {
+        self.move_window(id, false)
+    }
+
+    /// Move a known window right, wrapping at the edge without changing focus.
+    pub fn move_right(&mut self, id: WindowId) -> io::Result<bool> {
+        self.move_window(id, true)
+    }
+
+    fn move_window(&mut self, id: WindowId, right: bool) -> io::Result<bool> {
+        let index = self.index(id)?;
+        if self.entries.len() <= 1 {
+            return Ok(false);
         }
-        if self.active + 1 == self.entries.len() {
+        let active = self.active().unwrap().id();
+        if right && index + 1 == self.entries.len() {
             self.entries.rotate_right(1);
-            self.active = 0;
+        } else if !right && index == 0 {
+            self.entries.rotate_left(1);
         } else {
-            self.entries.swap(self.active, self.active + 1);
-            self.active += 1;
+            self.entries
+                .swap(index, if right { index + 1 } else { index - 1 });
         }
-        true
+        self.active = self.index(active).expect("reordering preserves windows");
+        Ok(true)
     }
 
     /// Names are opaque metadata, including empty or duplicate names. A UI must
@@ -330,6 +345,69 @@ impl<T> Windows<crate::pane_set::PaneSet<T>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn targeted_moves_preserve_every_active_identity_history_and_owned_content() {
+        for count in 1..=4 {
+            for active in 0..count {
+                for target in 0..count {
+                    for right in [false, true] {
+                        let mut windows = Windows::default();
+                        let ids: Vec<_> = (0..count)
+                            .map(|value| {
+                                windows.create(value.to_string(), Box::new(value)).unwrap()
+                            })
+                            .collect();
+                        windows.select(ids[active]).unwrap();
+                        let last = windows.last_active;
+                        let contents: Vec<_> = ids
+                            .iter()
+                            .map(|&id| windows.get(id).unwrap().content().as_ref() as *const usize)
+                            .collect();
+                        let changed = if right {
+                            windows.move_right(ids[target])
+                        } else {
+                            windows.move_left(ids[target])
+                        }
+                        .unwrap();
+                        assert_eq!(changed, count > 1);
+                        let mut expected = ids.clone();
+                        let moved = expected.remove(target);
+                        let destination = if right {
+                            (target + 1) % count
+                        } else {
+                            (target + count - 1) % count
+                        };
+                        expected.insert(destination, moved);
+                        assert_eq!(windows.iter().map(Window::id).collect::<Vec<_>>(), expected);
+                        assert_eq!(windows.active().unwrap().id(), ids[active]);
+                        assert_eq!(windows.last_active, last);
+                        for (index, &id) in ids.iter().enumerate() {
+                            assert_eq!(
+                                windows.get(id).unwrap().content().as_ref() as *const usize,
+                                contents[index]
+                            );
+                            assert_eq!(**windows.get(id).unwrap().content(), index);
+                        }
+                        for result in [
+                            windows.move_left(WindowId(u64::MAX)),
+                            windows.move_right(WindowId(u64::MAX)),
+                        ] {
+                            assert_eq!(result.unwrap_err().kind(), io::ErrorKind::NotFound);
+                        }
+                        assert_eq!(windows.iter().map(Window::id).collect::<Vec<_>>(), expected);
+                        assert_eq!(windows.active().unwrap().id(), ids[active]);
+                        assert_eq!(windows.last_active, last);
+                    }
+                }
+            }
+        }
+        let mut empty = Windows::<()>::default();
+        assert!(empty.move_left(WindowId(0)).is_err());
+        assert!(empty.move_right(WindowId(0)).is_err());
+        assert!(!empty.move_active_left() && !empty.move_active_right());
+        assert!(empty.active().is_none());
+    }
 
     #[test]
     fn exhausted_ids_do_not_wrap_or_change_focus() {

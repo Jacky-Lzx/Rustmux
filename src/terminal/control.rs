@@ -130,6 +130,16 @@ pub(super) fn handle(
             drop(windows.close(id)?);
             Ok(String::new())
         }
+        Request::MoveWindow { window, direction } => {
+            let id = window_target(windows, window)?;
+            match direction {
+                crate::control::WindowMoveDirection::Left => windows.move_left(id)?,
+                crate::control::WindowMoveDirection::Right => windows.move_right(id)?,
+            };
+            // Reordering keeps focus identity; accepted no-ops still refresh
+            // the bar, overlays and shortcut mode through the control path.
+            Ok(String::new())
+        }
         Request::ResizePane {
             pane,
             direction,

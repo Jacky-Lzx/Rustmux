@@ -10,6 +10,7 @@ rustmux list-panes -s work --toml
 rustmux select-pane -s work -p 0
 rustmux select-window -s work -w 2
 rustmux rename-window -s work -w 2 'build logs'
+rustmux move-window -s work -w 2 --direction left
 rustmux new-window -s work --name logs
 rustmux new-window -s work --name checks --cwd /absolute/project --command 'cargo test'
 rustmux split-pane -s work -p 0 --down
@@ -52,6 +53,13 @@ owned pane child in it. Omission targets the active window. Numbers follow the
 current display order. The session's final window is preserved with an error,
 even if it has several panes; use `kill SESSION` to end the whole session. See
 [Script Window Close](script-window-close.md) for focus, cleanup and persistence.
+
+`move-window [-w NUMBER] --direction left|right` moves a window one position
+in display order. Omission targets the active window. Movement wraps from the
+left edge to the end, or from the right edge to the start, preserving the order
+of other windows. Active identity and last-window history are preserved even
+when moving an inactive target. Re-enumerate numbers after moving. See
+[Script Window Move](script-window-move.md) for layouts, refresh and snapshots.
 
 `close-pane [-p ID]` removes a visible pane and cleans up its directly owned
 child. Omission targets the active pane. Closing a window's only pane removes

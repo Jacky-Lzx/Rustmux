@@ -63,6 +63,11 @@ fn pane_zoom() {
 }
 
 #[test]
+fn window_move() {
+    run_scenario("window_move");
+}
+
+#[test]
 fn notifications() {
     run_scenario("notifications");
 }
