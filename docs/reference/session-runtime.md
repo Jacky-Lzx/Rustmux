@@ -6,6 +6,12 @@ models, the last outer terminal height and the one undoable closed pane. The
 local terminal path now uses this owner too, so extraction does not introduce a
 second multiplexer implementation.
 
+Named servers also own a save-only socket and one background snapshot writer.
+Both attached and detached loops service save requests. A workspace snapshot
+captures metadata and immutable primary screens, then formats optional history
+and writes an atomic disk file outside the event loop. See
+[Session Snapshots](session-snapshots.md) for restart behavior and limits.
+
 Each call to the attachment loop creates fresh connection-local state such as
 the renderer cache, undecoded keyboard queue, prefix state, prompts and the
 current history view. Returning `Detached` leaves `TerminalSession` alive. A

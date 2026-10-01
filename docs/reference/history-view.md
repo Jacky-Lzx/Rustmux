@@ -325,7 +325,9 @@ acceptance is not acknowledged by this operation.
 
 Rows retain their original widths: shorter rows are padded and longer rows are
 clipped to the pane width, with clipped wide characters replaced by blank cells.
-There is no snapshot text reflow or disk persistence yet. Copying
+The frozen browser does not reflow its snapshot text on resize. Named sessions
+can persist primary history separately through [workspace snapshots](session-snapshots.md);
+restored history reflows to the new pane width. Copying
 uses the outer terminal's OSC 52 clipboard support; terminals or multiplexers
 that disable OSC 52 will ignore it.
 This does not recover content previously discarded by resize. A two-row outer

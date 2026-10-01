@@ -1,10 +1,13 @@
 """Real PTY save/restart/restore, detached saves, failure isolation and autosave."""
 import os
+import fcntl
 from pathlib import Path
 import shlex
 import socket
+import struct
 import subprocess
 import tempfile
+import termios
 import time
 import tomllib
 
@@ -59,8 +62,12 @@ with tempfile.TemporaryDirectory(prefix="rustmux-snapshots-") as root:
         expect_bar(session, b"logs")
         session.send(b"stty -echo; KEEP=old; printf 'SAVED_%s\\n' LOGS\n")
         session.expect(b"SAVED_LOGS")
+        fcntl.ioctl(session.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
+        session.send(b"printf 'SAVED_SIZE:%s\\n' \"$(stty size)\"\n")
+        session.expect(b"SAVED_SIZE:26 98")
         command(env, "save-session", name)
         saved = tomllib.loads(path.read_text())
+        assert (saved["rows"], saved["columns"]) == (30, 100), saved
         assert saved["active_window"] == 1 and len(saved["windows"]) == 2, saved
         assert len(saved["windows"][0]["panes"]) == 2, saved
         assert saved["windows"][0]["layout"]["active"] == 1, saved
@@ -85,6 +92,14 @@ with tempfile.TemporaryDirectory(prefix="rustmux-snapshots-") as root:
                 assert job.returncode == 0, (output, error)
         finally:
             stalled.close()
+        malformed = socket.socket(socket.AF_UNIX)
+        try:
+            malformed.connect(str(endpoint))
+            malformed.settimeout(2)
+            malformed.sendall(b"X")
+            assert malformed.recv(64) == b"", "malformed save request was not discarded"
+        finally:
+            malformed.close()
         session.send(b"\x02d")
         session.finish(0)
     finally:
