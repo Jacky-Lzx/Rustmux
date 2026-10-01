@@ -7,6 +7,8 @@ Pane commands accept `-p ID`; omission selects the current active pane.
 ```sh
 rustmux show-config -s work
 rustmux list-panes -s work --toml
+rustmux select-pane -s work -p 0
+rustmux select-window -s work -w 2
 rustmux new-window -s work --name logs
 rustmux split-pane -s work -p 0 --down
 rustmux send-keys -s work -p 0 --literal --enter 'printf "hello\n"'
@@ -22,6 +24,14 @@ Enumerate IDs before using them. They identify owned panes within the running
 server and remain unchanged across joins, breaks and interactive pane moves.
 IDs are not saved; enumerate again after restoring a workspace. Hidden undo panes
 are not command targets.
+
+`select-pane -p ID` focuses the runtime pane and its owning window.
+`select-window -w NUMBER` selects the one-based position reported by `list-panes`
+and the window bar, preserving the selected pane within that window. Both require
+an explicit target and print nothing on success. Window numbers follow display
+order and can change after window removal or reordering; runtime pane IDs remain
+stable. See [Script Focus Control](script-focus.md) for zoom, input and overlay
+behavior.
 
 `show-config` returns the running server's applied scalar settings and reload
 status as TOML without changing focus or dismissing overlays. See

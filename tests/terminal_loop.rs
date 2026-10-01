@@ -141,3 +141,8 @@ fn disconnect() {
 fn attach_create() {
     run_scenario("attach_create");
 }
+
+#[test]
+fn focus_control() {
+    run_scenario("focus_control");
+}

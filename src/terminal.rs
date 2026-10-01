@@ -490,7 +490,7 @@ impl TerminalSession {
         loop {
             self.reload_detached();
             if let Some(service) = self.control.as_mut() {
-                service.tick(|request| {
+                let refresh = service.tick(|request| {
                     if let crate::control::Request::DisconnectSession { server_pid } = request {
                         return Err(io::Error::other(
                             if server_pid != std::process::id() as i32 {
@@ -538,6 +538,13 @@ impl TerminalSession {
                         self.reload.as_ref(),
                     )
                 });
+                if refresh {
+                    self.windows
+                        .active_mut()
+                        .unwrap()
+                        .content_mut()
+                        .synchronize_sizes()?;
+                }
             }
             if let Some(identity) = self.rename.as_ref() {
                 self.session_name = Some(identity.name().as_str().into());
@@ -2218,6 +2225,14 @@ fn forward(
                 )
             }) {
                 queue_focus_transition(windows, old, active_focus(windows));
+                // Script selection can transfer zoom to another pane. Keep
+                // both child sizes synchronized, and propagate I/O failure to
+                // the normal runtime cleanup rather than a controller reply.
+                windows
+                    .active_mut()
+                    .unwrap()
+                    .content_mut()
+                    .synchronize_sizes()?;
                 history = None;
                 help = None;
                 prompt = None;

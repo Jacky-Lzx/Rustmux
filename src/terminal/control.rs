@@ -75,6 +75,22 @@ pub(super) fn handle(
         Request::ShowConfig => reload
             .ok_or_else(|| invalid("configuration reload is unavailable"))
             .and_then(|reload| reload.status()),
+        Request::SelectPane { pane } => {
+            let (window, id) = target(windows, Some(pane))?;
+            let set = windows.get_mut(window).unwrap().content_mut();
+            set.select(id)?;
+            windows.select(window)?;
+            Ok(String::new())
+        }
+        Request::SelectWindow { window } => {
+            let id = usize::from(window)
+                .checked_sub(1)
+                .and_then(|position| windows.iter().nth(position))
+                .map(|window| window.id())
+                .ok_or_else(|| invalid("unknown window number"))?;
+            windows.select(id)?;
+            Ok(String::new())
+        }
         Request::ListPanes { toml: as_toml } => {
             use std::os::unix::process::ExitStatusExt;
             let active = windows.active().map(|window| window.id());

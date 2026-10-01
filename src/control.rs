@@ -45,6 +45,20 @@ pub enum Command {
         #[arg(long)]
         toml: bool,
     },
+    /// Focus a runtime pane ID, including its window, without restarting it.
+    SelectPane {
+        #[command(flatten)]
+        target: Target,
+        #[arg(short = 'p', long)]
+        pane: u64,
+    },
+    /// Focus a one-based window number, preserving that window's selected pane.
+    SelectWindow {
+        #[command(flatten)]
+        target: Target,
+        #[arg(short = 'w', long, value_parser = clap::value_parser!(u16).range(1..))]
+        window: u16,
+    },
     /// Create a window, focus it, and print the new pane ID.
     NewWindow {
         #[command(flatten)]
@@ -146,6 +160,12 @@ pub(crate) enum Request {
     ListPanes {
         toml: bool,
     },
+    SelectPane {
+        pane: u64,
+    },
+    SelectWindow {
+        window: u16,
+    },
     NewWindow {
         name: Option<String>,
     },
@@ -224,6 +244,8 @@ impl Command {
                 },
             ),
             Self::ListPanes { target, toml } => (target, Request::ListPanes { toml }),
+            Self::SelectPane { target, pane } => (target, Request::SelectPane { pane }),
+            Self::SelectWindow { target, window } => (target, Request::SelectWindow { window }),
             Self::NewWindow { target, name } => (target, Request::NewWindow { name }),
             Self::SplitPane { target, down } => (
                 target.target,
@@ -538,7 +560,7 @@ impl Service {
         self.session_identity = Some(identity);
     }
 
-    /// Return true if requests were handled, so the frontend can refresh caches.
+    /// Return true after a successful request that needs a frontend refresh.
     pub(crate) fn tick(&mut self, mut handle: impl FnMut(Request) -> io::Result<String>) -> bool {
         for _ in 0..MAX_CLIENTS {
             let Ok((stream, _)) = self.listener.accept() else {
@@ -587,16 +609,18 @@ impl Service {
                             .map_err(io::Error::other)
                             .and_then(|text| toml::from_str(text).map_err(io::Error::other))
                             .and_then(|request| {
-                                let changes_layout = matches!(
+                                let refresh = matches!(
                                     &request,
                                     Request::NewWindow { .. }
+                                        | Request::SelectPane { .. }
+                                        | Request::SelectWindow { .. }
                                         | Request::SplitPane { .. }
                                         | Request::JoinPane { .. }
                                         | Request::BreakPane { .. }
                                         | Request::RespawnPane { .. }
                                 );
                                 let result = handle(request);
-                                handled |= changes_layout && result.is_ok();
+                                handled |= refresh && result.is_ok();
                                 result
                             });
                         let response = match result {
@@ -667,6 +691,44 @@ impl Drop for Service {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn focus_commands_require_explicit_pane_ids_and_one_based_window_numbers() {
+        let cli =
+            crate::cli::Cli::try_parse_from(["rustmux", "select-pane", "-s", "work", "-p", "0"])
+                .unwrap();
+        assert_eq!(
+            cli.command,
+            Some(crate::cli::Command::Control(Command::SelectPane {
+                target: Target {
+                    session: SessionName::new("work").unwrap(),
+                },
+                pane: 0,
+            }))
+        );
+        let cli =
+            crate::cli::Cli::try_parse_from(["rustmux", "select-window", "--window", "2"]).unwrap();
+        assert_eq!(
+            cli.command,
+            Some(crate::cli::Command::Control(Command::SelectWindow {
+                target: Target {
+                    session: SessionName::new("default").unwrap(),
+                },
+                window: 2,
+            }))
+        );
+        for arguments in [
+            &["rustmux", "select-pane"][..],
+            &["rustmux", "select-pane", "-p", "-1"][..],
+            &["rustmux", "select-window"][..],
+            &["rustmux", "select-window", "-w", "0"][..],
+            &["rustmux", "select-window", "-w", "-1"][..],
+        ] {
+            assert!(crate::cli::Cli::try_parse_from(arguments).is_err());
+        }
+    }
+
     #[test]
     fn input_validates_names_and_exact_byte_limits_before_sending() {
         assert_eq!(

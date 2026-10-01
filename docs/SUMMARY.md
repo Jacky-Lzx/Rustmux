@@ -55,6 +55,7 @@
 - [Saved Workspace Deletion](reference/saved-session-delete.md)
 - [Session Snapshots and Restored History](reference/session-snapshots.md)
 - [Script Control](reference/script-control.md)
+- [Script Focus Control](reference/script-focus.md)
 - [Project Layouts](reference/project-layouts.md)
 - [Retained Panes and Respawn](reference/pane-lifecycle.md)
 - [Pane Output](reference/pane-output.md)
