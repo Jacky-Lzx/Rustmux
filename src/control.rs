@@ -129,6 +129,13 @@ pub enum Command {
         #[arg(long, conflicts_with = "on")]
         off: bool,
     },
+    /// Exchange two pane positions in one window without changing focus.
+    SwapPane {
+        #[command(flatten)]
+        target: PaneTarget,
+        #[arg(long)]
+        to_pane: u64,
+    },
     /// Create a window, focus it, and print the new pane ID.
     NewWindow {
         #[command(flatten)]
@@ -272,6 +279,10 @@ pub(crate) enum Request {
     ZoomPane {
         pane: Option<u64>,
         zoom: Option<bool>,
+    },
+    SwapPane {
+        pane: Option<u64>,
+        to_pane: u64,
     },
     NewWindow {
         name: Option<String>,
@@ -417,6 +428,13 @@ impl Command {
                 },
             ),
             Self::ClosePane { target } => (target.target, Request::ClosePane { pane: target.pane }),
+            Self::SwapPane { target, to_pane } => (
+                target.target,
+                Request::SwapPane {
+                    pane: target.pane,
+                    to_pane,
+                },
+            ),
             Self::CapturePane { target, history } => (
                 target.target,
                 Request::CapturePane {
@@ -782,6 +800,7 @@ impl Service {
                                         | Request::MoveWindow { .. }
                                         | Request::ResizePane { .. }
                                         | Request::ZoomPane { .. }
+                                        | Request::SwapPane { .. }
                                         | Request::SplitPane { .. }
                                         | Request::ClosePane { .. }
                                         | Request::JoinPane { .. }
@@ -861,6 +880,48 @@ impl Drop for Service {
 mod tests {
     use super::*;
     use clap::Parser;
+
+    #[test]
+    fn swap_pane_accepts_active_or_explicit_source_and_requires_destination() {
+        for (arguments, pane, to_pane) in [
+            (vec!["rustmux", "swap-pane", "--to-pane", "0"], None, 0),
+            (
+                vec![
+                    "rustmux",
+                    "swap-pane",
+                    "-s",
+                    "work",
+                    "-p",
+                    "2",
+                    "--to-pane",
+                    "3",
+                ],
+                Some(2),
+                3,
+            ),
+        ] {
+            let cli = crate::cli::Cli::try_parse_from(arguments).unwrap();
+            let Some(crate::cli::Command::Control(Command::SwapPane {
+                target,
+                to_pane: parsed,
+            })) = cli.command
+            else {
+                panic!("expected swap-pane");
+            };
+            assert_eq!((target.pane, parsed), (pane, to_pane));
+            assert_eq!(
+                target.target.session.as_str(),
+                if pane.is_some() { "work" } else { "default" }
+            );
+        }
+        for arguments in [
+            vec!["rustmux", "swap-pane"],
+            vec!["rustmux", "swap-pane", "--to-pane", "invalid"],
+            vec!["rustmux", "swap-pane", "-p", "invalid", "--to-pane", "0"],
+        ] {
+            assert!(crate::cli::Cli::try_parse_from(arguments).is_err());
+        }
+    }
 
     #[test]
     fn move_window_accepts_default_or_positive_target_and_horizontal_direction() {

@@ -144,6 +144,12 @@ impl<T> PaneSet<T> {
         self.layout.swap_active_previous()
     }
 
+    /// Exchange layout positions while retaining owned contents and focus.
+    /// The caller synchronizes the resulting PTY/screen sizes separately.
+    pub fn swap_panes(&mut self, first: PaneId, second: PaneId) -> io::Result<bool> {
+        self.layout.swap_panes(first, second)
+    }
+
     /// Swap the active pane with its nearest neighbor in the requested direction.
     pub fn move_active(&mut self, direction: Direction) -> bool {
         self.layout.move_active(direction)

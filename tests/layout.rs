@@ -802,6 +802,60 @@ fn directional_move_swaps_nearest_neighbor_and_keeps_active_identity() {
 }
 
 #[test]
+fn targeted_swap_preserves_slots_focus_and_rejects_invalid_or_zoomed_targets() {
+    let mut layout = Layout::new(11, 21).unwrap();
+    let left = layout.active();
+    let right = layout.split_active(SplitAxis::Columns).unwrap();
+    let bottom = layout.split_active(SplitAxis::Rows).unwrap();
+    let stale = layout.split_active(SplitAxis::Rows).unwrap();
+    layout.close(stale).unwrap();
+    layout.select(bottom).unwrap();
+    let original = layout.clone();
+    let slots = layout.geometry();
+    assert!(layout.swap_panes(left, right).unwrap());
+    assert_eq!(layout.active(), bottom);
+    assert_eq!(
+        layout
+            .geometry()
+            .panes
+            .iter()
+            .map(|(id, _)| *id)
+            .collect::<Vec<_>>(),
+        vec![right, left, bottom]
+    );
+    assert_eq!(
+        layout
+            .geometry()
+            .panes
+            .iter()
+            .map(|(_, rect)| *rect)
+            .collect::<Vec<_>>(),
+        slots
+            .panes
+            .iter()
+            .map(|(_, rect)| *rect)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(layout.geometry().separators, slots.separators);
+    assert_partition(&layout);
+    assert!(layout.swap_panes(right, left).unwrap());
+    assert_eq!(layout, original);
+    assert!(!layout.swap_panes(left, left).unwrap());
+    for (first, second) in [(left, stale), (stale, left)] {
+        assert_eq!(
+            layout.swap_panes(first, second).unwrap_err().kind(),
+            std::io::ErrorKind::NotFound
+        );
+        assert_eq!(layout, original);
+    }
+    layout.toggle_zoom();
+    let zoomed = layout.clone();
+    assert!(layout.swap_panes(left, right).is_err());
+    assert!(layout.swap_panes(left, left).is_err());
+    assert_eq!(layout, zoomed);
+}
+
+#[test]
 fn swap_boundaries_zoom_and_later_close_preserve_valid_identity() {
     let mut layout = Layout::new(5, 9).unwrap();
     let before = layout.clone();

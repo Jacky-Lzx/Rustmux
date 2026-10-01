@@ -194,6 +194,21 @@ pub(super) fn handle(
             // repeated explicit states must not invert the current view.
             Ok(String::new())
         }
+        Request::SwapPane { pane, to_pane } => {
+            let (window, first) = target(windows, pane)?;
+            let (destination, second) = target(windows, Some(to_pane))?;
+            if window != destination {
+                return Err(invalid("swap-pane requires panes in the same window"));
+            }
+            let set = windows.get_mut(window).unwrap().content_mut();
+            if set.get(first).unwrap().is_temporary() || set.get(second).unwrap().is_temporary() {
+                return Err(invalid("temporary editor panes cannot be swapped"));
+            }
+            set.swap_panes(first, second)?;
+            // Keep global and remembered focus identities. The refresh path
+            // reflows surviving screens and synchronizes their new PTY sizes.
+            Ok(String::new())
+        }
         Request::ListPanes { toml: as_toml } => {
             use std::os::unix::process::ExitStatusExt;
             let active = windows.active().map(|window| window.id());

@@ -68,6 +68,11 @@ fn window_move() {
 }
 
 #[test]
+fn pane_swap() {
+    run_scenario("pane_swap");
+}
+
+#[test]
 fn notifications() {
     run_scenario("notifications");
 }

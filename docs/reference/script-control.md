@@ -17,6 +17,7 @@ rustmux split-pane -s work -p 0 --down
 rustmux resize-pane -s work -p 0 --direction right --cells 3
 rustmux zoom-pane -s work -p 0 --on
 rustmux zoom-pane -s work --off
+rustmux swap-pane -s work -p 0 --to-pane 2
 rustmux send-keys -s work -p 0 --literal --enter 'printf "hello\n"'
 rustmux send-keys -s work -p 0 'Ctrl c'
 rustmux capture-pane -s work -p 0 --history
@@ -82,6 +83,13 @@ toggles that window's full-pane view. Omission targets the active pane; omitting
 both flags toggles. Explicit states can be repeated without reversing the view.
 A single-pane window already fills the area and stays unzoomed. See
 [Script Pane Zoom](script-pane-zoom.md) for focus, actual PTY sizes and snapshots.
+
+`swap-pane [-p ID] --to-pane ID` exchanges two positions within one unzoomed
+window. Omission uses the active pane as the source; both targets must be in the
+same window. Focus, processes and IDs are preserved even for inactive targets;
+the applications resize to their new slots. Swapping a pane with itself succeeds
+without changing layout. See [Script Pane Swap](script-pane-swap.md) for validation,
+retained output and saved geometry.
 
 `show-config` returns the running server's applied scalar settings and reload
 status as TOML without changing focus or dismissing overlays. See

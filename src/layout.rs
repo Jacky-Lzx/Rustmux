@@ -526,6 +526,25 @@ impl Layout {
         self.swap_active(true)
     }
 
+    /// Exchange two known leaf identities without selecting them or changing
+    /// slots/ratios. Invalid targets and zoom are rejected before any mutation.
+    pub fn swap_panes(&mut self, first: PaneId, second: PaneId) -> io::Result<bool> {
+        if !self.root.contains(first) || !self.root.contains(second) {
+            return Err(io::Error::new(io::ErrorKind::NotFound, "unknown pane ID"));
+        }
+        if self.zoomed {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "cannot swap a zoomed pane layout",
+            ));
+        }
+        if first == second {
+            return Ok(false);
+        }
+        self.root.exchange(first, second);
+        Ok(true)
+    }
+
     fn swap_active(&mut self, backwards: bool) -> bool {
         if self.count == 1 || self.zoomed {
             return false;
