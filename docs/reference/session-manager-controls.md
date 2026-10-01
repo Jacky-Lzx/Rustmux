@@ -14,6 +14,7 @@ complete = ["tab"]
 open = ["enter"]
 create = ["a"]
 save = ["Ctrl a"]
+rename = ["Ctrl r"]
 delete = ["d"]
 cancel = ["esc", "q"]
 backspace = ["backspace"]
@@ -32,6 +33,8 @@ errors. Ctrl-C remains an unconditional interrupt/close key and cannot be bound.
 Navigation and action hints follow the effective bindings and available width.
 During search or name editing, printable action keys remain text; use arrows or
 control keys for navigation, completion, confirmation, cancellation and saving.
+Ctrl-R opens a saved workspace name editor from the table or filtered results;
+see [Saved Workspace Rename](saved-session-rename.md).
 Name entry supports confirmation, cancellation, backspace and saving.
 Hints in editors only show usable keys.
 The manager preserves the current search/name text during a valid reload.
@@ -49,8 +52,9 @@ deletion keeps the previous bindings; default-file deletion restores defaults.
 `check-config --toml` and `show-config` include a `[session_manager]` table of
 effective bindings. The former reads the selected file, while the latter reports
 the named server's applied configuration. `default-config` exports the manager
-defaults too. Unimplemented manager actions, such as `rename` and `disconnect`
-from the independent `main` track, remain ignored and are reported by
+defaults too. `rename` is supported for saved-only workspaces. Unimplemented
+manager actions, such as `disconnect` from the independent `main` track,
+remain ignored and are reported by
 `check-config`; `--strict` rejects those warnings.
 
 ## Manual saving
@@ -79,7 +83,7 @@ request to finish or time out.
 ## List refresh and termination
 
 While open, the manager refreshes the running/saved session list in the
-background every 500 ms and immediately after a save or deletion completes. Search and name
+background every 500 ms and immediately after a save, deletion or rename completes. Search and name
 editing remain open. Selection follows the same session name when it still
 exists; otherwise it moves to the nearest valid row. A changed list cancels an
 armed deletion/termination confirmation. Refresh failures retain the displayed list and
@@ -91,8 +95,8 @@ Press the `delete` key twice consecutively to terminate a live session, keeping
 its snapshot, or to delete the snapshot of a saved-only workspace. Default `dd`
 requires confirmation in both cases. The footer distinguishes `Kill` from
 `Delete`. See [Saved Workspace Deletion](saved-session-delete.md) for behavior
-and safety checks. Session rename and disconnecting another client remain
-separate future increments.
+and safety checks. Saved-only workspace rename is available through Ctrl-R.
+Live session rename and disconnecting another client remain separate increments.
 
 Configuration reading and list/save operations use bounded mailboxes outside
 the input loop. Before returning a choice, the manager shuts down and joins its

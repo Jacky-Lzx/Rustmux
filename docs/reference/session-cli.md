@@ -87,7 +87,10 @@ session prefix.
 `list`/`ls` and the manager include saved workspaces after the server exits.
 Detailed listings label them `SAVED`; live and saved copies of the same name
 appear only once. `kill-all` ignores saved-only entries. The manager offers
-`Restore` and confirmed `dd` snapshot deletion for these entries.
+`Restore`, Ctrl-R rename and confirmed `dd` snapshot deletion for these entries.
+Rename edits the selected saved name, confirms with Enter and cancels with Esc.
+It updates the manager and `ls` without overwriting another saved or running
+workspace. Live session rename is a separate increment.
 
 `attach` validates the private runtime directory and requires the socket to be
 owned by the effective user with no group or other permissions. It then performs

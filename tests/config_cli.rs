@@ -280,6 +280,7 @@ clear_defaults=true
 down=["n"]
 save=[]
 rename=["Ctrl r"]
+disconnect=["Ctrl d"]
 "#,
     )
     .unwrap();
@@ -303,6 +304,10 @@ rename=["Ctrl r"]
             .contains("session_manager")
     );
     assert_eq!(report["session_manager"]["down"][0].as_str(), Some("n"));
+    assert_eq!(
+        report["session_manager"]["rename"][0].as_str(),
+        Some("Ctrl r")
+    );
     assert!(
         report["session_manager"]["save"]
             .as_array()
@@ -310,6 +315,18 @@ rename=["Ctrl r"]
             .is_empty()
     );
     assert_eq!(report["session_manager"]["up"].as_array().unwrap().len(), 2);
+    fs::write(&path, "[session_manager]\nrename=['Ctrl r']").unwrap();
+    let implemented = command(
+        temporary.path(),
+        &[
+            "check-config",
+            "--config",
+            path.to_str().unwrap(),
+            "--toml",
+            "--strict",
+        ],
+    );
+    assert!(implemented.status.success());
     fs::write(&path, "[session_manager]\nup=['j']").unwrap();
     let failed = command(
         temporary.path(),

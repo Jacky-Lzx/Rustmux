@@ -39,7 +39,9 @@ The manager's `dd` action terminates running servers while retaining their
 snapshots. On a stopped saved entry it instead confirms deletion of that
 snapshot; any intervening key cancels. `kill-all` still ignores saved-only
 entries. See [Saved Workspace Deletion](saved-session-delete.md) for safety
-checks, configurable keys and failure behavior. Listing checks file names and private
+checks, configurable keys and failure behavior. Ctrl-R renames a selected
+saved workspace without changing its layout/history; see
+[Saved Workspace Rename](saved-session-rename.md). Listing checks file names and private
 regular-file metadata without decoding history. A corrupt private snapshot
 remains discoverable; its validation error is reported on restore.
 

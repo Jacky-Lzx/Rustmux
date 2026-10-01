@@ -444,6 +444,85 @@ pub(crate) fn delete(directory: &Path, name: &SessionName) -> io::Result<()> {
     std::fs::File::open(directory)?.sync_all()
 }
 
+/// Move the snapshot atomically without replacing any destination entry.
+pub(crate) fn rename(directory: &Path, old: &SessionName, new: &SessionName) -> io::Result<()> {
+    check_directory(directory, false)?;
+    let directory = OpenOptions::new()
+        .read(true)
+        .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_DIRECTORY)
+        .open(directory)?;
+    let metadata = directory.metadata()?;
+    if metadata.uid() != nix::unistd::geteuid().as_raw() || metadata.mode() & 0o077 != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "snapshot directory is not private",
+        ));
+    }
+    let old_file = std::ffi::CString::new(format!("{old}.toml")).expect("validated session name");
+    let new_file = std::ffi::CString::new(format!("{new}.toml")).expect("validated session name");
+    let metadata = nix::sys::stat::fstatat(
+        &directory,
+        old_file.as_c_str(),
+        nix::fcntl::AtFlags::AT_SYMLINK_NOFOLLOW,
+    )?;
+    if metadata.st_mode & nix::libc::S_IFMT != nix::libc::S_IFREG
+        || metadata.st_uid != nix::unistd::geteuid().as_raw()
+        || metadata.st_mode & 0o077 != 0
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "refusing to rename an unsafe snapshot",
+        ));
+    }
+    if old == new {
+        return Ok(());
+    }
+    rename_noreplace(&directory, &old_file, &new_file)?;
+    directory.sync_all()
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn rename_noreplace(
+    directory: &fs::File,
+    old: &std::ffi::CStr,
+    new: &std::ffi::CStr,
+) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+    let fd = directory.as_raw_fd();
+    // SAFETY: the directory descriptor and both NUL-terminated names remain
+    // valid for this call. Exclusive rename rejects even dangling destinations.
+    #[cfg(target_os = "macos")]
+    let result = unsafe {
+        nix::libc::renameatx_np(fd, old.as_ptr(), fd, new.as_ptr(), nix::libc::RENAME_EXCL)
+    };
+    // SAFETY: renameat2 receives a live descriptor, two valid C strings and
+    // its no-replace flag; it does not retain any pointer after returning.
+    #[cfg(target_os = "linux")]
+    let result = unsafe {
+        nix::libc::syscall(
+            nix::libc::SYS_renameat2,
+            fd,
+            old.as_ptr(),
+            fd,
+            new.as_ptr(),
+            nix::libc::RENAME_NOREPLACE,
+        )
+    };
+    if result == -1 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn rename_noreplace(_: &fs::File, _: &std::ffi::CStr, _: &std::ffi::CStr) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "exclusive snapshot rename is supported on Linux and macOS",
+    ))
+}
+
 fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
 }
@@ -530,6 +609,135 @@ mod tests {
         assert_eq!(
             list_names(directory.path()).unwrap_err().kind(),
             io::ErrorKind::PermissionDenied
+        );
+    }
+
+    #[test]
+    fn rename_preserves_bytes_permissions_and_rejects_every_existing_destination() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let old = SessionName::new("old").unwrap();
+        let new = SessionName::new("new").unwrap();
+        save(directory.path(), &old, &sample()).unwrap();
+        let source = directory.path().join("old.toml");
+        let target = directory.path().join("new.toml");
+        let before = fs::read(&source).unwrap();
+        let inode = fs::metadata(&source).unwrap().ino();
+        rename(directory.path(), &old, &old).unwrap();
+        fs::write(&target, "other data").unwrap();
+        assert_eq!(
+            rename(directory.path(), &old, &new).unwrap_err().kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        assert_eq!(fs::read(&target).unwrap(), b"other data");
+        fs::remove_file(&target).unwrap();
+        std::os::unix::fs::symlink(directory.path().join("absent"), &target).unwrap();
+        assert_eq!(
+            rename(directory.path(), &old, &new).unwrap_err().kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        assert!(
+            fs::symlink_metadata(&target)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        fs::remove_file(&target).unwrap();
+        fs::create_dir(&target).unwrap();
+        assert!(rename(directory.path(), &old, &new).is_err());
+        fs::remove_dir(&target).unwrap();
+        assert_eq!(fs::read(&source).unwrap(), before);
+        rename(directory.path(), &old, &new).unwrap();
+        assert!(!source.exists());
+        assert_eq!(fs::read(&target).unwrap(), before);
+        assert_eq!(fs::metadata(&target).unwrap().ino(), inode);
+        assert_eq!(fs::metadata(&target).unwrap().mode() & 0o777, 0o600);
+        assert!(load(directory.path(), &new).unwrap().is_some());
+        assert_eq!(list_names(directory.path()).unwrap(), vec![new.clone()]);
+        assert_eq!(
+            rename(directory.path(), &old, &new).unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
+    }
+
+    #[test]
+    fn rename_rejects_unsafe_sources_but_does_not_decode_corrupt_history() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let old = SessionName::new("old").unwrap();
+        let new = SessionName::new("new").unwrap();
+        let source = directory.path().join("old.toml");
+        let target = directory.path().join("new.toml");
+        fs::write(&source, "version = 999").unwrap();
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(
+            rename(directory.path(), &old, &new).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        fs::remove_file(&source).unwrap();
+        std::os::unix::fs::symlink(&target, &source).unwrap();
+        assert!(rename(directory.path(), &old, &new).is_err());
+        fs::remove_file(&source).unwrap();
+        fs::create_dir(&source).unwrap();
+        assert!(rename(directory.path(), &old, &new).is_err());
+        fs::remove_dir(&source).unwrap();
+        fs::write(&source, "version = 999").unwrap();
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o600)).unwrap();
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(rename(directory.path(), &old, &new).is_err());
+        assert!(source.exists());
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        rename(directory.path(), &old, &new).unwrap();
+        assert_eq!(fs::read_to_string(target).unwrap(), "version = 999");
+    }
+
+    #[test]
+    fn competing_snapshot_renames_cannot_overwrite_the_winner() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        for name in ["first", "second"] {
+            let path = directory.path().join(format!("{name}.toml"));
+            fs::write(&path, name).unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let gate = std::sync::Barrier::new(2);
+        let results = std::thread::scope(|scope| {
+            let jobs: Vec<_> = ["first", "second"]
+                .into_iter()
+                .map(|name| {
+                    let gate = &gate;
+                    let directory = directory.path();
+                    scope.spawn(move || {
+                        gate.wait();
+                        (
+                            name,
+                            rename(
+                                directory,
+                                &SessionName::new(name).unwrap(),
+                                &SessionName::new("winner").unwrap(),
+                            ),
+                        )
+                    })
+                })
+                .collect();
+            jobs.into_iter()
+                .map(|job| job.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+        let winner = results.iter().find(|(_, result)| result.is_ok()).unwrap().0;
+        let loser = results.iter().find(|(_, result)| result.is_err()).unwrap();
+        assert_eq!(
+            loser.1.as_ref().unwrap_err().kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        assert_eq!(
+            fs::read_to_string(directory.path().join("winner.toml")).unwrap(),
+            winner
+        );
+        assert!(!directory.path().join(format!("{winner}.toml")).exists());
+        assert_eq!(
+            fs::read_to_string(directory.path().join(format!("{}.toml", loser.0))).unwrap(),
+            loser.0
         );
     }
 

@@ -1,4 +1,4 @@
-//! Filesystem refreshes, saves and deletion stay off the picker input loop.
+//! Filesystem refreshes and workspace operations stay off the picker input loop.
 use super::*;
 use std::sync::{
     Mutex,
@@ -9,6 +9,7 @@ use std::thread::{self, JoinHandle};
 enum Request {
     Save(SessionName),
     Delete(SessionName),
+    Rename(SessionName, SessionName),
     Stop,
 }
 #[derive(Default)]
@@ -16,6 +17,7 @@ pub(super) struct Updates {
     pub list: Option<Result<Vec<SessionInfo>, String>>,
     pub save: Option<(SessionName, Result<(), String>)>,
     pub delete: Option<(SessionName, Result<(), String>)>,
+    pub rename: Option<(SessionName, SessionName, Result<(), String>)>,
 }
 pub(super) struct Worker {
     requests: SyncSender<Request>,
@@ -32,6 +34,7 @@ impl Worker {
             .spawn(move || {
                 loop {
                     let mut delete = None;
+                    let mut rename = None;
                     let save = match rx.recv_timeout(Duration::from_millis(500)) {
                         Ok(Request::Save(name)) => {
                             let result = super::super::snapshot::save_session_with_timeout(
@@ -47,6 +50,12 @@ impl Worker {
                             delete = Some((name, result));
                             None
                         }
+                        Ok(Request::Rename(old, new)) => {
+                            let result =
+                                super::super::rename_saved(&old, &new).map_err(|e| e.to_string());
+                            rename = Some((old, new, result));
+                            None
+                        }
                         Ok(Request::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
                         Err(mpsc::RecvTimeoutError::Timeout) => None,
                     };
@@ -58,6 +67,9 @@ impl Worker {
                         .map_err(|e| e.to_string());
                     let mut slot = output.lock().expect("manager mailbox");
                     slot.list = Some(list);
+                    if rename.is_some() {
+                        slot.rename = rename;
+                    }
                     if delete.is_some() {
                         slot.delete = delete;
                     }
@@ -77,6 +89,9 @@ impl Worker {
     }
     pub fn delete(&self, name: SessionName) -> bool {
         self.requests.try_send(Request::Delete(name)).is_ok()
+    }
+    pub fn rename(&self, old: SessionName, new: SessionName) -> bool {
+        self.requests.try_send(Request::Rename(old, new)).is_ok()
     }
     pub fn poll(&self) -> Updates {
         self.updates

@@ -48,6 +48,7 @@
 - [Session Client Bridge](reference/session-client.md)
 - [Named Session Commands](reference/session-cli.md)
 - [Session Manager Controls and Saving](reference/session-manager-controls.md)
+- [Saved Workspace Rename](reference/saved-session-rename.md)
 - [Saved Workspace Deletion](reference/saved-session-delete.md)
 - [Session Snapshots and Restored History](reference/session-snapshots.md)
 - [Script Control](reference/script-control.md)

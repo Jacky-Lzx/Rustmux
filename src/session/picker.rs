@@ -134,10 +134,12 @@ fn run_picker(
     let mut reload_error = None;
     let mut saving = false;
     let mut deleting = false;
+    let mut renaming = false;
+    let mut rename_source: Option<SessionName> = None;
     let mut selected = initially_selected
         .and_then(|name| sessions.iter().position(|session| &session.name == name))
         .unwrap_or(0);
-    let mut create_input: Option<String> = None;
+    let mut name_input: Option<String> = None;
     let mut search_input: Option<String> = None;
     let mut delete_armed: Option<(SessionName, bool)> = None;
     let mut decoder = InputDecoder::default();
@@ -154,7 +156,8 @@ fn run_picker(
         }
 
         let updates = worker.poll();
-        let operation_completed = updates.save.is_some() || updates.delete.is_some();
+        let operation_completed =
+            updates.save.is_some() || updates.delete.is_some() || updates.rename.is_some();
         if let Some(list) = updates.list {
             match list {
                 Ok(next) => {
@@ -196,13 +199,33 @@ fn run_picker(
             });
             dirty = true;
         }
+        if let Some((old, new, result)) = updates.rename {
+            renaming = false;
+            status = Some(match result {
+                Ok(()) => {
+                    if rename_source.as_ref() == Some(&old) {
+                        rename_source = None;
+                        name_input = None;
+                    }
+                    search_input = None;
+                    selected = sessions
+                        .iter()
+                        .position(|s| s.name == new)
+                        .unwrap_or(selected)
+                        .min(sessions.len().saturating_sub(1));
+                    format!("Renamed {old} to {new}")
+                }
+                Err(error) => format!("Rename failed: {error}"),
+            });
+            dirty = true;
+        }
         reload.poll_manager();
         let error = reload
             .error()
             .map(|error| format!("Config reload failed: {error}"));
         if error != reload_error {
             reload_error = error;
-            if !saving && !deleting && !operation_completed {
+            if !saving && !deleting && !renaming && !operation_completed {
                 status = None;
             }
             dirty = true;
@@ -224,7 +247,8 @@ fn run_picker(
                 &PickerView {
                     sessions: &visible,
                     selected,
-                    create_input: create_input.as_deref(),
+                    name_input: name_input.as_deref(),
+                    renaming_name: rename_source.is_some(),
                     search_input: search_input.as_deref(),
                     delete_armed: delete_armed.as_ref().map(|(name, _)| name),
                     current: initially_selected,
@@ -268,14 +292,14 @@ fn run_picker(
             if key == Key::Byte(3) {
                 return Ok(Choice::Cancel);
             }
-            let editing = create_input.is_some() || search_input.is_some();
+            let editing = name_input.is_some() || search_input.is_some();
             let action = bindings.action(key, editing);
             let armed = delete_armed.take();
-            if action != Some(Action::Save) && !saving && !deleting {
+            if action != Some(Action::Save) && !saving && !deleting && !renaming {
                 status = None;
             }
             if action == Some(Action::Save) {
-                if !saving && !deleting {
+                if !saving && !deleting && !renaming {
                     let target = save_target(
                         &sessions,
                         initially_selected,
@@ -296,18 +320,33 @@ fn run_picker(
                 dirty = true;
                 continue;
             }
-            if let Some(name) = &mut create_input {
+            if let Some(name) = &mut name_input {
                 match action {
-                    Some(Action::Open) => {
-                        if let Ok(name) = SessionName::new(name.clone()) {
-                            return Ok(Choice::Create(name));
+                    Some(Action::Open) if !renaming => match SessionName::new(name.clone()) {
+                        Ok(new) => {
+                            if let Some(old) = &rename_source {
+                                if !saving && !deleting {
+                                    status = Some(if worker.rename(old.clone(), new.clone()) {
+                                        renaming = true;
+                                        format!("Renaming {old}…")
+                                    } else {
+                                        "Rename failed: worker unavailable".into()
+                                    });
+                                }
+                            } else {
+                                return Ok(Choice::Create(new));
+                            }
                         }
+                        Err(error) => status = Some(format!("Invalid name: {error}")),
+                    },
+                    Some(Action::Cancel) => {
+                        name_input = None;
+                        rename_source = None;
                     }
-                    Some(Action::Cancel) => create_input = None,
-                    Some(Action::Backspace) => {
+                    Some(Action::Backspace) if !renaming => {
                         name.pop();
                     }
-                    _ => {
+                    _ if !renaming => {
                         if let Key::Byte(byte) = key
                             && (byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
                             && name.len() < super::MAX_SESSION_NAME_BYTES
@@ -315,6 +354,7 @@ fn run_picker(
                             name.push(char::from(byte));
                         }
                     }
+                    _ => {}
                 }
                 dirty = true;
                 continue;
@@ -323,6 +363,18 @@ fn run_picker(
             selected = selected.min(visible.len().saturating_sub(1));
             if let Some(next) = action_navigation(selected, visible.len(), action) {
                 selected = next;
+                dirty = true;
+                continue;
+            }
+            if action == Some(Action::Rename) && !saving && !deleting && !renaming {
+                if let Some(session) = visible.get(selected) {
+                    if session.saved {
+                        rename_source = Some(session.name.clone());
+                        name_input = Some(session.name.as_str().into());
+                    } else {
+                        status = Some("Rename failed: stop the session before renaming".into());
+                    }
+                }
                 dirty = true;
                 continue;
             }
@@ -361,9 +413,11 @@ fn run_picker(
                     Some(Action::Open) if !visible.is_empty() => {
                         return Ok(Choice::Attach(visible[selected].name.clone()));
                     }
-                    Some(Action::Create) => create_input = Some(String::new()),
+                    Some(Action::Create) => name_input = Some(String::new()),
                     Some(Action::Search) => search_input = Some(String::new()),
-                    Some(Action::Delete) if !visible.is_empty() && !saving && !deleting => {
+                    Some(Action::Delete)
+                        if !visible.is_empty() && !saving && !deleting && !renaming =>
+                    {
                         let name = visible[selected].name.clone();
                         if armed.as_ref() == Some(&(name.clone(), visible[selected].saved)) {
                             if !visible[selected].saved {
@@ -445,7 +499,8 @@ const PEACH: (u8, u8, u8) = (250, 179, 135);
 struct PickerView<'a> {
     sessions: &'a [SessionInfo],
     selected: usize,
-    create_input: Option<&'a str>,
+    name_input: Option<&'a str>,
+    renaming_name: bool,
     search_input: Option<&'a str>,
     delete_armed: Option<&'a SessionName>,
     current: Option<&'a SessionName>,
@@ -458,7 +513,7 @@ fn render(
     sessions: &[SessionInfo],
     selected: usize,
     size: (u16, u16),
-    create_input: Option<&str>,
+    name_input: Option<&str>,
     search_input: Option<&str>,
     delete_armed: Option<&SessionName>,
     current: Option<&SessionName>,
@@ -467,7 +522,8 @@ fn render(
         &PickerView {
             sessions,
             selected,
-            create_input,
+            name_input,
+            renaming_name: false,
             search_input,
             delete_armed,
             current,
@@ -481,7 +537,8 @@ fn render_view(view: &PickerView<'_>, size: (u16, u16)) -> Vec<u8> {
     let PickerView {
         sessions,
         selected,
-        create_input,
+        name_input,
+        renaming_name,
         search_input,
         delete_armed,
         current,
@@ -592,13 +649,24 @@ fn render_view(view: &PickerView<'_>, size: (u16, u16)) -> Vec<u8> {
     }
 
     let body_width = width - 4;
-    let navigation = if let Some(name) = create_input {
-        format!("New session: {name}_")
+    let navigation = if let Some(name) = name_input {
+        format!(
+            "{}: {name}_",
+            if renaming_name {
+                "Rename session"
+            } else {
+                "New session"
+            }
+        )
     } else if let Some(query) = search_input {
         format!("Search: {query}_")
     } else {
         [
-            bindings.hint(Action::Save, "Save"),
+            if sessions.get(selected).is_some_and(|s| s.saved) {
+                bindings.hint(Action::Rename, "Rename")
+            } else {
+                bindings.hint(Action::Save, "Save")
+            },
             bindings.hint(Action::Up, "Up"),
             bindings.hint(Action::Down, "Down"),
             bindings.hint(Action::Search, "Search"),
@@ -615,13 +683,13 @@ fn render_view(view: &PickerView<'_>, size: (u16, u16)) -> Vec<u8> {
         box_column + 2,
         &navigation,
         body_width,
-        if create_input.is_some() || search_input.is_some() {
+        if name_input.is_some() || search_input.is_some() {
             BLUE
         } else {
             MUTED
         },
         BASE,
-        create_input.is_some() || search_input.is_some(),
+        name_input.is_some() || search_input.is_some(),
     );
     write_at(
         &mut frame,
@@ -852,18 +920,25 @@ fn picker_footer(view: &PickerView<'_>, compact: bool) -> String {
             name
         );
     }
-    let open = if view.create_input.is_some() {
-        "Create"
+    let open = if view.name_input.is_some() {
+        if view.renaming_name {
+            "Rename"
+        } else {
+            "Create"
+        }
     } else if saved {
         "Restore"
     } else {
         "Attach"
     };
-    let editing = view.create_input.is_some() || view.search_input.is_some();
+    let editing = view.name_input.is_some() || view.search_input.is_some();
     let mut hints = vec![b.hint_in(Action::Open, open, editing)];
-    if view.create_input.is_some() {
+    if view.name_input.is_some() {
         hints.push(b.hint_in(Action::Cancel, "Cancel", true));
     } else if view.search_input.is_some() {
+        if saved {
+            hints.push(b.hint_in(Action::Rename, "Rename", true));
+        }
         hints.extend([
             b.hint_in(Action::Complete, "Complete", true),
             b.hint_in(Action::Cancel, "Clear", true),
@@ -878,13 +953,25 @@ fn picker_footer(view: &PickerView<'_>, compact: bool) -> String {
             ));
         }
     }
+    if saved && !editing {
+        hints.push(b.hint(Action::Rename, "Rename"));
+    }
     if !saved || view.current.is_some() {
         hints.push(b.hint_in(Action::Save, "Save", editing));
     }
-    if compact && let Some(name) = view.create_input {
-        hints.insert(0, format!("New: {name}_"));
+    if compact && let Some(name) = view.name_input {
+        hints.insert(
+            0,
+            format!(
+                "{}: {name}_",
+                if view.renaming_name { "Rename" } else { "New" }
+            ),
+        );
     }
-    if compact && let Some(query) = view.search_input {
+    if compact
+        && view.name_input.is_none()
+        && let Some(query) = view.search_input
+    {
         hints.insert(0, format!("Search: {query}_"));
     }
     hints
@@ -1216,6 +1303,38 @@ mod tests {
                 assert!(frame.contains("<dd> Delete"));
             }
             assert!(!frame.contains("[DETACHED]"));
+        }
+    }
+
+    #[test]
+    fn rename_editor_labels_full_and_compact_views_without_search_obscuring_it() {
+        let sessions = [SessionInfo {
+            name: SessionName::new("saved").unwrap(),
+            saved: true,
+            attached: false,
+            server_pid: None,
+            last_connected_at: None,
+        }];
+        let bindings = Bindings::default();
+        let view = PickerView {
+            sessions: &sessions,
+            selected: 0,
+            name_input: Some("new-name"),
+            renaming_name: true,
+            search_input: Some("saved"),
+            delete_armed: None,
+            current: None,
+            bindings: &bindings,
+            status: None,
+        };
+        for (size, title) in [
+            ((24, 160), "Rename session: new-name_"),
+            ((6, 160), "Rename: new-name_"),
+        ] {
+            let frame = String::from_utf8(render_view(&view, size)).unwrap();
+            assert!(frame.contains(title), "{frame}");
+            assert!(frame.contains("<Enter> Rename"));
+            assert!(!frame.contains("Search: saved"));
         }
     }
 

@@ -121,3 +121,8 @@ fn manager() {
 fn saved_delete() {
     run_scenario("saved_delete");
 }
+
+#[test]
+fn saved_rename() {
+    run_scenario("saved_rename");
+}

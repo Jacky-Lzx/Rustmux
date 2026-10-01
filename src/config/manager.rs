@@ -61,12 +61,13 @@ pub(crate) enum Action {
     Open,
     Create,
     Save,
+    Rename,
     Delete,
     Cancel,
     Backspace,
 }
 impl Action {
-    pub const ALL: [(Self, &'static str); 10] = [
+    pub const ALL: [(Self, &'static str); 11] = [
         (Self::Up, "up"),
         (Self::Down, "down"),
         (Self::Search, "search"),
@@ -74,6 +75,7 @@ impl Action {
         (Self::Open, "open"),
         (Self::Create, "create"),
         (Self::Save, "save"),
+        (Self::Rename, "rename"),
         (Self::Delete, "delete"),
         (Self::Cancel, "cancel"),
         (Self::Backspace, "backspace"),
@@ -97,6 +99,7 @@ impl Default for Bindings {
                 (Key::Byte(13), Open),
                 (Key::Byte(b'a'), Create),
                 (Key::Byte(1), Save),
+                (Key::Byte(18), Rename),
                 (Key::Byte(b'd'), Delete),
                 (Key::Byte(27), Cancel),
                 (Key::Byte(b'q'), Cancel),
@@ -220,6 +223,19 @@ mod tests {
         assert!(parse("save=['Ctrl c']").is_err());
         assert!(parse("save=['unknown']").is_err());
         assert!(parse("save='s'").is_err());
+        assert_eq!(
+            Bindings::default().action(Key::Byte(18), false),
+            Some(Action::Rename)
+        );
+        assert_eq!(
+            parse("rename=[]").unwrap().action(Key::Byte(18), false),
+            None
+        );
+        assert_eq!(
+            parse("rename=['r']").unwrap().action(Key::Byte(b'r'), true),
+            None
+        );
+        assert!(parse("rename=['Ctrl a']").is_err());
     }
     #[test]
     fn editing_keeps_printable_keys_as_text_and_reports_round_trip() {

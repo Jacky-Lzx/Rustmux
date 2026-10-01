@@ -273,6 +273,44 @@ fn delete_saved_in(runtime: &Path, state: &Path, name: &SessionName) -> io::Resu
     crate::persistence::delete(state, name)
 }
 
+pub(crate) fn rename_saved(old: &SessionName, new: &SessionName) -> io::Result<()> {
+    rename_saved_in(
+        &session_directory(),
+        &crate::persistence::state_directory()?,
+        old,
+        new,
+    )
+}
+
+fn rename_saved_in(
+    runtime: &Path,
+    state: &Path,
+    old: &SessionName,
+    new: &SessionName,
+) -> io::Result<()> {
+    // Stable ordering and nonblocking acquisition also cover opposite renames.
+    let (first, second) = if old <= new { (old, new) } else { (new, old) };
+    let _first = acquire_workspace_in(runtime, first)?;
+    let _second = if first != second {
+        Some(acquire_workspace_in(runtime, second)?)
+    } else {
+        None
+    };
+    for name in [old, new] {
+        match fs::symlink_metadata(socket_path_in(runtime, name)) {
+            Ok(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    format!("session '{name}' has a runtime endpoint; stop it before renaming"),
+                ));
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    crate::persistence::rename(state, old, new)
+}
+
 /// Return the PID only when a live server owns the PID record's lock.
 pub(crate) fn live_server_pid(name: &SessionName) -> io::Result<Pid> {
     live_server_pid_in(&session_directory(), name)
@@ -768,6 +806,44 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn saved_rename_locks_both_names_and_refuses_source_and_target_endpoints() {
+        let runtime = TestDirectory::new();
+        let state = tempfile::tempdir().unwrap();
+        fs::set_permissions(state.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let old = SessionName::new("old").unwrap();
+        let new = SessionName::new("new").unwrap();
+        let path = state.path().join("old.toml");
+        fs::write(&path, "snapshot bytes").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        for name in [&old, &new] {
+            let busy = acquire_workspace_in(&runtime.0, name).unwrap();
+            assert_eq!(
+                rename_saved_in(&runtime.0, state.path(), &old, &new)
+                    .unwrap_err()
+                    .kind(),
+                io::ErrorKind::WouldBlock
+            );
+            drop(busy);
+            let endpoint = SessionEndpoint::bind_in(&runtime.0, name).unwrap();
+            assert_eq!(
+                rename_saved_in(&runtime.0, state.path(), &old, &new)
+                    .unwrap_err()
+                    .kind(),
+                io::ErrorKind::AlreadyExists
+            );
+            drop(endpoint);
+            assert_eq!(fs::read_to_string(&path).unwrap(), "snapshot bytes");
+            assert!(!state.path().join("new.toml").exists());
+        }
+        rename_saved_in(&runtime.0, state.path(), &old, &new).unwrap();
+        assert!(!path.exists());
+        assert_eq!(
+            fs::read_to_string(state.path().join("new.toml")).unwrap(),
+            "snapshot bytes"
+        );
     }
 
     #[test]

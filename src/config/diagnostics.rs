@@ -186,7 +186,9 @@ complete = ["tab"]
 open = ["enter"]
 create = ["a"]
 save = ["Ctrl a"]
-# Press twice to terminate a live session; saved snapshots remain.
+# Rename a saved-only workspace.
+rename = ["Ctrl r"]
+# Press twice to kill a live session or delete a saved-only snapshot.
 delete = ["d"]
 cancel = ["esc", "q"]
 backspace = ["backspace"]
