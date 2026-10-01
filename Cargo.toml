@@ -12,6 +12,7 @@ flate2 = "1.1.10"
 nix = { version = "0.31", features = ["fs", "term", "process", "poll", "signal", "user"] }
 png = "0.18.1"
 signal-hook = "0.3"
+serde = { version = "1", features = ["derive"] }
 tempfile = "3.27.0"
 toml = "1.1.6"
 unicode-width = { version = "0.2.2", default-features = false }

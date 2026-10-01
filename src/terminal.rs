@@ -99,56 +99,112 @@ pub fn serve_session(
     shell_path: &OsStr,
     name: &crate::session::SessionName,
     endpoint: &SessionEndpoint,
-    mut peer: ServerPeer,
+    peer: ServerPeer,
     notifications: crate::config::Notifications,
     scrollback_lines: usize,
     shortcuts: crate::config::Shortcuts,
 ) -> io::Result<u8> {
+    serve_inner(
+        SessionContext {
+            shell_path,
+            session_name: Some(name.as_str()),
+            notifications,
+            scrollback_lines,
+            shortcuts,
+        },
+        name,
+        endpoint,
+        peer,
+        crate::config::PersistenceOptions::default(),
+        None,
+    )
+}
+
+pub(crate) fn serve_configured_session(
+    config: &crate::config::Config,
+    name: &crate::session::SessionName,
+    endpoint: &SessionEndpoint,
+    peer: ServerPeer,
+    snapshot: Option<crate::persistence::Snapshot>,
+) -> io::Result<u8> {
+    serve_inner(
+        SessionContext {
+            shell_path: config.shell(),
+            session_name: Some(name.as_str()),
+            notifications: config.notifications(),
+            scrollback_lines: config.scrollback_lines(),
+            shortcuts: config.shortcuts(),
+        },
+        name,
+        endpoint,
+        peer,
+        config.persistence(),
+        snapshot,
+    )
+}
+
+fn serve_inner(
+    context: SessionContext<'_>,
+    name: &crate::session::SessionName,
+    endpoint: &SessionEndpoint,
+    mut peer: ServerPeer,
+    options: crate::config::PersistenceOptions,
+    snapshot: Option<crate::persistence::Snapshot>,
+) -> io::Result<u8> {
     let (rows, columns) = peer.size();
-    let mut session = TerminalSession::new(
-        shell_path,
+    let shortcuts = context.shortcuts;
+    let mut session = TerminalSession::from_snapshot(
+        context,
         rows,
         columns,
-        Some(name.as_str()),
-        notifications,
-        scrollback_lines,
-        shortcuts,
+        snapshot.as_ref(),
+        options.save_scrollback,
     )?;
+    session.persistence = Some(crate::session::snapshot::SnapshotService::bind(
+        name,
+        options,
+        context.scrollback_lines,
+    )?);
     let signals = Signals::install()?;
-    loop {
-        let mut frontend = ServerFrontend::new(peer);
-        match session.attach(&mut frontend, &signals)? {
-            ForwardExit::Process(code) => {
-                if !frontend.has_pending_output() {
-                    frontend.send_exit(i32::from(code))?;
-                }
-                return Ok(code);
-            }
-            ForwardExit::Detached | ForwardExit::Disconnected => {}
-        }
-        drop(frontend);
-
+    let result = (|| {
         loop {
-            match session.wait_for_client(endpoint, &signals)? {
-                DetachedEvent::Process(code) => return Ok(code),
-                DetachedEvent::Client(stream) => {
-                    match handshake::server_with_keybinds(
-                        stream,
-                        shortcuts.locked_entry_key(),
-                        !shortcuts.clear_defaults(),
-                    ) {
-                        Ok(next) => {
-                            peer = next;
-                            break;
+            let mut frontend = ServerFrontend::new(peer);
+            match session.attach(&mut frontend, &signals)? {
+                ForwardExit::Process(code) => {
+                    if !frontend.has_pending_output() {
+                        frontend.send_exit(i32::from(code))?;
+                    }
+                    return Ok(code);
+                }
+                ForwardExit::Detached | ForwardExit::Disconnected => {}
+            }
+            session.finish_saves(true);
+            drop(frontend);
+
+            loop {
+                match session.wait_for_client(endpoint, &signals)? {
+                    DetachedEvent::Process(code) => return Ok(code),
+                    DetachedEvent::Client(stream) => {
+                        match handshake::server_with_keybinds(
+                            stream,
+                            shortcuts.locked_entry_key(),
+                            !shortcuts.clear_defaults(),
+                        ) {
+                            Ok(next) => {
+                                peer = next;
+                                break;
+                            }
+                            // A malformed or abandoned connection belongs to that client;
+                            // it must not terminate the existing panes.
+                            Err(_) => continue,
                         }
-                        // A malformed or abandoned connection belongs to that client;
-                        // it must not terminate the existing panes.
-                        Err(_) => continue,
                     }
                 }
             }
         }
-    }
+    })();
+    session.finish_saves(true);
+    result
 }
 
 /// State that must survive one frontend disconnect and a later attachment.
@@ -164,6 +220,7 @@ struct TerminalSession {
     scrollback_lines: usize,
     shortcuts: crate::config::Shortcuts,
     closed: Option<crate::closed_pane::ClosedPane>,
+    persistence: Option<crate::session::snapshot::SnapshotService>,
 }
 
 #[derive(Clone, Copy)]
@@ -176,6 +233,7 @@ struct SessionContext<'a> {
 }
 
 struct AttachmentCapabilities<'a> {
+    persistence: Option<&'a mut crate::session::snapshot::SnapshotService>,
     cell_pixels: &'a mut Option<CellPixelSize>,
     graphics_support: &'a mut Option<GraphicsSupport>,
     inherited_colors: &'a mut Arc<TerminalColors>,
@@ -191,19 +249,61 @@ impl TerminalSession {
         scrollback_lines: usize,
         shortcuts: crate::config::Shortcuts,
     ) -> io::Result<Self> {
-        check_size(rows, columns)?;
-        let mut windows = Windows::default();
-        windows.create(
-            "shell".into(),
-            spawn_window(
+        Self::from_snapshot(
+            SessionContext {
                 shell_path,
-                None,
-                pane_rows(rows),
+                session_name,
+                notifications,
+                scrollback_lines,
+                shortcuts,
+            },
+            rows,
+            columns,
+            None,
+            false,
+        )
+    }
+
+    fn from_snapshot(
+        context: SessionContext<'_>,
+        rows: u16,
+        columns: u16,
+        snapshot: Option<&crate::persistence::Snapshot>,
+        restore_history: bool,
+    ) -> io::Result<Self> {
+        let SessionContext {
+            shell_path,
+            session_name,
+            notifications,
+            scrollback_lines,
+            shortcuts,
+        } = context;
+        check_size(rows, columns)?;
+        let windows = match snapshot {
+            Some(snapshot) => snapshot.restore(
+                shell_path,
+                rows,
                 columns,
                 notifications,
                 scrollback_lines,
+                restore_history,
             )?,
-        )?;
+            None => {
+                let mut windows = Windows::default();
+                windows.create(
+                    "shell".into(),
+                    spawn_window(
+                        shell_path,
+                        None,
+                        pane_rows(rows),
+                        columns,
+                        notifications,
+                        scrollback_lines,
+                    )?,
+                )?;
+                windows
+            }
+        };
         Ok(Self {
             shell_path: shell_path.to_owned(),
             session_name: session_name.map(str::to_owned),
@@ -216,7 +316,14 @@ impl TerminalSession {
             scrollback_lines,
             shortcuts,
             closed: None,
+            persistence: None,
         })
+    }
+
+    fn finish_saves(&mut self, checkpoint: bool) {
+        if let Some(service) = self.persistence.as_mut() {
+            service.finish(&self.windows, self.outer_rows, checkpoint);
+        }
     }
 
     fn attach(
@@ -241,6 +348,7 @@ impl TerminalSession {
             },
             &mut self.outer_rows,
             AttachmentCapabilities {
+                persistence: self.persistence.as_mut(),
                 cell_pixels: &mut self.cell_pixels,
                 graphics_support: &mut self.graphics_support,
                 inherited_colors: &mut self.inherited_colors,
@@ -256,6 +364,9 @@ impl TerminalSession {
         signals: &Signals,
     ) -> io::Result<DetachedEvent> {
         loop {
+            if let Some(service) = self.persistence.as_mut() {
+                service.tick(&self.windows, self.outer_rows);
+            }
             let received = signals.pending.load(Ordering::Relaxed);
             if received != 0 {
                 return Ok(DetachedEvent::Process((128 + received) as u8));
@@ -1728,6 +1839,7 @@ fn forward(
     closed: &mut Option<crate::closed_pane::ClosedPane>,
 ) -> io::Result<ForwardExit> {
     let AttachmentCapabilities {
+        mut persistence,
         cell_pixels,
         graphics_support,
         inherited_colors,
@@ -1774,7 +1886,16 @@ fn forward(
     let mut detach_requested = false;
     let mut pane_resize_pending: Option<(WindowId, Instant)> = None;
     let mut pending_outer_resize = None;
+    let mut save_error = None;
     loop {
+        if let Some(service) = persistence.as_mut() {
+            service.tick(windows, *outer_rows);
+            let current = service.error().map(str::to_owned);
+            if save_error != current {
+                save_error = current;
+                force_redraw = true;
+            }
+        }
         if graphics_probe_deadline.is_none() && to_terminal.is_empty() {
             graphics_probe_deadline = Some(Instant::now() + GRAPHICS_PROBE_TIMEOUT);
         }
@@ -2231,6 +2352,32 @@ fn forward(
                                 view.set_cursor_shape(crate::screen::CursorShape::SteadyBar);
                             }
                         }
+                    }
+                    if let Some(error) = &save_error
+                        && prompt.is_none()
+                        && history.is_none()
+                        && help.is_none()
+                        && footer_enabled(*outer_rows)
+                    {
+                        let (rows, columns) = view.dimensions();
+                        view.save_cursor();
+                        view.position(rows - 1, 0);
+                        view.set_style(crate::style::Style {
+                            foreground: crate::style::Color::Rgb(243, 139, 168),
+                            ..crate::style::Style::default()
+                        });
+                        view.erase_line(crate::screen::EraseMode::All);
+                        let mut used = 0;
+                        for character in format!("Save failed: {error}").chars() {
+                            let width =
+                                unicode_width::UnicodeWidthChar::width(character).unwrap_or(0);
+                            if used + width > columns {
+                                break;
+                            }
+                            view.print(character);
+                            used += width;
+                        }
+                        view.restore_cursor();
                     }
                     if let Some(prompt) = &prompt {
                         renderer

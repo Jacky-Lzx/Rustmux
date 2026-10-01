@@ -1,6 +1,5 @@
 //! Process orchestration for named persistent sessions.
 
-use std::ffi::OsStr;
 use std::fs;
 use std::fs::OpenOptions;
 use std::io::{self, Read, Write};
@@ -29,13 +28,15 @@ const DETACHED_START_TIMEOUT: Duration = Duration::from_secs(2);
 /// created with `fork` and continues in Rust before starting any other threads.
 pub fn create(
     name: &SessionName,
-    shell: &OsStr,
-    notifications: crate::config::Notifications,
-    scrollback_lines: usize,
-    shortcuts: crate::config::Shortcuts,
+    config: &crate::config::Config,
     detached: bool,
     config_path: Option<&Path>,
 ) -> io::Result<u8> {
+    let snapshot = crate::persistence::load(&crate::persistence::state_directory()?, name)?;
+    let bootstrap_size = snapshot
+        .as_ref()
+        .map(|snapshot| snapshot.bootstrap_size())
+        .unwrap_or((DETACHED_ROWS, DETACHED_COLUMNS));
     let endpoint = SessionEndpoint::bind(name)?;
     // SAFETY: the CLI calls this during single-threaded startup, so the child
     // cannot inherit locks held by another thread.
@@ -43,28 +44,20 @@ pub fn create(
         ForkResult::Parent { .. } => {
             drop(endpoint.relinquish());
             if detached {
-                start_detached(name)
+                start_detached(name, bootstrap_size)
             } else {
                 attach(name, config_path)
             }
         }
         ForkResult::Child => {
-            let status = run_server(
-                endpoint,
-                name,
-                shell,
-                notifications,
-                scrollback_lines,
-                shortcuts,
-            )
-            .unwrap_or(1);
+            let status = run_server(endpoint, name, config, snapshot).unwrap_or(1);
             std::process::exit(i32::from(status));
         }
     }
 }
 
-fn start_detached(name: &SessionName) -> io::Result<u8> {
-    let mut peer = handshake::client(connect(name)?, DETACHED_ROWS, DETACHED_COLUMNS)?;
+fn start_detached(name: &SessionName, size: (u16, u16)) -> io::Result<u8> {
+    let mut peer = handshake::client(connect(name)?, size.0, size.1)?;
     peer.stream().set_nonblocking(false)?;
     peer.stream()
         .set_read_timeout(Some(DETACHED_START_TIMEOUT))?;
@@ -162,15 +155,7 @@ fn manage_sessions(
             super::picker::Choice::Create(name) => {
                 let config = crate::config::load_with_path(config_path)
                     .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
-                create(
-                    &name,
-                    config.shell(),
-                    config.notifications(),
-                    config.scrollback_lines(),
-                    config.shortcuts(),
-                    true,
-                    config_path,
-                )?;
+                create(&name, &config, true, config_path)?;
                 return Ok(Some(name));
             }
             super::picker::Choice::Kill(name) => {
@@ -211,27 +196,18 @@ pub fn kill(name: &SessionName) -> io::Result<()> {
 fn run_server(
     endpoint: SessionEndpoint,
     name: &SessionName,
-    shell: &OsStr,
-    notifications: crate::config::Notifications,
-    scrollback_lines: usize,
-    shortcuts: crate::config::Shortcuts,
+    config: &crate::config::Config,
+    snapshot: Option<crate::persistence::Snapshot>,
 ) -> io::Result<u8> {
     detach_process(endpoint.listener().as_raw_fd())?;
     let _server = acquire_server(name)?;
+    let shortcuts = config.shortcuts();
     let peer = accept_peer(
         &endpoint,
         shortcuts.locked_entry_key(),
         !shortcuts.clear_defaults(),
     )?;
-    crate::terminal::serve_session(
-        shell,
-        name,
-        &endpoint,
-        peer,
-        notifications,
-        scrollback_lines,
-        shortcuts,
-    )
+    crate::terminal::serve_configured_session(config, name, &endpoint, peer, snapshot)
 }
 
 fn detach_process(listener: i32) -> io::Result<()> {

@@ -17,6 +17,8 @@ use crate::{
 
 /// Maximum retained physical history rows per screen.
 pub const SCROLLBACK_MAX_LINES: usize = crate::scrollback::MAX_LINES;
+
+pub(crate) mod history_snapshot;
 /// Maximum retained history cells, independent of the visible grid limit.
 pub const SCROLLBACK_MAX_CELLS: usize = crate::scrollback::MAX_CELLS;
 

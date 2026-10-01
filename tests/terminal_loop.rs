@@ -63,6 +63,11 @@ fn sessions() {
 }
 
 #[test]
+fn snapshots() {
+    run_scenario("snapshots");
+}
+
+#[test]
 fn frame_reconstruction() {
     run_scenario("frames");
 }

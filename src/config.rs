@@ -562,9 +562,21 @@ pub struct Config {
     notifications: Notifications,
     scrollback_lines: usize,
     shortcuts: Shortcuts,
+    persistence: PersistenceOptions,
+}
+
+/// Disk saving is opt-in; explicit manual saves remain available with defaults.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct PersistenceOptions {
+    pub autosave_interval_seconds: u64,
+    pub save_scrollback: bool,
+    pub save_scrollback_colors: bool,
 }
 
 impl Config {
+    pub fn persistence(&self) -> PersistenceOptions {
+        self.persistence
+    }
     pub fn shell(&self) -> &OsString {
         &self.shell
     }
@@ -588,6 +600,7 @@ struct ParsedConfig {
     notifications: Notifications,
     scrollback_lines: Option<usize>,
     shortcuts: Shortcuts,
+    persistence: PersistenceOptions,
 }
 
 /// Load and validate the complete configuration used by a new session.
@@ -613,6 +626,7 @@ pub fn load_with_path(path: Option<&Path>) -> Result<Config, String> {
             .scrollback_lines
             .unwrap_or(DEFAULT_SCROLLBACK_LINES),
         shortcuts: configured.shortcuts,
+        persistence: configured.persistence,
     })
 }
 
@@ -664,6 +678,33 @@ fn parse_config(source: &str) -> Result<ParsedConfig, String> {
         }
     };
     let notifications = parse_notifications(document.get("notifications"))?;
+    let boolean = |key: &str| -> Result<bool, String> {
+        document
+            .get(key)
+            .map(|value| {
+                value
+                    .as_bool()
+                    .ok_or_else(|| format!("{key} must be a boolean"))
+            })
+            .transpose()
+            .map(|value| value.unwrap_or(false))
+    };
+    let persistence = PersistenceOptions {
+        autosave_interval_seconds: document
+            .get("autosave_interval_seconds")
+            .map(|value| {
+                value
+                    .as_integer()
+                    .and_then(|value| u64::try_from(value).ok())
+                    .ok_or_else(|| {
+                        "autosave_interval_seconds must be a nonnegative integer".to_owned()
+                    })
+            })
+            .transpose()?
+            .unwrap_or(0),
+        save_scrollback: boolean("save_scrollback")?,
+        save_scrollback_colors: boolean("save_scrollback_colors")?,
+    };
     let clear_defaults = document
         .get("clear_defaults")
         .map(|value| {
@@ -697,6 +738,7 @@ fn parse_config(source: &str) -> Result<ParsedConfig, String> {
         notifications,
         scrollback_lines,
         shortcuts,
+        persistence,
     })
 }
 
@@ -1748,6 +1790,7 @@ preset = "mocha"
                 notifications: Notifications::default(),
                 scrollback_lines: Some(5000),
                 shortcuts: Shortcuts::default(),
+                persistence: PersistenceOptions::default(),
             }
         );
         assert_eq!(
@@ -1769,6 +1812,24 @@ preset = "mocha"
                 .unwrap_err()
                 .contains("nonempty")
         );
+    }
+
+    #[test]
+    fn persistence_defaults_are_opt_in_and_values_are_validated() {
+        assert_eq!(
+            parse_config("").unwrap().persistence,
+            PersistenceOptions::default()
+        );
+        assert_eq!(parse_config("autosave_interval_seconds = 30\nsave_scrollback = true\nsave_scrollback_colors = true").unwrap().persistence,
+            PersistenceOptions { autosave_interval_seconds: 30, save_scrollback: true, save_scrollback_colors: true });
+        for source in [
+            "autosave_interval_seconds = -1",
+            "autosave_interval_seconds = 0.5",
+            "save_scrollback = 1",
+            "save_scrollback_colors = 'true'",
+        ] {
+            assert!(parse_config(source).is_err());
+        }
     }
 
     #[test]

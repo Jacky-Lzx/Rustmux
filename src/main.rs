@@ -34,16 +34,8 @@ fn execute(cli: rustmux::cli::Cli) -> Result<u8, String> {
         }
         Some(rustmux::cli::Command::New { name, detached }) => {
             let config = rustmux::config::load_with_path(config_path)?;
-            rustmux::session::supervisor::create(
-                &name,
-                config.shell(),
-                config.notifications(),
-                config.scrollback_lines(),
-                config.shortcuts(),
-                detached,
-                config_path,
-            )
-            .map_err(|error| error.to_string())
+            rustmux::session::supervisor::create(&name, &config, detached, config_path)
+                .map_err(|error| error.to_string())
         }
         Some(rustmux::cli::Command::Attach { name }) => match name {
             Some(name) => rustmux::session::supervisor::attach(&name, config_path)
@@ -69,6 +61,11 @@ fn execute(cli: rustmux::cli::Cli) -> Result<u8, String> {
             Ok(0)
         }
         Some(rustmux::cli::Command::KillAll { yes }) => kill_all(yes),
+        Some(rustmux::cli::Command::Save { name }) => {
+            rustmux::session::snapshot::save_session(&name).map_err(|error| error.to_string())?;
+            println!("saved {name}");
+            Ok(0)
+        }
     }
 }
 

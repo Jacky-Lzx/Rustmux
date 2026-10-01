@@ -2,6 +2,8 @@
 
 use std::io;
 
+pub(crate) mod snapshot;
+
 /// Bounds recursion, geometry storage and future per-window PTY ownership.
 pub const MAX_PANES: usize = 64;
 

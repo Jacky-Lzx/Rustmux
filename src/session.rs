@@ -6,6 +6,7 @@ pub mod handshake;
 mod listing;
 mod picker;
 pub mod protocol;
+pub mod snapshot;
 pub mod supervisor;
 
 use std::fmt;

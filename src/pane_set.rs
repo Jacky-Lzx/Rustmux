@@ -12,6 +12,26 @@ pub struct PaneSet<T> {
 }
 
 impl<T> PaneSet<T> {
+    /// Validate the entire restored geometry before starting any owned contents.
+    pub(crate) fn from_layout_with(
+        layout: Layout,
+        mut create: impl FnMut(PaneId, Rect) -> io::Result<T>,
+    ) -> io::Result<Self> {
+        require_content_cells(&layout)?;
+        let mut geometry = layout.tiled_content_geometry().panes;
+        if layout.is_zoomed() {
+            let visible = layout.content_geometry().panes[0];
+            *geometry
+                .iter_mut()
+                .find(|(id, _)| *id == visible.0)
+                .unwrap() = visible;
+        }
+        let mut entries = Vec::with_capacity(geometry.len());
+        for (id, rect) in geometry {
+            entries.push((id, create(id, rect)?));
+        }
+        Ok(Self { layout, entries })
+    }
     /// Own an initial content value. Invalid dimensions drop the supplied value.
     pub fn new(rows: u16, columns: u16, content: T) -> io::Result<Self> {
         let layout = Layout::new(rows, columns)?;

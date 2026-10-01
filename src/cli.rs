@@ -18,6 +18,9 @@ pub struct Cli {
 
 #[derive(Clone, Debug, Eq, PartialEq, Subcommand)]
 pub enum Command {
+    /// Save a running session's layout and optional history to disk.
+    #[command(name = "save-session", visible_alias = "save")]
+    Save { name: SessionName },
     /// Create a named session and attach to it.
     New {
         /// Session name: ASCII letters, numbers, '-' or '_'.
@@ -164,5 +167,21 @@ mod tests {
     #[test]
     fn clap_definition_is_internally_consistent() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn save_command_requires_a_valid_name_and_does_not_attach() {
+        for action in ["save", "save-session"] {
+            assert_eq!(
+                Cli::try_parse_from(["rustmux", action, "work"])
+                    .unwrap()
+                    .command,
+                Some(Command::Save {
+                    name: SessionName::new("work").unwrap()
+                })
+            );
+            assert!(Cli::try_parse_from(["rustmux", action]).is_err());
+            assert!(Cli::try_parse_from(["rustmux", action, "../bad"]).is_err());
+        }
     }
 }

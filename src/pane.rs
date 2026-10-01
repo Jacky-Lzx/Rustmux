@@ -166,6 +166,9 @@ impl PaneIo {
 }
 
 impl Pane {
+    pub(crate) fn is_temporary(&self) -> bool {
+        self._temporary_file.is_some()
+    }
     /// Construct the screen before starting a process, then make the master
     /// nonblocking. Startup failures leave no live child behind. Follow
     /// PtyShell::spawn's single-threaded process-spawning requirement.
