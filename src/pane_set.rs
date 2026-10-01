@@ -91,7 +91,43 @@ impl<T> PaneSet<T> {
 
     /// Adjust geometry without replacing contents; synchronize PTY sizes separately.
     pub fn resize_active(&mut self, direction: Direction) -> bool {
-        self.layout.resize_active(direction)
+        self.resize_pane(self.layout.active(), direction, 1)
+            .unwrap_or(false)
+    }
+
+    /// Change a target's separator without selecting it or replacing contents.
+    pub fn resize_pane(
+        &mut self,
+        id: PaneId,
+        direction: Direction,
+        cells: u16,
+    ) -> io::Result<bool> {
+        let mut candidate = self.layout.clone();
+        if !candidate.resize_pane(id, direction, cells)? {
+            return Ok(false);
+        }
+        if require_content_cells(&candidate).is_err() {
+            // Raw layout leaves include the outer border. Find the largest
+            // valid movement without iterating over every requested cell.
+            let (mut low, mut high) = (0, cells);
+            while low < high {
+                let middle = low + (high - low).div_ceil(2);
+                let mut probe = self.layout.clone();
+                probe.resize_pane(id, direction, middle)?;
+                if require_content_cells(&probe).is_ok() {
+                    low = middle;
+                } else {
+                    high = middle - 1;
+                }
+            }
+            if low == 0 {
+                return Ok(false);
+            }
+            candidate = self.layout.clone();
+            candidate.resize_pane(id, direction, low)?;
+        }
+        self.layout = candidate;
+        Ok(true)
     }
 
     pub(crate) fn resize_separator(&mut self, index: usize, delta: i32) -> bool {

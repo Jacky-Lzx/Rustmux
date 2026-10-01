@@ -12,6 +12,7 @@ rustmux select-window -s work -w 2
 rustmux rename-window -s work -w 2 'build logs'
 rustmux new-window -s work --name logs
 rustmux split-pane -s work -p 0 --down
+rustmux resize-pane -s work -p 0 --direction right --cells 3
 rustmux send-keys -s work -p 0 --literal --enter 'printf "hello\n"'
 rustmux send-keys -s work -p 0 'Ctrl c'
 rustmux capture-pane -s work -p 0 --history
@@ -40,6 +41,15 @@ without control characters; duplicate names are allowed. Numbers follow display
 order. Successful requests redraw the bar and reset overlays and shortcuts like
 the other mutating script controls. See [Script Window Rename](script-window-rename.md)
 for validation, focus and snapshot behavior.
+
+`resize-pane [-p ID] --direction left|right|up|down [--cells N]` moves the
+nearest separator of the matching orientation, including in an inactive window,
+without selecting the target. Directions describe separator movement; `right`
+grows the left subtree and shrinks the right subtree. The target defaults to the
+active pane and the movement defaults to one cell. Requests clamp to valid pane
+content sizes; zoom, a missing separator or an already reached boundary returns
+a nonzero status. See [Script Pane Resize](script-pane-resize.md) for limits,
+PTY synchronization and persistence.
 
 `show-config` returns the running server's applied scalar settings and reload
 status as TOML without changing focus or dismissing overlays. See

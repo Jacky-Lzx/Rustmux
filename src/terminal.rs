@@ -539,11 +539,9 @@ impl TerminalSession {
                     )
                 });
                 if refresh {
-                    self.windows
-                        .active_mut()
-                        .unwrap()
-                        .content_mut()
-                        .synchronize_sizes()?;
+                    for window in self.windows.iter_mut() {
+                        window.content_mut().synchronize_sizes()?;
+                    }
                 }
             }
             if let Some(identity) = self.rename.as_ref() {
@@ -2225,14 +2223,12 @@ fn forward(
                 )
             }) {
                 queue_focus_transition(windows, old, active_focus(windows));
-                // Script selection can transfer zoom to another pane. Keep
-                // both child sizes synchronized, and propagate I/O failure to
+                // Script selection or resizing can change an inactive window.
+                // Keep all child sizes synchronized, and propagate I/O failure to
                 // the normal runtime cleanup rather than a controller reply.
-                windows
-                    .active_mut()
-                    .unwrap()
-                    .content_mut()
-                    .synchronize_sizes()?;
+                for window in windows.iter_mut() {
+                    window.content_mut().synchronize_sizes()?;
+                }
                 history = None;
                 help = None;
                 prompt = None;

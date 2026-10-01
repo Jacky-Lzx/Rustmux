@@ -31,6 +31,26 @@ pub struct PaneTarget {
     pub pane: Option<u64>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ResizeDirection {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
+impl From<ResizeDirection> for crate::layout::Direction {
+    fn from(direction: ResizeDirection) -> Self {
+        match direction {
+            ResizeDirection::Left => Self::Left,
+            ResizeDirection::Right => Self::Right,
+            ResizeDirection::Up => Self::Up,
+            ResizeDirection::Down => Self::Down,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Subcommand)]
 pub enum Command {
     /// Show the server's active settings and configuration reload status as TOML.
@@ -66,6 +86,16 @@ pub enum Command {
         #[arg(short = 'w', long, value_parser = clap::value_parser!(u16).range(1..))]
         window: Option<u16>,
         name: String,
+    },
+    /// Move a pane's nearest separator, preserving focus; defaults to the active pane.
+    ResizePane {
+        #[command(flatten)]
+        target: PaneTarget,
+        /// Separator movement, rather than growth of the target pane.
+        #[arg(long, value_enum)]
+        direction: ResizeDirection,
+        #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u16).range(1..))]
+        cells: u16,
     },
     /// Create a window, focus it, and print the new pane ID.
     NewWindow {
@@ -178,6 +208,11 @@ pub(crate) enum Request {
         window: Option<u16>,
         name: String,
     },
+    ResizePane {
+        pane: Option<u64>,
+        direction: ResizeDirection,
+        cells: u16,
+    },
     NewWindow {
         name: Option<String>,
     },
@@ -263,6 +298,18 @@ impl Command {
                 window,
                 name,
             } => (target, Request::RenameWindow { window, name }),
+            Self::ResizePane {
+                target,
+                direction,
+                cells,
+            } => (
+                target.target,
+                Request::ResizePane {
+                    pane: target.pane,
+                    direction,
+                    cells,
+                },
+            ),
             Self::NewWindow { target, name } => (target, Request::NewWindow { name }),
             Self::SplitPane { target, down } => (
                 target.target,
@@ -632,6 +679,7 @@ impl Service {
                                         | Request::SelectPane { .. }
                                         | Request::SelectWindow { .. }
                                         | Request::RenameWindow { .. }
+                                        | Request::ResizePane { .. }
                                         | Request::SplitPane { .. }
                                         | Request::JoinPane { .. }
                                         | Request::BreakPane { .. }
@@ -710,6 +758,56 @@ impl Drop for Service {
 mod tests {
     use super::*;
     use clap::Parser;
+
+    #[test]
+    fn resize_arguments_require_direction_and_positive_bounded_cells() {
+        let cli =
+            crate::cli::Cli::try_parse_from(["rustmux", "resize-pane", "--direction", "right"])
+                .unwrap();
+        assert_eq!(
+            cli.command,
+            Some(crate::cli::Command::Control(Command::ResizePane {
+                target: PaneTarget {
+                    target: Target {
+                        session: SessionName::new("default").unwrap()
+                    },
+                    pane: None,
+                },
+                direction: ResizeDirection::Right,
+                cells: 1,
+            }))
+        );
+        for arguments in [
+            &["rustmux", "resize-pane"][..],
+            &["rustmux", "resize-pane", "--direction", "diagonal"][..],
+            &[
+                "rustmux",
+                "resize-pane",
+                "--direction",
+                "left",
+                "--cells",
+                "0",
+            ][..],
+            &[
+                "rustmux",
+                "resize-pane",
+                "--direction",
+                "up",
+                "--cells",
+                "65536",
+            ][..],
+            &[
+                "rustmux",
+                "resize-pane",
+                "--direction",
+                "down",
+                "--cells",
+                "-1",
+            ][..],
+        ] {
+            assert!(crate::cli::Cli::try_parse_from(arguments).is_err());
+        }
+    }
 
     #[test]
     fn rename_window_uses_current_or_one_based_explicit_target() {

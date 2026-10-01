@@ -568,6 +568,27 @@ impl Layout {
     /// active. Preserve focus and IDs. Zoom, no matching split or a minimum-size
     /// boundary leaves the complete layout unchanged and returns false.
     pub fn resize_active(&mut self, direction: Direction) -> bool {
+        self.adjust_pane(self.active, direction, 1)
+    }
+
+    /// Move a target pane's nearest matching separator by up to `cells` cells.
+    /// Clamp to subtree minima without changing focus or any pane identity.
+    pub fn resize_pane(
+        &mut self,
+        id: PaneId,
+        direction: Direction,
+        cells: u16,
+    ) -> io::Result<bool> {
+        if cells == 0 {
+            return Err(invalid("resize cells must be positive"));
+        }
+        if !self.root.contains(id) {
+            return Err(io::Error::new(io::ErrorKind::NotFound, "unknown pane ID"));
+        }
+        Ok(self.adjust_pane(id, direction, cells))
+    }
+
+    fn adjust_pane(&mut self, id: PaneId, direction: Direction, cells: u16) -> bool {
         if self.zoomed {
             return false;
         }
@@ -579,7 +600,7 @@ impl Layout {
         };
         self.root
             .adjust(
-                self.active,
+                id,
                 Rect {
                     row: 0,
                     column: 0,
@@ -587,7 +608,7 @@ impl Layout {
                     columns: self.columns,
                 },
                 axis,
-                delta,
+                delta * i32::from(cells),
             )
             .unwrap_or(false)
     }

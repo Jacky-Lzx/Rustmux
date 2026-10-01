@@ -38,6 +38,11 @@ fn window_rename() {
 }
 
 #[test]
+fn pane_resize() {
+    run_scenario("pane_resize");
+}
+
+#[test]
 fn notifications() {
     run_scenario("notifications");
 }

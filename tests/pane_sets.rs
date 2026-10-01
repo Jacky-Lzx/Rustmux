@@ -25,6 +25,60 @@ fn assert_membership<T>(panes: &PaneSet<T>) {
 }
 
 #[test]
+fn bulk_resize_preserves_owned_contents_and_clamps_inside_outer_borders() {
+    let drops = Rc::new(RefCell::new(Vec::new()));
+    let mut panes = PaneSet::new(
+        10,
+        20,
+        Content {
+            value: 0,
+            drops: drops.clone(),
+        },
+    )
+    .unwrap();
+    let left = panes.layout().active();
+    let right = panes
+        .split_with(SplitAxis::Columns, |_, _| {
+            Ok(Content {
+                value: 1,
+                drops: drops.clone(),
+            })
+        })
+        .unwrap();
+    panes.select(left).unwrap();
+    assert!(
+        panes
+            .resize_pane(right, Direction::Right, u16::MAX)
+            .unwrap()
+    );
+    assert_eq!(panes.layout().active(), left);
+    let columns = |panes: &PaneSet<Content>| {
+        panes
+            .layout()
+            .tiled_content_geometry()
+            .panes
+            .iter()
+            .map(|(_, rect)| rect.columns)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(columns(&panes), vec![15, 1]);
+    let before = panes.layout().clone();
+    assert!(!panes.resize_active(Direction::Right));
+    assert_eq!(panes.layout(), &before);
+    assert!(panes.resize_pane(right, Direction::Left, u16::MAX).unwrap());
+    assert_eq!(columns(&panes), vec![1, 15]);
+    assert_eq!(panes.get(left).unwrap().value, 0);
+    assert_eq!(panes.get(right).unwrap().value, 1);
+    let before = panes.layout().clone();
+    assert!(panes.resize_pane(right, Direction::Right, 0).is_err());
+    assert_eq!(panes.layout(), &before);
+    assert!(drops.borrow().is_empty());
+    assert_membership(&panes);
+    drop(panes);
+    assert_eq!(*drops.borrow(), vec![0, 1]);
+}
+
+#[test]
 fn split_failure_preserves_layout_zoom_contents_and_does_not_consume_id() {
     let mut panes = PaneSet::new(7, 7, String::from("first")).unwrap();
     let first = panes.layout().active();

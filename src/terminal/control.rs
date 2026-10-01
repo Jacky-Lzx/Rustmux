@@ -107,6 +107,27 @@ pub(super) fn handle(
             windows.rename(id, window_name)?;
             Ok(String::new())
         }
+        Request::ResizePane {
+            pane,
+            direction,
+            cells,
+        } => {
+            if cells == 0 {
+                return Err(invalid("resize cells must be positive"));
+            }
+            let (window, id) = target(windows, pane)?;
+            let set = windows.get_mut(window).unwrap().content_mut();
+            if set.layout().is_zoomed() {
+                return Err(invalid("cannot resize a zoomed pane layout"));
+            }
+            if !set.resize_pane(id, direction.into(), cells)? {
+                return Err(invalid("pane separator cannot move in that direction"));
+            }
+            // Both event loops synchronize windows after accepted mutations.
+            // An I/O failure must end the runtime, since a
+            // partially committed screen/PTY resize cannot safely continue.
+            Ok(String::new())
+        }
         Request::ListPanes { toml: as_toml } => {
             use std::os::unix::process::ExitStatusExt;
             let active = windows.active().map(|window| window.id());

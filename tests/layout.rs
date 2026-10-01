@@ -33,6 +33,131 @@ fn assert_partition(layout: &Layout) {
 }
 
 #[test]
+fn targeted_bulk_resize_preserves_focus_and_adjusts_nearest_matching_split() {
+    let mut layout = Layout::new(21, 80).unwrap();
+    let left = layout.active();
+    let upper = layout.split_active(SplitAxis::Columns).unwrap();
+    let lower = layout.split_active(SplitAxis::Rows).unwrap();
+    layout.select(left).unwrap();
+    assert!(layout.resize_pane(lower, Direction::Right, 5).unwrap());
+    assert!(layout.resize_pane(lower, Direction::Up, 3).unwrap());
+    assert_eq!(layout.active(), left);
+    assert_eq!(
+        layout.geometry().panes,
+        vec![
+            (
+                left,
+                Rect {
+                    row: 0,
+                    column: 0,
+                    rows: 21,
+                    columns: 44
+                }
+            ),
+            (
+                upper,
+                Rect {
+                    row: 0,
+                    column: 46,
+                    rows: 6,
+                    columns: 34
+                }
+            ),
+            (
+                lower,
+                Rect {
+                    row: 8,
+                    column: 46,
+                    rows: 13,
+                    columns: 34
+                }
+            ),
+        ]
+    );
+    assert_partition(&layout);
+    let resized = layout.clone();
+    layout.resize(43, 160).unwrap();
+    assert_eq!(layout.geometry().panes[0].1.columns, 89);
+    assert_eq!(layout.geometry().panes[1].1.rows, 12);
+    assert_partition(&layout);
+    layout.resize(21, 80).unwrap();
+    assert_eq!(layout, resized, "outer resize lost the manual split ratios");
+}
+
+#[test]
+fn bulk_resize_clamps_deepest_split_without_falling_back_to_outer_separator() {
+    let mut layout = Layout::new(10, 20).unwrap();
+    let left = layout.active();
+    let middle = layout.split_active(SplitAxis::Columns).unwrap();
+    let right = layout.split_active(SplitAxis::Columns).unwrap();
+    layout.select(left).unwrap();
+    let outer = layout.geometry().separators[0];
+    assert!(
+        layout
+            .resize_pane(middle, Direction::Right, u16::MAX)
+            .unwrap()
+    );
+    assert_eq!(layout.geometry().separators[0], outer);
+    assert_eq!(
+        layout
+            .geometry()
+            .panes
+            .iter()
+            .find(|(id, _)| *id == right)
+            .unwrap()
+            .1
+            .columns,
+        1
+    );
+    let clamped = layout.clone();
+    assert!(!layout.resize_pane(middle, Direction::Right, 1).unwrap());
+    assert_eq!(layout, clamped);
+    assert!(
+        layout
+            .resize_pane(middle, Direction::Left, u16::MAX)
+            .unwrap()
+    );
+    assert_eq!(layout.geometry().separators[0], outer);
+    assert_eq!(
+        layout
+            .geometry()
+            .panes
+            .iter()
+            .find(|(id, _)| *id == middle)
+            .unwrap()
+            .1
+            .columns,
+        1
+    );
+    assert_eq!(layout.active(), left);
+    assert_partition(&layout);
+}
+
+#[test]
+fn targeted_resize_errors_and_noops_preserve_complete_layout() {
+    let mut layout = Layout::new(10, 20).unwrap();
+    let original = layout.active();
+    let removed = layout.split_active(SplitAxis::Columns).unwrap();
+    layout.close(removed).unwrap();
+    let before = layout.clone();
+    assert!(layout.resize_pane(original, Direction::Right, 0).is_err());
+    assert_eq!(
+        layout
+            .resize_pane(removed, Direction::Right, 1)
+            .unwrap_err()
+            .kind(),
+        std::io::ErrorKind::NotFound
+    );
+    assert!(!layout.resize_pane(original, Direction::Up, 2).unwrap());
+    assert_eq!(layout, before);
+    let right = layout.split_active(SplitAxis::Columns).unwrap();
+    layout.toggle_zoom();
+    let zoomed = layout.clone();
+    assert!(!layout.resize_pane(right, Direction::Left, 3).unwrap());
+    assert_eq!(layout, zoomed);
+}
+
+#[test]
 fn nested_splits_have_exact_rectangles_and_preserve_ids_on_resize() {
     let mut layout = Layout::new(7, 11).unwrap();
     let first = layout.active();
