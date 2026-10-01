@@ -103,6 +103,19 @@ pub(super) fn handle(
             windows.select(window)?;
             Ok(String::new())
         }
+        Request::SelectPaneDirection { pane, direction } => {
+            let (window, origin) = target(windows, pane)?;
+            windows
+                .get_mut(window)
+                .unwrap()
+                .content_mut()
+                .select_direction_from(origin, direction.into())?
+                .ok_or_else(|| invalid("no pane in that direction"))?;
+            windows.select(window)?;
+            // Resolve before selecting the origin or its window, so edge and
+            // invalid-source failures cannot alter remembered or global focus.
+            Ok(String::new())
+        }
         Request::SelectWindow { window } => {
             let id = window_target(windows, Some(window))?;
             windows.select(id)?;

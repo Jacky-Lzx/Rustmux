@@ -2,12 +2,15 @@
 
 Control a named running session while attached or detached, without taking its
 interactive client lease. Each command accepts `-s SESSION` (default `default`).
-Pane commands accept `-p ID`; omission selects the current active pane.
+Pane commands accept `-p ID`; most default to the current active pane.
+`select-pane` requires an ID or a direction.
 
 ```sh
 rustmux show-config -s work
 rustmux list-panes -s work --toml
 rustmux select-pane -s work -p 0
+rustmux select-pane -s work --direction right
+rustmux select-pane -s work -p 0 --direction down
 rustmux select-window -s work -w 2
 rustmux rename-window -s work -w 2 'build logs'
 rustmux move-window -s work -w 2 --direction left
@@ -36,9 +39,15 @@ IDs are not saved; enumerate again after restoring a workspace. Hidden undo pane
 are not command targets.
 
 `select-pane -p ID` focuses the runtime pane and its owning window.
+`select-pane [--pane ID] --direction left|right|up|down` instead selects that
+origin's nearest geometric neighbor in the same window; omitting the ID uses
+the active pane. It preserves pane positions and zoom, and returns an error
+without changing focus if there is no neighbor. See
+[Script Directional Focus](script-directional-focus.md) for selection rules,
+focus events and snapshots.
 `select-window -w NUMBER` selects the one-based position reported by `list-panes`
-and the window bar, preserving the selected pane within that window. Both require
-an explicit target and print nothing on success. Window numbers follow display
+and the window bar, preserving the selected pane within that window. It requires
+an explicit number. Both commands print nothing on success. Window numbers follow display
 order and can change after window removal or reordering; runtime pane IDs remain
 stable. See [Script Focus Control](script-focus.md) for zoom, input and overlay
 behavior.

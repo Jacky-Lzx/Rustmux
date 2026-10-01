@@ -78,6 +78,11 @@ fn pane_move() {
 }
 
 #[test]
+fn directional_focus() {
+    run_scenario("directional_focus");
+}
+
+#[test]
 fn notifications() {
     run_scenario("notifications");
 }

@@ -89,6 +89,15 @@ impl<T> PaneSet<T> {
         self.layout.select_direction(direction)
     }
 
+    /// Select the origin's directional neighbor, preserving focus on failure.
+    pub fn select_direction_from(
+        &mut self,
+        origin: PaneId,
+        direction: Direction,
+    ) -> io::Result<Option<PaneId>> {
+        self.layout.select_direction_from(origin, direction)
+    }
+
     /// Adjust geometry without replacing contents; synchronize PTY sizes separately.
     pub fn resize_active(&mut self, direction: Direction) -> bool {
         self.resize_pane(self.layout.active(), direction, 1)

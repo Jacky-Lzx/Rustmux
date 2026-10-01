@@ -72,12 +72,15 @@ pub enum Command {
         #[arg(long)]
         toml: bool,
     },
-    /// Focus a runtime pane ID, including its window, without restarting it.
+    /// Focus a runtime pane, or its directional neighbor, including its window.
     SelectPane {
         #[command(flatten)]
         target: Target,
-        #[arg(short = 'p', long)]
-        pane: u64,
+        /// Target pane, or origin for --direction; otherwise use the active pane.
+        #[arg(short = 'p', long, required_unless_present = "direction")]
+        pane: Option<u64>,
+        #[arg(long, value_enum)]
+        direction: Option<ResizeDirection>,
     },
     /// Focus a one-based window number, preserving that window's selected pane.
     SelectWindow {
@@ -264,6 +267,10 @@ pub(crate) enum Request {
     SelectPane {
         pane: u64,
     },
+    SelectPaneDirection {
+        pane: Option<u64>,
+        direction: ResizeDirection,
+    },
     SelectWindow {
         window: u16,
     },
@@ -380,7 +387,20 @@ impl Command {
                 },
             ),
             Self::ListPanes { target, toml } => (target, Request::ListPanes { toml }),
-            Self::SelectPane { target, pane } => (target, Request::SelectPane { pane }),
+            Self::SelectPane {
+                target,
+                pane,
+                direction,
+            } => (
+                target,
+                match direction {
+                    Some(direction) => Request::SelectPaneDirection { pane, direction },
+                    None => Request::SelectPane {
+                        pane: pane
+                            .ok_or_else(|| invalid("select-pane requires --pane or --direction"))?,
+                    },
+                },
+            ),
             Self::SelectWindow { target, window } => (target, Request::SelectWindow { window }),
             Self::RenameWindow {
                 target,
@@ -812,6 +832,7 @@ impl Service {
                                     &request,
                                     Request::NewWindow { .. }
                                         | Request::SelectPane { .. }
+                                        | Request::SelectPaneDirection { .. }
                                         | Request::SelectWindow { .. }
                                         | Request::RenameWindow { .. }
                                         | Request::CloseWindow { .. }
@@ -899,6 +920,51 @@ impl Drop for Service {
 mod tests {
     use super::*;
     use clap::Parser;
+
+    #[test]
+    fn select_pane_accepts_direction_with_active_or_explicit_origin() {
+        for (name, direction) in [
+            ("left", ResizeDirection::Left),
+            ("right", ResizeDirection::Right),
+            ("up", ResizeDirection::Up),
+            ("down", ResizeDirection::Down),
+        ] {
+            for pane in [None, Some(0)] {
+                let mut arguments = vec!["rustmux", "select-pane", "--direction", name];
+                if pane.is_some() {
+                    arguments.extend(["-s", "work", "-p", "0"]);
+                }
+                let cli = crate::cli::Cli::try_parse_from(arguments).unwrap();
+                let Some(crate::cli::Command::Control(Command::SelectPane {
+                    target,
+                    pane: parsed_pane,
+                    direction: parsed,
+                })) = cli.command
+                else {
+                    panic!("expected select-pane");
+                };
+                assert_eq!((parsed_pane, parsed), (pane, Some(direction)));
+                assert_eq!(
+                    target.session.as_str(),
+                    if pane.is_some() { "work" } else { "default" }
+                );
+            }
+        }
+        for arguments in [
+            vec!["rustmux", "select-pane", "--direction"],
+            vec!["rustmux", "select-pane", "--direction", "next"],
+            vec![
+                "rustmux",
+                "select-pane",
+                "-p",
+                "invalid",
+                "--direction",
+                "left",
+            ],
+        ] {
+            assert!(crate::cli::Cli::try_parse_from(arguments).is_err());
+        }
+    }
 
     #[test]
     fn move_pane_accepts_active_or_explicit_source_and_requires_cardinal_direction() {
@@ -1275,7 +1341,8 @@ mod tests {
                 target: Target {
                     session: SessionName::new("work").unwrap(),
                 },
-                pane: 0,
+                pane: Some(0),
+                direction: None,
             }))
         );
         let cli =

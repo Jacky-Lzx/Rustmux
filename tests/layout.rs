@@ -566,6 +566,65 @@ fn directional_selection_uses_overlap_and_preserves_geometry_and_zoom() {
 }
 
 #[test]
+fn directional_selection_from_an_inactive_origin_is_atomic_and_zoom_aware() {
+    let mut layout = Layout::new(15, 17).unwrap();
+    let left = layout.active();
+    let top = layout.split_active(SplitAxis::Columns).unwrap();
+    let bottom = layout.split_active(SplitAxis::Rows).unwrap();
+    let stale = layout.split_active(SplitAxis::Rows).unwrap();
+    layout.close(stale).unwrap();
+    layout.select(bottom).unwrap();
+    let tiled = layout.tiled_geometry();
+    assert_eq!(
+        layout
+            .select_direction_from(left, Direction::Right)
+            .unwrap(),
+        Some(top)
+    );
+    assert_eq!(layout.active(), top);
+    assert_eq!(layout.tiled_geometry(), tiled);
+    // Origin differs from current selection; finding the current target is a success.
+    let before = layout.clone();
+    assert_eq!(
+        layout
+            .select_direction_from(left, Direction::Right)
+            .unwrap(),
+        Some(top)
+    );
+    assert_eq!(layout, before);
+    assert_eq!(
+        layout
+            .select_direction_from(bottom, Direction::Down)
+            .unwrap(),
+        None
+    );
+    assert_eq!(layout, before);
+    assert_eq!(
+        layout
+            .select_direction_from(stale, Direction::Left)
+            .unwrap_err()
+            .kind(),
+        std::io::ErrorKind::NotFound
+    );
+    assert_eq!(layout, before);
+    layout.toggle_zoom();
+    assert_eq!(
+        layout.select_direction_from(top, Direction::Down).unwrap(),
+        Some(bottom)
+    );
+    assert!(layout.is_zoomed());
+    assert_eq!(layout.active(), bottom);
+    assert_eq!(layout.geometry().panes[0].0, bottom);
+    assert_eq!(layout.tiled_geometry(), tiled);
+    let before = layout.clone();
+    assert_eq!(
+        layout.select_direction_from(top, Direction::Up).unwrap(),
+        None
+    );
+    assert_eq!(layout, before);
+}
+
+#[test]
 fn directional_ties_are_deterministic_and_single_panes_do_not_wrap() {
     let mut layout = Layout::new(7, 7).unwrap();
     let top = layout.active();

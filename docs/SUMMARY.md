@@ -56,6 +56,7 @@
 - [Session Snapshots and Restored History](reference/session-snapshots.md)
 - [Script Control](reference/script-control.md)
 - [Script Focus Control](reference/script-focus.md)
+- [Script Directional Focus](reference/script-directional-focus.md)
 - [Script Window Rename](reference/script-window-rename.md)
 - [Script Window Close](reference/script-window-close.md)
 - [Script Window Move](reference/script-window-move.md)

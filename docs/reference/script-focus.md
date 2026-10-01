@@ -6,14 +6,20 @@ rustmux select-pane -s work -p 0
 rustmux select-window -s work -w 2
 ```
 
-`select-pane` requires `-p ID` (or `--pane ID`). It finds the pane's runtime ID
-across all windows, selects it and activates its owning window. `select-window`
+`select-pane` without `--direction` requires `-p ID` (or `--pane ID`). It finds
+the pane's runtime ID across all windows, selects it and activates its owning window. `select-window`
 requires `-w NUMBER` (or `--window NUMBER`) and selects that window's remembered
 pane. Numbers are one-based display positions, matching the window bar and the
 `window` field of `list-panes`. They can change after removal or reordering.
 Enumerate current targets before choosing; use a pane ID when identity must
 survive window moves. The default session target is `default`; `-s SESSION`
 selects another named running server.
+
+`select-pane --direction left|right|up|down` selects a geometric neighbor of the
+active pane. With `-p ID`, that ID supplies the origin; the origin need not be
+selected or in the active window. No neighbor returns an error without changing
+focus. See [Script Directional Focus](script-directional-focus.md) for geometry,
+zoom and compatibility details.
 
 Successful commands print nothing and exit with status zero. Missing required
 arguments, zero window numbers, unknown windows/panes and malformed requests

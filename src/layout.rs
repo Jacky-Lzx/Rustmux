@@ -463,25 +463,22 @@ impl Layout {
     /// center and finally traversal order.
     /// No candidate leaves the complete layout unchanged. Zoom follows the selection.
     pub fn select_direction(&mut self, direction: Direction) -> Option<PaneId> {
-        let panes = self.tiled_geometry().panes;
-        let source = panes
-            .iter()
-            .find(|(id, _)| *id == self.active)
+        self.select_direction_from(self.active, direction)
             .expect("active pane exists")
-            .1;
-        let target = panes
-            .iter()
-            .enumerate()
-            .filter(|(_, (id, _))| *id != self.active)
-            .filter_map(|(index, (id, rect))| {
-                source
-                    .focus_score(*rect, direction)
-                    .map(|score| ((score, index), *id))
-            })
-            .min_by_key(|(score, _)| *score)
-            .map(|(_, id)| id)?;
-        self.active = target;
-        Some(target)
+    }
+
+    /// Select a geometric neighbor of a known origin without first selecting it.
+    /// Edge moves preserve the entire layout; zoom follows a successful selection.
+    pub fn select_direction_from(
+        &mut self,
+        origin: PaneId,
+        direction: Direction,
+    ) -> io::Result<Option<PaneId>> {
+        let target = self.directional_neighbor(origin, direction)?;
+        if let Some(target) = target {
+            self.active = target;
+        }
+        Ok(target)
     }
 
     /// Exchange the active pane identity with its nearest geometric neighbor.
@@ -511,14 +508,19 @@ impl Layout {
         id: PaneId,
         direction: Direction,
     ) -> io::Result<Option<PaneId>> {
-        if !self.root.contains(id) {
-            return Err(io::Error::new(io::ErrorKind::NotFound, "unknown pane ID"));
-        }
+        let target = self.directional_neighbor(id, direction)?;
         if self.zoomed {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "cannot move a zoomed pane layout",
             ));
+        }
+        Ok(target)
+    }
+
+    fn directional_neighbor(&self, id: PaneId, direction: Direction) -> io::Result<Option<PaneId>> {
+        if !self.root.contains(id) {
+            return Err(io::Error::new(io::ErrorKind::NotFound, "unknown pane ID"));
         }
         let panes = self.tiled_geometry().panes;
         let source = panes
