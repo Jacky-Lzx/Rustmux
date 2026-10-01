@@ -136,6 +136,13 @@ pub enum Command {
         #[arg(long)]
         to_pane: u64,
     },
+    /// Exchange a pane with its nearest directional neighbor without changing focus.
+    MovePane {
+        #[command(flatten)]
+        target: PaneTarget,
+        #[arg(long, value_enum)]
+        direction: ResizeDirection,
+    },
     /// Create a window, focus it, and print the new pane ID.
     NewWindow {
         #[command(flatten)]
@@ -283,6 +290,10 @@ pub(crate) enum Request {
     SwapPane {
         pane: Option<u64>,
         to_pane: u64,
+    },
+    MovePane {
+        pane: Option<u64>,
+        direction: ResizeDirection,
     },
     NewWindow {
         name: Option<String>,
@@ -433,6 +444,13 @@ impl Command {
                 Request::SwapPane {
                     pane: target.pane,
                     to_pane,
+                },
+            ),
+            Self::MovePane { target, direction } => (
+                target.target,
+                Request::MovePane {
+                    pane: target.pane,
+                    direction,
                 },
             ),
             Self::CapturePane { target, history } => (
@@ -801,6 +819,7 @@ impl Service {
                                         | Request::ResizePane { .. }
                                         | Request::ZoomPane { .. }
                                         | Request::SwapPane { .. }
+                                        | Request::MovePane { .. }
                                         | Request::SplitPane { .. }
                                         | Request::ClosePane { .. }
                                         | Request::JoinPane { .. }
@@ -880,6 +899,50 @@ impl Drop for Service {
 mod tests {
     use super::*;
     use clap::Parser;
+
+    #[test]
+    fn move_pane_accepts_active_or_explicit_source_and_requires_cardinal_direction() {
+        for (name, direction) in [
+            ("left", ResizeDirection::Left),
+            ("right", ResizeDirection::Right),
+            ("up", ResizeDirection::Up),
+            ("down", ResizeDirection::Down),
+        ] {
+            for pane in [None, Some(0)] {
+                let mut arguments = vec!["rustmux", "move-pane", "--direction", name];
+                if pane.is_some() {
+                    arguments.extend(["-s", "work", "-p", "0"]);
+                }
+                let cli = crate::cli::Cli::try_parse_from(arguments).unwrap();
+                let Some(crate::cli::Command::Control(Command::MovePane {
+                    target,
+                    direction: parsed,
+                })) = cli.command
+                else {
+                    panic!("expected move-pane");
+                };
+                assert_eq!((target.pane, parsed), (pane, direction));
+                assert_eq!(
+                    target.target.session.as_str(),
+                    if pane.is_some() { "work" } else { "default" }
+                );
+            }
+        }
+        for arguments in [
+            vec!["rustmux", "move-pane"],
+            vec!["rustmux", "move-pane", "--direction", "next"],
+            vec![
+                "rustmux",
+                "move-pane",
+                "-p",
+                "invalid",
+                "--direction",
+                "left",
+            ],
+        ] {
+            assert!(crate::cli::Cli::try_parse_from(arguments).is_err());
+        }
+    }
 
     #[test]
     fn swap_pane_accepts_active_or_explicit_source_and_requires_destination() {

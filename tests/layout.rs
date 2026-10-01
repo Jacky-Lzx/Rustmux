@@ -802,6 +802,86 @@ fn directional_move_swaps_nearest_neighbor_and_keeps_active_identity() {
 }
 
 #[test]
+fn targeted_move_uses_geometry_preserves_focus_and_isolates_failures() {
+    let mut layout = Layout::new(11, 21).unwrap();
+    let left = layout.active();
+    let top = layout.split_active(SplitAxis::Columns).unwrap();
+    let bottom = layout.split_active(SplitAxis::Rows).unwrap();
+    let stale = layout.split_active(SplitAxis::Rows).unwrap();
+    layout.close(stale).unwrap();
+    layout.select(bottom).unwrap();
+    let original = layout.clone();
+    // A large left pane overlaps two right panes: the aligned top edge wins.
+    assert!(layout.move_pane(left, Direction::Right).unwrap());
+    assert_eq!(layout.active(), bottom);
+    assert_eq!(
+        layout
+            .geometry()
+            .panes
+            .iter()
+            .map(|(id, _)| *id)
+            .collect::<Vec<_>>(),
+        vec![top, left, bottom]
+    );
+    assert_eq!(layout.geometry().separators, original.geometry().separators);
+    assert_eq!(
+        layout
+            .geometry()
+            .panes
+            .iter()
+            .map(|(_, rect)| *rect)
+            .collect::<Vec<_>>(),
+        original
+            .geometry()
+            .panes
+            .iter()
+            .map(|(_, rect)| *rect)
+            .collect::<Vec<_>>()
+    );
+    assert!(layout.move_pane(left, Direction::Left).unwrap());
+    assert_eq!(layout, original);
+    // Inactive source exchanges with the selected neighbor without selecting itself.
+    assert!(layout.move_pane(top, Direction::Down).unwrap());
+    assert_eq!(layout.active(), bottom);
+    assert_eq!(layout.geometry().panes[1].0, bottom);
+    assert!(layout.move_pane(top, Direction::Up).unwrap());
+    assert_eq!(layout, original);
+    for (id, direction) in [
+        (left, Direction::Left),
+        (top, Direction::Up),
+        (bottom, Direction::Down),
+    ] {
+        assert!(!layout.move_pane(id, direction).unwrap());
+        assert_eq!(layout, original);
+    }
+    assert_eq!(
+        layout.move_pane(stale, Direction::Left).unwrap_err().kind(),
+        std::io::ErrorKind::NotFound
+    );
+    assert_eq!(layout, original);
+    layout.toggle_zoom();
+    let zoomed = layout.clone();
+    for id in [left, bottom] {
+        assert_eq!(
+            layout.move_pane(id, Direction::Left).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidInput
+        );
+        assert_eq!(layout, zoomed);
+    }
+    let mut single = Layout::new(5, 9).unwrap();
+    let before = single.clone();
+    for direction in [
+        Direction::Left,
+        Direction::Right,
+        Direction::Up,
+        Direction::Down,
+    ] {
+        assert!(!single.move_pane(single.active(), direction).unwrap());
+        assert_eq!(single, before);
+    }
+}
+
+#[test]
 fn targeted_swap_preserves_slots_focus_and_rejects_invalid_or_zoomed_targets() {
     let mut layout = Layout::new(11, 21).unwrap();
     let left = layout.active();

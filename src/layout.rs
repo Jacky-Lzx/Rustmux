@@ -490,29 +490,53 @@ impl Layout {
         if self.zoomed {
             return false;
         }
+        self.move_pane(self.active, direction)
+            .expect("active pane exists")
+    }
+
+    /// Exchange a known pane with its nearest geometric neighbor, preserving focus.
+    /// No neighbor leaves the layout alone; invalid IDs and zoom are errors.
+    pub fn move_pane(&mut self, id: PaneId, direction: Direction) -> io::Result<bool> {
+        if let Some(target) = self.move_target(id, direction)? {
+            self.root.exchange(id, target);
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// Resolve a move before mutation so callers can check both panes' eligibility.
+    pub(crate) fn move_target(
+        &self,
+        id: PaneId,
+        direction: Direction,
+    ) -> io::Result<Option<PaneId>> {
+        if !self.root.contains(id) {
+            return Err(io::Error::new(io::ErrorKind::NotFound, "unknown pane ID"));
+        }
+        if self.zoomed {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "cannot move a zoomed pane layout",
+            ));
+        }
         let panes = self.tiled_geometry().panes;
         let source = panes
             .iter()
-            .find(|(id, _)| *id == self.active)
-            .expect("active pane exists")
+            .find(|(pane, _)| *pane == id)
+            .expect("target pane exists")
             .1;
-        let target = panes
+        Ok(panes
             .iter()
             .enumerate()
-            .filter(|(_, (id, _))| *id != self.active)
+            .filter(|(_, (pane, _))| *pane != id)
             .filter_map(|(index, (id, rect))| {
                 source
                     .focus_score(*rect, direction)
                     .map(|score| ((score, index), *id))
             })
             .min_by_key(|(score, _)| *score)
-            .map(|(_, id)| id);
-        if let Some(target) = target {
-            self.root.exchange(self.active, target);
-            true
-        } else {
-            false
-        }
+            .map(|(_, id)| id))
     }
 
     /// Exchange the active pane with its traversal successor, wrapping at the end.

@@ -209,6 +209,25 @@ pub(super) fn handle(
             // reflows surviving screens and synchronizes their new PTY sizes.
             Ok(String::new())
         }
+        Request::MovePane { pane, direction } => {
+            let (window, id) = target(windows, pane)?;
+            let set = windows.get_mut(window).unwrap().content_mut();
+            if set.get(id).unwrap().is_temporary() {
+                return Err(invalid("temporary editor panes cannot be moved"));
+            }
+            let direction = direction.into();
+            let neighbor = set
+                .layout()
+                .move_target(id, direction)?
+                .ok_or_else(|| invalid("no pane in that direction"))?;
+            if set.get(neighbor).unwrap().is_temporary() {
+                return Err(invalid("temporary editor panes cannot be moved"));
+            }
+            set.move_pane(id, direction)?;
+            // Focus stays with the same owned pane. Normal control refresh
+            // synchronizes sizes, including in an inactive target window.
+            Ok(String::new())
+        }
         Request::ListPanes { toml: as_toml } => {
             use std::os::unix::process::ExitStatusExt;
             let active = windows.active().map(|window| window.id());

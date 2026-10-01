@@ -18,6 +18,7 @@ rustmux resize-pane -s work -p 0 --direction right --cells 3
 rustmux zoom-pane -s work -p 0 --on
 rustmux zoom-pane -s work --off
 rustmux swap-pane -s work -p 0 --to-pane 2
+rustmux move-pane -s work -p 0 --direction right
 rustmux send-keys -s work -p 0 --literal --enter 'printf "hello\n"'
 rustmux send-keys -s work -p 0 'Ctrl c'
 rustmux capture-pane -s work -p 0 --history
@@ -90,6 +91,14 @@ same window. Focus, processes and IDs are preserved even for inactive targets;
 the applications resize to their new slots. Swapping a pane with itself succeeds
 without changing layout. See [Script Pane Swap](script-pane-swap.md) for validation,
 retained output and saved geometry.
+
+`move-pane [-p ID] --direction left|right|up|down` exchanges the source with its
+nearest geometric neighbor in the same window. Omission uses the active pane.
+It preserves focus and process identity, including in inactive windows; each
+application resizes to its new slot. Movement does not wrap. Missing neighbors,
+zoomed layouts and temporary editor targets return a nonzero status without
+changing the layout. See [Script Pane Move](script-pane-move.md) for neighbor
+selection, validation and snapshots.
 
 `show-config` returns the running server's applied scalar settings and reload
 status as TOML without changing focus or dismissing overlays. See

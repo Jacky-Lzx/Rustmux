@@ -64,6 +64,7 @@
 - [Script Pane Close](reference/script-pane-close.md)
 - [Script Pane Zoom](reference/script-pane-zoom.md)
 - [Script Pane Swap](reference/script-pane-swap.md)
+- [Script Pane Move](reference/script-pane-move.md)
 - [Project Layouts](reference/project-layouts.md)
 - [Retained Panes and Respawn](reference/pane-lifecycle.md)
 - [Pane Output](reference/pane-output.md)

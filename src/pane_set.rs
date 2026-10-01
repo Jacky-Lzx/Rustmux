@@ -155,6 +155,12 @@ impl<T> PaneSet<T> {
         self.layout.move_active(direction)
     }
 
+    /// Exchange a pane with its directional neighbor without selecting it.
+    /// The caller synchronizes the resulting PTY/screen sizes separately.
+    pub fn move_pane(&mut self, id: PaneId, direction: Direction) -> io::Result<bool> {
+        self.layout.move_pane(id, direction)
+    }
+
     pub fn toggle_zoom(&mut self) -> bool {
         self.layout.toggle_zoom()
     }
