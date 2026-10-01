@@ -62,6 +62,7 @@
 - [Session Frontend Adapter](reference/session-frontend.md)
 - [Session Runtime State](reference/session-runtime.md)
 - [Frontend I/O Boundary](reference/frontend-io.md)
+- [Terminal Device Opening](reference/terminal-device.md)
 
 - [Split Layout Model](reference/split-layout.md)
 - [Pane Contents and Layout Ownership](reference/pane-ownership.md)

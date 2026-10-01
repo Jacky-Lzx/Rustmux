@@ -28,6 +28,11 @@ fn input() {
 }
 
 #[test]
+fn terminal_device() {
+    run_scenario("device");
+}
+
+#[test]
 fn notifications() {
     run_scenario("notifications");
 }
