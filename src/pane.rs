@@ -21,6 +21,7 @@ use nix::pty::Winsize;
 use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::{
     collections::VecDeque,
     ffi::OsStr,
@@ -58,13 +59,63 @@ pub struct Pane {
 // Identity belongs to the owned Pane, so joins/breaks preserve it even when
 // the destination layout assigns a different local leaf ID.
 fn next_control_id() -> io::Result<u64> {
-    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    NEXT.fetch_update(
-        std::sync::atomic::Ordering::Relaxed,
-        std::sync::atomic::Ordering::Relaxed,
-        |id| id.checked_add(1),
-    )
-    .map_err(|_| io::Error::other("control pane IDs exhausted"))
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    allocate_control_id(&NEXT)
+}
+
+fn allocate_control_id(next: &AtomicU64) -> io::Result<u64> {
+    let mut id = next.load(Ordering::Relaxed);
+    loop {
+        let successor = id
+            .checked_add(1)
+            .ok_or_else(|| io::Error::other("control pane IDs exhausted"))?;
+        // Preserve fetch_update's checked increment on toolchains both before
+        // and after its rename to try_update, without suppressing warnings.
+        match next.compare_exchange_weak(id, successor, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return Ok(id),
+            Err(current) => id = current,
+        }
+    }
+}
+
+#[cfg(test)]
+mod control_id_tests {
+    use super::*;
+
+    #[test]
+    fn exhaustion_preserves_counter_without_wrapping_or_reusing_ids() {
+        let next = AtomicU64::new(u64::MAX - 1);
+        assert_eq!(allocate_control_id(&next).unwrap(), u64::MAX - 1);
+        for _ in 0..2 {
+            let error = allocate_control_id(&next).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::Other);
+            assert_eq!(error.to_string(), "control pane IDs exhausted");
+            assert_eq!(next.load(Ordering::Relaxed), u64::MAX);
+        }
+    }
+
+    #[test]
+    fn concurrent_allocations_return_unique_contiguous_ids() {
+        let next = AtomicU64::new(0);
+        let mut ids = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..8)
+                .map(|_| {
+                    scope.spawn(|| {
+                        (0..512)
+                            .map(|_| allocate_control_id(&next).unwrap())
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .flat_map(|handle| handle.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+        ids.sort_unstable();
+        assert_eq!(ids, (0..4096).collect::<Vec<_>>());
+        assert_eq!(next.load(Ordering::Relaxed), 4096);
+    }
 }
 
 enum GraphicsSink<'a> {
