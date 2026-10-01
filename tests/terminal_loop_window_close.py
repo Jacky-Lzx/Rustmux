@@ -73,6 +73,11 @@ while True:
         pane = int(run(action, *arguments, "--command", command(label)).stdout)
         wait_until(lambda: record(label) is not None, f"probe {label} did not start")
         assert record(label)["pid"] == next(p["pid"] for p in panes() if p["id"] == pane)
+        # The child can publish its state before the server parses DECSET 1004.
+        # Capturing the following marker proves that reporting is enabled before
+        # another control request changes focus, including in detached sessions.
+        wait_until(lambda: "WINDOW_CLOSE_READY" in run("capture-pane", "-p", pane).stdout,
+                   f"server did not parse probe {label}'s focus-reporting setup")
         return pane
 
     def size(label, rows, columns):

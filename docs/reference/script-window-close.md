@@ -93,3 +93,38 @@ Local cumulative verification on macOS, 2026-10-01, using Rust 1.99.0:
 - `cargo +1.99.0 clippy --all-targets --all-features --locked --offline -- -D warnings`
   passed.
 - `cargo +1.99.0 fmt --all --check`, `git diff --check` and `mdbook build` passed.
+
+## CI startup-race repair
+
+GitHub [run 36883454438](https://github.com/Jacky-Lzx/Rustmux/actions/runs/36883454438)
+on `main-human` commit `9ecff78` passed Ubuntu but failed the macOS window-close
+scenario at “last-window focus-out did not arrive.” The probe had written its
+JSON state, but the server could still be waiting to parse its earlier DECSET
+1004 output. Selecting another window at that point correctly queues no
+focus-out for an application that has not yet enabled reporting.
+
+The fixture now polls `capture-pane` for `WINDOW_CLOSE_READY`, which the probe
+emits after enabling focus reporting. A capture reads the server's parsed screen,
+so it establishes the required readiness boundary for both attached and detached
+servers. Child-state and PID checks remain in place; focus-event assertions and
+five-second timeouts are unchanged. Production code is unchanged.
+
+A temporary controlled reproduction gated the last probe's mode output after
+publishing its initial JSON. Switching away before releasing that gate reproduced
+the original failure. With the corrected helper, releasing the gate and waiting
+for the parsed marker allowed the same focus-out and closure assertions to pass.
+The normal corrected scenario also passed five consecutive runs. These controlled
+copies are local diagnostics rather than additional repository test targets.
+
+This repair is isolated from the pending notification-filter feature and awaits
+owner review. The repaired revision has not been pushed or run in GitHub CI.
+
+Local verification of the CI repair, using Rust 1.99.0:
+
+- The focused window-close test passed; a controlled gated startup passed after
+  the fix, followed by five consecutive normal runs of the same real PTY fixture.
+- `cargo +1.99.0 test --all-targets --locked --offline -- --test-threads=4`:
+  941 passed, zero failed, six existing ignored tests, across 47 targets.
+  All 37 real PTY scenarios passed under CI's four-thread setting.
+- `cargo +1.99.0 clippy --all-targets --all-features --locked --offline -- -D warnings`,
+  `cargo +1.99.0 fmt --all --check`, `git diff --check` and `mdbook build` passed.
