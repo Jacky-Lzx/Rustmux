@@ -54,7 +54,13 @@ pub fn inspect(path: Option<&Path>) -> Result<Inspection, String> {
         file_loaded: source.is_some(),
         shell_source,
         warnings,
-        settings: Settings {
+        settings: Settings::from(&config),
+    })
+}
+
+impl From<&Config> for Settings {
+    fn from(config: &Config) -> Self {
+        Self {
             shell: config.shell.to_string_lossy().into_owned(),
             scrollback_lines: config.scrollback_lines,
             remain_on_exit: config.remain_on_exit,
@@ -64,8 +70,8 @@ pub fn inspect(path: Option<&Path>) -> Result<Inspection, String> {
             save_scrollback_colors: config.persistence.save_scrollback_colors,
             long_command_bell: config.notifications.long_command_bell,
             command_duration_seconds: config.notifications.command_duration.as_secs(),
-        },
-    })
+        }
+    }
 }
 
 fn ignored_options(source: &str) -> Vec<String> {

@@ -5,6 +5,7 @@ interactive client lease. Each command accepts `-s SESSION` (default `default`).
 Pane commands accept `-p ID`; omission selects the current active pane.
 
 ```sh
+rustmux show-config -s work
 rustmux list-panes -s work --toml
 rustmux new-window -s work --name logs
 rustmux split-pane -s work -p 0 --down
@@ -21,6 +22,11 @@ Enumerate IDs before using them. They identify owned panes within the running
 server and remain unchanged across joins, breaks and interactive pane moves.
 IDs are not saved; enumerate again after restoring a workspace. Hidden undo panes
 are not command targets.
+
+`show-config` returns the running server's applied scalar settings and reload
+status as TOML without changing focus or dismissing overlays. See
+[Configuration Hot Reload](config-reload.md) for source selection, pending
+updates and error handling.
 
 `list-panes` prints tab-separated ID, one-based window number, title and working
 directory. Control characters in text fields are replaced with spaces.

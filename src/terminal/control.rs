@@ -65,8 +65,12 @@ pub(super) fn handle(
     context: SessionContext<'_>,
     rows: u16,
     remain_on_exit: bool,
+    reload: Option<&crate::config::reload::Reload>,
 ) -> io::Result<String> {
     match request {
+        Request::ShowConfig => reload
+            .ok_or_else(|| invalid("configuration reload is unavailable"))
+            .and_then(|reload| reload.status()),
         Request::ListPanes { toml: as_toml } => {
             use std::os::unix::process::ExitStatusExt;
             let active = windows.active().map(|window| window.id());

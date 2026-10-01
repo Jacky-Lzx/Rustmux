@@ -42,7 +42,8 @@ include its path. Without this option, Rustmux uses
 `XDG_CONFIG_HOME` is unset. A missing default file still uses built-in defaults.
 The option does not change `XDG_CONFIG_HOME` for pane processes.
 
-Existing named sessions keep the configuration loaded by their server at creation.
+Existing named sessions watch the configuration source selected at creation;
+see [Configuration Hot Reload](config-reload.md) for supported live updates.
 An attaching client's `--config` selection applies when it creates or restores a
 session from the Session Manager; it also remains selected when switching between sessions.
 `list`, `kill` and `kill-all` do not read configuration files.

@@ -34,8 +34,10 @@ The command works with ordinary pipes and inside a Rustmux pane. It does not
 start a shell, create a session endpoint or state directory, attach a terminal,
 write configuration, or update a running session. The reported settings apply
 to a newly started local session or server using this process's environment.
-Existing named servers keep their startup settings; attaching with a different
-configuration does not replace them.
+Existing named servers watch their startup-selected file; attaching with a
+different configuration does not replace that source. Use
+[`show-config`](config-reload.md#inspecting-a-running-server) to inspect a running
+server's applied settings and reload errors.
 
 Ordinary output lists the selected path, effective scalar settings and shell
 source. Warnings go to stderr. `--toml` returns a machine-readable inspection
@@ -73,7 +75,8 @@ field in `main`'s schema. In particular, it does not check ignored parameters
 inside otherwise supported action tables. It does not check that the selected
 shell executable exists or can start, and it does not certify editor or terminal
 compatibility. Shell startup still performs its own executable validation.
-Configuration hot reload and theme configuration are not added by this change.
+See [configuration hot reload](config-reload.md) for live updates and restart-only
+settings. Theme configuration is not supported.
 
 ## Review and verification
 

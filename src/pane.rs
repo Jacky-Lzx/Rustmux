@@ -263,6 +263,9 @@ impl Pane {
     pub(crate) fn control_id(&self) -> u64 {
         self.control_id
     }
+    pub(crate) fn configure_notifications(&mut self, notifications: crate::config::Notifications) {
+        self.command_bell_after = notifications.command_bell_after();
+    }
     pub(crate) fn read_output(&self, after: Option<u64>) -> io::Result<crate::pane_output::Chunk> {
         self.output.read(self.control_id, after, self.io.eof)
     }

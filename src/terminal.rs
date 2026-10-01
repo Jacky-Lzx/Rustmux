@@ -68,6 +68,7 @@ pub fn run(
         scrollback_lines,
         shortcuts,
         false,
+        None,
     )
 }
 
@@ -79,6 +80,7 @@ pub fn run_configured(config: &crate::config::Config) -> io::Result<u8> {
         config.scrollback_lines(),
         config.shortcuts(),
         config.remain_on_exit(),
+        Some(config),
     )
 }
 
@@ -88,6 +90,7 @@ fn run_inner(
     scrollback_lines: usize,
     shortcuts: crate::config::Shortcuts,
     remain_on_exit: bool,
+    config: Option<&crate::config::Config>,
 ) -> io::Result<u8> {
     let file = TerminalDevice::open_controlling()?;
     let size = window_size(&file)?;
@@ -103,6 +106,10 @@ fn run_inner(
         shortcuts,
     )?;
     session.remain_on_exit = remain_on_exit;
+    session.reload = config
+        .map(crate::config::reload::Reload::new)
+        .transpose()?
+        .flatten();
     let signals = Signals::install()?;
     let mut terminal = LocalFrontend::enter(file, signals.resize.clone())?;
     let result = session.attach(&mut terminal, &signals);
@@ -143,9 +150,12 @@ pub fn serve_session(
         name,
         endpoint,
         peer,
-        crate::config::PersistenceOptions::default(),
         None,
-        false,
+        Bootstrap {
+            options: crate::config::PersistenceOptions::default(),
+            remain_on_exit: false,
+            config: None,
+        },
     )
 }
 
@@ -167,10 +177,19 @@ pub(crate) fn serve_configured_session(
         name,
         endpoint,
         peer,
-        config.persistence(),
         snapshot,
-        config.remain_on_exit(),
+        Bootstrap {
+            options: config.persistence(),
+            remain_on_exit: config.remain_on_exit(),
+            config: Some(config),
+        },
     )
+}
+
+struct Bootstrap<'a> {
+    options: crate::config::PersistenceOptions,
+    remain_on_exit: bool,
+    config: Option<&'a crate::config::Config>,
 }
 
 fn serve_inner(
@@ -178,10 +197,14 @@ fn serve_inner(
     name: &crate::session::SessionName,
     endpoint: &SessionEndpoint,
     mut peer: ServerPeer,
-    options: crate::config::PersistenceOptions,
     snapshot: Option<crate::persistence::Snapshot>,
-    remain_on_exit: bool,
+    bootstrap: Bootstrap<'_>,
 ) -> io::Result<u8> {
+    let Bootstrap {
+        options,
+        remain_on_exit,
+        config,
+    } = bootstrap;
     let (rows, columns) = peer.size();
     let shortcuts = context.shortcuts;
     let mut session = TerminalSession::from_snapshot(
@@ -198,6 +221,10 @@ fn serve_inner(
     )?);
     session.remain_on_exit = remain_on_exit;
     session.control = Some(crate::control::Service::bind(name)?);
+    session.reload = config
+        .map(crate::config::reload::Reload::new)
+        .transpose()?
+        .flatten();
     let signals = Signals::install()?;
     let result = (|| {
         loop {
@@ -256,6 +283,7 @@ struct TerminalSession {
     closed: Option<crate::closed_pane::ClosedPane>,
     persistence: Option<crate::session::snapshot::SnapshotService>,
     control: Option<crate::control::Service>,
+    reload: Option<crate::config::reload::Reload>,
 }
 
 #[derive(Clone, Copy)]
@@ -269,6 +297,7 @@ struct SessionContext<'a> {
 
 struct AttachmentCapabilities<'a> {
     remain_on_exit: bool,
+    reload: Option<&'a mut crate::config::reload::Reload>,
     control: Option<&'a mut crate::control::Service>,
     persistence: Option<&'a mut crate::session::snapshot::SnapshotService>,
     cell_pixels: &'a mut Option<CellPixelSize>,
@@ -356,6 +385,7 @@ impl TerminalSession {
             closed: None,
             persistence: None,
             control: None,
+            reload: None,
         })
     }
 
@@ -374,7 +404,7 @@ impl TerminalSession {
         // Its initial resize will replace this before active panes are read.
         self.cell_pixels = None;
         self.graphics_support = None;
-        forward(
+        let result = forward(
             frontend,
             &mut self.windows,
             signals,
@@ -388,6 +418,7 @@ impl TerminalSession {
             &mut self.outer_rows,
             AttachmentCapabilities {
                 remain_on_exit: self.remain_on_exit,
+                reload: self.reload.as_mut(),
                 control: self.control.as_mut(),
                 persistence: self.persistence.as_mut(),
                 cell_pixels: &mut self.cell_pixels,
@@ -395,7 +426,35 @@ impl TerminalSession {
                 inherited_colors: &mut self.inherited_colors,
             },
             &mut self.closed,
-        )
+        );
+        if let Some(config) = self.reload.as_ref().map(|reload| reload.current().clone()) {
+            self.import_config(&config);
+        }
+        result
+    }
+
+    fn import_config(&mut self, config: &crate::config::Config) {
+        self.shell_path = config.shell().clone();
+        self.shortcuts = config.shortcuts();
+        self.notifications = config.notifications();
+        self.scrollback_lines = config.scrollback_lines();
+        self.remain_on_exit = config.remain_on_exit();
+    }
+
+    fn reload_detached(&mut self) {
+        if let Some(reload) = self.reload.as_mut() {
+            reload.poll();
+        }
+        if let Some(config) = self.reload.as_mut().and_then(|reload| reload.take()) {
+            apply_config(
+                &config,
+                &mut self.windows,
+                &mut self.closed,
+                self.persistence.as_mut(),
+            );
+            self.import_config(&config);
+            self.reload.as_mut().unwrap().commit(config);
+        }
     }
 
     /// Keep every PTY live while waiting for the next session client.
@@ -405,6 +464,7 @@ impl TerminalSession {
         signals: &Signals,
     ) -> io::Result<DetachedEvent> {
         loop {
+            self.reload_detached();
             if let Some(service) = self.control.as_mut() {
                 service.tick(|request| {
                     control::handle(
@@ -419,6 +479,7 @@ impl TerminalSession {
                         },
                         self.outer_rows,
                         self.remain_on_exit,
+                        self.reload.as_ref(),
                     )
                 });
             }
@@ -888,6 +949,23 @@ fn history_exit_input(
 }
 
 impl WindowInput {
+    fn can_reload(&self) -> bool {
+        self.mode == InputMode::Locked
+            && !self.paste
+            && self.mouse.is_empty()
+            && self.pane_drag.is_none()
+            && !self.bar_press
+            && !self.footer_press
+            && !self.pane_press
+            && !(1..6).any(|count| {
+                self.tail
+                    .iter()
+                    .rev()
+                    .take(count)
+                    .copied()
+                    .eq(b"\x1b[200~"[..count].iter().rev().copied())
+            })
+    }
     // Hold only candidate mouse reports. Escape alone is released after 30ms;
     // completed non-mouse sequences are forwarded as soon as they are known.
     fn feed(&mut self, byte: u8, output: &mut Vec<WindowKey>) {
@@ -1890,6 +1968,42 @@ fn service_pane(
     Ok(())
 }
 
+struct RuntimeConfig {
+    shell: OsString,
+    notifications: crate::config::Notifications,
+    scrollback_lines: usize,
+    shortcuts: crate::config::Shortcuts,
+    remain_on_exit: bool,
+}
+impl RuntimeConfig {
+    fn update(&mut self, config: &crate::config::Config) {
+        self.shell = config.shell().clone();
+        self.notifications = config.notifications();
+        self.scrollback_lines = config.scrollback_lines();
+        self.shortcuts = config.shortcuts();
+        self.remain_on_exit = config.remain_on_exit();
+    }
+}
+
+fn apply_config(
+    config: &crate::config::Config,
+    windows: &mut Windows<PaneSet<Pane>>,
+    closed: &mut Option<crate::closed_pane::ClosedPane>,
+    persistence: Option<&mut crate::session::snapshot::SnapshotService>,
+) {
+    for window in windows.iter_mut() {
+        for (_, pane) in window.content_mut().iter_mut() {
+            pane.configure_notifications(config.notifications());
+        }
+    }
+    if let Some(pane) = closed.as_mut().and_then(|saved| saved.pane.as_mut()) {
+        pane.configure_notifications(config.notifications());
+    }
+    if let Some(service) = persistence {
+        service.configure(config.persistence(), config.scrollback_lines());
+    }
+}
+
 fn forward(
     frontend: &mut impl Frontend,
     windows: &mut Windows<PaneSet<Pane>>,
@@ -1901,19 +2015,22 @@ fn forward(
 ) -> io::Result<ForwardExit> {
     let AttachmentCapabilities {
         remain_on_exit,
+        mut reload,
         mut control,
         mut persistence,
         cell_pixels,
         graphics_support,
         inherited_colors,
     } = capabilities;
-    let SessionContext {
-        shell_path,
-        session_name,
-        notifications,
-        scrollback_lines,
-        shortcuts,
-    } = context;
+    let session_name = context.session_name;
+    let mut runtime = RuntimeConfig {
+        shell: context.shell_path.to_owned(),
+        notifications: context.notifications,
+        scrollback_lines: context.scrollback_lines,
+        shortcuts: context.shortcuts,
+        remain_on_exit,
+    };
+    let shortcuts = runtime.shortcuts;
     let mut renderer = Renderer::default();
     let mut kitty_overlays = KittyOverlays::default();
     let mut outer_image_replies = OuterImageReplies::default();
@@ -1950,11 +2067,55 @@ fn forward(
     let mut pane_resize_pending: Option<(WindowId, Instant)> = None;
     let mut pending_outer_resize = None;
     let mut save_error = None;
+    let mut reload_error = None;
     loop {
+        if let Some(service) = reload.as_deref_mut() {
+            service.poll();
+            if service.pending()
+                && input.is_empty()
+                && keys.can_reload()
+                && history.is_none()
+                && help.is_none()
+                && prompt.is_none()
+                && let Some(config) = service.take()
+            {
+                apply_config(&config, windows, closed, persistence.as_deref_mut());
+                runtime.update(&config);
+                keys.shortcuts = runtime.shortcuts;
+                service.commit(config);
+                renderer.invalidate();
+                force_redraw = true;
+                bar_dirty = true;
+            }
+            let error = service.error().map(str::to_owned);
+            if reload_error != error {
+                reload_error = error;
+                force_redraw = true;
+            }
+        }
+        let shell_path = runtime.shell.as_os_str();
+        let notifications = runtime.notifications;
+        let scrollback_lines = runtime.scrollback_lines;
+        let shortcuts = runtime.shortcuts;
+        let remain_on_exit = runtime.remain_on_exit;
+        let context = SessionContext {
+            shell_path,
+            session_name,
+            notifications,
+            scrollback_lines,
+            shortcuts,
+        };
         if let Some(service) = control.as_mut() {
             let old = active_focus(windows);
             if service.tick(|request| {
-                control::handle(request, windows, context, *outer_rows, remain_on_exit)
+                control::handle(
+                    request,
+                    windows,
+                    context,
+                    *outer_rows,
+                    remain_on_exit,
+                    reload.as_deref(),
+                )
             }) {
                 queue_focus_transition(windows, old, active_focus(windows));
                 history = None;
@@ -2482,7 +2643,15 @@ fn forward(
                             }
                         }
                     }
-                    if let Some(error) = &save_error
+                    let status_error = reload_error
+                        .as_ref()
+                        .map(|error| format!("Config reload failed: {error}"))
+                        .or_else(|| {
+                            save_error
+                                .as_ref()
+                                .map(|error| format!("Save failed: {error}"))
+                        });
+                    if let Some(error) = status_error
                         && prompt.is_none()
                         && history.is_none()
                         && help.is_none()
@@ -2497,7 +2666,7 @@ fn forward(
                         });
                         view.erase_line(crate::screen::EraseMode::All);
                         let mut used = 0;
-                        for character in format!("Save failed: {error}").chars() {
+                        for character in error.chars() {
                             let width =
                                 unicode_width::UnicodeWidthChar::width(character).unwrap_or(0);
                             if used + width > columns {
@@ -2870,6 +3039,10 @@ fn forward(
                     session_name.is_some(),
                     shortcuts,
                 );
+                if reload_error.is_some() || save_error.is_some() {
+                    // Error text replaces the footer hints; it has no actions.
+                    keys.footer_hitboxes.clear();
+                }
                 keys.active_pane = Some(set.layout().active());
                 keys.pane_hitboxes = pane_view::hitboxes(set.layout());
                 keys.separator_hitboxes = set.layout().separator_hitboxes();
@@ -5814,3 +5987,30 @@ s = { actions = [{ action = "switch-mode", mode = "history" }] }
     }
 }
 mod control;
+
+#[cfg(test)]
+mod config_reload_input_tests {
+    use super::*;
+    #[test]
+    fn reload_barrier_preserves_modes_partial_mouse_and_paste_markers() {
+        let mut input = WindowInput::default();
+        assert!(input.can_reload());
+        input.mode = InputMode::Normal;
+        assert!(!input.can_reload());
+        input.mode = InputMode::Locked;
+        input.mouse.push(27);
+        assert!(!input.can_reload());
+        input.mouse.clear();
+        for bytes in [b"\x1b".as_slice(), b"\x1b[", b"\x1b[20", b"\x1b[200"] {
+            input.tail = bytes.iter().copied().collect();
+            assert!(!input.can_reload());
+        }
+        input.tail = b"abcdef".iter().copied().collect();
+        assert!(input.can_reload());
+        input.paste = true;
+        assert!(!input.can_reload());
+        input.paste = false;
+        input.pane_press = true;
+        assert!(!input.can_reload());
+    }
+}

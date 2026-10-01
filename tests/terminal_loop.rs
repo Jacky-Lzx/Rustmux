@@ -106,3 +106,8 @@ fn colors() {
 fn output() {
     run_scenario("output");
 }
+
+#[test]
+fn reload() {
+    run_scenario("reload");
+}

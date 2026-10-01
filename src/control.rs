@@ -33,6 +33,11 @@ pub struct PaneTarget {
 
 #[derive(Clone, Debug, Eq, PartialEq, Subcommand)]
 pub enum Command {
+    /// Show the server's active settings and configuration reload status as TOML.
+    ShowConfig {
+        #[command(flatten)]
+        target: Target,
+    },
     /// List runtime pane IDs, windows, focus and working directories.
     ListPanes {
         #[command(flatten)]
@@ -129,6 +134,7 @@ pub enum Command {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "action", rename_all = "kebab-case", deny_unknown_fields)]
 pub(crate) enum Request {
+    ShowConfig,
     ListPanes {
         toml: bool,
     },
@@ -179,6 +185,7 @@ struct Response {
 impl Command {
     pub fn run(self) -> io::Result<String> {
         let (target, request) = match self {
+            Self::ShowConfig { target } => (target, Request::ShowConfig),
             Self::SubscribePane { target, after } => {
                 let chunk = output_chunk(&target, after)?;
                 follow_output(&target, chunk, &mut io::stdout().lock())?;

@@ -43,12 +43,16 @@ split_down = "D"
 `long_command_bell` controls whether an OSC 133-integrated command rings when it
 finishes, and `command_duration_seconds` sets the positive whole-second threshold.
 Both notification values are optional and default to `true` and `5`. Configuration
-is read when a local session or named-session server starts. `scrollback_lines`
+is read at startup and checked for changes every 500 ms. `scrollback_lines`
 is an optional nonnegative integer that defaults to `1000`; set it to `0` to
 disable retained history. The separate 65,536-cell cap remains fixed, so a large
 line limit cannot make history unbounded. New windows, splits and temporary editor
-windows inherit the session value. An existing named session keeps its original
-configuration until it is recreated.
+windows inherit the session value. Changes to shell and history capacity apply
+to future panes; existing child processes and history capacities are preserved.
+Bindings, notifications, pane retention and saving settings can update live.
+The LOCKED entry key and `clear_defaults` require a restart. See
+[Configuration Hot Reload](../reference/config-reload.md) for safe application
+boundaries, errors and `rustmux show-config -s NAME`.
 
 Enable `remain_on_exit = true` to inspect exited panes and restart them with
 Ctrl-B then Shift-R. See [Retained Panes and Respawn](../reference/pane-lifecycle.md)
@@ -59,8 +63,8 @@ creating a window and splitting the active pane. Each value must be one printabl
 ASCII character. Unset entries keep their defaults (`c`, `%`, and `"`). Duplicate
 keys, keys reserved by another command, and `d` (named-session detach) are
 rejected. The old key stops invoking an action when it is replaced. The footer
-and shortcut-help panel show the configured keys. Ctrl-B itself and other
-commands are not configurable yet.
+and shortcut-help panel show the configured keys. Mode-based bindings below also
+configure supported actions and the LOCKED entry key.
 
 The first mode-based bindings are also accepted in main's `[keybinds.normal]`
 format. They take precedence over `[shortcuts]` for `new-window`,
@@ -131,8 +135,8 @@ in `[keybinds.normal]` (main's `Ctrl o`), then use `[keybinds.session]` for
 `d` detaches, `w` opens the Session Manager, `o` returns to NORMAL, and Esc
 returns to LOCKED. The footer shows the configured actions and accepts clicks.
 SESSION mode is unavailable in a local unnamed process. Recreate an existing
-named session before testing this change because its server retains the code
-and configuration from when it started.
+named session after updating the binary because its server retains the code
+from when it started.
 
 Other mode tables and unsupported actions from main's larger configuration are
 still ignored. `clear_defaults = true` disables implicit NORMAL shortcuts,
@@ -150,8 +154,9 @@ A single
 `switch-mode normal` action selects the LOCKED-to-NORMAL prefix; Ctrl-B remains
 the default. Pressing the configured key twice sends one literal prefix byte to
 the child. The attached client receives the running server's effective prefix
-at connection time, so changing the local config does not change an existing
-named session. PANE's floating action is not yet supported.
+at connection time. Changing the entry key requires restarting the named
+session; ordinary supported bindings can reload live. PANE's floating action is
+not yet supported.
 
 Standalone `switch-mode` bindings can now jump directly among the supported
 PANE, RESIZE, MOVE, TAB, and (for named sessions) SESSION modes. Main's
@@ -172,8 +177,8 @@ commands disappear from shortcut help; unsupported action sequences remain
 ignored rather than being partly executed.
 
 `RUSTMUX_SHELL=/bin/sh ./target/debug/rustmux` remains available as a temporary
-override. Changes take effect the next time a local session or named-session
-server starts.
+override. Environment changes take effect the next time a local session or
+named-session server starts.
 
 Running without arguments keeps the foreground-only behavior. To create a named
 session that survives terminal detachment, or reconnect to it later, use:

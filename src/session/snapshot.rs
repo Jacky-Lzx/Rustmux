@@ -56,6 +56,14 @@ pub(crate) struct SnapshotService {
 }
 
 impl SnapshotService {
+    pub(crate) fn configure(&mut self, options: PersistenceOptions, history_limit: usize) {
+        if self.options.autosave_interval_seconds != options.autosave_interval_seconds {
+            self.last_autosave = Instant::now();
+        }
+        self.options = options;
+        self.history_limit = history_limit;
+    }
+
     pub(crate) fn error(&self) -> Option<&str> {
         self.last_error.as_deref()
     }

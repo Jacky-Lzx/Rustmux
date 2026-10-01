@@ -9,6 +9,7 @@ use std::time::Duration;
 use crate::layout::Direction;
 
 mod diagnostics;
+pub(crate) mod reload;
 pub use diagnostics::{Inspection, Settings, default_config, inspect};
 
 const DEFAULT_COMMAND_DURATION_SECONDS: u64 = 5;
@@ -562,6 +563,7 @@ impl Notifications {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Config {
+    source: Option<reload::Source>,
     shell: OsString,
     notifications: Notifications,
     scrollback_lines: usize,
@@ -624,11 +626,25 @@ pub fn load_with_path(path: Option<&Path>) -> Result<Config, String> {
         Some(path) => load_config(path, false)?,
         None => load_config(&config_path(), true)?,
     };
-    Ok(resolve_config(configured))
+    let selected = path.map(Path::to_owned).unwrap_or_else(config_path);
+    let selected = if selected.is_absolute() {
+        selected
+    } else {
+        env::current_dir()
+            .map_err(|error| error.to_string())?
+            .join(selected)
+    };
+    let mut config = resolve_config(configured);
+    config.source = Some(reload::Source {
+        path: selected,
+        allow_missing: path.is_none(),
+    });
+    Ok(config)
 }
 
 fn resolve_config(configured: ParsedConfig) -> Config {
     Config {
+        source: None,
         shell: select_shell(
             env::var_os("RUSTMUX_SHELL"),
             configured.shell.map(OsString::from),
