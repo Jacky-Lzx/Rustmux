@@ -220,6 +220,59 @@ fn acquire_server_in(
     Ok(ServerLease { _lock: lock })
 }
 
+/// Serialize snapshot deletion with loading and binding a restored workspace.
+/// This sidecar stays on disk: unlinking it could split concurrent lock owners.
+pub(crate) fn acquire_workspace(name: &SessionName) -> io::Result<Flock<File>> {
+    acquire_workspace_in(&session_directory(), name)
+}
+
+fn acquire_workspace_in(directory: &Path, name: &SessionName) -> io::Result<Flock<File>> {
+    ensure_private_directory(directory)?;
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .mode(0o600)
+        .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK)
+        .open(directory.join(format!("{name}.workspace")))?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.uid() != effective_user_id() || metadata.mode() & 0o077 != 0
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "unsafe workspace lock",
+        ));
+    }
+    Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|(_, error)| io::Error::from(error))
+}
+
+pub(crate) fn delete_saved(name: &SessionName) -> io::Result<()> {
+    delete_saved_in(
+        &session_directory(),
+        &crate::persistence::state_directory()?,
+        name,
+    )
+}
+
+fn delete_saved_in(runtime: &Path, state: &Path, name: &SessionName) -> io::Result<()> {
+    let _workspace = acquire_workspace_in(runtime, name)?;
+    // Refuse any endpoint, including one whose server is starting or stopping.
+    // Creation holds the same workspace lock until its socket has been bound.
+    match fs::symlink_metadata(socket_path_in(runtime, name)) {
+        Ok(_) => {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!(
+                    "session '{name}' has a runtime endpoint; stop it before deleting its snapshot"
+                ),
+            ));
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    crate::persistence::delete(state, name)
+}
+
 /// Return the PID only when a live server owns the PID record's lock.
 pub(crate) fn live_server_pid(name: &SessionName) -> io::Result<Pid> {
     live_server_pid_in(&session_directory(), name)
@@ -715,6 +768,43 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn saved_deletion_serializes_with_startup_and_refuses_runtime_endpoints() {
+        let runtime = TestDirectory::new();
+        let state = tempfile::tempdir().unwrap();
+        fs::set_permissions(state.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let name = SessionName::new("saved").unwrap();
+        let path = state.path().join("saved.toml");
+        // Deletion also works for corrupt snapshots that cannot be restored.
+        fs::write(&path, "version = 999").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        let starting = acquire_workspace_in(&runtime.0, &name).unwrap();
+        assert_eq!(
+            delete_saved_in(&runtime.0, state.path(), &name)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::WouldBlock
+        );
+        assert!(path.exists());
+        let endpoint = SessionEndpoint::bind_in(&runtime.0, &name).unwrap();
+        drop(starting);
+        assert_eq!(
+            delete_saved_in(&runtime.0, state.path(), &name)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        assert!(path.exists());
+        drop(endpoint);
+        delete_saved_in(&runtime.0, state.path(), &name).unwrap();
+        assert!(!path.exists());
+        // A retained lock path remains the same inode after endpoint cleanup.
+        let lock_path = runtime.0.join("saved.workspace");
+        let identity = fs::metadata(&lock_path).unwrap().ino();
+        drop(acquire_workspace_in(&runtime.0, &name).unwrap());
+        assert_eq!(fs::metadata(lock_path).unwrap().ino(), identity);
     }
 
     #[test]

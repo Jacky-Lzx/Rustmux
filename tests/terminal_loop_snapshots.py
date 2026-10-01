@@ -137,7 +137,7 @@ with tempfile.TemporaryDirectory(prefix="rustmux-snapshots-") as root:
         expect_picker(session, b"<Enter> Restore", b"[SAVED]")
         session.send(b"\x1b")
         expect_picker(session, b"<Enter> Restore  <a> New")
-        session.send(b"dd\r")  # Killing a saved-only workspace is disabled.
+        session.send(b"dx\r")  # Another key cancels saved-workspace deletion.
         session.expect(b"RUSTMUX_READY>")
         assert command(env, "ls").stdout.splitlines().count(name) == 1
         row = next(line for line in command(env, "ls", "--long").stdout.splitlines() if line.startswith(name + " "))

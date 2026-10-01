@@ -35,9 +35,11 @@ the `Restore` action. Enter starts fresh shells using the selected configuration
 and current terminal dimensions before attaching. `attach` without a name
 restores directly when there is just one entry.
 
-The manager's `dd` action and `kill-all` operate only on running servers and
-retain their snapshots. Stopped saved entries do not offer `dd`; remove the
-snapshot file explicitly to forget them. Listing checks file names and private
+The manager's `dd` action terminates running servers while retaining their
+snapshots. On a stopped saved entry it instead confirms deletion of that
+snapshot; any intervening key cancels. `kill-all` still ignores saved-only
+entries. See [Saved Workspace Deletion](saved-session-delete.md) for safety
+checks, configurable keys and failure behavior. Listing checks file names and private
 regular-file metadata without decoding history. A corrupt private snapshot
 remains discoverable; its validation error is reported on restore.
 

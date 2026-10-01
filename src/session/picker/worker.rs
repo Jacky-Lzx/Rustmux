@@ -1,4 +1,4 @@
-//! Filesystem refreshes and acknowledged saves stay off the picker input loop.
+//! Filesystem refreshes, saves and deletion stay off the picker input loop.
 use super::*;
 use std::sync::{
     Mutex,
@@ -8,12 +8,14 @@ use std::thread::{self, JoinHandle};
 
 enum Request {
     Save(SessionName),
+    Delete(SessionName),
     Stop,
 }
 #[derive(Default)]
 pub(super) struct Updates {
     pub list: Option<Result<Vec<SessionInfo>, String>>,
     pub save: Option<(SessionName, Result<(), String>)>,
+    pub delete: Option<(SessionName, Result<(), String>)>,
 }
 pub(super) struct Worker {
     requests: SyncSender<Request>,
@@ -29,6 +31,7 @@ impl Worker {
             .name("rustmux-manager".into())
             .spawn(move || {
                 loop {
+                    let mut delete = None;
                     let save = match rx.recv_timeout(Duration::from_millis(500)) {
                         Ok(Request::Save(name)) => {
                             let result = super::super::snapshot::save_session_with_timeout(
@@ -37,6 +40,12 @@ impl Worker {
                             )
                             .map_err(|e| e.to_string());
                             Some((name, result))
+                        }
+                        Ok(Request::Delete(name)) => {
+                            let result =
+                                super::super::delete_saved(&name).map_err(|e| e.to_string());
+                            delete = Some((name, result));
+                            None
                         }
                         Ok(Request::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
                         Err(mpsc::RecvTimeoutError::Timeout) => None,
@@ -49,6 +58,9 @@ impl Worker {
                         .map_err(|e| e.to_string());
                     let mut slot = output.lock().expect("manager mailbox");
                     slot.list = Some(list);
+                    if delete.is_some() {
+                        slot.delete = delete;
+                    }
                     if save.is_some() {
                         slot.save = save;
                     }
@@ -63,6 +75,9 @@ impl Worker {
     pub fn save(&self, name: SessionName) -> bool {
         self.requests.try_send(Request::Save(name)).is_ok()
     }
+    pub fn delete(&self, name: SessionName) -> bool {
+        self.requests.try_send(Request::Delete(name)).is_ok()
+    }
     pub fn poll(&self) -> Updates {
         self.updates
             .try_lock()
@@ -75,7 +90,7 @@ impl Worker {
     }
     fn finish(&mut self) {
         if let Some(thread) = self.thread.take() {
-            // Complete accepted saves and end all workers before a picker choice
+            // Complete accepted operations and end all workers before a picker choice
             // can restore/create a session through the supervisor's fork path.
             let _ = self.requests.send(Request::Stop);
             let _ = thread.join();

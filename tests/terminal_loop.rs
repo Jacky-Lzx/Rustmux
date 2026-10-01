@@ -116,3 +116,8 @@ fn reload() {
 fn manager() {
     run_scenario("manager");
 }
+
+#[test]
+fn saved_delete() {
+    run_scenario("saved_delete");
+}

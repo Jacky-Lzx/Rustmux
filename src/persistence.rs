@@ -426,6 +426,24 @@ pub(crate) fn save(directory: &Path, name: &SessionName, snapshot: &Snapshot) ->
     Ok(())
 }
 
+/// Remove only the selected private regular snapshot, without decoding history.
+pub(crate) fn delete(directory: &Path, name: &SessionName) -> io::Result<()> {
+    check_directory(directory, false)?;
+    let path = directory.join(format!("{name}.toml"));
+    let metadata = fs::symlink_metadata(&path)?;
+    if !metadata.is_file()
+        || metadata.uid() != nix::unistd::geteuid().as_raw()
+        || metadata.mode() & 0o077 != 0
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "refusing to delete an unsafe snapshot",
+        ));
+    }
+    fs::remove_file(path)?;
+    std::fs::File::open(directory)?.sync_all()
+}
+
 fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
 }
@@ -512,6 +530,54 @@ mod tests {
         assert_eq!(
             list_names(directory.path()).unwrap_err().kind(),
             io::ErrorKind::PermissionDenied
+        );
+    }
+
+    #[test]
+    fn deletion_is_scoped_and_rejects_unsafe_files_and_directories() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let name = SessionName::new("work").unwrap();
+        let other = SessionName::new("other").unwrap();
+        save(directory.path(), &name, &sample()).unwrap();
+        save(directory.path(), &other, &sample()).unwrap();
+        let path = directory.path().join("work.toml");
+        let retained = directory.path().join("other.toml");
+        let before = fs::read(&retained).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(
+            delete(directory.path(), &name).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert!(path.exists());
+        fs::remove_file(&path).unwrap();
+        std::os::unix::fs::symlink(&retained, &path).unwrap();
+        assert_eq!(
+            delete(directory.path(), &name).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert!(
+            fs::symlink_metadata(&path)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        fs::remove_file(&path).unwrap();
+        fs::create_dir(&path).unwrap();
+        assert!(delete(directory.path(), &name).is_err());
+        fs::remove_dir(&path).unwrap();
+        save(directory.path(), &name, &sample()).unwrap();
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(delete(directory.path(), &name).is_err());
+        assert!(path.exists());
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        delete(directory.path(), &name).unwrap();
+        assert!(!path.exists());
+        assert_eq!(fs::read(retained).unwrap(), before);
+        assert_eq!(list_names(directory.path()).unwrap(), vec![other]);
+        assert_eq!(
+            delete(directory.path(), &name).unwrap_err().kind(),
+            io::ErrorKind::NotFound
         );
     }
 

@@ -133,12 +133,13 @@ fn run_picker(
     let mut list_error = None;
     let mut reload_error = None;
     let mut saving = false;
+    let mut deleting = false;
     let mut selected = initially_selected
         .and_then(|name| sessions.iter().position(|session| &session.name == name))
         .unwrap_or(0);
     let mut create_input: Option<String> = None;
     let mut search_input: Option<String> = None;
-    let mut delete_armed: Option<SessionName> = None;
+    let mut delete_armed: Option<(SessionName, bool)> = None;
     let mut decoder = InputDecoder::default();
     let mut input = [0; 256];
     let mut previous_size = None;
@@ -153,7 +154,7 @@ fn run_picker(
         }
 
         let updates = worker.poll();
-        let save_completed = updates.save.is_some();
+        let operation_completed = updates.save.is_some() || updates.delete.is_some();
         if let Some(list) = updates.list {
             match list {
                 Ok(next) => {
@@ -187,13 +188,21 @@ fn run_picker(
             });
             dirty = true;
         }
+        if let Some((name, result)) = updates.delete {
+            deleting = false;
+            status = Some(match result {
+                Ok(()) => format!("Deleted {name}"),
+                Err(error) => format!("Delete failed: {error}"),
+            });
+            dirty = true;
+        }
         reload.poll_manager();
         let error = reload
             .error()
             .map(|error| format!("Config reload failed: {error}"));
         if error != reload_error {
             reload_error = error;
-            if !saving && !save_completed {
+            if !saving && !deleting && !operation_completed {
                 status = None;
             }
             dirty = true;
@@ -217,7 +226,7 @@ fn run_picker(
                     selected,
                     create_input: create_input.as_deref(),
                     search_input: search_input.as_deref(),
-                    delete_armed: delete_armed.as_ref(),
+                    delete_armed: delete_armed.as_ref().map(|(name, _)| name),
                     current: initially_selected,
                     bindings: &bindings,
                     status: status
@@ -262,11 +271,11 @@ fn run_picker(
             let editing = create_input.is_some() || search_input.is_some();
             let action = bindings.action(key, editing);
             let armed = delete_armed.take();
-            if action != Some(Action::Save) && !saving {
+            if action != Some(Action::Save) && !saving && !deleting {
                 status = None;
             }
             if action == Some(Action::Save) {
-                if !saving {
+                if !saving && !deleting {
                     let target = save_target(
                         &sessions,
                         initially_selected,
@@ -354,12 +363,21 @@ fn run_picker(
                     }
                     Some(Action::Create) => create_input = Some(String::new()),
                     Some(Action::Search) => search_input = Some(String::new()),
-                    Some(Action::Delete) if !visible.is_empty() && !visible[selected].saved => {
+                    Some(Action::Delete) if !visible.is_empty() && !saving && !deleting => {
                         let name = visible[selected].name.clone();
-                        if armed.as_ref() == Some(&name) {
-                            return Ok(Choice::Kill(name));
+                        if armed.as_ref() == Some(&(name.clone(), visible[selected].saved)) {
+                            if !visible[selected].saved {
+                                return Ok(Choice::Kill(name));
+                            }
+                            status = Some(if worker.delete(name.clone()) {
+                                deleting = true;
+                                format!("Deleting {name}…")
+                            } else {
+                                "Delete failed: worker unavailable".into()
+                            });
+                        } else {
+                            delete_armed = Some((name, visible[selected].saved));
                         }
-                        delete_armed = Some(name);
                     }
                     Some(Action::Cancel) => return Ok(Choice::Cancel),
                     _ => {}
@@ -827,7 +845,12 @@ fn picker_footer(view: &PickerView<'_>, compact: bool) -> String {
     let b = view.bindings;
     let saved = view.sessions.get(view.selected).is_some_and(|s| s.saved);
     if let Some(name) = view.delete_armed {
-        return format!("Press {} again to kill '{}'", delete_label(b), name);
+        return format!(
+            "Press {} again to {} '{}'",
+            delete_label(b),
+            if saved { "delete saved" } else { "kill" },
+            name
+        );
     }
     let open = if view.create_input.is_some() {
         "Create"
@@ -847,11 +870,12 @@ fn picker_footer(view: &PickerView<'_>, compact: bool) -> String {
         ]);
     } else {
         hints.push(b.hint(Action::Create, "New"));
-        if !saved {
-            let label = repeat_delete_label(b);
-            if !label.is_empty() {
-                hints.push(format!("<{label}> Kill"));
-            }
+        let label = repeat_delete_label(b);
+        if !label.is_empty() {
+            hints.push(format!(
+                "<{label}> {}",
+                if saved { "Delete" } else { "Kill" }
+            ));
         }
     }
     if !saved || view.current.is_some() {
@@ -1180,7 +1204,7 @@ mod tests {
             last_connected_at: None,
         }];
         for (size, query, action) in [
-            ((24, 80), None, "<Enter> Restore"),
+            ((24, 160), None, "<Enter> Restore"),
             ((6, 40), None, "<Enter> Restore"),
             ((24, 100), Some("off"), "<Enter> Restore"),
         ] {
@@ -1188,7 +1212,9 @@ mod tests {
                 String::from_utf8(render(&sessions, 0, size, None, query, None, None)).unwrap();
             assert!(frame.contains("[SAVED]"));
             assert!(frame.contains(action));
-            assert!(!frame.contains("dd"));
+            if query.is_none() && size.1 >= 160 {
+                assert!(frame.contains("<dd> Delete"));
+            }
             assert!(!frame.contains("[DETACHED]"));
         }
     }

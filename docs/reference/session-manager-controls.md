@@ -37,7 +37,7 @@ Hints in editors only show usable keys.
 The manager preserves the current search/name text during a valid reload.
 Partial escape reports finish before the new bindings apply. Invalid updates
 retain the entire previous keymap and show an error. Replacing a keymap cancels
-an armed termination confirmation.
+an armed deletion/termination confirmation.
 
 Unlike the server's entry-key policy, the manager's bindings can update while
 editing even if the file also changes a server restart-only setting. The manager
@@ -79,19 +79,20 @@ request to finish or time out.
 ## List refresh and termination
 
 While open, the manager refreshes the running/saved session list in the
-background every 500 ms and immediately after a save completes. Search and name
+background every 500 ms and immediately after a save or deletion completes. Search and name
 editing remain open. Selection follows the same session name when it still
 exists; otherwise it moves to the nearest valid row. A changed list cancels an
-armed termination confirmation. Refresh failures retain the displayed list and
+armed deletion/termination confirmation. Refresh failures retain the displayed list and
 show an error. A selected workspace is checked again before attachment or
 restoration, so a workspace that stopped while the picker was open can restore
 from its saved snapshot.
 
-The `delete` action preserves this track's existing behavior: press its key
-twice consecutively to terminate a live session. Default `dd` still requires
-confirmation. Saved snapshots remain, and the action is unavailable on
-saved-only rows. Snapshot deletion, session rename and disconnecting another
-client are separate future increments.
+Press the `delete` key twice consecutively to terminate a live session, keeping
+its snapshot, or to delete the snapshot of a saved-only workspace. Default `dd`
+requires confirmation in both cases. The footer distinguishes `Kill` from
+`Delete`. See [Saved Workspace Deletion](saved-session-delete.md) for behavior
+and safety checks. Session rename and disconnecting another client remain
+separate future increments.
 
 Configuration reading and list/save operations use bounded mailboxes outside
 the input loop. Before returning a choice, the manager shuts down and joins its

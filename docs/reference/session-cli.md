@@ -87,7 +87,7 @@ session prefix.
 `list`/`ls` and the manager include saved workspaces after the server exits.
 Detailed listings label them `SAVED`; live and saved copies of the same name
 appear only once. `kill-all` ignores saved-only entries. The manager offers
-`Restore` for these entries, with its `dd` kill action disabled.
+`Restore` and confirmed `dd` snapshot deletion for these entries.
 
 `attach` validates the private runtime directory and requires the socket to be
 owned by the effective user with no group or other permissions. It then performs
@@ -116,7 +116,8 @@ returns to the complete table. An empty result leaves Enter and Tab inactive. As
 `main` Session Manager, `a` opens a bounded session-name editor; Enter creates
 and attaches the new session, while Esc returns to the table. Pressing `d` once
 arms termination for a selected live session and changes the footer to a warning.
-Only an immediately following `d` terminates it; every other key clears the
+For a saved-only row, the same action arms deletion of its disk snapshot.
+Only an immediately following `d` confirms the selected action; every other key clears the
 pending confirmation. After termination, the refreshed table remains open. The
 window follows terminal resizes and restores the previous terminal modes and
 screen before attaching or returning.

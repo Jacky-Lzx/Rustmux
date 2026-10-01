@@ -65,6 +65,7 @@ fn create_with_bootstrap(
     } else {
         size
     };
+    let workspace = super::acquire_workspace(name)?;
     let snapshot = if let Some(layout) = layout {
         let (rows, columns) = size.unwrap();
         Some(crate::project::load(layout, rows, columns)?)
@@ -75,6 +76,7 @@ fn create_with_bootstrap(
         .or_else(|| snapshot.as_ref().map(|snapshot| snapshot.bootstrap_size()))
         .unwrap_or((DETACHED_ROWS, DETACHED_COLUMNS));
     let endpoint = SessionEndpoint::bind(name)?;
+    drop(workspace);
     // SAFETY: the CLI calls this during single-threaded startup, so the child
     // cannot inherit locks held by another thread.
     match unsafe { fork() }? {
