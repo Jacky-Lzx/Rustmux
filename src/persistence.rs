@@ -47,6 +47,8 @@ struct SavedWindow {
 #[serde(deny_unknown_fields)]
 struct SavedPane {
     id: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    command: Option<String>,
     directory: Option<PathBuf>,
     history: Vec<SavedRow>,
 }
@@ -86,6 +88,7 @@ impl PreparedSnapshot {
                 }
                 panes.push(SavedPane {
                     id: id.get(),
+                    command: pane.startup_command().map(str::to_owned),
                     directory: pane.inherited_directory(),
                     history: Vec::new(),
                 });
@@ -130,6 +133,50 @@ impl PreparedSnapshot {
 }
 
 impl Snapshot {
+    pub(crate) fn from_project(
+        project: crate::project::Project,
+        rows: u16,
+        columns: u16,
+    ) -> io::Result<Self> {
+        let mut windows = Vec::new();
+        for window in project.windows {
+            let mut layout = Layout::new(crate::chrome::pane_rows(rows), columns)?;
+            let first = layout.active();
+            let mut panes = Vec::new();
+            for pane in window.panes {
+                let id = if panes.is_empty() {
+                    first
+                } else {
+                    layout.split_active(match pane.split {
+                        crate::project::Split::Right => crate::layout::SplitAxis::Columns,
+                        crate::project::Split::Down => crate::layout::SplitAxis::Rows,
+                    })?
+                };
+                panes.push(SavedPane {
+                    id: id.get(),
+                    command: pane.command,
+                    directory: Some(pane.cwd),
+                    history: Vec::new(),
+                });
+            }
+            layout.select(first)?;
+            windows.push(SavedWindow {
+                name: window.name,
+                layout: layout.saved(),
+                panes,
+            });
+        }
+        let snapshot = Self {
+            version: VERSION,
+            rows,
+            columns,
+            active_window: 0,
+            colors: false,
+            windows,
+        };
+        snapshot.validate()?;
+        Ok(snapshot)
+    }
     pub(crate) fn bootstrap_size(&self) -> (u16, u16) {
         (self.rows, self.columns)
     }
@@ -176,6 +223,7 @@ impl Snapshot {
                 return Err(invalid("saved pane contents do not match layout leaves"));
             }
             for pane in &window.panes {
+                crate::project::validate_command(pane.command.as_deref())?;
                 if pane
                     .directory
                     .as_ref()
@@ -211,13 +259,14 @@ impl Snapshot {
                     .iter()
                     .find(|pane| pane.id == id.get())
                     .unwrap();
-                let mut pane = Pane::spawn_in(
+                let mut pane = Pane::spawn_with_startup(
                     shell,
                     saved.directory.as_deref(),
                     rect.rows,
                     rect.columns,
                     notifications,
                     history_limit,
+                    saved.command.as_deref(),
                 )?;
                 if restore_history {
                     pane.parts_mut()
@@ -397,11 +446,13 @@ mod tests {
                 panes: vec![
                     SavedPane {
                         id: 0,
+                        command: None,
                         directory: Some(PathBuf::from("/tmp")),
                         history: vec![],
                     },
                     SavedPane {
                         id: 1,
+                        command: None,
                         directory: None,
                         history: vec![SavedRow {
                             text: "retained output".into(),

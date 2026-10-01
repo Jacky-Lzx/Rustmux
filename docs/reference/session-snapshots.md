@@ -46,7 +46,8 @@ window, zoom state and working directories. Temporary history/output editor
 windows and hidden undo panes are excluded. A missing directory falls back to the
 server's working directory. Every restored pane starts the currently configured
 shell; shell variables, processes, foreground jobs and command exit state are
-not restored or rerun.
+not restored. Explicit [project startup commands](project-layouts.md) are rerun;
+ordinary interactive commands and saved output are not executed.
 
 The flat split-tree format is validated before any restored shell starts.
 Invalid files are reported during `new`, without replacing the snapshot. All
@@ -136,7 +137,7 @@ TOML reader. The work on the review branch is implementation evidence, not owner
 
 Local verification on macOS, 2026-10-01:
 
-- `cargo test --all-targets --locked --offline -- --test-threads=4`: 845 passed,
+- `cargo test --all-targets --locked --offline -- --test-threads=4`: 851 passed,
   zero failed, six ignored by their existing default test settings.
 - The strengthened PTY scenario was rerun successfully after adding saved CLI
   listings, manager restoration, saved-size and malformed save-request checks.

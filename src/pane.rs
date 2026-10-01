@@ -40,6 +40,7 @@ pub(crate) const MAX_REPLY_DRAIN_BYTES: usize = 8192;
 #[derive(Debug)]
 pub struct Pane {
     control_id: u64,
+    startup_command: Option<String>,
     shell: PtyShell,
     parser: Parser,
     graphics_framer: GraphicsFramer,
@@ -182,6 +183,9 @@ impl Pane {
     pub(crate) fn control_id(&self) -> u64 {
         self.control_id
     }
+    pub(crate) fn startup_command(&self) -> Option<&str> {
+        self.startup_command.as_deref()
+    }
     pub(crate) fn is_temporary(&self) -> bool {
         self._temporary_file.is_some()
     }
@@ -207,6 +211,27 @@ impl Pane {
         notifications: crate::config::Notifications,
         scrollback_lines: usize,
     ) -> io::Result<Self> {
+        Self::spawn_with_startup(
+            shell,
+            directory,
+            rows,
+            columns,
+            notifications,
+            scrollback_lines,
+            None,
+        )
+    }
+
+    pub(crate) fn spawn_with_startup(
+        shell: impl AsRef<OsStr>,
+        directory: Option<&Path>,
+        rows: u16,
+        columns: u16,
+        notifications: crate::config::Notifications,
+        scrollback_lines: usize,
+        startup: Option<&str>,
+    ) -> io::Result<Self> {
+        crate::project::validate_command(startup)?;
         let control_id = next_control_id()?;
         if usize::from(rows) * usize::from(columns) > MAX_CELLS {
             return Err(io::Error::new(
@@ -220,7 +245,7 @@ impl Pane {
             scrollback_lines,
         )?;
         let directory = directory.filter(|path| path.is_dir());
-        let shell = PtyShell::spawn_in(shell, directory, rows, columns)?;
+        let shell = PtyShell::spawn_startup(shell, directory, rows, columns, startup)?;
         let master = shell.master_fd().expect("new PTY is open");
         let flags = OFlag::from_bits_truncate(fcntl(master, FcntlArg::F_GETFL)?);
         fcntl(master, FcntlArg::F_SETFL(flags | OFlag::O_NONBLOCK))?;
@@ -230,6 +255,7 @@ impl Pane {
         }
         Ok(Self {
             control_id,
+            startup_command: startup.map(str::to_owned),
             shell,
             parser: Parser::new(),
             graphics_framer: GraphicsFramer::new(),
@@ -268,6 +294,7 @@ impl Pane {
         fcntl(master, FcntlArg::F_SETFL(flags | OFlag::O_NONBLOCK))?;
         Ok(Self {
             control_id,
+            startup_command: None,
             shell,
             parser: Parser::new(),
             graphics_framer: GraphicsFramer::new(),

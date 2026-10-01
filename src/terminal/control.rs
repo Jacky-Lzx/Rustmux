@@ -165,6 +165,9 @@ pub(super) fn handle(
             let set = windows.get_mut(window).unwrap().content_mut();
             let previous = set.layout().active();
             let directory = set.get(id).unwrap().inherited_directory();
+            if set.get(id).unwrap().is_temporary() {
+                return Err(invalid("temporary editor panes cannot be split by script"));
+            }
             set.select(id)?;
             let result = set.split_with(
                 if down {
@@ -204,6 +207,23 @@ pub(super) fn handle(
             let (destination, target_id) = target(windows, Some(to_pane))?;
             if source == destination {
                 return Err(invalid("join-pane requires panes in different windows"));
+            }
+            if windows
+                .get(source)
+                .unwrap()
+                .content()
+                .get(id)
+                .unwrap()
+                .is_temporary()
+                || windows
+                    .get(destination)
+                    .unwrap()
+                    .content()
+                    .get(target_id)
+                    .unwrap()
+                    .is_temporary()
+            {
+                return Err(invalid("temporary editor panes cannot be joined"));
             }
             let control_id = windows
                 .get(source)
@@ -263,6 +283,11 @@ pub(super) fn handle(
             name(&window_name)?;
             let (source, id) = target(windows, pane)?;
             let set = windows.get(source).unwrap().content();
+            if set.get(id).unwrap().is_temporary() {
+                return Err(invalid(
+                    "temporary editor panes cannot be broken into windows",
+                ));
+            }
             let control_id = set.get(id).unwrap().control_id();
             if set.iter().len() == 1 {
                 return Ok(format!("{control_id}\n"));

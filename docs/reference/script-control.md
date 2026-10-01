@@ -33,6 +33,7 @@ the moved process, screen and ID; an emptied source window is removed. Breaks
 also preserve them. Breaking a window's sole pane is a no-op returning its ID.
 Invalid IDs, invalid names, exhausted limits and impossible splits return a
 nonzero exit status. Captures and input requests do not change focus.
+Temporary history/output editor panes cannot be split or moved by script.
 
 `send-keys --literal` joins arguments with spaces. Named keys accept a single
 Unicode character, `Ctrl c`-style control keys, Enter, Tab, Esc, Space, Backspace,
@@ -65,3 +66,15 @@ in `src/terminal.rs`, pane identity in `src/pane.rs`, then CLI dispatch.
 `cargo test --test terminal_loop control` verifies attached/detached operations,
 malformed and idle controllers, bounded input, failed ID isolation and stable
 process/ID behavior after joins and breaks.
+
+[Project layouts](project-layouts.md) cover startup files and recorded commands.
+Local cumulative verification on macOS, 2026-10-01:
+
+- `cargo test --all-targets --locked --offline -- --test-threads=4`: 851 passed,
+  zero failed, six existing tests ignored by default.
+- Focused real PTY control and project scenarios passed, including server-side
+  input rejection and fragmented requests.
+- Rust formatting, Clippy with warnings denied and the mdBook build passed.
+
+This review branch is implementation evidence; its final changes await the
+owner's review. Linux CI and installed-client validation were not performed.

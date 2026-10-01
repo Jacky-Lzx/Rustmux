@@ -30,6 +30,9 @@ pub enum Command {
         /// Leave the new session running without attaching this terminal.
         #[arg(short, long)]
         detached: bool,
+        /// Start from a project TOML file instead of the saved workspace.
+        #[arg(long)]
+        layout: Option<PathBuf>,
     },
     /// Attach to an existing named session.
     Attach {
@@ -72,6 +75,7 @@ mod tests {
             Some(Command::New {
                 name: SessionName::new("work").unwrap(),
                 detached: false,
+                layout: None,
             })
         );
         assert_eq!(
@@ -81,6 +85,7 @@ mod tests {
             Some(Command::New {
                 name: SessionName::new("work").unwrap(),
                 detached: true,
+                layout: None,
             })
         );
         assert_eq!(

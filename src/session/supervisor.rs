@@ -32,7 +32,18 @@ pub fn create(
     detached: bool,
     config_path: Option<&Path>,
 ) -> io::Result<u8> {
-    create_with_bootstrap(name, config, detached, config_path, None)
+    create_with_bootstrap(name, config, detached, config_path, None, None)
+}
+
+/// Validate an explicit project layout before binding or forking its named server.
+pub fn create_from_layout(
+    name: &SessionName,
+    config: &crate::config::Config,
+    detached: bool,
+    config_path: Option<&Path>,
+    layout: &Path,
+) -> io::Result<u8> {
+    create_with_bootstrap(name, config, detached, config_path, None, Some(layout))
 }
 
 fn create_with_bootstrap(
@@ -41,8 +52,25 @@ fn create_with_bootstrap(
     detached: bool,
     config_path: Option<&Path>,
     size: Option<(u16, u16)>,
+    layout: Option<&Path>,
 ) -> io::Result<u8> {
-    let snapshot = crate::persistence::load(&crate::persistence::state_directory()?, name)?;
+    let size = if layout.is_some() {
+        if detached {
+            Some((40, 120))
+        } else {
+            let file = crate::terminal_device::TerminalDevice::open_controlling()?;
+            let size = crate::terminal_device::window_size(&file)?;
+            Some((size.ws_row, size.ws_col))
+        }
+    } else {
+        size
+    };
+    let snapshot = if let Some(layout) = layout {
+        let (rows, columns) = size.unwrap();
+        Some(crate::project::load(layout, rows, columns)?)
+    } else {
+        crate::persistence::load(&crate::persistence::state_directory()?, name)?
+    };
     let bootstrap_size = size
         .or_else(|| snapshot.as_ref().map(|snapshot| snapshot.bootstrap_size()))
         .unwrap_or((DETACHED_ROWS, DETACHED_COLUMNS));
@@ -203,6 +231,7 @@ fn restore_selected(session: &super::SessionInfo, config_path: Option<&Path>) ->
             true,
             config_path,
             Some((size.ws_row, size.ws_col)),
+            None,
         )?;
     }
     Ok(())

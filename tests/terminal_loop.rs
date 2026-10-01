@@ -73,6 +73,11 @@ fn control() {
 }
 
 #[test]
+fn project() {
+    run_scenario("project");
+}
+
+#[test]
 fn frame_reconstruction() {
     run_scenario("frames");
 }

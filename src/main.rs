@@ -36,10 +36,23 @@ fn execute(cli: rustmux::cli::Cli) -> Result<u8, String> {
             )
             .map_err(|error| error.to_string())
         }
-        Some(rustmux::cli::Command::New { name, detached }) => {
+        Some(rustmux::cli::Command::New {
+            name,
+            detached,
+            layout,
+        }) => {
             let config = rustmux::config::load_with_path(config_path)?;
-            rustmux::session::supervisor::create(&name, &config, detached, config_path)
-                .map_err(|error| error.to_string())
+            let result = match layout {
+                Some(layout) => rustmux::session::supervisor::create_from_layout(
+                    &name,
+                    &config,
+                    detached,
+                    config_path,
+                    &layout,
+                ),
+                None => rustmux::session::supervisor::create(&name, &config, detached, config_path),
+            };
+            result.map_err(|error| error.to_string())
         }
         Some(rustmux::cli::Command::Attach { name }) => match name {
             Some(name) => rustmux::session::supervisor::attach(&name, config_path)
@@ -200,9 +213,15 @@ mod tests {
             Some(Command::New {
                 name: name.clone(),
                 detached: false,
+                layout: None,
             }),
             Some(Command::Attach {
                 name: Some(name.clone()),
+            }),
+            Some(Command::New {
+                name: name.clone(),
+                detached: false,
+                layout: Some("project.toml".into()),
             }),
         ] {
             assert!(starts_interactive_session(&command));
@@ -211,6 +230,7 @@ mod tests {
             Some(Command::New {
                 name: name.clone(),
                 detached: true,
+                layout: None,
             }),
             Some(Command::List { long: false }),
             Some(Command::Kill { name: name.clone() }),

@@ -53,6 +53,31 @@ with tempfile.TemporaryDirectory(prefix="rustmux-control-") as root:
                 peer.sendall(packet)
         session.send(b"stty -echo; KEEP=preserved; printf 'PTY_%s\\n' ALIVE\n")
         session.expect(b"PTY_ALIVE")
+        # Bypass CLI validation and fragment a wire request to check server-side
+        # limits and incremental header/body assembly.
+        body = (f'action="send-keys"\npane={first["id"]}\nbytes=[' +
+                ','.join(['0'] * 4097) + ']\n').encode()
+        header = struct.pack("!I", len(body))
+        with socket.socket(socket.AF_UNIX) as peer:
+            peer.settimeout(3)
+            peer.connect(str(endpoint))
+            peer.sendall(header[:2])
+            time.sleep(0.01)
+            peer.sendall(header[2:] + body[:100])
+            time.sleep(0.01)
+            peer.sendall(body[100:])
+            response = bytearray()
+            while len(response) < 4:
+                chunk = peer.recv(4096)
+                assert chunk, "server closed without rejecting input"
+                response.extend(chunk)
+            length = struct.unpack("!I", response[:4])[0]
+            while len(response) < length + 4:
+                chunk = peer.recv(4096)
+                assert chunk
+                response.extend(chunk)
+            rejected = tomllib.loads(response[4:].decode())
+            assert not rejected["ok"] and "4096" in rejected["output"], rejected
         moved = int(command("new-window", "--name", "logs"))
         split = int(command("split-pane", "-p", moved, "--down"))
         assert len({p["id"] for p in panes()}) == 3

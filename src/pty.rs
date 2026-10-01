@@ -45,8 +45,25 @@ impl PtyShell {
         rows: u16,
         columns: u16,
     ) -> io::Result<Self> {
+        Self::spawn_startup(shell, directory, rows, columns, None)
+    }
+
+    pub(crate) fn spawn_startup(
+        shell: impl AsRef<OsStr>,
+        directory: Option<&Path>,
+        rows: u16,
+        columns: u16,
+        startup: Option<&str>,
+    ) -> io::Result<Self> {
         let mut command = Command::new(shell);
-        command.arg("-i");
+        match startup {
+            Some(startup) => {
+                command.arg("-c").arg(startup);
+            }
+            None => {
+                command.arg("-i");
+            }
+        }
         if let Some(directory) = directory {
             command.current_dir(directory);
         }

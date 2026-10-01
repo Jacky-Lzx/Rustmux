@@ -21,6 +21,7 @@ pub mod pane_set;
 pub mod pane_view;
 pub mod parser;
 mod persistence;
+mod project;
 mod prompt;
 pub mod pty;
 pub mod render;

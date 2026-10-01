@@ -22,6 +22,8 @@ fresh restored shells.
 
 Additional [script control commands](script-control.md) query panes, send input,
 capture text, create windows and splits, and move panes while preserving processes.
+`new --layout PATH` starts a validated [project layout](project-layouts.md),
+including directories, windows, splits and optional explicit startup commands.
 
 `--config PATH` (or `-c PATH`) selects the configuration for foreground startup
 and newly created named sessions. It can appear before or after a subcommand:
