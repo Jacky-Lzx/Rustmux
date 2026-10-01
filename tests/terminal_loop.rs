@@ -131,3 +131,8 @@ fn saved_rename() {
 fn live_rename() {
     run_scenario("live_rename");
 }
+
+#[test]
+fn disconnect() {
+    run_scenario("disconnect");
+}

@@ -235,7 +235,10 @@ with tempfile.TemporaryDirectory(prefix="rustmux-snapshots-") as root:
         session.expect(b"AUTO_BEFORE")
         session.send(b"\x02d")
         session.finish(0)
-        assert path.exists() and "AUTO_BEFORE" in path.read_text()
+        # Client exit restores its terminal before the server finishes its
+        # asynchronous detach checkpoint. Observe the durable file with a deadline.
+        wait_until(lambda: path.exists() and "AUTO_BEFORE" in path.read_text(),
+                   "detach checkpoint did not capture prior output")
         wait_until(lambda: "AUTO_DETACHED" in path.read_text(), "detached autosave did not capture new output")
     finally:
         session.close()

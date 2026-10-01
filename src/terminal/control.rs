@@ -69,6 +69,9 @@ pub(super) fn handle(
 ) -> io::Result<String> {
     match request {
         Request::RenameSession { .. } => Err(invalid("live rename is unavailable for this server")),
+        Request::DisconnectSession { .. } => {
+            Err(invalid("client disconnect is unavailable for this server"))
+        }
         Request::ShowConfig => reload
             .ok_or_else(|| invalid("configuration reload is unavailable"))
             .and_then(|reload| reload.status()),

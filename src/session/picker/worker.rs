@@ -10,6 +10,7 @@ enum Request {
     Save(SessionName),
     Delete(SessionName),
     Rename(SessionName, SessionName, Option<i32>),
+    Disconnect(SessionName, i32),
     Stop,
 }
 #[derive(Default)]
@@ -19,6 +20,7 @@ pub(super) struct Updates {
     pub save: Option<(SessionName, Result<(), String>)>,
     pub delete: Option<(SessionName, Result<(), String>)>,
     pub rename: Option<(SessionName, SessionName, Result<(), String>)>,
+    pub disconnect: Option<(SessionName, Result<(), String>)>,
 }
 pub(super) struct Worker {
     requests: SyncSender<Request>,
@@ -44,6 +46,7 @@ impl Worker {
                 loop {
                     let mut delete = None;
                     let mut rename = None;
+                    let mut disconnect = None;
                     let save = match rx.recv_timeout(Duration::from_millis(500)) {
                         Ok(Request::Save(name)) => {
                             let result = super::super::snapshot::save_session_with_timeout(
@@ -63,6 +66,12 @@ impl Worker {
                             let result = super::super::rename::session(&old, &new, server)
                                 .map_err(|e| e.to_string());
                             rename = Some((old, new, result));
+                            None
+                        }
+                        Ok(Request::Disconnect(name, server)) => {
+                            let result = crate::control::disconnect_session(&name, server)
+                                .map_err(|e| e.to_string());
+                            disconnect = Some((name, result));
                             None
                         }
                         Ok(Request::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -92,6 +101,9 @@ impl Worker {
                     if rename.is_some() {
                         slot.rename = rename;
                     }
+                    if disconnect.is_some() {
+                        slot.disconnect = disconnect;
+                    }
                     if delete.is_some() {
                         slot.delete = delete;
                     }
@@ -115,6 +127,11 @@ impl Worker {
     pub fn rename(&self, old: SessionName, new: SessionName, server: Option<i32>) -> bool {
         self.requests
             .try_send(Request::Rename(old, new, server))
+            .is_ok()
+    }
+    pub fn disconnect(&self, name: SessionName, server: i32) -> bool {
+        self.requests
+            .try_send(Request::Disconnect(name, server))
             .is_ok()
     }
     pub fn poll(&self) -> Updates {

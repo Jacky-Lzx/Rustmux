@@ -62,7 +62,7 @@ with tempfile.TemporaryDirectory(prefix="rustmux-delete-") as root:
             expect(session, b"<dd> Delete")
             assert path.read_bytes() == before
 
-            settings.write_text('[session_manager]\ndelete = ["Ctrl x"]\n')
+            settings.write_text('[session_manager]\ndelete = ["Ctrl x"]\ndisconnect = []\n')
             expect(session, b"<Ctrl-X twice> Delete")
             session.send(b"dd")  # The old shortcut is disabled.
             time.sleep(0.1)

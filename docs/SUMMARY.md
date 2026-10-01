@@ -50,6 +50,7 @@
 - [Session Manager Controls and Saving](reference/session-manager-controls.md)
 - [Saved Workspace Rename](reference/saved-session-rename.md)
 - [Live Session Rename](reference/live-session-rename.md)
+- [Session Manager Disconnect](reference/session-manager-disconnect.md)
 - [Saved Workspace Deletion](reference/saved-session-delete.md)
 - [Session Snapshots and Restored History](reference/session-snapshots.md)
 - [Script Control](reference/script-control.md)

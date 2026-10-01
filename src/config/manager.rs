@@ -62,12 +62,13 @@ pub(crate) enum Action {
     Create,
     Save,
     Rename,
+    Disconnect,
     Delete,
     Cancel,
     Backspace,
 }
 impl Action {
-    pub const ALL: [(Self, &'static str); 11] = [
+    pub const ALL: [(Self, &'static str); 12] = [
         (Self::Up, "up"),
         (Self::Down, "down"),
         (Self::Search, "search"),
@@ -76,6 +77,7 @@ impl Action {
         (Self::Create, "create"),
         (Self::Save, "save"),
         (Self::Rename, "rename"),
+        (Self::Disconnect, "disconnect"),
         (Self::Delete, "delete"),
         (Self::Cancel, "cancel"),
         (Self::Backspace, "backspace"),
@@ -100,6 +102,7 @@ impl Default for Bindings {
                 (Key::Byte(b'a'), Create),
                 (Key::Byte(1), Save),
                 (Key::Byte(18), Rename),
+                (Key::Byte(24), Disconnect),
                 (Key::Byte(b'd'), Delete),
                 (Key::Byte(27), Cancel),
                 (Key::Byte(b'q'), Cancel),
@@ -212,6 +215,35 @@ mod tests {
     fn parse(s: &str) -> Result<Bindings, String> {
         Bindings::parse(Some(&toml::Value::Table(s.parse::<toml::Table>().unwrap())))
     }
+    #[test]
+    fn disconnect_replaces_disables_and_validates_keys_without_consuming_editor_text() {
+        assert_eq!(
+            Bindings::default().action(Key::Byte(24), false),
+            Some(Action::Disconnect)
+        );
+        assert_eq!(
+            parse("disconnect=[]").unwrap().action(Key::Byte(24), false),
+            None
+        );
+        let custom = parse("disconnect=['x']").unwrap();
+        assert_eq!(
+            custom.action(Key::Byte(b'x'), false),
+            Some(Action::Disconnect)
+        );
+        assert_eq!(custom.action(Key::Byte(b'x'), true), None);
+        assert_eq!(custom.action(Key::Byte(24), false), None);
+        assert!(parse("disconnect=['Ctrl a']").is_err());
+        assert!(parse("disconnect=['Ctrl c']").is_err());
+        assert!(parse("disconnect=['bad key']").is_err());
+        assert!(parse("delete=['Ctrl x']").is_err());
+        assert_eq!(
+            parse("delete=['Ctrl x']\ndisconnect=[]")
+                .unwrap()
+                .action(Key::Byte(24), false),
+            Some(Action::Delete)
+        );
+    }
+
     #[test]
     fn replacements_disabling_and_alias_conflicts() {
         let b = parse("up=['Ctrl k']\ndown=['n']\ncreate=[]").unwrap();

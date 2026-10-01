@@ -15,6 +15,7 @@ open = ["enter"]
 create = ["a"]
 save = ["Ctrl a"]
 rename = ["Ctrl r"]
+disconnect = ["Ctrl x"]
 delete = ["d"]
 cancel = ["esc", "q"]
 backspace = ["backspace"]
@@ -53,10 +54,9 @@ deletion keeps the previous bindings; default-file deletion restores defaults.
 `check-config --toml` and `show-config` include a `[session_manager]` table of
 effective bindings. The former reads the selected file, while the latter reports
 the named server's applied configuration. `default-config` exports the manager
-defaults too. `rename` supports live and saved workspaces. Unimplemented
-manager actions, such as `disconnect` from the independent `main` track,
-remain ignored and are reported by
-`check-config`; `--strict` rejects those warnings.
+defaults too. `rename` supports live and saved workspaces. Unknown manager
+actions remain ignored and are reported by `check-config`; `--strict` rejects
+those warnings.
 
 ## Manual saving
 
@@ -96,8 +96,9 @@ Press the `delete` key twice consecutively to terminate a live session, keeping
 its snapshot, or to delete the snapshot of a saved-only workspace. Default `dd`
 requires confirmation in both cases. The footer distinguishes `Kill` from
 `Delete`. See [Saved Workspace Deletion](saved-session-delete.md) for behavior
-and safety checks. Ctrl-R renames live or saved workspaces. Disconnecting
-another client remains a separate increment.
+and safety checks. Ctrl-R renames live or saved workspaces. Ctrl-X gracefully
+disconnects the displayed client of another attached session; see
+[Session Manager Disconnect](session-manager-disconnect.md).
 
 Configuration reading and list/save operations use bounded mailboxes outside
 the input loop. Before returning a choice, the manager shuts down and joins its

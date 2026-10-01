@@ -281,6 +281,7 @@ down=["n"]
 save=[]
 rename=["Ctrl r"]
 disconnect=["Ctrl d"]
+unimplemented=[]
 "#,
     )
     .unwrap();
@@ -305,6 +306,10 @@ disconnect=["Ctrl d"]
     );
     assert_eq!(report["session_manager"]["down"][0].as_str(), Some("n"));
     assert_eq!(
+        report["session_manager"]["disconnect"][0].as_str(),
+        Some("Ctrl d")
+    );
+    assert_eq!(
         report["session_manager"]["rename"][0].as_str(),
         Some("Ctrl r")
     );
@@ -315,7 +320,11 @@ disconnect=["Ctrl d"]
             .is_empty()
     );
     assert_eq!(report["session_manager"]["up"].as_array().unwrap().len(), 2);
-    fs::write(&path, "[session_manager]\nrename=['Ctrl r']").unwrap();
+    fs::write(
+        &path,
+        "[session_manager]\nrename=['Ctrl r']\ndisconnect=['Ctrl d']",
+    )
+    .unwrap();
     let implemented = command(
         temporary.path(),
         &[

@@ -186,8 +186,10 @@ complete = ["tab"]
 open = ["enter"]
 create = ["a"]
 save = ["Ctrl a"]
-# Rename a saved-only workspace.
+# Rename a live or saved workspace.
 rename = ["Ctrl r"]
+# Detach the selected other session's displayed client; keep its panes running.
+disconnect = ["Ctrl x"]
 # Press twice to kill a live session or delete a saved-only snapshot.
 delete = ["d"]
 cancel = ["esc", "q"]

@@ -356,6 +356,48 @@ pub(crate) fn acquire_client(name: &SessionName) -> io::Result<ClientLease> {
     acquire_client_in(&session_directory(), name)
 }
 
+pub(crate) fn wait_for_client_release(
+    name: &SessionName,
+    deadline: std::time::Instant,
+) -> io::Result<()> {
+    wait_for_client_release_in(&session_directory(), name, deadline)
+}
+
+fn wait_for_client_release_in(
+    directory: &Path,
+    name: &SessionName,
+    deadline: std::time::Instant,
+) -> io::Result<()> {
+    // The caller holds the workspace lock. Read the existing lease only; a
+    // missing or unsafe lock must not manufacture an acknowledgement.
+    let mut file = open_lock_file_with(directory, name, false)?;
+    let metadata = file.metadata()?;
+    let identity = (metadata.dev(), metadata.ino());
+    loop {
+        if std::time::Instant::now() >= deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "client did not finish detaching; request may still complete",
+            ));
+        }
+        let metadata = fs::symlink_metadata(lock_path_in(directory, name))?;
+        if (metadata.dev(), metadata.ino()) != identity {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "client lease identity changed",
+            ));
+        }
+        match Flock::lock(file, FlockArg::LockSharedNonblock) {
+            Ok(_lease) => return Ok(()),
+            Err((lease, Errno::EWOULDBLOCK)) => {
+                file = lease;
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err((_, error)) => return Err(error.into()),
+        }
+    }
+}
+
 fn acquire_client_in(directory: &Path, name: &SessionName) -> io::Result<ClientLease> {
     let _workspace = acquire_workspace_in(directory, name)?;
     ensure_private_directory(directory)?;
@@ -1000,6 +1042,40 @@ mod tests {
         assert_eq!(
             connect_in(&directory.0, &name).unwrap_err().kind(),
             io::ErrorKind::PermissionDenied
+        );
+    }
+
+    #[test]
+    fn disconnect_acknowledgement_waits_for_lease_release_and_obeys_deadline() {
+        let directory = TestDirectory::new();
+        let name = SessionName::new("release").unwrap();
+        let _endpoint = SessionEndpoint::bind_in(&directory.0, &name).unwrap();
+        let lease = acquire_client_in(&directory.0, &name).unwrap();
+        use std::time::{Duration, Instant};
+        assert_eq!(
+            wait_for_client_release_in(
+                &directory.0,
+                &name,
+                Instant::now() + Duration::from_millis(20)
+            )
+            .unwrap_err()
+            .kind(),
+            io::ErrorKind::TimedOut
+        );
+        drop(lease);
+        wait_for_client_release_in(&directory.0, &name, Instant::now() + Duration::from_secs(1))
+            .unwrap();
+        // An absent lease cannot falsely acknowledge a detached client.
+        fs::remove_file(lock_path_in(&directory.0, &name)).unwrap();
+        assert_eq!(
+            wait_for_client_release_in(
+                &directory.0,
+                &name,
+                Instant::now() + Duration::from_secs(1)
+            )
+            .unwrap_err()
+            .kind(),
+            io::ErrorKind::NotFound
         );
     }
 

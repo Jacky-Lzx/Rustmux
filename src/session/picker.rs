@@ -136,6 +136,7 @@ fn run_picker(
     let mut saving = false;
     let mut deleting = false;
     let mut renaming = false;
+    let mut disconnecting = false;
     let mut rename_source: Option<(SessionName, Option<i32>)> = None;
     let mut selected = initially_selected
         .and_then(|name| sessions.iter().position(|session| &session.name == name))
@@ -160,8 +161,10 @@ fn run_picker(
         if let Some(name) = updates.current {
             current = Some(name);
         }
-        let operation_completed =
-            updates.save.is_some() || updates.delete.is_some() || updates.rename.is_some();
+        let operation_completed = updates.save.is_some()
+            || updates.delete.is_some()
+            || updates.rename.is_some()
+            || updates.disconnect.is_some();
         if let Some(list) = updates.list {
             match list {
                 Ok(mut next) => {
@@ -228,13 +231,21 @@ fn run_picker(
             });
             dirty = true;
         }
+        if let Some((name, result)) = updates.disconnect {
+            disconnecting = false;
+            status = Some(match result {
+                Ok(()) => format!("Disconnected {name}"),
+                Err(error) => format!("Disconnect failed: {error}"),
+            });
+            dirty = true;
+        }
         reload.poll_manager();
         let error = reload
             .error()
             .map(|error| format!("Config reload failed: {error}"));
         if error != reload_error {
             reload_error = error;
-            if !saving && !deleting && !renaming && !operation_completed {
+            if !saving && !deleting && !renaming && !disconnecting && !operation_completed {
                 status = None;
             }
             dirty = true;
@@ -304,11 +315,11 @@ fn run_picker(
             let editing = name_input.is_some() || search_input.is_some();
             let action = bindings.action(key, editing);
             let armed = delete_armed.take();
-            if action != Some(Action::Save) && !saving && !deleting && !renaming {
+            if action != Some(Action::Save) && !saving && !deleting && !renaming && !disconnecting {
                 status = None;
             }
             if action == Some(Action::Save) {
-                if !saving && !deleting && !renaming {
+                if !saving && !deleting && !renaming && !disconnecting {
                     let target = save_target(
                         &sessions,
                         current.as_ref(),
@@ -334,7 +345,7 @@ fn run_picker(
                     Some(Action::Open) if !renaming => match SessionName::new(name.clone()) {
                         Ok(new) => {
                             if let Some((old, server)) = &rename_source {
-                                if !saving && !deleting {
+                                if !saving && !deleting && !disconnecting {
                                     status =
                                         Some(if worker.rename(old.clone(), new.clone(), *server) {
                                             renaming = true;
@@ -376,11 +387,31 @@ fn run_picker(
                 dirty = true;
                 continue;
             }
-            if action == Some(Action::Rename) && !saving && !deleting && !renaming {
+            if action == Some(Action::Rename) && !saving && !deleting && !renaming && !disconnecting
+            {
                 if let Some(session) = visible.get(selected) {
                     rename_source = Some((session.name.clone(), session.server_pid));
                     name_input = Some(session.name.as_str().into());
                 }
+                dirty = true;
+                continue;
+            }
+            if action == Some(Action::Disconnect)
+                && !saving
+                && !deleting
+                && !renaming
+                && !disconnecting
+            {
+                status = Some(
+                    match disconnect_target(visible.get(selected), current.as_ref()) {
+                        Ok((name, server)) if worker.disconnect(name.clone(), server) => {
+                            disconnecting = true;
+                            format!("Disconnecting {name}…")
+                        }
+                        Ok(_) => "Disconnect failed: worker unavailable".into(),
+                        Err(error) => format!("Disconnect failed: {error}"),
+                    },
+                );
                 dirty = true;
                 continue;
             }
@@ -422,7 +453,11 @@ fn run_picker(
                     Some(Action::Create) => name_input = Some(String::new()),
                     Some(Action::Search) => search_input = Some(String::new()),
                     Some(Action::Delete)
-                        if !visible.is_empty() && !saving && !deleting && !renaming =>
+                        if !visible.is_empty()
+                            && !saving
+                            && !deleting
+                            && !renaming
+                            && !disconnecting =>
                     {
                         let name = visible[selected].name.clone();
                         if armed.as_ref() == Some(&(name.clone(), visible[selected].saved)) {
@@ -446,6 +481,23 @@ fn run_picker(
             dirty = true;
         }
     }
+}
+
+fn disconnect_target<'a>(
+    session: Option<&'a SessionInfo>,
+    current: Option<&SessionName>,
+) -> Result<(&'a SessionName, i32), &'static str> {
+    let session = session.ok_or("no session selected")?;
+    if current == Some(&session.name) {
+        return Err("current session is already detached while the manager is open");
+    }
+    if session.saved || !session.attached {
+        return Err("selected session has no attached client");
+    }
+    let server = session
+        .server_pid
+        .ok_or("selected session is not running")?;
+    Ok((&session.name, server))
 }
 
 fn save_target(
@@ -670,6 +722,8 @@ fn render_view(view: &PickerView<'_>, size: (u16, u16)) -> Vec<u8> {
         [
             if sessions.get(selected).is_some_and(|s| s.saved) {
                 bindings.hint(Action::Rename, "Rename")
+            } else if disconnect_target(sessions.get(selected), current).is_ok() {
+                bindings.hint(Action::Disconnect, "Disconnect")
             } else {
                 bindings.hint(Action::Save, "Save")
             },
@@ -958,6 +1012,15 @@ fn picker_footer(view: &PickerView<'_>, compact: bool) -> String {
     if !editing {
         hints.push(b.hint(Action::Rename, "Rename"));
     }
+    if view.name_input.is_none()
+        && disconnect_target(view.sessions.get(view.selected), view.current).is_ok()
+    {
+        let position = if view.search_input.is_some() { 2 } else { 1 };
+        hints.insert(
+            position,
+            b.hint_in(Action::Disconnect, "Disconnect", editing),
+        );
+    }
     if !saved || view.current.is_some() {
         hints.push(b.hint_in(Action::Save, "Save", editing));
     }
@@ -1113,6 +1176,51 @@ impl Drop for PickerSignals {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn disconnect_only_targets_other_attached_live_sessions_and_hints_follow_bindings() {
+        let current = SessionName::new("current").unwrap();
+        let mut session = SessionInfo {
+            name: SessionName::new("other").unwrap(),
+            saved: false,
+            attached: true,
+            server_pid: Some(42),
+            last_connected_at: None,
+        };
+        assert_eq!(
+            disconnect_target(Some(&session), Some(&current)).unwrap().1,
+            42
+        );
+        assert!(disconnect_target(Some(&session), Some(&session.name)).is_err());
+        assert!(disconnect_target(None, None).is_err());
+        let bindings = Bindings::default();
+        let sessions = [session.clone()];
+        let mut view = PickerView {
+            sessions: &sessions,
+            selected: 0,
+            name_input: None,
+            renaming_name: false,
+            search_input: None,
+            delete_armed: None,
+            current: Some(&current),
+            bindings: &bindings,
+            status: None,
+        };
+        assert!(picker_footer(&view, false).contains("<Ctrl-X> Disconnect"));
+        view.current = Some(&session.name);
+        assert!(!picker_footer(&view, false).contains("Disconnect"));
+        view.current = None;
+        view.name_input = Some("editing");
+        assert!(!picker_footer(&view, false).contains("Disconnect"));
+        session.attached = false;
+        assert!(disconnect_target(Some(&session), None).is_err());
+        session.attached = true;
+        session.saved = true;
+        assert!(disconnect_target(Some(&session), None).is_err());
+        session.saved = false;
+        session.server_pid = None;
+        assert!(disconnect_target(Some(&session), None).is_err());
+    }
 
     #[test]
     fn save_target_uses_current_or_selected_live_session_without_fallback() {

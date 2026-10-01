@@ -24,6 +24,7 @@ The existing configurable `delete` action applies to both live and saved rows:
 ```toml
 [session_manager]
 delete = ["Ctrl x"]
+disconnect = [] # Release the default Ctrl-X disconnect binding.
 ```
 
 With this configuration, press Ctrl-X twice consecutively. `delete = []`

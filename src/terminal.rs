@@ -440,6 +440,20 @@ impl TerminalSession {
         if let Some(config) = self.reload.as_ref().map(|reload| reload.current().clone()) {
             self.import_config(&config);
         }
+        // A peer can disappear after a controller requests detach but before
+        // the control frame is written. A named server keeps its panes alive.
+        if self.rename.is_some()
+            && result.as_ref().is_err_and(|error| {
+                matches!(
+                    error.kind(),
+                    io::ErrorKind::BrokenPipe
+                        | io::ErrorKind::ConnectionReset
+                        | io::ErrorKind::NotConnected
+                )
+            })
+        {
+            return Ok(ForwardExit::Disconnected);
+        }
         result
     }
 
@@ -477,6 +491,15 @@ impl TerminalSession {
             self.reload_detached();
             if let Some(service) = self.control.as_mut() {
                 service.tick(|request| {
+                    if let crate::control::Request::DisconnectSession { server_pid } = request {
+                        return Err(io::Error::other(
+                            if server_pid != std::process::id() as i32 {
+                                "session server changed; refresh and retry"
+                            } else {
+                                "session has no attached client"
+                            },
+                        ));
+                    }
                     if let crate::control::Request::RenameSession {
                         source,
                         name,
@@ -2152,6 +2175,18 @@ fn forward(
         if let Some(service) = control.as_mut() {
             let old = active_focus(windows);
             if service.tick(|request| {
+                if let crate::control::Request::DisconnectSession { server_pid } = request {
+                    if server_pid != std::process::id() as i32 {
+                        return Err(io::Error::other(
+                            "session server changed; refresh and retry",
+                        ));
+                    }
+                    if connection != ConnectionState::Attached {
+                        return Err(io::Error::other("session has no attached client"));
+                    }
+                    detach_requested = true;
+                    return Ok(String::new());
+                }
                 if let crate::control::Request::RenameSession {
                     source,
                     name,
@@ -3527,7 +3562,11 @@ fn forward(
         {
             renamed_notice = None;
         }
-        if session_manager_requested && renamed_notice.is_none() && to_terminal.is_empty() {
+        if session_manager_requested
+            && !detach_requested
+            && renamed_notice.is_none()
+            && to_terminal.is_empty()
+        {
             if frontend.open_session_manager()? {
                 return Ok(ForwardExit::Detached);
             }

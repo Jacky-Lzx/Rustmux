@@ -134,6 +134,9 @@ pub enum Command {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "action", rename_all = "kebab-case", deny_unknown_fields)]
 pub(crate) enum Request {
+    DisconnectSession {
+        server_pid: i32,
+    },
     RenameSession {
         source: String,
         name: String,
@@ -427,6 +430,25 @@ pub(crate) fn rename_session(
         },
     )
     .map(|_| ())
+}
+
+pub(crate) fn disconnect_session(name: &SessionName, server_pid: i32) -> io::Result<()> {
+    // Keep the alias stable and prevent a new client from acquiring this lease
+    // until the original displayed client has released it. Never signal a PID.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let _workspace = crate::session::acquire_workspace(name)?;
+    let unchanged = || {
+        if crate::session::live_server_pid(name)?.as_raw() != server_pid {
+            return Err(io::Error::other(
+                "session server changed; refresh and retry",
+            ));
+        }
+        Ok(())
+    };
+    unchanged()?;
+    request_session(name, &Request::DisconnectSession { server_pid })?;
+    crate::session::wait_for_client_release(name, deadline)?;
+    unchanged()
 }
 
 fn request_session(name: &SessionName, request: &Request) -> io::Result<String> {
