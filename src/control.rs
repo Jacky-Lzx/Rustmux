@@ -71,6 +71,17 @@ pub enum Command {
         #[arg(long)]
         history: bool,
     },
+    /// Restart an exited pane in place, preserving its runtime ID.
+    RespawnPane {
+        #[command(flatten)]
+        target: PaneTarget,
+        /// Override the recorded startup command (run through the configured shell).
+        #[arg(long)]
+        command: Option<String>,
+        /// Override the startup directory; must be an absolute existing directory.
+        #[arg(long)]
+        cwd: Option<PathBuf>,
+    },
     /// Move a pane beside a pane in another window, preserving its runtime ID.
     JoinPane {
         #[command(flatten)]
@@ -110,6 +121,11 @@ pub(crate) enum Request {
         pane: Option<u64>,
         history: bool,
     },
+    RespawnPane {
+        pane: Option<u64>,
+        command: Option<String>,
+        cwd: Option<PathBuf>,
+    },
     JoinPane {
         pane: Option<u64>,
         to_pane: u64,
@@ -145,6 +161,18 @@ impl Command {
                 Request::CapturePane {
                     pane: target.pane,
                     history,
+                },
+            ),
+            Self::RespawnPane {
+                target,
+                command,
+                cwd,
+            } => (
+                target.target,
+                Request::RespawnPane {
+                    pane: target.pane,
+                    command,
+                    cwd,
                 },
             ),
             Self::JoinPane {
@@ -390,6 +418,7 @@ impl Service {
                                         | Request::SplitPane { .. }
                                         | Request::JoinPane { .. }
                                         | Request::BreakPane { .. }
+                                        | Request::RespawnPane { .. }
                                 );
                                 let result = handle(request);
                                 handled |= changes_layout && result.is_ok();

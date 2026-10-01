@@ -25,6 +25,7 @@ pub(crate) struct Pane {
     #[serde(default = "default_directory")]
     pub cwd: PathBuf,
     pub command: Option<String>,
+    pub remain_on_exit: Option<bool>,
     #[serde(default)]
     pub split: Split,
 }
@@ -125,6 +126,7 @@ mod tests {
             "[[windows]]\nname='dev'\n[[windows.panes]]\nsplit='diagonal'",
             "[[windows]]\nname='dev'\n[[windows.panes]]\ncommand=''",
             "[[windows]]\nname='dev'\n[[windows.panes]]\nunknown=1",
+            "[[windows]]\nname='dev'\n[[windows.panes]]\nremain_on_exit='true'",
         ] {
             assert!(parse(text, root.path()).is_err(), "{text}");
         }

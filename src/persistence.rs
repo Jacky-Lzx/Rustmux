@@ -49,6 +49,8 @@ struct SavedPane {
     id: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     command: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    remain_on_exit: Option<bool>,
     directory: Option<PathBuf>,
     history: Vec<SavedRow>,
 }
@@ -89,6 +91,7 @@ impl PreparedSnapshot {
                 panes.push(SavedPane {
                     id: id.get(),
                     command: pane.startup_command().map(str::to_owned),
+                    remain_on_exit: pane.remain_on_exit_override(),
                     directory: pane.inherited_directory(),
                     history: Vec::new(),
                 });
@@ -155,6 +158,7 @@ impl Snapshot {
                 panes.push(SavedPane {
                     id: id.get(),
                     command: pane.command,
+                    remain_on_exit: pane.remain_on_exit,
                     directory: Some(pane.cwd),
                     history: Vec::new(),
                 });
@@ -268,6 +272,7 @@ impl Snapshot {
                     history_limit,
                     saved.command.as_deref(),
                 )?;
+                pane.set_remain_on_exit(saved.remain_on_exit);
                 if restore_history {
                     pane.parts_mut()
                         .2
@@ -447,12 +452,14 @@ mod tests {
                     SavedPane {
                         id: 0,
                         command: None,
+                        remain_on_exit: None,
                         directory: Some(PathBuf::from("/tmp")),
                         history: vec![],
                     },
                     SavedPane {
                         id: 1,
                         command: None,
+                        remain_on_exit: None,
                         directory: None,
                         history: vec![SavedRow {
                             text: "retained output".into(),

@@ -107,6 +107,7 @@ pub enum PaneAction {
     Next,
     Zoom,
     Close,
+    Respawn,
     Normal,
     Resize,
     Move,
@@ -563,6 +564,7 @@ pub struct Config {
     scrollback_lines: usize,
     shortcuts: Shortcuts,
     persistence: PersistenceOptions,
+    remain_on_exit: bool,
 }
 
 /// Disk saving is opt-in; explicit manual saves remain available with defaults.
@@ -574,6 +576,9 @@ pub struct PersistenceOptions {
 }
 
 impl Config {
+    pub fn remain_on_exit(&self) -> bool {
+        self.remain_on_exit
+    }
     pub fn persistence(&self) -> PersistenceOptions {
         self.persistence
     }
@@ -601,6 +606,7 @@ struct ParsedConfig {
     scrollback_lines: Option<usize>,
     shortcuts: Shortcuts,
     persistence: PersistenceOptions,
+    remain_on_exit: bool,
 }
 
 /// Load and validate the complete configuration used by a new session.
@@ -627,6 +633,7 @@ pub fn load_with_path(path: Option<&Path>) -> Result<Config, String> {
             .unwrap_or(DEFAULT_SCROLLBACK_LINES),
         shortcuts: configured.shortcuts,
         persistence: configured.persistence,
+        remain_on_exit: configured.remain_on_exit,
     })
 }
 
@@ -739,6 +746,7 @@ fn parse_config(source: &str) -> Result<ParsedConfig, String> {
         scrollback_lines,
         shortcuts,
         persistence,
+        remain_on_exit: boolean("remain_on_exit")?,
     })
 }
 
@@ -935,6 +943,7 @@ fn parse_keybinds(
                 shortcuts.legacy_configured[slot] = true;
             } else if let Some((action, canonical)) = names.iter().find_map(|name| {
                 let canonical = match *name {
+                    "respawn-pane" => b'R',
                     "close-window" => b'&',
                     "rename-window" => b',',
                     "next-window" => b'n',
@@ -1332,6 +1341,7 @@ fn parse_pane_bindings(
                     Some("new-pane-down") => Some((PaneAction::SplitDown, false)),
                     Some("toggle-pane-zoom") => Some((PaneAction::Zoom, false)),
                     Some("close-pane") => Some((PaneAction::Close, false)),
+                    Some("respawn-pane") => Some((PaneAction::Respawn, false)),
                     _ => None,
                 }
             }
@@ -1791,6 +1801,7 @@ preset = "mocha"
                 scrollback_lines: Some(5000),
                 shortcuts: Shortcuts::default(),
                 persistence: PersistenceOptions::default(),
+                remain_on_exit: false,
             }
         );
         assert_eq!(
@@ -1811,6 +1822,23 @@ preset = "mocha"
             parse_config("shell = \"  \"")
                 .unwrap_err()
                 .contains("nonempty")
+        );
+    }
+
+    #[test]
+    fn pane_retention_is_opt_in_and_respawn_bindings_are_supported() {
+        assert!(!parse_config("").unwrap().remain_on_exit);
+        assert!(
+            parse_config("remain_on_exit = true")
+                .unwrap()
+                .remain_on_exit
+        );
+        assert!(parse_config("remain_on_exit = 'true'").is_err());
+        let shortcuts = parse_config("clear_defaults=true\n[keybinds.locked]\n\"Ctrl b\"={actions=[{action='switch-mode', mode='normal'}]}\n[keybinds.normal]\nr={actions=['respawn-pane', {action='switch-mode', mode='locked'}]}\n[keybinds.pane]\nR={actions=['respawn-pane', {action='switch-mode', mode='locked'}]}").unwrap().shortcuts;
+        assert_eq!(shortcuts.resolve(b'r'), Some(b'R'));
+        assert_eq!(
+            shortcuts.pane_binding(b'R').unwrap().action,
+            PaneAction::Respawn
         );
     }
 

@@ -62,6 +62,33 @@ pub fn run(
     scrollback_lines: usize,
     shortcuts: crate::config::Shortcuts,
 ) -> io::Result<u8> {
+    run_inner(
+        shell_path,
+        notifications,
+        scrollback_lines,
+        shortcuts,
+        false,
+    )
+}
+
+/// Run a local session with the configured pane exit policy.
+pub fn run_configured(config: &crate::config::Config) -> io::Result<u8> {
+    run_inner(
+        config.shell(),
+        config.notifications(),
+        config.scrollback_lines(),
+        config.shortcuts(),
+        config.remain_on_exit(),
+    )
+}
+
+fn run_inner(
+    shell_path: &OsStr,
+    notifications: crate::config::Notifications,
+    scrollback_lines: usize,
+    shortcuts: crate::config::Shortcuts,
+    remain_on_exit: bool,
+) -> io::Result<u8> {
     let file = TerminalDevice::open_controlling()?;
     let size = window_size(&file)?;
     // Start the shell before changing the outer terminal, so exec failures
@@ -75,6 +102,7 @@ pub fn run(
         scrollback_lines,
         shortcuts,
     )?;
+    session.remain_on_exit = remain_on_exit;
     let signals = Signals::install()?;
     let mut terminal = LocalFrontend::enter(file, signals.resize.clone())?;
     let result = session.attach(&mut terminal, &signals);
@@ -117,6 +145,7 @@ pub fn serve_session(
         peer,
         crate::config::PersistenceOptions::default(),
         None,
+        false,
     )
 }
 
@@ -140,6 +169,7 @@ pub(crate) fn serve_configured_session(
         peer,
         config.persistence(),
         snapshot,
+        config.remain_on_exit(),
     )
 }
 
@@ -150,6 +180,7 @@ fn serve_inner(
     mut peer: ServerPeer,
     options: crate::config::PersistenceOptions,
     snapshot: Option<crate::persistence::Snapshot>,
+    remain_on_exit: bool,
 ) -> io::Result<u8> {
     let (rows, columns) = peer.size();
     let shortcuts = context.shortcuts;
@@ -165,6 +196,7 @@ fn serve_inner(
         options,
         context.scrollback_lines,
     )?);
+    session.remain_on_exit = remain_on_exit;
     session.control = Some(crate::control::Service::bind(name)?);
     let signals = Signals::install()?;
     let result = (|| {
@@ -210,6 +242,7 @@ fn serve_inner(
 
 /// State that must survive one frontend disconnect and a later attachment.
 struct TerminalSession {
+    remain_on_exit: bool,
     shell_path: OsString,
     session_name: Option<String>,
     windows: Windows<PaneSet<Pane>>,
@@ -235,6 +268,7 @@ struct SessionContext<'a> {
 }
 
 struct AttachmentCapabilities<'a> {
+    remain_on_exit: bool,
     control: Option<&'a mut crate::control::Service>,
     persistence: Option<&'a mut crate::session::snapshot::SnapshotService>,
     cell_pixels: &'a mut Option<CellPixelSize>,
@@ -308,6 +342,7 @@ impl TerminalSession {
             }
         };
         Ok(Self {
+            remain_on_exit: false,
             shell_path: shell_path.to_owned(),
             session_name: session_name.map(str::to_owned),
             windows,
@@ -352,6 +387,7 @@ impl TerminalSession {
             },
             &mut self.outer_rows,
             AttachmentCapabilities {
+                remain_on_exit: self.remain_on_exit,
                 control: self.control.as_mut(),
                 persistence: self.persistence.as_mut(),
                 cell_pixels: &mut self.cell_pixels,
@@ -400,10 +436,8 @@ impl TerminalSession {
 
             for window in self.windows.iter_mut() {
                 for (_, pane) in window.content_mut().iter_mut() {
-                    let (shell, _, _, state) = pane.parts_mut();
-                    if state.status.is_none() {
-                        state.status = shell.try_wait()?;
-                    }
+                    let retained = pane.retain_after_exit(self.remain_on_exit);
+                    pane.observe_exit(retained)?;
                 }
             }
             if let Some(code) = self.remove_finished_detached()? {
@@ -509,7 +543,9 @@ impl TerminalSession {
                 let state = pane.io();
                 if state.eof {
                     if let Some(status) = state.status {
-                        finished.push((window.id(), pane_id, exit_code(status)));
+                        if !pane.retain_after_exit(self.remain_on_exit) {
+                            finished.push((window.id(), pane_id, exit_code(status)));
+                        }
                     } else if state
                         .eof_at
                         .is_some_and(|time| time.elapsed() > Duration::from_secs(1))
@@ -747,6 +783,7 @@ enum WindowKey {
     Last,
     Close,
     ClosePane,
+    RespawnPane,
     MoveLeft,
     MoveRight,
     Split(SplitAxis),
@@ -1323,6 +1360,7 @@ impl WindowInput {
             PaneAction::Next => output.push(WindowKey::NextPane),
             PaneAction::Zoom => output.push(WindowKey::ToggleZoom),
             PaneAction::Close => output.push(WindowKey::ClosePane),
+            PaneAction::Respawn => output.push(WindowKey::RespawnPane),
             PaneAction::History => output.push(WindowKey::History),
             PaneAction::Normal => self.mode = InputMode::Normal,
             PaneAction::Resize => self.mode = InputMode::Resize,
@@ -1576,6 +1614,7 @@ fn shortcut_action(byte: u8) -> Option<WindowKey> {
         b'\t' => WindowKey::Last,
         b'&' => WindowKey::Close,
         b'x' => WindowKey::ClosePane,
+        b'R' => WindowKey::RespawnPane,
         b'<' => WindowKey::MoveLeft,
         b'>' => WindowKey::MoveRight,
         b'%' => WindowKey::Split(SplitAxis::Columns),
@@ -1860,6 +1899,7 @@ fn forward(
     closed: &mut Option<crate::closed_pane::ClosedPane>,
 ) -> io::Result<ForwardExit> {
     let AttachmentCapabilities {
+        remain_on_exit,
         mut control,
         mut persistence,
         cell_pixels,
@@ -2151,10 +2191,25 @@ fn forward(
         };
         // Observe exits before preparing resizes, so dead panes need no PTY ioctl.
         for window in windows.iter_mut() {
-            for (_, pane) in window.content_mut().iter_mut() {
-                let (shell, _, _, state) = pane.parts_mut();
-                if state.status.is_none() {
-                    state.status = shell.try_wait()?;
+            let focused = window.content().layout().active();
+            let active_window = window.id() == active;
+            for (id, pane) in window.content_mut().iter_mut() {
+                let retained = pane.retain_after_exit(remain_on_exit);
+                if pane.observe_exit(retained)? {
+                    bar_dirty = true;
+                    if active_window && id == focused && pane.retain_after_exit(remain_on_exit) {
+                        // The stopped process cannot end a partial paste/mouse
+                        // sequence. Retained panes still need Rustmux shortcuts.
+                        keys = WindowInput {
+                            mode: if history.is_some() {
+                                InputMode::History
+                            } else {
+                                InputMode::Locked
+                            },
+                            shortcuts,
+                            ..WindowInput::default()
+                        };
+                    }
                 }
             }
         }
@@ -2269,6 +2324,7 @@ fn forward(
             }
             if id == active {
                 if panes.active().io().eof
+                    && !panes.active().retain_after_exit(remain_on_exit)
                     && (prompt.is_some() || history.is_some() || help.is_some())
                 {
                     history = None;
@@ -2303,9 +2359,22 @@ fn forward(
                             (pane_id, screen)
                         })
                         .collect();
-                    let titles: Vec<_> = panes
+                    let owned_titles: Vec<_> = panes
                         .iter()
-                        .map(|(pane_id, pane)| (pane_id, pane.terminal_title()))
+                        .map(|(id, pane)| {
+                            (
+                                id,
+                                if pane.retain_after_exit(remain_on_exit) {
+                                    pane.display_title()
+                                } else {
+                                    pane.terminal_title().into()
+                                },
+                            )
+                        })
+                        .collect();
+                    let titles: Vec<_> = owned_titles
+                        .iter()
+                        .map(|(id, title)| (*id, title.as_ref()))
                         .collect();
                     let bells: Vec<_> = panes
                         .iter()
@@ -2335,6 +2404,24 @@ fn forward(
                         },
                         shortcuts,
                     )?;
+                    if panes.active().retain_after_exit(remain_on_exit)
+                        && (panes.active().io().status.is_some() || panes.active().io().eof)
+                    {
+                        view.set_mouse_tracking(if *outer_rows > 1 {
+                            crate::screen::MouseTracking::Drag
+                        } else {
+                            crate::screen::MouseTracking::Off
+                        });
+                        view.set_sgr_mouse(*outer_rows > 1);
+                        view.set_bracketed_paste(false);
+                        view.set_focus_reporting(false);
+                        view.set_kitty_keyboard_flags(0, 1);
+                        view.set_application_cursor_keys(false);
+                        view.set_application_keypad(false);
+                        if history.is_none() && prompt.is_none() && help.is_none() {
+                            view.set_cursor_visible(false);
+                        }
+                    }
                     if keys.mode != InputMode::Locked
                         || prompt.is_some()
                         || history.is_some()
@@ -2457,9 +2544,10 @@ fn forward(
                 let state = pane.io();
                 if state.eof {
                     if let Some(status) = state.status {
-                        if id != active
+                        if (id != active
                             || (zoomed && pane_id != focused)
-                            || (!state.dirty && to_terminal.is_empty())
+                            || (!state.dirty && to_terminal.is_empty()))
+                            && !pane.retain_after_exit(remain_on_exit)
                         {
                             finished.push((id, pane_id, exit_code(status)));
                         }
@@ -2715,7 +2803,10 @@ fn forward(
                 force_redraw = true;
             }
             let pane = windows.active().unwrap().content().active();
-            if !pane.io().accepts_input() || pane.io().to_shell.len() > LIMIT - 64 {
+            let stopped = pane.io().eof || pane.io().status.is_some();
+            if !(stopped && pane.retain_after_exit(remain_on_exit))
+                && (!pane.io().accepts_input() || pane.io().to_shell.len() > LIMIT - 64)
+            {
                 break;
             }
             keys.shortcuts = shortcuts;
@@ -2733,11 +2824,19 @@ fn forward(
             keys.pane_top = usize::from(*outer_rows > 1) + usize::from(rect.row);
             keys.pane_left = usize::from(rect.column);
             keys.pane_width = usize::from(rect.columns);
-            keys.mouse_tracking = pane.screen().mouse_tracking();
+            keys.mouse_tracking = if stopped {
+                crate::screen::MouseTracking::Off
+            } else {
+                pane.screen().mouse_tracking()
+            };
             keys.alternate_scroll =
-                pane.screen().is_alternate() && pane.screen().alternate_scroll();
-            keys.application_cursor_keys = pane.screen().application_cursor_keys();
-            keys.kitty_keyboard_flags = pane.screen().kitty_keyboard_flags();
+                !stopped && pane.screen().is_alternate() && pane.screen().alternate_scroll();
+            keys.application_cursor_keys = !stopped && pane.screen().application_cursor_keys();
+            keys.kitty_keyboard_flags = if stopped {
+                0
+            } else {
+                pane.screen().kitty_keyboard_flags()
+            };
             keys.bar_enabled = *outer_rows > 1;
             keys.footer_row = footer_enabled(*outer_rows).then_some(usize::from(*outer_rows));
             if help_action.is_none() && keys.mouse.is_empty() && input.front() == Some(&27) {
@@ -2788,6 +2887,9 @@ fn forward(
                 match action {
                     WindowKey::Byte(byte) => {
                         let pane = windows.active_mut().unwrap().content_mut().active_mut();
+                        if !pane.io().accepts_input() {
+                            continue;
+                        }
                         if submits_command(byte, keys.paste) {
                             pane.command_submitted();
                         }
@@ -3050,6 +3152,29 @@ fn forward(
                         prompt = Some(WindowPrompt::close_pane());
                         renderer.invalidate();
                         force_redraw = true;
+                    }
+                    WindowKey::RespawnPane => {
+                        let pane = windows.active_mut().unwrap().content_mut().active_mut();
+                        if pane
+                            .respawn(shell_path, None, None, notifications, scrollback_lines)
+                            .is_err()
+                        {
+                            if to_terminal.is_empty() {
+                                to_terminal.push_back(7);
+                            }
+                        } else {
+                            history = None;
+                            input.clear();
+                            prompt = None;
+                            help = None;
+                            keys = WindowInput {
+                                shortcuts,
+                                ..WindowInput::default()
+                            };
+                            renderer.invalidate();
+                            force_redraw = true;
+                            bar_dirty = true;
+                        }
                     }
                     WindowKey::Close => {
                         prompt = Some(WindowPrompt::close());

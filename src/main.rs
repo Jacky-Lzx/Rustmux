@@ -28,13 +28,7 @@ fn execute(cli: rustmux::cli::Cli) -> Result<u8, String> {
         }
         None => {
             let config = rustmux::config::load_with_path(config_path)?;
-            rustmux::terminal::run(
-                config.shell(),
-                config.notifications(),
-                config.scrollback_lines(),
-                config.shortcuts(),
-            )
-            .map_err(|error| error.to_string())
+            rustmux::terminal::run_configured(&config).map_err(|error| error.to_string())
         }
         Some(rustmux::cli::Command::New {
             name,

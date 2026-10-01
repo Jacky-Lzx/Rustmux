@@ -11,6 +11,7 @@ rustmux split-pane -s work -p 0 --down
 rustmux send-keys -s work -p 0 --literal --enter 'printf "hello\n"'
 rustmux send-keys -s work -p 0 'Ctrl c'
 rustmux capture-pane -s work -p 0 --history
+rustmux respawn-pane -s work -p 0
 rustmux join-pane -s work -p 0 --to-pane 1 --down
 rustmux break-pane -s work -p 0 --name editor
 rustmux save-session work
@@ -25,7 +26,8 @@ are not command targets.
 directory. Control characters in text fields are replaced with spaces.
 `--toml` prints a `panes` array with `id`, `pid`, `window`, `window_name`, `active`,
 `selected`, `title` and an optional `directory`. `selected` means focused within
-that window; `active` also requires that window to be active.
+that window; `active` also requires that window to be active. Exit state and
+restart semantics are described in [Retained Panes and Respawn](pane-lifecycle.md).
 
 New windows and splits gain focus and print their new pane ID. A split inherits
 the specified pane's directory. Joins require two different windows and preserve
@@ -70,7 +72,7 @@ process/ID behavior after joins and breaks.
 [Project layouts](project-layouts.md) cover startup files and recorded commands.
 Local cumulative verification on macOS, 2026-10-01:
 
-- `cargo test --all-targets --locked --offline -- --test-threads=4`: 851 passed,
+- `cargo test --all-targets --locked --offline -- --test-threads=4`: 854 passed,
   zero failed, six existing tests ignored by default.
 - Focused real PTY control and project scenarios passed, including server-side
   input rejection and fragmented requests.

@@ -78,6 +78,11 @@ fn project() {
 }
 
 #[test]
+fn lifecycle() {
+    run_scenario("lifecycle");
+}
+
+#[test]
 fn frame_reconstruction() {
     run_scenario("frames");
 }

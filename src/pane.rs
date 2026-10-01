@@ -41,6 +41,8 @@ pub(crate) const MAX_REPLY_DRAIN_BYTES: usize = 8192;
 pub struct Pane {
     control_id: u64,
     startup_command: Option<String>,
+    spawn_directory: Option<PathBuf>,
+    remain_on_exit: Option<bool>,
     shell: PtyShell,
     parser: Parser,
     graphics_framer: GraphicsFramer,
@@ -180,6 +182,81 @@ impl PaneIo {
 }
 
 impl Pane {
+    pub(crate) fn remain_on_exit_override(&self) -> Option<bool> {
+        self.remain_on_exit
+    }
+    pub(crate) fn set_remain_on_exit(&mut self, value: Option<bool>) {
+        self.remain_on_exit = value;
+    }
+    pub(crate) fn retain_after_exit(&self, default: bool) -> bool {
+        !self.is_temporary() && self.remain_on_exit.unwrap_or(default)
+    }
+    pub(crate) fn observe_exit(&mut self, retained: bool) -> io::Result<bool> {
+        let mut changed = false;
+        if self.io.status.is_none() {
+            self.io.status = self.shell.try_wait()?;
+            if retained && self.io.status.is_some() {
+                self.io.to_shell.clear();
+                self.screen.set_synchronized_output(false);
+                self.io.synchronized_since = None;
+                self.io.dirty = true;
+                changed = true;
+            }
+        }
+        if self.io.eof && self.io.status.is_some() && self.shell.master_fd().is_some() {
+            self.shell.terminate()?;
+        }
+        Ok(changed)
+    }
+
+    /// Prepare the replacement completely before dropping the drained old child.
+    /// The layout and script identity belong to this pane, while terminal state
+    /// and pending input belong to the old process and must not cross the restart.
+    pub(crate) fn respawn(
+        &mut self,
+        shell: &OsStr,
+        command: Option<&str>,
+        directory: Option<&Path>,
+        notifications: crate::config::Notifications,
+        scrollback_lines: usize,
+    ) -> io::Result<()> {
+        if self.is_temporary() {
+            return Err(io::Error::other(
+                "temporary editor panes cannot be respawned",
+            ));
+        }
+        if !self.io.eof || self.io.status.is_none() {
+            return Err(io::Error::other(
+                "pane must exit and finish output before respawn",
+            ));
+        }
+        let directory = directory
+            .map(Path::to_owned)
+            .or_else(|| self.inherited_directory());
+        if directory.as_ref().is_some_and(|path| !path.is_dir()) {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "respawn directory does not exist",
+            ));
+        }
+        let (rows, columns) = self.screen.dimensions();
+        let mut replacement = Self::spawn_with_startup(
+            shell,
+            directory.as_deref(),
+            rows as u16,
+            columns as u16,
+            notifications,
+            scrollback_lines,
+            command.or(self.startup_command.as_deref()),
+        )?;
+        if let Some((width, height)) = self.shell.cell_pixels() {
+            replacement.shell.sync_cell_pixels(Some((width, height)))?;
+        }
+        replacement.control_id = self.control_id;
+        replacement.remain_on_exit = self.remain_on_exit;
+        *self = replacement;
+        Ok(())
+    }
     pub(crate) fn control_id(&self) -> u64 {
         self.control_id
     }
@@ -256,6 +333,10 @@ impl Pane {
         Ok(Self {
             control_id,
             startup_command: startup.map(str::to_owned),
+            spawn_directory: directory
+                .map(Path::to_owned)
+                .or_else(|| std::env::current_dir().ok()),
+            remain_on_exit: None,
             shell,
             parser: Parser::new(),
             graphics_framer: GraphicsFramer::new(),
@@ -295,6 +376,8 @@ impl Pane {
         Ok(Self {
             control_id,
             startup_command: None,
+            spawn_directory: None,
+            remain_on_exit: Some(false),
             shell,
             parser: Parser::new(),
             graphics_framer: GraphicsFramer::new(),
@@ -309,6 +392,10 @@ impl Pane {
 
     /// Keep the shell but discard user input intended for the stopped foreground job.
     pub(crate) fn stop_for_hide(&mut self) -> io::Result<()> {
+        if self.io.eof || self.io.status.is_some() {
+            self.io.to_shell.clear();
+            return Ok(());
+        }
         let stopped = self.shell.stop_foreground()?;
         self.io.semantic.cancel_current();
         if stopped {
@@ -369,6 +456,9 @@ impl Pane {
         &mut self,
         cell_pixels: Option<CellPixelSize>,
     ) -> io::Result<()> {
+        if self.io.eof || self.io.status.is_some() {
+            return Ok(());
+        }
         self.shell
             .sync_cell_pixels(cell_pixels.map(|cell| (cell.width(), cell.height())))
     }
@@ -440,14 +530,38 @@ impl Pane {
             .unwrap_or("shell")
     }
 
+    pub(crate) fn display_title(&self) -> std::borrow::Cow<'_, str> {
+        use std::os::unix::process::ExitStatusExt;
+        match self.io.status {
+            Some(status) => {
+                let reason = match status.code() {
+                    Some(code) => format!("exited {code}"),
+                    None => format!("signal {}", status.signal().unwrap_or(0)),
+                };
+                format!("{} [{reason}]", self.terminal_title()).into()
+            }
+            None => self.terminal_title().into(),
+        }
+    }
+
     pub(crate) fn command_submitted(&mut self) {
         self.io.semantic.command_submitted();
         self.io.prompt_start = None;
     }
 
     pub(crate) fn inherited_directory(&self) -> Option<PathBuf> {
+        if self.io.eof || self.io.status.is_some() {
+            // Never inspect an exited PID: the OS may have already reused it.
+            return self
+                .io
+                .semantic
+                .current_directory()
+                .map(Path::to_owned)
+                .or_else(|| self.spawn_directory.clone());
+        }
         self.shell
             .inherited_directory(self.io.semantic.current_directory())
+            .or_else(|| self.spawn_directory.clone())
     }
 
     /// Consume child output and route terminal replies back to this same child.
@@ -2545,5 +2659,102 @@ mod io_tests {
                 .collect::<Vec<_>>(),
             b"other"
         );
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+    use std::io::Read;
+
+    #[test]
+    fn respawn_prepares_before_replacing_and_resets_process_state() {
+        let root = tempfile::tempdir().unwrap();
+        let mut pane = Pane::spawn_with_startup(
+            "/bin/sh",
+            Some(root.path()),
+            12,
+            40,
+            crate::config::Notifications::default(),
+            100,
+            Some("printf retained; exit 7"),
+        )
+        .unwrap();
+        pane.set_remain_on_exit(Some(true));
+        let original_id = pane.control_id();
+        let original_pid = pane.shell().id();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !pane.io.eof || pane.io.status.is_none() {
+            pane.observe_exit(true).unwrap();
+            if !pane.io.eof {
+                let mut bytes = [0; 4096];
+                match pane.shell_mut().read(&mut bytes) {
+                    Ok(0) => pane.finish_output(),
+                    Ok(n) => pane.process_output(&bytes[..n], &mut |_| {}),
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
+                    Err(e) => panic!("{e}"),
+                }
+            }
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        pane.observe_exit(true).unwrap();
+        assert!(pane.shell().master_fd().is_none());
+        assert_eq!(pane.io.status.unwrap().code(), Some(7));
+        assert!(pane.retain_after_exit(false));
+        let before = crate::history_view::export_text(pane.screen());
+        assert!(before.contains("retained"));
+        assert!(
+            pane.respawn(
+                OsStr::new("/missing-rustmux-test-shell"),
+                None,
+                None,
+                crate::config::Notifications::default(),
+                100
+            )
+            .is_err()
+        );
+        assert_eq!(crate::history_view::export_text(pane.screen()), before);
+        assert_eq!(pane.control_id(), original_id);
+        assert_eq!(pane.shell().id(), original_pid);
+        assert_eq!(pane.io.status.unwrap().code(), Some(7));
+        // Resize the retained model after releasing the old master.
+        pane.prepare_resize(14, 52).unwrap().commit().unwrap();
+        pane.process_output(b"\x1b[?1049h\x1b[?1000h\x1b[?2004h\x1b[>1u", &mut |_| {});
+        pane.io.to_shell.push_back(b'x');
+        pane.respawn(
+            OsStr::new("/bin/sh"),
+            Some("exec /bin/sh -i"),
+            None,
+            crate::config::Notifications::default(),
+            100,
+        )
+        .unwrap();
+        assert_eq!(pane.control_id(), original_id);
+        assert_ne!(pane.shell().id(), original_pid);
+        assert_eq!(pane.screen.dimensions(), (14, 52));
+        assert!(!pane.screen.is_alternate());
+        assert!(!pane.screen.bracketed_paste());
+        assert_eq!(
+            pane.screen.mouse_tracking(),
+            crate::screen::MouseTracking::Off
+        );
+        assert_eq!(pane.screen.kitty_keyboard_flags(), 0);
+        assert!(pane.io.to_shell.is_empty());
+        assert!(!pane.io.eof && pane.io.status.is_none());
+        assert_eq!(pane.inherited_directory().as_deref(), Some(root.path()));
+        assert!(pane.retain_after_exit(false));
+        let pid = pane.shell().id();
+        assert!(
+            pane.respawn(
+                OsStr::new("/bin/sh"),
+                None,
+                None,
+                crate::config::Notifications::default(),
+                100
+            )
+            .is_err()
+        );
+        assert_eq!(pane.shell().id(), pid);
     }
 }

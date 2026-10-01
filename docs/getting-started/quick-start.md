@@ -17,6 +17,7 @@ reports an error without silently falling back.
 ```toml
 shell = "/opt/homebrew/bin/fish"
 scrollback_lines = 1000
+remain_on_exit = false
 
 [notifications]
 long_command_bell = true
@@ -37,6 +38,10 @@ disable retained history. The separate 65,536-cell cap remains fixed, so a large
 line limit cannot make history unbounded. New windows, splits and temporary editor
 windows inherit the session value. An existing named session keeps its original
 configuration until it is recreated.
+
+Enable `remain_on_exit = true` to inspect exited panes and restart them with
+Ctrl-B then Shift-R. See [Retained Panes and Respawn](../reference/pane-lifecycle.md)
+for project overrides and the script interface.
 
 The optional `[shortcuts]` entries replace the keys pressed after Ctrl-B for
 creating a window and splitting the active pane. Each value must be one printable

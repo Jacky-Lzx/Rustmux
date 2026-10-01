@@ -121,6 +121,12 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         group: CommandGroup::Pane,
+        key: "R",
+        label: "Respawn exited pane",
+        actions: &[(0, b'R')],
+    },
+    Command {
+        group: CommandGroup::Pane,
         key: "x",
         label: "Close pane",
         actions: &[(0, b'x')],
@@ -861,7 +867,14 @@ mod tests {
             "[keybinds.normal]\n'Ctrl u' = { actions = [{ action = 'switch-mode', mode = 'session' }] }",
         );
         let mut named = ShortcutHelp::with_shortcuts(true, shortcuts);
-        let body = text(&named.overlay(&Screen::new(24, 80).unwrap()));
+        let screen = Screen::new(24, 80).unwrap();
+        let mut body = text(&named.overlay(&screen));
+        for _ in 1..named.pages {
+            for byte in b"\x1b[6~" {
+                named.feed(*byte, Instant::now());
+            }
+            body.push_str(&text(&named.overlay(&screen)));
+        }
         assert!(body.contains("Session mode"));
         assert!(body.contains("Ctrl-U"));
         assert_eq!(named.feed(15, Instant::now()), HelpEvent::Continue);

@@ -45,8 +45,10 @@ start one fresh shell.
 `command` runs through the configured shell with `-c`; otherwise the pane starts
 an interactive shell with `-i`. Commands must be nonempty, at most 4096 bytes,
 and contain no NUL. When a command exits its pane follows the normal exit
-lifecycle. Append `; exec /bin/sh -i` or another appropriate interactive shell
-when the pane should remain open. Process state is not serialized.
+lifecycle. Set `remain_on_exit = true` on that pane to retain its output and
+restart it later, or append `; exec /bin/sh -i` to continue into an interactive
+shell. See [Retained Panes and Respawn](pane-lifecycle.md). Process state is not
+serialized.
 
 Explicit startup commands are kept with their owned panes when they move, and
 are included in manual/automatic workspace snapshots. Restoring those snapshots

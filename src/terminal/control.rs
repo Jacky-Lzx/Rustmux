@@ -14,6 +14,10 @@ struct PaneInfo {
     selected: bool,
     directory: Option<String>,
     title: String,
+    exited: bool,
+    output_complete: bool,
+    exit_code: Option<i32>,
+    exit_signal: Option<i32>,
 }
 #[derive(Serialize)]
 struct PaneList {
@@ -63,6 +67,7 @@ pub(super) fn handle(
 ) -> io::Result<String> {
     match request {
         Request::ListPanes { toml: as_toml } => {
+            use std::os::unix::process::ExitStatusExt;
             let active = windows.active().map(|window| window.id());
             let mut panes = Vec::new();
             for (index, window) in windows.iter().enumerate() {
@@ -79,6 +84,10 @@ pub(super) fn handle(
                             .inherited_directory()
                             .map(|p| p.to_string_lossy().into_owned()),
                         title: pane.terminal_title().to_owned(),
+                        exited: pane.io().status.is_some(),
+                        output_complete: pane.io().eof,
+                        exit_code: pane.io().status.and_then(|s| s.code()),
+                        exit_signal: pane.io().status.and_then(|s| s.signal()),
                     });
                 }
             }
@@ -118,6 +127,32 @@ pub(super) fn handle(
                     .screen(),
                 history,
             )
+        }
+        Request::RespawnPane { pane, command, cwd } => {
+            crate::project::validate_command(command.as_deref())?;
+            if cwd
+                .as_ref()
+                .is_some_and(|path| !path.is_absolute() || !path.is_dir())
+            {
+                return Err(invalid(
+                    "respawn cwd must be an absolute existing directory",
+                ));
+            }
+            let (window, id) = target(windows, pane)?;
+            let pane = windows
+                .get_mut(window)
+                .unwrap()
+                .content_mut()
+                .get_mut(id)
+                .unwrap();
+            pane.respawn(
+                context.shell_path,
+                command.as_deref(),
+                cwd.as_deref(),
+                context.notifications,
+                context.scrollback_lines,
+            )?;
+            Ok(format!("{}\n", pane.control_id()))
         }
         Request::SendKeys { pane, bytes } => {
             if bytes.len() > MAX_INPUT {
