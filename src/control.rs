@@ -104,6 +104,15 @@ pub enum Command {
         #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u16).range(1..))]
         cells: u16,
     },
+    /// Focus a pane and toggle its full-window view, or set it with --on/--off.
+    ZoomPane {
+        #[command(flatten)]
+        target: PaneTarget,
+        #[arg(long, conflicts_with = "off")]
+        on: bool,
+        #[arg(long, conflicts_with = "on")]
+        off: bool,
+    },
     /// Create a window, focus it, and print the new pane ID.
     NewWindow {
         #[command(flatten)]
@@ -240,6 +249,10 @@ pub(crate) enum Request {
         direction: ResizeDirection,
         cells: u16,
     },
+    ZoomPane {
+        pane: Option<u64>,
+        zoom: Option<bool>,
+    },
     NewWindow {
         name: Option<String>,
         command: Option<String>,
@@ -351,6 +364,19 @@ impl Command {
                 command,
                 cwd,
             } => (target, Request::NewWindow { name, command, cwd }),
+            Self::ZoomPane { target, on, off } => (
+                target.target,
+                Request::ZoomPane {
+                    pane: target.pane,
+                    zoom: if on {
+                        Some(true)
+                    } else if off {
+                        Some(false)
+                    } else {
+                        None
+                    },
+                },
+            ),
             Self::SplitPane {
                 target,
                 down,
@@ -729,6 +755,7 @@ impl Service {
                                         | Request::RenameWindow { .. }
                                         | Request::CloseWindow { .. }
                                         | Request::ResizePane { .. }
+                                        | Request::ZoomPane { .. }
                                         | Request::SplitPane { .. }
                                         | Request::ClosePane { .. }
                                         | Request::JoinPane { .. }
@@ -808,6 +835,41 @@ impl Drop for Service {
 mod tests {
     use super::*;
     use clap::Parser;
+
+    #[test]
+    fn zoom_pane_accepts_default_toggle_or_exclusive_explicit_state() {
+        for (arguments, pane, on, off) in [
+            (vec!["rustmux", "zoom-pane"], None, false, false),
+            (
+                vec!["rustmux", "zoom-pane", "-s", "work", "-p", "0", "--on"],
+                Some(0),
+                true,
+                false,
+            ),
+            (vec!["rustmux", "zoom-pane", "--off"], None, false, true),
+        ] {
+            let cli = crate::cli::Cli::try_parse_from(arguments).unwrap();
+            let Some(crate::cli::Command::Control(Command::ZoomPane {
+                target,
+                on: parsed_on,
+                off: parsed_off,
+            })) = cli.command
+            else {
+                panic!("expected zoom-pane");
+            };
+            assert_eq!((target.pane, parsed_on, parsed_off), (pane, on, off));
+            assert_eq!(
+                target.target.session.as_str(),
+                if pane.is_some() { "work" } else { "default" }
+            );
+        }
+        assert!(
+            crate::cli::Cli::try_parse_from(["rustmux", "zoom-pane", "--on", "--off"]).is_err()
+        );
+        assert!(
+            crate::cli::Cli::try_parse_from(["rustmux", "zoom-pane", "-p", "invalid"]).is_err()
+        );
+    }
 
     #[test]
     fn close_window_accepts_active_default_or_positive_window_number() {

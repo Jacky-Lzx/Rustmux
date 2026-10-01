@@ -58,6 +58,11 @@ fn window_close() {
 }
 
 #[test]
+fn pane_zoom() {
+    run_scenario("pane_zoom");
+}
+
+#[test]
 fn notifications() {
     run_scenario("notifications");
 }

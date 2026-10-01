@@ -170,6 +170,20 @@ pub(super) fn handle(
             // resulting focus transition through their normal refresh path.
             Ok(String::new())
         }
+        Request::ZoomPane { pane, zoom } => {
+            let (window, id) = target(windows, pane)?;
+            let set = windows.get_mut(window).unwrap().content_mut();
+            set.select(id)?;
+            let desired = zoom.unwrap_or(!set.layout().is_zoomed());
+            if desired != set.layout().is_zoomed() {
+                // A single pane already fills the window and stays unzoomed.
+                set.toggle_zoom();
+            }
+            windows.select(window)?;
+            // Normal control refresh transfers sizes and application focus;
+            // repeated explicit states must not invert the current view.
+            Ok(String::new())
+        }
         Request::ListPanes { toml: as_toml } => {
             use std::os::unix::process::ExitStatusExt;
             let active = windows.active().map(|window| window.id());

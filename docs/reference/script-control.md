@@ -14,6 +14,8 @@ rustmux new-window -s work --name logs
 rustmux new-window -s work --name checks --cwd /absolute/project --command 'cargo test'
 rustmux split-pane -s work -p 0 --down
 rustmux resize-pane -s work -p 0 --direction right --cells 3
+rustmux zoom-pane -s work -p 0 --on
+rustmux zoom-pane -s work --off
 rustmux send-keys -s work -p 0 --literal --enter 'printf "hello\n"'
 rustmux send-keys -s work -p 0 'Ctrl c'
 rustmux capture-pane -s work -p 0 --history
@@ -66,6 +68,12 @@ active pane and the movement defaults to one cell. Requests clamp to valid pane
 content sizes; zoom, a missing separator or an already reached boundary returns
 a nonzero status. See [Script Pane Resize](script-pane-resize.md) for limits,
 PTY synchronization and persistence.
+
+`zoom-pane [-p ID] [--on | --off]` selects a pane and its window, then sets or
+toggles that window's full-pane view. Omission targets the active pane; omitting
+both flags toggles. Explicit states can be repeated without reversing the view.
+A single-pane window already fills the area and stays unzoomed. See
+[Script Pane Zoom](script-pane-zoom.md) for focus, actual PTY sizes and snapshots.
 
 `show-config` returns the running server's applied scalar settings and reload
 status as TOML without changing focus or dismissing overlays. See

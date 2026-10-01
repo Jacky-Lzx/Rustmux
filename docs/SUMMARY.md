@@ -61,6 +61,7 @@
 - [Script Pane Resize](reference/script-pane-resize.md)
 - [Script Pane Startup](reference/script-pane-startup.md)
 - [Script Pane Close](reference/script-pane-close.md)
+- [Script Pane Zoom](reference/script-pane-zoom.md)
 - [Project Layouts](reference/project-layouts.md)
 - [Retained Panes and Respawn](reference/pane-lifecycle.md)
 - [Pane Output](reference/pane-output.md)
