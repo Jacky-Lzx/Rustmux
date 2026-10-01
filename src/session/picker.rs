@@ -19,18 +19,8 @@ use crate::terminal_device::TerminalDevice;
 const POLL_MILLIS: u16 = 30;
 const ESCAPE_DELAY: Duration = Duration::from_millis(30);
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Key {
-    Up,
-    Down,
-    Tab,
-    Enter,
-    Escape,
-    Interrupt,
-    Backspace,
-    Character(u8),
-}
-
+mod worker;
+use crate::config::manager::{Action, Bindings, Key};
 #[derive(Default)]
 struct InputDecoder {
     escape: Vec<u8>,
@@ -47,11 +37,11 @@ impl InputDecoder {
                         self.escape.push(byte);
                         self.escape_at = Some(now);
                     }
-                    3 => keys.push(Key::Interrupt),
-                    8 | 127 => keys.push(Key::Backspace),
-                    b'\t' => keys.push(Key::Tab),
-                    b'\r' | b'\n' => keys.push(Key::Enter),
-                    _ => keys.push(Key::Character(byte)),
+                    3 => keys.push(Key::Byte(3)),
+                    8 | 127 => keys.push(Key::Byte(127)),
+                    b'\t' => keys.push(Key::Byte(9)),
+                    b'\r' | b'\n' => keys.push(Key::Byte(13)),
+                    _ => keys.push(Key::byte(byte)),
                 }
                 continue;
             }
@@ -68,7 +58,7 @@ impl InputDecoder {
                     self.clear_escape();
                 }
                 _ => {
-                    keys.push(Key::Escape);
+                    keys.push(Key::Byte(27));
                     self.clear_escape();
                 }
             }
@@ -83,7 +73,7 @@ impl InputDecoder {
                 .is_some_and(|start| now.saturating_duration_since(start) >= ESCAPE_DELAY)
         {
             self.clear_escape();
-            Some(Key::Escape)
+            Some(Key::Byte(27))
         } else {
             None
         }
@@ -106,11 +96,25 @@ pub(super) enum Choice {
 pub(super) fn choose(
     sessions: &[SessionInfo],
     initially_selected: Option<&SessionName>,
+    config_path: Option<&std::path::Path>,
 ) -> io::Result<Choice> {
+    let config = crate::config::load_with_path(config_path).map_err(io::Error::other)?;
+    let mut reload =
+        crate::config::reload::Reload::new(&config)?.expect("loaded configuration source");
+    let worker = worker::Worker::new(initially_selected.cloned())?;
     let file = TerminalDevice::open_controlling()?;
     let signals = PickerSignals::install()?;
     let mut terminal = TerminalDevice::enter(file)?;
-    let result = run_picker(&mut terminal, &signals, sessions, initially_selected);
+    let result = run_picker(
+        &mut terminal,
+        &signals,
+        sessions,
+        initially_selected,
+        &mut reload,
+        &worker,
+    );
+    worker.shutdown();
+    reload.shutdown();
     let restored = terminal.restore();
     result.and_then(|selection| restored.map(|()| selection))
 }
@@ -120,7 +124,15 @@ fn run_picker(
     signals: &PickerSignals,
     sessions: &[SessionInfo],
     initially_selected: Option<&SessionName>,
+    reload: &mut crate::config::reload::Reload,
+    worker: &worker::Worker,
 ) -> io::Result<Choice> {
+    let mut sessions = sessions.to_vec();
+    let mut bindings = reload.current().manager().clone();
+    let mut status = None;
+    let mut list_error = None;
+    let mut reload_error = None;
+    let mut saving = false;
     let mut selected = initially_selected
         .and_then(|name| sessions.iter().position(|session| &session.name == name))
         .unwrap_or(0);
@@ -140,19 +152,80 @@ fn run_picker(
             ));
         }
 
+        let updates = worker.poll();
+        let save_completed = updates.save.is_some();
+        if let Some(list) = updates.list {
+            match list {
+                Ok(next) => {
+                    if list_error.take().is_some() {
+                        dirty = true;
+                    }
+                    if next != sessions {
+                        let previous = filtered_sessions(&sessions, search_input.as_deref());
+                        let name = previous.get(selected).map(|s| &s.name);
+                        let visible = filtered_sessions(&next, search_input.as_deref());
+                        selected = name
+                            .and_then(|name| visible.iter().position(|s| &s.name == name))
+                            .unwrap_or(selected)
+                            .min(visible.len().saturating_sub(1));
+                        sessions = next;
+                        delete_armed = None;
+                        dirty = true;
+                    }
+                }
+                Err(error) => {
+                    list_error = Some(format!("Refresh failed: {error}"));
+                    dirty = true;
+                }
+            }
+        }
+        if let Some((name, result)) = updates.save {
+            saving = false;
+            status = Some(match result {
+                Ok(()) => format!("Saved {name}"),
+                Err(error) => format!("Save failed: {error}"),
+            });
+            dirty = true;
+        }
+        reload.poll_manager();
+        let error = reload
+            .error()
+            .map(|error| format!("Config reload failed: {error}"));
+        if error != reload_error {
+            reload_error = error;
+            if !saving && !save_completed {
+                status = None;
+            }
+            dirty = true;
+        }
+        if decoder.escape.is_empty()
+            && let Some(config) = reload.take()
+        {
+            bindings = config.manager().clone();
+            reload.commit(config);
+            delete_armed = None;
+            dirty = true;
+        }
         let size = terminal.size()?;
         let size = (size.ws_row, size.ws_col);
         if dirty || previous_size != Some(size) {
-            let visible = filtered_sessions(sessions, search_input.as_deref());
+            let visible = filtered_sessions(&sessions, search_input.as_deref());
             selected = selected.min(visible.len().saturating_sub(1));
-            terminal.write_all(&render(
-                &visible,
-                selected,
+            terminal.write_all(&render_view(
+                &PickerView {
+                    sessions: &visible,
+                    selected,
+                    create_input: create_input.as_deref(),
+                    search_input: search_input.as_deref(),
+                    delete_armed: delete_armed.as_ref(),
+                    current: initially_selected,
+                    bindings: &bindings,
+                    status: status
+                        .as_deref()
+                        .or(reload_error.as_deref())
+                        .or(list_error.as_deref()),
+                },
                 size,
-                create_input.as_deref(),
-                search_input.as_deref(),
-                delete_armed.as_ref(),
-                initially_selected,
             ))?;
             previous_size = Some(size);
             dirty = false;
@@ -183,106 +256,145 @@ fn run_picker(
         }
 
         for key in keys {
+            if key == Key::Byte(3) {
+                return Ok(Choice::Cancel);
+            }
+            let editing = create_input.is_some() || search_input.is_some();
+            let action = bindings.action(key, editing);
+            let armed = delete_armed.take();
+            if action != Some(Action::Save) && !saving {
+                status = None;
+            }
+            if action == Some(Action::Save) {
+                if !saving {
+                    let target = save_target(
+                        &sessions,
+                        initially_selected,
+                        selected,
+                        search_input.as_deref(),
+                    );
+                    status = Some(if let Some(name) = target {
+                        if worker.save(name.clone()) {
+                            saving = true;
+                            format!("Saving {name}…")
+                        } else {
+                            "Save failed: worker unavailable".into()
+                        }
+                    } else {
+                        "Save failed: no running session to save".into()
+                    });
+                }
+                dirty = true;
+                continue;
+            }
             if let Some(name) = &mut create_input {
-                match key {
-                    Key::Enter => {
+                match action {
+                    Some(Action::Open) => {
                         if let Ok(name) = SessionName::new(name.clone()) {
                             return Ok(Choice::Create(name));
                         }
                     }
-                    Key::Escape => create_input = None,
-                    Key::Interrupt => return Ok(Choice::Cancel),
-                    Key::Backspace => {
+                    Some(Action::Cancel) => create_input = None,
+                    Some(Action::Backspace) => {
                         name.pop();
                     }
-                    Key::Character(byte)
-                        if (byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-                            && name.len() < super::MAX_SESSION_NAME_BYTES =>
-                    {
-                        name.push(char::from(byte));
+                    _ => {
+                        if let Key::Byte(byte) = key
+                            && (byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+                            && name.len() < super::MAX_SESSION_NAME_BYTES
+                        {
+                            name.push(char::from(byte));
+                        }
                     }
-                    Key::Up | Key::Down | Key::Tab | Key::Character(_) => {}
                 }
                 dirty = true;
                 continue;
             }
-
-            if let Some(query) = &mut search_input {
-                let visible = filtered_sessions(sessions, Some(query));
-                selected = selected.min(visible.len().saturating_sub(1));
-                if let Some(next) = search_navigation_target(selected, visible.len(), key) {
-                    selected = next;
-                    dirty = true;
-                    continue;
-                }
-                match key {
-                    Key::Enter if !visible.is_empty() => {
-                        return Ok(Choice::Attach(visible[selected].name.clone()));
-                    }
-                    Key::Tab if !visible.is_empty() => {
-                        *query = visible[selected].name.as_str().to_owned();
-                        selected = 0;
-                    }
-                    Key::Escape => {
-                        let selected_name =
-                            visible.get(selected).map(|session| session.name.clone());
-                        search_input = None;
-                        selected = selected_name
-                            .as_ref()
-                            .and_then(|name| {
-                                sessions.iter().position(|session| &session.name == name)
-                            })
-                            .unwrap_or(0);
-                    }
-                    Key::Interrupt => return Ok(Choice::Cancel),
-                    Key::Backspace => {
-                        query.pop();
-                        selected = 0;
-                    }
-                    Key::Character(byte)
-                        if byte.is_ascii_graphic()
-                            && query.len() < super::MAX_SESSION_NAME_BYTES =>
-                    {
-                        query.push(char::from(byte));
-                        selected = 0;
-                    }
-                    Key::Up | Key::Down | Key::Tab | Key::Enter | Key::Character(_) => {}
-                }
-                dirty = true;
-                continue;
-            }
-
-            let armed = delete_armed.take();
-            if let Some(next) = navigation_target(selected, sessions.len(), key) {
+            let visible = filtered_sessions(&sessions, search_input.as_deref());
+            selected = selected.min(visible.len().saturating_sub(1));
+            if let Some(next) = action_navigation(selected, visible.len(), action) {
                 selected = next;
                 dirty = true;
                 continue;
             }
-            match key {
-                Key::Enter if !sessions.is_empty() => {
-                    return Ok(Choice::Attach(sessions[selected].name.clone()));
-                }
-                Key::Character(b'a') => create_input = Some(String::new()),
-                Key::Character(b'/') => search_input = Some(String::new()),
-                Key::Character(b'd') if !sessions.is_empty() && !sessions[selected].saved => {
-                    let name = sessions[selected].name.clone();
-                    if armed.as_ref() == Some(&name) {
-                        return Ok(Choice::Kill(name));
+            if let Some(query) = &mut search_input {
+                match action {
+                    Some(Action::Open) if !visible.is_empty() => {
+                        return Ok(Choice::Attach(visible[selected].name.clone()));
                     }
-                    delete_armed = Some(name);
+                    Some(Action::Complete) if !visible.is_empty() => {
+                        *query = visible[selected].name.as_str().into();
+                        selected = 0;
+                    }
+                    Some(Action::Cancel) => {
+                        let name = visible.get(selected).map(|s| &s.name);
+                        selected = name
+                            .and_then(|n| sessions.iter().position(|s| &s.name == n))
+                            .unwrap_or(0);
+                        search_input = None;
+                    }
+                    Some(Action::Backspace) => {
+                        query.pop();
+                        selected = 0;
+                    }
+                    _ => {
+                        if let Key::Byte(byte) = key
+                            && byte.is_ascii_graphic()
+                            && query.len() < super::MAX_SESSION_NAME_BYTES
+                        {
+                            query.push(char::from(byte));
+                            selected = 0;
+                        }
+                    }
                 }
-                Key::Escape | Key::Interrupt | Key::Character(b'q') => {
-                    return Ok(Choice::Cancel);
+            } else {
+                match action {
+                    Some(Action::Open) if !visible.is_empty() => {
+                        return Ok(Choice::Attach(visible[selected].name.clone()));
+                    }
+                    Some(Action::Create) => create_input = Some(String::new()),
+                    Some(Action::Search) => search_input = Some(String::new()),
+                    Some(Action::Delete) if !visible.is_empty() && !visible[selected].saved => {
+                        let name = visible[selected].name.clone();
+                        if armed.as_ref() == Some(&name) {
+                            return Ok(Choice::Kill(name));
+                        }
+                        delete_armed = Some(name);
+                    }
+                    Some(Action::Cancel) => return Ok(Choice::Cancel),
+                    _ => {}
                 }
-                Key::Backspace
-                | Key::Tab
-                | Key::Character(_)
-                | Key::Up
-                | Key::Down
-                | Key::Enter => {}
             }
             dirty = true;
         }
+    }
+}
+
+fn save_target(
+    sessions: &[SessionInfo],
+    current: Option<&SessionName>,
+    selected: usize,
+    query: Option<&str>,
+) -> Option<SessionName> {
+    if let Some(name) = current {
+        return sessions
+            .iter()
+            .find(|s| &s.name == name && !s.saved)
+            .map(|s| s.name.clone());
+    }
+    filtered_sessions(sessions, query)
+        .get(selected)
+        .filter(|s| !s.saved)
+        .map(|s| s.name.clone())
+}
+fn action_navigation(selected: usize, count: usize, action: Option<Action>) -> Option<usize> {
+    if count == 0 {
+        return None;
+    }
+    match action {
+        Some(Action::Up) => Some(selected.checked_sub(1).unwrap_or(count - 1)),
+        Some(Action::Down) => Some((selected + 1) % count),
+        _ => None,
     }
 }
 
@@ -295,28 +407,13 @@ fn filtered_sessions(sessions: &[SessionInfo], query: Option<&str>) -> Vec<Sessi
         .collect()
 }
 
-fn navigation_target(selected: usize, session_count: usize, key: Key) -> Option<usize> {
-    if session_count == 0 {
-        return None;
-    }
-    match key {
-        Key::Up | Key::Character(b'k') => {
-            Some(selected.checked_sub(1).unwrap_or(session_count - 1))
-        }
-        Key::Down | Key::Character(b'j') => Some((selected + 1) % session_count),
-        _ => None,
-    }
+#[cfg(test)]
+fn navigation_target(selected: usize, count: usize, key: Key) -> Option<usize> {
+    action_navigation(selected, count, Bindings::default().action(key, false))
 }
-
-fn search_navigation_target(selected: usize, session_count: usize, key: Key) -> Option<usize> {
-    if session_count == 0 {
-        return None;
-    }
-    match key {
-        Key::Up => Some(selected.checked_sub(1).unwrap_or(session_count - 1)),
-        Key::Down => Some((selected + 1) % session_count),
-        _ => None,
-    }
+#[cfg(test)]
+fn search_navigation_target(selected: usize, count: usize, key: Key) -> Option<usize> {
+    action_navigation(selected, count, Bindings::default().action(key, true))
 }
 
 const BASE: (u8, u8, u8) = (30, 30, 46);
@@ -334,8 +431,11 @@ struct PickerView<'a> {
     search_input: Option<&'a str>,
     delete_armed: Option<&'a SessionName>,
     current: Option<&'a SessionName>,
+    bindings: &'a Bindings,
+    status: Option<&'a str>,
 }
 
+#[cfg(test)]
 fn render(
     sessions: &[SessionInfo],
     selected: usize,
@@ -345,6 +445,31 @@ fn render(
     delete_armed: Option<&SessionName>,
     current: Option<&SessionName>,
 ) -> Vec<u8> {
+    render_view(
+        &PickerView {
+            sessions,
+            selected,
+            create_input,
+            search_input,
+            delete_armed,
+            current,
+            bindings: &Bindings::default(),
+            status: None,
+        },
+        size,
+    )
+}
+fn render_view(view: &PickerView<'_>, size: (u16, u16)) -> Vec<u8> {
+    let PickerView {
+        sessions,
+        selected,
+        create_input,
+        search_input,
+        delete_armed,
+        current,
+        bindings,
+        status: _,
+    } = *view;
     let (box_row, box_column, height, width) = picker_rect(size);
     // Clear with the terminal's default background so emulator transparency is
     // preserved outside the explicitly painted manager window.
@@ -444,15 +569,7 @@ fn render(
     }
 
     if height < 8 {
-        let view = PickerView {
-            sessions,
-            selected,
-            create_input,
-            search_input,
-            delete_armed,
-            current,
-        };
-        draw_compact_sessions(&mut frame, &view, (box_row, box_column, height, width));
+        draw_compact_sessions(&mut frame, view, (box_row, box_column, height, width));
         return frame.into_bytes();
     }
 
@@ -462,7 +579,17 @@ fn render(
     } else if let Some(query) = search_input {
         format!("Search: {query}_")
     } else {
-        "↑/↓/j/k Move  / Search  Esc/q Close".to_owned()
+        [
+            bindings.hint(Action::Save, "Save"),
+            bindings.hint(Action::Up, "Up"),
+            bindings.hint(Action::Down, "Down"),
+            bindings.hint(Action::Search, "Search"),
+            bindings.hint(Action::Cancel, "Close"),
+        ]
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("  ")
     };
     write_field(
         &mut frame,
@@ -627,25 +754,7 @@ fn render(
         }
     }
 
-    let restore_selected = sessions.get(selected).is_some_and(|session| session.saved);
-    let footer = if create_input.is_some() {
-        "<Enter> Create  <Esc> Cancel".to_owned()
-    } else if search_input.is_some() {
-        format!(
-            "<Enter> {}  <Tab> Complete  <Esc> Clear",
-            if restore_selected {
-                "Restore"
-            } else {
-                "Attach"
-            }
-        )
-    } else if let Some(name) = delete_armed {
-        format!("Press d again to kill '{name}'")
-    } else if restore_selected {
-        "<Enter> Restore  <a> New".to_owned()
-    } else {
-        "<Enter> Attach  <a> New  <dd> Kill".to_owned()
-    };
+    let footer = picker_footer(view, false);
     write_field(
         &mut frame,
         box_row + height - 2,
@@ -689,28 +798,7 @@ fn draw_compact_sessions(
         );
     }
     if height >= 3 {
-        let restore_selected = view
-            .sessions
-            .get(view.selected)
-            .is_some_and(|session| session.saved);
-        let footer = if let Some(name) = view.create_input {
-            format!("New: {name}_  Enter create")
-        } else if let Some(query) = view.search_input {
-            format!(
-                "Search: {query}_  Enter {}",
-                if restore_selected {
-                    "restore"
-                } else {
-                    "attach"
-                }
-            )
-        } else if let Some(name) = view.delete_armed {
-            format!("d again: kill {name}")
-        } else if restore_selected {
-            "Enter restore  a new".to_owned()
-        } else {
-            "Enter attach  a new  dd kill".to_owned()
-        };
+        let footer = picker_footer(view, true);
         write_field(
             frame,
             box_row + height - 2,
@@ -725,6 +813,78 @@ fn draw_compact_sessions(
             BASE,
             view.delete_armed.is_some(),
         );
+    }
+}
+
+fn picker_footer(view: &PickerView<'_>, compact: bool) -> String {
+    if let Some(status) = view.status {
+        return status
+            .chars()
+            .take(256)
+            .map(|c| if c.is_control() { ' ' } else { c })
+            .collect();
+    }
+    let b = view.bindings;
+    let saved = view.sessions.get(view.selected).is_some_and(|s| s.saved);
+    if let Some(name) = view.delete_armed {
+        return format!("Press {} again to kill '{}'", delete_label(b), name);
+    }
+    let open = if view.create_input.is_some() {
+        "Create"
+    } else if saved {
+        "Restore"
+    } else {
+        "Attach"
+    };
+    let editing = view.create_input.is_some() || view.search_input.is_some();
+    let mut hints = vec![b.hint_in(Action::Open, open, editing)];
+    if view.create_input.is_some() {
+        hints.push(b.hint_in(Action::Cancel, "Cancel", true));
+    } else if view.search_input.is_some() {
+        hints.extend([
+            b.hint_in(Action::Complete, "Complete", true),
+            b.hint_in(Action::Cancel, "Clear", true),
+        ]);
+    } else {
+        hints.push(b.hint(Action::Create, "New"));
+        if !saved {
+            let label = repeat_delete_label(b);
+            if !label.is_empty() {
+                hints.push(format!("<{label}> Kill"));
+            }
+        }
+    }
+    if !saved || view.current.is_some() {
+        hints.push(b.hint_in(Action::Save, "Save", editing));
+    }
+    if compact && let Some(name) = view.create_input {
+        hints.insert(0, format!("New: {name}_"));
+    }
+    if compact && let Some(query) = view.search_input {
+        hints.insert(0, format!("Search: {query}_"));
+    }
+    hints
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("  ")
+}
+
+fn delete_label(bindings: &Bindings) -> String {
+    bindings
+        .hint(Action::Delete, "")
+        .trim()
+        .trim_matches(['<', '>'])
+        .to_owned()
+}
+fn repeat_delete_label(bindings: &Bindings) -> String {
+    let key = delete_label(bindings);
+    if key.len() == 1 {
+        format!("{key}{key}")
+    } else if key.is_empty() {
+        key
+    } else {
+        format!("{key} twice")
     }
 }
 
@@ -842,6 +1002,37 @@ mod tests {
     use super::*;
 
     #[test]
+    fn save_target_uses_current_or_selected_live_session_without_fallback() {
+        let current = SessionName::new("current").unwrap();
+        let other = SessionName::new("other").unwrap();
+        let mut sessions = vec![
+            SessionInfo {
+                name: current.clone(),
+                saved: false,
+                attached: false,
+                server_pid: Some(10),
+                last_connected_at: None,
+            },
+            SessionInfo {
+                name: other.clone(),
+                saved: false,
+                attached: false,
+                server_pid: Some(11),
+                last_connected_at: None,
+            },
+        ];
+        assert_eq!(
+            save_target(&sessions, Some(&current), 1, None),
+            Some(current.clone())
+        );
+        assert_eq!(save_target(&sessions, None, 1, None), Some(other));
+        sessions[0].saved = true;
+        assert_eq!(save_target(&sessions, Some(&current), 1, None), None);
+        assert_eq!(save_target(&sessions, None, 0, None), None);
+        assert_eq!(save_target(&sessions, None, 0, Some("missing")), None);
+    }
+
+    #[test]
     fn decoder_handles_navigation_choice_and_delayed_escape() {
         let now = Instant::now();
         let mut decoder = InputDecoder::default();
@@ -850,27 +1041,27 @@ mod tests {
             [
                 Key::Up,
                 Key::Down,
-                Key::Character(b'j'),
-                Key::Tab,
-                Key::Enter,
+                Key::Byte(b'j'),
+                Key::Byte(9),
+                Key::Byte(13),
             ]
         );
         assert!(decoder.feed(b"\x1b", now).is_empty());
-        assert_eq!(decoder.flush_due(now + ESCAPE_DELAY), Some(Key::Escape));
+        assert_eq!(decoder.flush_due(now + ESCAPE_DELAY), Some(Key::Byte(27)));
     }
 
     #[test]
     fn character_and_arrow_navigation_wrap_at_both_ends() {
-        assert_eq!(navigation_target(0, 3, Key::Character(b'j')), Some(1));
+        assert_eq!(navigation_target(0, 3, Key::Byte(b'j')), Some(1));
         assert_eq!(navigation_target(2, 3, Key::Down), Some(0));
-        assert_eq!(navigation_target(2, 3, Key::Character(b'k')), Some(1));
+        assert_eq!(navigation_target(2, 3, Key::Byte(b'k')), Some(1));
         assert_eq!(navigation_target(0, 3, Key::Up), Some(2));
-        assert_eq!(navigation_target(0, 0, Key::Character(b'j')), None);
-        assert_eq!(navigation_target(0, 3, Key::Character(b'x')), None);
+        assert_eq!(navigation_target(0, 0, Key::Byte(b'j')), None);
+        assert_eq!(navigation_target(0, 3, Key::Byte(b'x')), None);
         assert_eq!(search_navigation_target(0, 3, Key::Down), Some(1));
         assert_eq!(search_navigation_target(0, 3, Key::Up), Some(2));
-        assert_eq!(search_navigation_target(0, 3, Key::Character(b'j')), None);
-        assert_eq!(search_navigation_target(0, 3, Key::Character(b'k')), None);
+        assert_eq!(search_navigation_target(0, 3, Key::Byte(b'j')), None);
+        assert_eq!(search_navigation_target(0, 3, Key::Byte(b'k')), None);
     }
 
     #[test]
@@ -921,7 +1112,7 @@ mod tests {
         assert!(frame.contains("[DETACHED]"));
         assert!(frame.contains("4321"));
         assert!(frame.contains("9876"));
-        assert!(frame.contains("<Enter> Attach  <a> New  <dd> Kill"));
+        assert!(frame.contains("<Enter> Attach  <a> New"));
         let wide =
             String::from_utf8(render(&sessions, 1, (24, 160), None, None, None, None)).unwrap();
         assert!(wide.contains("LAST CONNECTED"));
@@ -990,7 +1181,7 @@ mod tests {
         }];
         for (size, query, action) in [
             ((24, 80), None, "<Enter> Restore"),
-            ((6, 40), None, "Enter restore"),
+            ((6, 40), None, "<Enter> Restore"),
             ((24, 100), Some("off"), "<Enter> Restore"),
         ] {
             let frame =

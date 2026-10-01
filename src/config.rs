@@ -9,6 +9,7 @@ use std::time::Duration;
 use crate::layout::Direction;
 
 mod diagnostics;
+pub(crate) mod manager;
 pub(crate) mod reload;
 pub use diagnostics::{Inspection, Settings, default_config, inspect};
 
@@ -564,6 +565,7 @@ impl Notifications {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Config {
     source: Option<reload::Source>,
+    manager: manager::Bindings,
     shell: OsString,
     notifications: Notifications,
     scrollback_lines: usize,
@@ -581,6 +583,9 @@ pub struct PersistenceOptions {
 }
 
 impl Config {
+    pub(crate) fn manager(&self) -> &manager::Bindings {
+        &self.manager
+    }
     pub fn remain_on_exit(&self) -> bool {
         self.remain_on_exit
     }
@@ -606,6 +611,7 @@ impl Config {
 
 #[derive(Debug, Default, Eq, PartialEq)]
 struct ParsedConfig {
+    manager: manager::Bindings,
     shell: Option<String>,
     notifications: Notifications,
     scrollback_lines: Option<usize>,
@@ -645,6 +651,7 @@ pub fn load_with_path(path: Option<&Path>) -> Result<Config, String> {
 fn resolve_config(configured: ParsedConfig) -> Config {
     Config {
         source: None,
+        manager: configured.manager,
         shell: select_shell(
             env::var_os("RUSTMUX_SHELL"),
             configured.shell.map(OsString::from),
@@ -771,6 +778,7 @@ fn parse_config(source: &str) -> Result<ParsedConfig, String> {
         })
         .transpose()?;
     Ok(ParsedConfig {
+        manager: manager::Bindings::parse(document.get("session_manager"))?,
         shell,
         notifications,
         scrollback_lines,
@@ -1826,6 +1834,7 @@ preset = "mocha"
             )
             .unwrap(),
             ParsedConfig {
+                manager: manager::Bindings::default(),
                 shell: Some("/opt/homebrew/bin/fish".to_owned()),
                 notifications: Notifications::default(),
                 scrollback_lines: Some(5000),

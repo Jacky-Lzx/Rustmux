@@ -111,3 +111,8 @@ fn output() {
 fn reload() {
     run_scenario("reload");
 }
+
+#[test]
+fn manager() {
+    run_scenario("manager");
+}

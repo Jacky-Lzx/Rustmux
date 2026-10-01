@@ -188,11 +188,16 @@ fn manage_sessions(
             }
             _ => {}
         }
-        match super::picker::choose(&sessions, return_to.as_ref())? {
+        match super::picker::choose(&sessions, return_to.as_ref(), config_path)? {
             super::picker::Choice::Attach(name) => {
-                if let Some(session) = sessions.iter().find(|session| session.name == name) {
-                    restore_selected(session, config_path)?;
-                }
+                let latest = super::list_info()?;
+                let session = latest
+                    .iter()
+                    .find(|session| session.name == name)
+                    .ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::NotFound, "selected session disappeared")
+                    })?;
+                restore_selected(session, config_path)?;
                 return Ok(Some(name));
             }
             super::picker::Choice::Create(name) => {
@@ -208,7 +213,9 @@ fn manage_sessions(
                 }
                 changed = true;
             }
-            super::picker::Choice::Cancel => return Ok(return_to),
+            super::picker::Choice::Cancel => {
+                return Ok(return_to.filter(|name| live_server_pid(name).is_ok()));
+            }
         }
     }
 }

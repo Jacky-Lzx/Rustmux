@@ -200,6 +200,10 @@ same after reattachment. The endpoint is removed when the last pane exits. See
 [Named Session Commands](../reference/session-cli.md).
 
 Ctrl-B followed by Ctrl-W opens the Session Manager from an attached session.
+Ctrl-A saves the current session and confirms success when its snapshot write
+finishes. Configure actions under `[session_manager]`; keys, hints and the list
+update while the manager is open. See
+[Session Manager Controls and Saving](../reference/session-manager-controls.md).
 The current session is selected initially; choose another session with `j`/`k`
 and Enter, or press Esc or `q` to return to the current session. The current
 session stays first and is marked `CURRENT`; other attached sessions precede

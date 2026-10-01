@@ -265,3 +265,62 @@ fn discovered_file_and_explicit_override_select_the_same_startup_paths() {
     assert_eq!(settings(&explicit)["remain_on_exit"].as_bool(), Some(false));
     assert_eq!(settings(&default)["remain_on_exit"].as_bool(), Some(true));
 }
+
+#[test]
+fn manager_keys_are_reported_independently_of_clear_defaults_and_ignored_actions_warn() {
+    let temporary = tempfile::tempdir().unwrap();
+    let path = temporary.path().join("manager.toml");
+    fs::write(
+        &path,
+        r#"
+clear_defaults=true
+[keybinds.locked]
+"Ctrl b"={actions=[{action="switch-mode",mode="normal"}]}
+[session_manager]
+down=["n"]
+save=[]
+rename=["Ctrl r"]
+"#,
+    )
+    .unwrap();
+    let output = command(
+        temporary.path(),
+        &[
+            "check-config",
+            "--config",
+            path.to_str().unwrap(),
+            "--toml",
+            "--strict",
+        ],
+    );
+    assert!(!output.status.success());
+    let report = report(&output);
+    assert_eq!(report["warnings"].as_array().unwrap().len(), 1);
+    assert!(
+        report["warnings"][0]
+            .as_str()
+            .unwrap()
+            .contains("session_manager")
+    );
+    assert_eq!(report["session_manager"]["down"][0].as_str(), Some("n"));
+    assert!(
+        report["session_manager"]["save"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(report["session_manager"]["up"].as_array().unwrap().len(), 2);
+    fs::write(&path, "[session_manager]\nup=['j']").unwrap();
+    let failed = command(
+        temporary.path(),
+        &["check-config", "--config", path.to_str().unwrap(), "--toml"],
+    );
+    assert!(!failed.status.success());
+    assert!(failed.stdout.is_empty());
+    assert!(
+        String::from_utf8(failed.stderr)
+            .unwrap()
+            .contains("conflicts")
+    );
+    assert!(!temporary.path().join("state").exists());
+}

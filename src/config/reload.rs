@@ -29,6 +29,7 @@ pub(crate) struct Reload {
     candidate: Option<Config>,
     error: Option<String>,
     generation: u64,
+    worker: Option<thread::JoinHandle<()>>,
 }
 
 impl Reload {
@@ -40,7 +41,7 @@ impl Reload {
         let stop = Arc::new(AtomicBool::new(false));
         let output = mailbox.clone();
         let cancelled = stop.clone();
-        thread::Builder::new()
+        let worker = thread::Builder::new()
             .name("rustmux-config".into())
             .spawn(move || {
                 let mut last: Option<Result<Option<String>, String>> = None;
@@ -72,7 +73,7 @@ impl Reload {
                         *output.lock().expect("config mailbox") = Some(update);
                         last = Some(text);
                     }
-                    thread::sleep(INTERVAL);
+                    thread::park_timeout(INTERVAL);
                 }
             })?;
         Ok(Some(Self {
@@ -82,10 +83,17 @@ impl Reload {
             candidate: None,
             error: None,
             generation: 0,
+            worker: Some(worker),
         }))
     }
 
     pub fn poll(&mut self) {
+        self.sample(true);
+    }
+    pub fn poll_manager(&mut self) {
+        self.sample(false);
+    }
+    fn sample(&mut self, server_policy: bool) {
         let update = self
             .mailbox
             .try_lock()
@@ -93,9 +101,9 @@ impl Reload {
             .and_then(|mut slot| slot.take());
         if let Some(update) = update {
             let update = update.and_then(|config| {
-                if config.shortcuts.locked_entry_key() != self.current.shortcuts.locked_entry_key()
-                    || config.shortcuts.clear_defaults() != self.current.shortcuts.clear_defaults()
-                {
+                let entry_changed = config.shortcuts.locked_entry_key() != self.current.shortcuts.locked_entry_key()
+                    || config.shortcuts.clear_defaults() != self.current.shortcuts.clear_defaults();
+                if server_policy && entry_changed {
                     Err(String::from(
                         "configuration reload requires restart to change the entry key or clear_defaults",
                     ))
@@ -113,6 +121,13 @@ impl Reload {
                     self.candidate = None;
                 }
             }
+        }
+    }
+    pub fn shutdown(mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(worker) = self.worker.take() {
+            worker.thread().unpark();
+            let _ = worker.join();
         }
     }
     pub fn pending(&self) -> bool {
@@ -140,6 +155,7 @@ impl Reload {
             error: Option<&'a str>,
             new_window_key: Option<String>,
             settings: Settings,
+            session_manager: std::collections::BTreeMap<String, Vec<String>>,
         }
         toml::to_string(&Status {
             path: self
@@ -159,6 +175,7 @@ impl Reload {
                 .action_is_active(b'c')
                 .then(|| char::from(self.current.shortcuts.key_for(b'c')).to_string()),
             settings: Settings::from(&self.current),
+            session_manager: self.current.manager.report(),
         })
         .map_err(io::Error::other)
     }
@@ -166,6 +183,9 @@ impl Reload {
 impl Drop for Reload {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
+        if let Some(worker) = &self.worker {
+            worker.thread().unpark();
+        }
     }
 }
 

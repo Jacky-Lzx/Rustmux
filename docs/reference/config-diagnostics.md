@@ -11,9 +11,9 @@ rustmux check-config --config ./rustmux-defaults.toml --strict
 ```
 
 `default-config` (alias `dump-config`) prints a reusable TOML template of the
-scalar defaults implemented on `main-human`. It does not load user configuration,
+scalar defaults and Session Manager keys implemented on `main-human`. It does not load user configuration,
 even if `--config` names a missing or invalid file. It does not write files itself.
-Keybinding defaults remain implicit: the template deliberately avoids pinning a
+Pane-mode keybinding defaults remain implicit: the template deliberately avoids pinning a
 separate copy of the binding tables. See [windows](windows.md) and
 [history](history-view.md) for bindings and supported overrides.
 
@@ -42,7 +42,7 @@ server's applied settings and reload errors.
 Ordinary output lists the selected path, effective scalar settings and shell
 source. Warnings go to stderr. `--toml` returns a machine-readable inspection
 report on stdout, with warnings included in the `warnings` array. A successful
-inspection is not an exported configuration: bindings are validated but are not
+inspection is not an exported configuration: pane-mode bindings are validated but are not
 flattened into the report, notification settings are presented as scalar fields,
 and paths and shell names use their UTF-8 display representation.
 
@@ -54,6 +54,7 @@ and paths and shell names use their UTF-8 display representation.
 | `shell_source` | `RUSTMUX_SHELL`, `config`, `SHELL`, or `fallback` |
 | `warnings` | Diagnostics for ignored options or bindings |
 | `[settings]` | Effective shell, scrollback limit, retention, clear-defaults flag, saving settings, and notification settings |
+| `[session_manager]` | Effective manager action keys, including disabled actions as empty arrays |
 
 Supported configuration errors, unreadable selected files, invalid TOML and
 binding conflicts return exit status 1, with an error on stderr and no report.

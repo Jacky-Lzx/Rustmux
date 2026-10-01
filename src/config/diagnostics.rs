@@ -12,6 +12,7 @@ pub struct Inspection {
     pub shell_source: &'static str,
     pub warnings: Vec<String>,
     pub settings: Settings,
+    pub session_manager: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -55,6 +56,7 @@ pub fn inspect(path: Option<&Path>) -> Result<Inspection, String> {
         shell_source,
         warnings,
         settings: Settings::from(&config),
+        session_manager: config.manager.report(),
     })
 }
 
@@ -91,8 +93,19 @@ fn ignored_options(source: &str) -> Vec<String> {
                 | "notifications"
                 | "shortcuts"
                 | "keybinds"
+                | "session_manager"
         ) {
             warnings.push(format!("ignored top-level option {key:?}"));
+        }
+    }
+    if let Some(manager) = table.get("session_manager").and_then(toml::Value::as_table) {
+        for name in manager.keys() {
+            if !manager::Action::ALL
+                .iter()
+                .any(|(_, action)| *action == name)
+            {
+                warnings.push(format!("ignored session_manager action {name:?}"));
+            }
         }
     }
     if let Some(notifications) = table.get("notifications").and_then(toml::Value::as_table) {
@@ -164,6 +177,19 @@ save_scrollback_colors = false
 [notifications]
 long_command_bell = true
 command_duration_seconds = {DEFAULT_COMMAND_DURATION_SECONDS}
+
+[session_manager]
+up = ["k", "up"]
+down = ["j", "down"]
+search = ["/"]
+complete = ["tab"]
+open = ["enter"]
+create = ["a"]
+save = ["Ctrl a"]
+# Press twice to terminate a live session; saved snapshots remain.
+delete = ["d"]
+cancel = ["esc", "q"]
+backspace = ["backspace"]
 
 # Keybinding defaults are implicit. Add [shortcuts] or [keybinds.MODE] overrides.
 # Default prefix: Ctrl-B; new window: c; split right: %; split down: \".

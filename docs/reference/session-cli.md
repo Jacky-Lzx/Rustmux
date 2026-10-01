@@ -22,6 +22,8 @@ fresh restored shells.
 
 Additional [script control commands](script-control.md) query panes, send input,
 capture text, create windows and splits, and move panes while preserving processes.
+The [Session Manager](session-manager-controls.md) now supports configurable
+keys, live list refresh and acknowledged manual saving with Ctrl-A.
 `new --layout PATH` starts a validated [project layout](project-layouts.md),
 including directories, windows, splits and optional explicit startup commands.
 

@@ -294,6 +294,14 @@ impl Drop for SnapshotService {
 /// Request a save while the session is attached or detached. Success means the
 /// atomic write and directory sync finished, not merely that it was scheduled.
 pub fn save_session(name: &SessionName) -> io::Result<()> {
+    save_session_inner(name, None)
+}
+
+pub(crate) fn save_session_with_timeout(name: &SessionName, timeout: Duration) -> io::Result<()> {
+    save_session_inner(name, Some(timeout))
+}
+
+fn save_session_inner(name: &SessionName, timeout: Option<Duration>) -> io::Result<()> {
     super::live_server_pid(name)?;
     let directory = super::session_directory();
     super::ensure_private_directory(&directory)?;
@@ -311,8 +319,13 @@ pub fn save_session(name: &SessionName) -> io::Result<()> {
     let mut stream = UnixStream::connect(path)?;
     stream.set_write_timeout(Some(REQUEST_TIMEOUT))?;
     stream.write_all(b"S")?;
-    let mut response = String::new();
-    stream.take(2048).read_to_string(&mut response)?;
+    let response = if let Some(timeout) = timeout {
+        read_acknowledgement(&mut stream, timeout)?
+    } else {
+        let mut response = String::new();
+        stream.take(2048).read_to_string(&mut response)?;
+        response
+    };
     if response == "OK\n" {
         Ok(())
     } else {
@@ -323,5 +336,69 @@ pub fn save_session(name: &SessionName) -> io::Result<()> {
                 .trim_end()
                 .to_owned(),
         ))
+    }
+}
+
+// Unix socket receive-timeout options are not available on every supported
+// platform. Read nonblocking and enforce a deadline with poll instead.
+fn read_acknowledgement(stream: &mut UnixStream, timeout: Duration) -> io::Result<String> {
+    use nix::{
+        errno::Errno,
+        poll::{PollFd, PollFlags, poll},
+    };
+    use std::os::fd::AsFd;
+    stream.set_nonblocking(true)?;
+    let deadline = Instant::now() + timeout;
+    let mut bytes = Vec::new();
+    while bytes.len() < 2048 {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "session save acknowledgement timed out",
+            ));
+        }
+        let mut buffer = [0; 256];
+        let limit = buffer.len().min(2048 - bytes.len());
+        match stream.read(&mut buffer[..limit]) {
+            Ok(0) => break,
+            Ok(count) => bytes.extend_from_slice(&buffer[..count]),
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                let mut fds = [PollFd::new(stream.as_fd(), PollFlags::POLLIN)];
+                match poll(&mut fds, remaining.as_millis().clamp(1, 100) as u16) {
+                    Ok(_) | Err(Errno::EINTR) => {}
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    String::from_utf8(bytes).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+}
+
+#[cfg(test)]
+mod acknowledgement_tests {
+    use super::*;
+    #[test]
+    fn stalled_and_fragmented_replies_obey_the_acknowledgement_deadline() {
+        let (mut client, _server) = UnixStream::pair().unwrap();
+        assert_eq!(
+            read_acknowledgement(&mut client, Duration::from_millis(20))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::TimedOut
+        );
+        let (mut client, mut server) = UnixStream::pair().unwrap();
+        let writer = std::thread::spawn(move || {
+            server.write_all(b"O").unwrap();
+            std::thread::sleep(Duration::from_millis(10));
+            server.write_all(b"K\n").unwrap();
+        });
+        assert_eq!(
+            read_acknowledgement(&mut client, Duration::from_secs(2)).unwrap(),
+            "OK\n"
+        );
+        writer.join().unwrap();
     }
 }

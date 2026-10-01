@@ -77,8 +77,9 @@ startup.
 | `error` | Latest reload error, omitted when there is none |
 | `new_window_key` | Current preferred NORMAL-mode new-window key, omitted if that action is inactive |
 | `[settings]` | Applied scalar settings, using the same fields as configuration diagnostics |
+| `[session_manager]` | Applied manager bindings on this server; the client-side manager uses its own selected source |
 
-Bindings are validated and applied but are not flattened into this report;
+Pane-mode bindings are validated and applied but are not flattened into this report;
 Help displays their active definitions. The report describes the session's
 defaults, not per-pane overrides, existing child environments or existing
 history capacities. The low-level library entry points that receive raw settings
