@@ -28,6 +28,17 @@ def wait_until(predicate, detail):
         time.sleep(0.02)
 
 
+def expect_picker(session, *texts):
+    # Picker frames use absolute writes, rather than the pane renderer's frame
+    # delimiters used by Session.expect(). Inspect their raw output instead.
+    deadline = time.monotonic() + 8
+    while not all(text in session.output for text in texts):
+        session.read()
+        assert time.monotonic() < deadline, (texts, bytes(session.output[-2000:]))
+    session.output.clear()
+    session.frames.clear()
+
+
 with tempfile.TemporaryDirectory(prefix="rustmux-snapshots-") as root:
     root = Path(root)
     config = root / "config" / "rustmux"
@@ -110,9 +121,27 @@ with tempfile.TemporaryDirectory(prefix="rustmux-snapshots-") as root:
     assert path.read_bytes() == before_restart, "default-off autosave changed the manual snapshot"
     assert not endpoint.exists()
 
-    session = new()
+    assert command(env, "ls").stdout.splitlines().count(name) == 1
+    listing = command(env, "ls", "--long").stdout
+    assert "SAVED" in next(line for line in listing.splitlines() if line.startswith(name + " ")), listing
+    # A second saved workspace guarantees the manager opens instead of using
+    # its single-session shortcut, independent of other running test sessions.
+    other_path = path.with_name(f"other-{os.getpid()}.toml")
+    other_path.write_bytes(before_restart)
+    other_path.chmod(0o600)
+
+    session = Session(extra_env=env, arguments=("attach",))
     try:
+        expect_picker(session, b"Session Manager")
+        session.send(("/" + name).encode())
+        expect_picker(session, b"<Enter> Restore", b"[SAVED]")
+        session.send(b"\x1b")
+        expect_picker(session, b"<Enter> Restore  <a> New")
+        session.send(b"dd\r")  # Killing a saved-only workspace is disabled.
         session.expect(b"RUSTMUX_READY>")
+        assert command(env, "ls").stdout.splitlines().count(name) == 1
+        row = next(line for line in command(env, "ls", "--long").stdout.splitlines() if line.startswith(name + " "))
+        assert "ATTACHED" in row and "SAVED" not in row, row
         expect_bar(session, b"logs")
         assert b"SAVED_LOGS" not in b"".join(session.last_rows), "saved output replaced the fresh live screen"
         session.send(b"stty -echo; printf 'FRESH:%s\\n' ${KEEP-unset}\n")
@@ -134,7 +163,9 @@ with tempfile.TemporaryDirectory(prefix="rustmux-snapshots-") as root:
         session.finish(0)
     finally:
         session.close()
-        command(env, "kill", name)
+        if endpoint.with_suffix(".sock").exists():
+            command(env, "kill", name)
+        other_path.unlink()
 
     # Disabling saved history still restores the layout and starts fresh shells.
     settings.write_text("save_scrollback = false\n")
@@ -168,7 +199,8 @@ with tempfile.TemporaryDirectory(prefix="rustmux-snapshots-") as root:
     path.write_text("version = 999\n")
     invalid = command(env, "new", name, "--detached", success=False)
     assert path.read_text() == "version = 999\n"
-    assert name not in command(env, "list").stdout.splitlines()
+    assert name in command(env, "list").stdout.splitlines()
+    assert not endpoint.with_suffix(".sock").exists(), "invalid restoration launched a server"
     path.write_bytes(good)
 
     # A failed disk save reports an error and preserves the live server.

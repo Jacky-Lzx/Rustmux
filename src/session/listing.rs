@@ -95,6 +95,7 @@ mod tests {
         server_pid: Option<i32>,
     ) -> SessionInfo {
         SessionInfo {
+            saved: false,
             name: SessionName::new(name).unwrap(),
             attached,
             server_pid,

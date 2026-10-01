@@ -264,7 +264,7 @@ fn run_picker(
                 }
                 Key::Character(b'a') => create_input = Some(String::new()),
                 Key::Character(b'/') => search_input = Some(String::new()),
-                Key::Character(b'd') if !sessions.is_empty() => {
+                Key::Character(b'd') if !sessions.is_empty() && !sessions[selected].saved => {
                     let name = sessions[selected].name.clone();
                     if armed.as_ref() == Some(&name) {
                         return Ok(Choice::Kill(name));
@@ -627,12 +627,22 @@ fn render(
         }
     }
 
+    let restore_selected = sessions.get(selected).is_some_and(|session| session.saved);
     let footer = if create_input.is_some() {
         "<Enter> Create  <Esc> Cancel".to_owned()
     } else if search_input.is_some() {
-        "<Enter> Attach  <Tab> Complete  <Esc> Clear".to_owned()
+        format!(
+            "<Enter> {}  <Tab> Complete  <Esc> Clear",
+            if restore_selected {
+                "Restore"
+            } else {
+                "Attach"
+            }
+        )
     } else if let Some(name) = delete_armed {
         format!("Press d again to kill '{name}'")
+    } else if restore_selected {
+        "<Enter> Restore  <a> New".to_owned()
     } else {
         "<Enter> Attach  <a> New  <dd> Kill".to_owned()
     };
@@ -679,12 +689,25 @@ fn draw_compact_sessions(
         );
     }
     if height >= 3 {
+        let restore_selected = view
+            .sessions
+            .get(view.selected)
+            .is_some_and(|session| session.saved);
         let footer = if let Some(name) = view.create_input {
             format!("New: {name}_  Enter create")
         } else if let Some(query) = view.search_input {
-            format!("Search: {query}_  Enter attach")
+            format!(
+                "Search: {query}_  Enter {}",
+                if restore_selected {
+                    "restore"
+                } else {
+                    "attach"
+                }
+            )
         } else if let Some(name) = view.delete_armed {
             format!("d again: kill {name}")
+        } else if restore_selected {
+            "Enter restore  a new".to_owned()
         } else {
             "Enter attach  a new  dd kill".to_owned()
         };
@@ -856,6 +879,7 @@ mod tests {
             .into_iter()
             .enumerate()
             .map(|(index, name)| SessionInfo {
+                saved: false,
                 name: SessionName::new(name).unwrap(),
                 attached: index == 1,
                 server_pid: Some(100 + index as i32),
@@ -873,12 +897,14 @@ mod tests {
     fn full_picker_is_centered_and_shows_status_and_server_pid() {
         let sessions = [
             SessionInfo {
+                saved: false,
                 name: SessionName::new("active").unwrap(),
                 attached: true,
                 server_pid: Some(4321),
                 last_connected_at: Some(900),
             },
             SessionInfo {
+                saved: false,
                 name: SessionName::new("idle").unwrap(),
                 attached: false,
                 server_pid: Some(9876),
@@ -930,6 +956,7 @@ mod tests {
         let sessions: Vec<_> = ["alpha", "Jupiter", "jump-start"]
             .into_iter()
             .map(|name| SessionInfo {
+                saved: false,
                 name: SessionName::new(name).unwrap(),
                 attached: false,
                 server_pid: None,
@@ -953,8 +980,32 @@ mod tests {
     }
 
     #[test]
+    fn saved_session_shows_restore_action_in_full_compact_and_search_views() {
+        let sessions = [SessionInfo {
+            name: SessionName::new("offline").unwrap(),
+            saved: true,
+            attached: false,
+            server_pid: None,
+            last_connected_at: None,
+        }];
+        for (size, query, action) in [
+            ((24, 80), None, "<Enter> Restore"),
+            ((6, 40), None, "Enter restore"),
+            ((24, 100), Some("off"), "<Enter> Restore"),
+        ] {
+            let frame =
+                String::from_utf8(render(&sessions, 0, size, None, query, None, None)).unwrap();
+            assert!(frame.contains("[SAVED]"));
+            assert!(frame.contains(action));
+            assert!(!frame.contains("dd"));
+            assert!(!frame.contains("[DETACHED]"));
+        }
+    }
+
+    #[test]
     fn current_session_has_a_distinct_status() {
         let sessions = [SessionInfo {
+            saved: false,
             name: SessionName::new("work").unwrap(),
             attached: false,
             server_pid: Some(4321),
@@ -977,6 +1028,7 @@ mod tests {
     #[test]
     fn last_connected_labels_use_compact_elapsed_units() {
         let mut session = SessionInfo {
+            saved: false,
             name: SessionName::new("work").unwrap(),
             attached: false,
             server_pid: None,

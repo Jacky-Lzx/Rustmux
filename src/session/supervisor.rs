@@ -32,10 +32,19 @@ pub fn create(
     detached: bool,
     config_path: Option<&Path>,
 ) -> io::Result<u8> {
+    create_with_bootstrap(name, config, detached, config_path, None)
+}
+
+fn create_with_bootstrap(
+    name: &SessionName,
+    config: &crate::config::Config,
+    detached: bool,
+    config_path: Option<&Path>,
+    size: Option<(u16, u16)>,
+) -> io::Result<u8> {
     let snapshot = crate::persistence::load(&crate::persistence::state_directory()?, name)?;
-    let bootstrap_size = snapshot
-        .as_ref()
-        .map(|snapshot| snapshot.bootstrap_size())
+    let bootstrap_size = size
+        .or_else(|| snapshot.as_ref().map(|snapshot| snapshot.bootstrap_size()))
         .unwrap_or((DETACHED_ROWS, DETACHED_COLUMNS));
     let endpoint = SessionEndpoint::bind(name)?;
     // SAFETY: the CLI calls this during single-threaded startup, so the child
@@ -142,16 +151,22 @@ fn manage_sessions(
             [] => {
                 return Err(io::Error::new(
                     io::ErrorKind::NotFound,
-                    "no sessions are running",
+                    "no running or saved sessions",
                 ));
             }
             [session] if attach_single_directly && !changed => {
+                restore_selected(session, config_path)?;
                 return Ok(Some(session.name.clone()));
             }
             _ => {}
         }
         match super::picker::choose(&sessions, return_to.as_ref())? {
-            super::picker::Choice::Attach(name) => return Ok(Some(name)),
+            super::picker::Choice::Attach(name) => {
+                if let Some(session) = sessions.iter().find(|session| session.name == name) {
+                    restore_selected(session, config_path)?;
+                }
+                return Ok(Some(name));
+            }
             super::picker::Choice::Create(name) => {
                 let config = crate::config::load_with_path(config_path)
                     .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
@@ -168,6 +183,29 @@ fn manage_sessions(
             super::picker::Choice::Cancel => return Ok(return_to),
         }
     }
+}
+
+fn restore_selected(session: &super::SessionInfo, config_path: Option<&Path>) -> io::Result<()> {
+    if session.saved {
+        // The picker has restored the outer terminal and dropped its signal
+        // registrations before we fork a fresh server for this workspace.
+        let config = crate::config::load_with_path(config_path)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+        let file = crate::terminal_device::TerminalDevice::open_controlling()?;
+        let size = crate::terminal_device::window_size(&file)?;
+        drop(file);
+        // Restore at the actual attachment dimensions. Bootstrapping at the
+        // saved width and immediately resizing would pull old history into the
+        // otherwise fresh live screen through ordinary primary-grid reflow.
+        create_with_bootstrap(
+            &session.name,
+            &config,
+            true,
+            config_path,
+            Some((size.ws_row, size.ws_col)),
+        )?;
+    }
+    Ok(())
 }
 
 fn order_sessions(sessions: &mut [super::SessionInfo], current: Option<&SessionName>) {
@@ -310,6 +348,7 @@ mod tests {
 
     fn info(name: &str, attached: bool, last_connected_at: Option<u64>) -> SessionInfo {
         SessionInfo {
+            saved: false,
             name: SessionName::new(name).unwrap(),
             attached,
             server_pid: None,

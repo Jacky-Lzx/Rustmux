@@ -81,7 +81,7 @@ fn starts_interactive_session(command: &Option<rustmux::cli::Command>) -> bool {
 }
 
 fn kill_all(skip_confirmation: bool) -> Result<u8, String> {
-    let sessions = rustmux::session::list().map_err(|error| error.to_string())?;
+    let sessions = rustmux::session::list_running().map_err(|error| error.to_string())?;
     if sessions.is_empty() {
         println!("no sessions");
         return Ok(0);

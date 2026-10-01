@@ -273,7 +273,7 @@ fn acquire_client_in(directory: &Path, name: &SessionName) -> io::Result<ClientL
     }
 }
 
-/// Return private session endpoints in stable name order.
+/// Return running and saved session names in stable name order, without duplicates.
 pub fn list() -> io::Result<Vec<SessionName>> {
     Ok(list_info()?
         .into_iter()
@@ -281,7 +281,15 @@ pub fn list() -> io::Result<Vec<SessionName>> {
         .collect())
 }
 
-/// Format live sessions as a human-readable table.
+/// Return only running sessions, for operations such as kill-all.
+pub fn list_running() -> io::Result<Vec<SessionName>> {
+    Ok(list_info_in(&session_directory())?
+        .into_iter()
+        .map(|session| session.name)
+        .collect())
+}
+
+/// Format running and saved sessions as a human-readable table.
 pub fn format_list() -> io::Result<String> {
     listing::format_list()
 }
@@ -289,6 +297,8 @@ pub fn format_list() -> io::Result<String> {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SessionInfo {
     pub(crate) name: SessionName,
+    /// A stopped session with a disk snapshot, rather than a live endpoint.
+    pub(crate) saved: bool,
     pub(crate) attached: bool,
     pub(crate) server_pid: Option<i32>,
     pub(crate) last_connected_at: Option<u64>,
@@ -296,7 +306,9 @@ pub(crate) struct SessionInfo {
 
 impl SessionInfo {
     fn status(&self, current: Option<&SessionName>) -> &'static str {
-        if current == Some(&self.name) {
+        if self.saved {
+            "SAVED"
+        } else if current == Some(&self.name) {
             "CURRENT"
         } else if self.attached {
             "ATTACHED"
@@ -306,6 +318,9 @@ impl SessionInfo {
     }
 
     fn last_connected_label(&self, current: Option<&SessionName>, now: u64) -> String {
+        if self.saved {
+            return "—".to_owned();
+        }
         if current == Some(&self.name) || self.attached {
             return "Now".to_owned();
         }
@@ -335,7 +350,9 @@ pub(crate) fn order_info(sessions: &mut [SessionInfo], current: Option<&SessionN
 }
 
 fn session_rank(session: &SessionInfo, current: Option<&SessionName>) -> u8 {
-    if current == Some(&session.name) {
+    if session.saved {
+        3
+    } else if current == Some(&session.name) {
         0
     } else if session.attached {
         1
@@ -381,7 +398,27 @@ fn record_connection_in(directory: &Path, name: &SessionName, timestamp: u64) ->
 }
 
 pub(crate) fn list_info() -> io::Result<Vec<SessionInfo>> {
-    list_info_in(&session_directory())
+    let live = list_info_in(&session_directory())?;
+    let saved = crate::persistence::list_names(&crate::persistence::state_directory()?)?;
+    Ok(merge_saved(live, saved))
+}
+
+fn merge_saved(mut live: Vec<SessionInfo>, saved: Vec<SessionName>) -> Vec<SessionInfo> {
+    let running: std::collections::HashSet<_> = live.iter().map(|s| s.name.clone()).collect();
+    live.extend(
+        saved
+            .into_iter()
+            .filter(|name| !running.contains(name))
+            .map(|name| SessionInfo {
+                name,
+                saved: true,
+                attached: false,
+                server_pid: None,
+                last_connected_at: None,
+            }),
+    );
+    live.sort_unstable_by(|left, right| left.name.cmp(&right.name));
+    live
 }
 
 fn list_info_in(directory: &Path) -> io::Result<Vec<SessionInfo>> {
@@ -427,6 +464,7 @@ fn list_info_in(directory: &Path) -> io::Result<Vec<SessionInfo>> {
         };
         let server_pid = live_server_pid_in(directory, &name).ok().map(Pid::as_raw);
         sessions.push(SessionInfo {
+            saved: false,
             last_connected_at: read_last_connected_in(directory, &name),
             name,
             attached,
@@ -929,5 +967,31 @@ mod tests {
             list_info_in(&directory.0).unwrap_err().kind(),
             io::ErrorKind::PermissionDenied
         );
+    }
+
+    #[test]
+    fn saved_listing_merges_by_name_and_keeps_live_state_first() {
+        let work = SessionName::new("work").unwrap();
+        let offline = SessionName::new("offline").unwrap();
+        let mut sessions = merge_saved(
+            vec![SessionInfo {
+                name: work.clone(),
+                saved: false,
+                attached: true,
+                server_pid: Some(123),
+                last_connected_at: Some(10),
+            }],
+            vec![offline.clone(), work.clone()],
+        );
+        assert_eq!(sessions.len(), 2);
+        assert_eq!(sessions[0].name, offline);
+        assert_eq!(sessions[1].status(None), "ATTACHED");
+        assert_eq!(sessions[1].server_pid, Some(123));
+        assert_eq!(sessions[0].status(Some(&offline)), "SAVED");
+        assert_eq!(sessions[0].last_connected_label(Some(&offline), 50), "—");
+        assert_eq!(sessions[0].server_pid, None);
+        order_info(&mut sessions, None);
+        assert_eq!(sessions[0].name, work);
+        assert_eq!(sessions[1].name, offline);
     }
 }

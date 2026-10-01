@@ -266,6 +266,42 @@ fn check_directory(directory: &Path, create: bool) -> io::Result<()> {
     Ok(())
 }
 
+/// Enumerate private snapshot files without decoding potentially large histories.
+/// Content validation still happens before restoring a selected workspace.
+pub(crate) fn list_names(directory: &Path) -> io::Result<Vec<SessionName>> {
+    match check_directory(directory, false) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        result => result?,
+    }
+    let mut names = Vec::new();
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        let file_name = entry.file_name();
+        let Some(name) = file_name
+            .to_str()
+            .and_then(|name| name.strip_suffix(".toml"))
+        else {
+            continue;
+        };
+        let Ok(name) = SessionName::new(name) else {
+            continue;
+        };
+        let metadata = match fs::symlink_metadata(entry.path()) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+        };
+        if metadata.is_file()
+            && metadata.uid() == nix::unistd::geteuid().as_raw()
+            && metadata.mode() & 0o077 == 0
+        {
+            names.push(name);
+        }
+    }
+    names.sort_unstable();
+    Ok(names)
+}
+
 pub(crate) fn load(directory: &Path, name: &SessionName) -> io::Result<Option<Snapshot>> {
     match check_directory(directory, false) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -375,6 +411,50 @@ mod tests {
                 ],
             }],
         }
+    }
+
+    #[test]
+    fn lists_only_private_named_regular_snapshots_without_decoding_history() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        save(
+            directory.path(),
+            &SessionName::new("work").unwrap(),
+            &sample(),
+        )
+        .unwrap();
+        // A corrupt private snapshot stays discoverable; restore reports its error.
+        let corrupt = directory.path().join("broken.toml");
+        fs::write(&corrupt, "version = 999").unwrap();
+        fs::set_permissions(&corrupt, fs::Permissions::from_mode(0o600)).unwrap();
+        fs::write(directory.path().join("public.toml"), "").unwrap();
+        fs::set_permissions(
+            directory.path().join("public.toml"),
+            fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(&corrupt, directory.path().join("link.toml")).unwrap();
+        fs::create_dir(directory.path().join("folder.toml")).unwrap();
+        fs::write(directory.path().join("bad name.toml"), "").unwrap();
+        fs::write(directory.path().join("ignored.tmp"), "").unwrap();
+        assert_eq!(
+            list_names(directory.path())
+                .unwrap()
+                .iter()
+                .map(SessionName::as_str)
+                .collect::<Vec<_>>(),
+            ["broken", "work"]
+        );
+        assert!(
+            list_names(&directory.path().join("missing"))
+                .unwrap()
+                .is_empty()
+        );
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(
+            list_names(directory.path()).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
     }
 
     #[test]

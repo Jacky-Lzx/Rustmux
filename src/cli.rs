@@ -31,10 +31,10 @@ pub enum Command {
     },
     /// Attach to an existing named session.
     Attach {
-        /// Existing session name; omit to choose from running sessions.
+        /// Existing running session name; omit to choose running or saved sessions.
         name: Option<SessionName>,
     },
-    /// List named session endpoints.
+    /// List running sessions and saved workspaces.
     #[command(visible_alias = "ls")]
     List {
         /// Show connection state, server PID and last connection time.

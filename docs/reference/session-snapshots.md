@@ -22,10 +22,24 @@ file replacement and directory sync have finished. Unknown sessions, unsafe
 paths and write errors return a nonzero status. Foreground Rustmux without a
 session name has no disk-saving endpoint.
 
-`new work` automatically loads the saved workspace for that name. `attach` still
+`new work` automatically loads the saved workspace for that name. `attach NAME`
 requires a running server; it does not start a stopped session. `kill` and
 `kill-all` retain snapshots. Removing a snapshot file explicitly makes the next
 creation start with one fresh shell window.
+
+`list`/`ls` includes both running sessions and saved workspaces, with each name
+appearing once. `ls --long` marks stopped saved workspaces as `SAVED`, without a
+server PID or last-connection time. The Session Manager includes them after live
+sessions; search and navigation work for both. A selected `SAVED` entry offers
+the `Restore` action. Enter starts fresh shells using the selected configuration
+and current terminal dimensions before attaching. `attach` without a name
+restores directly when there is just one entry.
+
+The manager's `dd` action and `kill-all` operate only on running servers and
+retain their snapshots. Stopped saved entries do not offer `dd`; remove the
+snapshot file explicitly to forget them. Listing checks file names and private
+regular-file metadata without decoding history. A corrupt private snapshot
+remains discoverable; its validation error is reported on restore.
 
 Snapshots include window names/order, split axes/ratios, focused panes, active
 window, zoom state and working directories. Temporary history/output editor
@@ -106,22 +120,26 @@ expire after two seconds. The interactive protocol and its version are unchanged
 Reading order: `src/layout/snapshot.rs`, `src/screen/history_snapshot.rs`,
 `src/persistence.rs`, `src/session/snapshot.rs`, then the integration in
 `src/config.rs`, `src/session/supervisor.rs`, `src/terminal.rs` and the CLI.
+For saved-session discovery and selection, also review `src/session.rs`,
+`src/session/picker.rs`, and the running-only `kill-all` path in `src/main.rs`.
 
 Unit coverage checks split ratios/focus/zoom, malformed graphs, styled Unicode
 reflow, alternate-screen exclusion, unsafe controls, atomic storage and file
 permissions. `cargo test --test terminal_loop snapshots` exercises real nested
 PTY save/restart/restore at different widths, fresh shell state, directories,
 concurrent and detached saves, saved-history opt-out, invalid files, write failure
-isolation and autosave.
+isolation and autosave. It also checks saved CLI listings, manager search and
+restoration at the current terminal size, without duplicate names or saved text
+appearing in the fresh live screen.
 The snapshot PTY scenario requires Python 3.11 or later for its standard-library
 TOML reader. The work on the review branch is implementation evidence, not owner acceptance.
 
 Local verification on macOS, 2026-10-01:
 
-- `cargo test --all-targets --locked --offline -- --test-threads=4`: 842 passed,
+- `cargo test --all-targets --locked --offline -- --test-threads=4`: 845 passed,
   zero failed, six ignored by their existing default test settings.
-- The strengthened PTY scenario was rerun successfully after adding saved-size
-  restoration and malformed save-request checks.
+- The strengthened PTY scenario was rerun successfully after adding saved CLI
+  listings, manager restoration, saved-size and malformed save-request checks.
 - `cargo fmt --all -- --check` and
   `cargo clippy --all-targets --all-features --locked --offline -- -D warnings` passed.
 - `mdbook build` passed. Linux CI and owner acceptance remain unverified.
