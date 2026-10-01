@@ -11,6 +11,7 @@ rustmux select-pane -s work -p 0
 rustmux select-window -s work -w 2
 rustmux rename-window -s work -w 2 'build logs'
 rustmux new-window -s work --name logs
+rustmux new-window -s work --name checks --cwd /absolute/project --command 'cargo test'
 rustmux split-pane -s work -p 0 --down
 rustmux resize-pane -s work -p 0 --direction right --cells 3
 rustmux send-keys -s work -p 0 --literal --enter 'printf "hello\n"'
@@ -64,7 +65,11 @@ that window; `active` also requires that window to be active. Exit state and
 restart semantics are described in [Retained Panes and Respawn](pane-lifecycle.md).
 
 New windows and splits gain focus and print their new pane ID. A split inherits
-the specified pane's directory. Joins require two different windows and preserve
+the specified pane's directory. Both commands accept `--cwd /absolute/directory`
+to override inheritance and `--command 'shell command'` to launch a recorded job.
+Omitting the command starts an interactive shell. Startup commands are retained
+for respawn and workspace restoration; see [Script Pane Startup](script-pane-startup.md).
+Joins require two different windows and preserve
 the moved process, screen and ID; an emptied source window is removed. Breaks
 also preserve them. Breaking a window's sole pane is a no-op returning its ID.
 Invalid IDs, invalid names, exhausted limits and impossible splits return a

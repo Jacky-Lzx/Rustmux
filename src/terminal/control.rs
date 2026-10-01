@@ -70,6 +70,16 @@ fn name(name: Option<&str>) -> io::Result<()> {
     Ok(())
 }
 
+fn startup(command: Option<&str>, cwd: Option<&Path>) -> io::Result<()> {
+    crate::project::validate_command(command)?;
+    if cwd.is_some_and(|path| !path.is_absolute() || !path.is_dir()) {
+        return Err(invalid(
+            "startup cwd must be an absolute existing directory",
+        ));
+    }
+    Ok(())
+}
+
 pub(super) fn handle(
     request: Request,
     windows: &mut Windows<PaneSet<Pane>>,
@@ -254,29 +264,48 @@ pub(super) fn handle(
             pane.parts_mut().3.to_shell.extend(bytes);
             Ok(String::new())
         }
-        Request::NewWindow { name: window_name } => {
+        Request::NewWindow {
+            name: window_name,
+            command,
+            cwd,
+        } => {
             name(window_name.as_deref())?;
+            startup(command.as_deref(), cwd.as_deref())?;
             if windows.iter().len() >= MAX_WINDOWS {
                 return Err(invalid("window limit reached"));
             }
             let columns = windows.active().unwrap().content().layout().dimensions().1;
-            let set = spawn_window(
-                context.shell_path,
-                active_directory(windows).as_deref(),
-                pane_rows(rows),
+            let rows = pane_rows(rows);
+            let (content_rows, content_columns) = pane_content_dimensions(rows, columns);
+            let directory = cwd.or_else(|| active_directory(windows));
+            let set = PaneSet::new(
+                rows,
                 columns,
-                context.notifications,
-                context.scrollback_lines,
+                Pane::spawn_with_startup(
+                    context.shell_path,
+                    directory.as_deref(),
+                    content_rows,
+                    content_columns,
+                    context.notifications,
+                    context.scrollback_lines,
+                    command.as_deref(),
+                )?,
             )?;
             let id = set.active().control_id();
             windows.create(window_name.unwrap_or_else(|| "shell".into()), set)?;
             Ok(format!("{id}\n"))
         }
-        Request::SplitPane { pane, down } => {
+        Request::SplitPane {
+            pane,
+            down,
+            command,
+            cwd,
+        } => {
+            startup(command.as_deref(), cwd.as_deref())?;
             let (window, id) = target(windows, pane)?;
             let set = windows.get_mut(window).unwrap().content_mut();
             let previous = set.layout().active();
-            let directory = set.get(id).unwrap().inherited_directory();
+            let directory = cwd.or_else(|| set.get(id).unwrap().inherited_directory());
             if set.get(id).unwrap().is_temporary() {
                 return Err(invalid("temporary editor panes cannot be split by script"));
             }
@@ -288,13 +317,14 @@ pub(super) fn handle(
                     SplitAxis::Columns
                 },
                 |_, rect| {
-                    Pane::spawn_in(
+                    Pane::spawn_with_startup(
                         context.shell_path,
                         directory.as_deref(),
                         rect.rows,
                         rect.columns,
                         context.notifications,
                         context.scrollback_lines,
+                        command.as_deref(),
                     )
                 },
             );

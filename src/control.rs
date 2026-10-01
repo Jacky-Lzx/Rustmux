@@ -103,6 +103,12 @@ pub enum Command {
         target: Target,
         #[arg(short = 'n', long)]
         name: Option<String>,
+        /// Run COMMAND through the configured server shell instead of opening an interactive shell.
+        #[arg(long)]
+        command: Option<String>,
+        /// Start in an absolute existing directory; otherwise inherit the active pane's directory.
+        #[arg(long)]
+        cwd: Option<PathBuf>,
     },
     /// Split a pane to the right, or below with --down.
     SplitPane {
@@ -110,6 +116,12 @@ pub enum Command {
         target: PaneTarget,
         #[arg(long)]
         down: bool,
+        /// Run COMMAND through the configured server shell instead of opening an interactive shell.
+        #[arg(long)]
+        command: Option<String>,
+        /// Start in an absolute existing directory; otherwise inherit the target pane's directory.
+        #[arg(long)]
+        cwd: Option<PathBuf>,
     },
     /// Send named keys or --literal text; optionally append Enter.
     SendKeys {
@@ -215,10 +227,14 @@ pub(crate) enum Request {
     },
     NewWindow {
         name: Option<String>,
+        command: Option<String>,
+        cwd: Option<PathBuf>,
     },
     SplitPane {
         pane: Option<u64>,
         down: bool,
+        command: Option<String>,
+        cwd: Option<PathBuf>,
     },
     SendKeys {
         pane: Option<u64>,
@@ -310,12 +326,24 @@ impl Command {
                     cells,
                 },
             ),
-            Self::NewWindow { target, name } => (target, Request::NewWindow { name }),
-            Self::SplitPane { target, down } => (
+            Self::NewWindow {
+                target,
+                name,
+                command,
+                cwd,
+            } => (target, Request::NewWindow { name, command, cwd }),
+            Self::SplitPane {
+                target,
+                down,
+                command,
+                cwd,
+            } => (
                 target.target,
                 Request::SplitPane {
                     pane: target.pane,
                     down,
+                    command,
+                    cwd,
                 },
             ),
             Self::CapturePane { target, history } => (
@@ -758,6 +786,65 @@ impl Drop for Service {
 mod tests {
     use super::*;
     use clap::Parser;
+
+    #[test]
+    fn creation_arguments_preserve_startup_command_and_directory() {
+        for action in ["new-window", "split-pane"] {
+            let cli = crate::cli::Cli::try_parse_from([
+                "rustmux",
+                action,
+                "--cwd",
+                "/tmp/project with spaces",
+                "--command",
+                "printf 'hello world'; exit 7",
+            ])
+            .unwrap();
+            let Some(crate::cli::Command::Control(command)) = cli.command else {
+                panic!("expected control command")
+            };
+            let (startup, cwd) = match command {
+                Command::NewWindow { command, cwd, .. }
+                | Command::SplitPane { command, cwd, .. } => (command, cwd),
+                _ => panic!("expected pane creation"),
+            };
+            assert_eq!(startup.as_deref(), Some("printf 'hello world'; exit 7"));
+            assert_eq!(cwd, Some(PathBuf::from("/tmp/project with spaces")));
+            let cli = crate::cli::Cli::try_parse_from(["rustmux", action]).unwrap();
+            assert!(matches!(
+                cli.command,
+                Some(crate::cli::Command::Control(
+                    Command::NewWindow {
+                        command: None,
+                        cwd: None,
+                        ..
+                    } | Command::SplitPane {
+                        command: None,
+                        cwd: None,
+                        ..
+                    }
+                ))
+            ));
+        }
+    }
+
+    #[test]
+    fn legacy_creation_requests_omit_optional_startup_fields() {
+        for body in ["action='new-window'", "action='split-pane'\ndown=true"] {
+            let request = toml::from_str::<Request>(body).unwrap();
+            assert!(matches!(
+                request,
+                Request::NewWindow {
+                    command: None,
+                    cwd: None,
+                    ..
+                } | Request::SplitPane {
+                    command: None,
+                    cwd: None,
+                    ..
+                }
+            ));
+        }
+    }
 
     #[test]
     fn resize_arguments_require_direction_and_positive_bounded_cells() {

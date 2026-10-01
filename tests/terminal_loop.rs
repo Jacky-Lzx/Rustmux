@@ -43,6 +43,11 @@ fn pane_resize() {
 }
 
 #[test]
+fn pane_startup() {
+    run_scenario("pane_startup");
+}
+
+#[test]
 fn notifications() {
     run_scenario("notifications");
 }
