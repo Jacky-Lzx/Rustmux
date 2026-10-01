@@ -87,6 +87,13 @@ pub enum Command {
         window: Option<u16>,
         name: String,
     },
+    /// Close a window and all its panes; the final session window cannot be closed.
+    CloseWindow {
+        #[command(flatten)]
+        target: Target,
+        #[arg(short = 'w', long, value_parser = clap::value_parser!(u16).range(1..))]
+        window: Option<u16>,
+    },
     /// Move a pane's nearest separator, preserving focus; defaults to the active pane.
     ResizePane {
         #[command(flatten)]
@@ -225,6 +232,9 @@ pub(crate) enum Request {
         window: Option<u16>,
         name: String,
     },
+    CloseWindow {
+        window: Option<u16>,
+    },
     ResizePane {
         pane: Option<u64>,
         direction: ResizeDirection,
@@ -322,6 +332,7 @@ impl Command {
                 window,
                 name,
             } => (target, Request::RenameWindow { window, name }),
+            Self::CloseWindow { target, window } => (target, Request::CloseWindow { window }),
             Self::ResizePane {
                 target,
                 direction,
@@ -716,6 +727,7 @@ impl Service {
                                         | Request::SelectPane { .. }
                                         | Request::SelectWindow { .. }
                                         | Request::RenameWindow { .. }
+                                        | Request::CloseWindow { .. }
                                         | Request::ResizePane { .. }
                                         | Request::SplitPane { .. }
                                         | Request::ClosePane { .. }
@@ -796,6 +808,37 @@ impl Drop for Service {
 mod tests {
     use super::*;
     use clap::Parser;
+
+    #[test]
+    fn close_window_accepts_active_default_or_positive_window_number() {
+        for (arguments, window) in [
+            (vec!["rustmux", "close-window"], None),
+            (
+                vec!["rustmux", "close-window", "-s", "work", "-w", "2"],
+                Some(2),
+            ),
+        ] {
+            let cli = crate::cli::Cli::try_parse_from(arguments).unwrap();
+            let Some(crate::cli::Command::Control(Command::CloseWindow {
+                target,
+                window: parsed,
+            })) = cli.command
+            else {
+                panic!("expected close-window");
+            };
+            assert_eq!(parsed, window);
+            assert_eq!(
+                target.session.as_str(),
+                if window.is_some() { "work" } else { "default" }
+            );
+        }
+        for invalid in ["0", "-1", "65536", "invalid"] {
+            assert!(
+                crate::cli::Cli::try_parse_from(["rustmux", "close-window", "-w", invalid])
+                    .is_err()
+            );
+        }
+    }
 
     #[test]
     fn close_pane_accepts_active_default_or_explicit_runtime_id() {

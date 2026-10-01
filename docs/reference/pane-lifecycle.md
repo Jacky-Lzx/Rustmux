@@ -31,12 +31,15 @@ screen and retained history remain available to capture, History mode, navigatio
 zoom and ordinary close confirmation. Input intended for the stopped process is
 discarded; Rustmux shortcuts remain available. Final output drains before the
 PTY closes and the direct child is reaped. A named server stays available in
-`ls` and the session manager even when every visible pane has exited. Explicitly
-closing its final pane ends the server; an existing saved workspace stays listed.
+`ls` and the session manager even when every visible pane has exited. Closing its
+final pane interactively ends the server; an existing saved workspace stays listed.
 For script cleanup, `close-pane -s SESSION -p ID` removes a running or retained
 pane without confirmation or undo storage. It preserves the session's final
 pane with an error; end the whole session using `kill SESSION` instead. See
 [Script Pane Close](script-pane-close.md).
+`close-window -s SESSION -w NUMBER` cleans up every pane in the specified window,
+including retained panes, while protecting the session's final window. See
+[Script Window Close](script-window-close.md).
 The existing EOF cleanup still finalizes incomplete terminal sequences and
 releases pane graphics storage; retention preserves the text grid and history.
 

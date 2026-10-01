@@ -53,6 +53,11 @@ fn pane_close() {
 }
 
 #[test]
+fn window_close() {
+    run_scenario("window_close");
+}
+
+#[test]
 fn notifications() {
     run_scenario("notifications");
 }

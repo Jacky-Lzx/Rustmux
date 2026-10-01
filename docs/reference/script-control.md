@@ -19,6 +19,7 @@ rustmux send-keys -s work -p 0 'Ctrl c'
 rustmux capture-pane -s work -p 0 --history
 rustmux respawn-pane -s work -p 0
 rustmux close-pane -s work -p 2
+rustmux close-window -s work -w 2
 rustmux join-pane -s work -p 0 --to-pane 1 --down
 rustmux break-pane -s work -p 0 --name editor
 rustmux save-session work
@@ -43,6 +44,12 @@ without control characters; duplicate names are allowed. Numbers follow display
 order. Successful requests redraw the bar and reset overlays and shortcuts like
 the other mutating script controls. See [Script Window Rename](script-window-rename.md)
 for validation, focus and snapshot behavior.
+
+`close-window [-w NUMBER]` removes a whole window and cleans up every directly
+owned pane child in it. Omission targets the active window. Numbers follow the
+current display order. The session's final window is preserved with an error,
+even if it has several panes; use `kill SESSION` to end the whole session. See
+[Script Window Close](script-window-close.md) for focus, cleanup and persistence.
 
 `close-pane [-p ID]` removes a visible pane and cleans up its directly owned
 child. Omission targets the active pane. Closing a window's only pane removes

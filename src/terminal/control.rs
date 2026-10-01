@@ -117,6 +117,19 @@ pub(super) fn handle(
             windows.rename(id, window_name)?;
             Ok(String::new())
         }
+        Request::CloseWindow { window } => {
+            let id = window_target(windows, window)?;
+            if windows.iter().len() == 1 {
+                return Err(invalid(
+                    "cannot close the final session window; use kill SESSION",
+                ));
+            }
+            // Remove the entire ownership group before dropping its panes.
+            // Existing child cleanup and control refresh handle reaping, focus
+            // fallback and surviving PTY sizes without close-undo storage.
+            drop(windows.close(id)?);
+            Ok(String::new())
+        }
         Request::ResizePane {
             pane,
             direction,
