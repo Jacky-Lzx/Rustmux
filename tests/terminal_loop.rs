@@ -68,6 +68,11 @@ fn frame_reconstruction() {
 }
 
 #[test]
+fn input_backpressure() {
+    run_scenario("writes");
+}
+
+#[test]
 fn config() {
     run_scenario("config");
 }

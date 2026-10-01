@@ -205,7 +205,13 @@ class Session:
                 n = os.write(self.master, data)
                 data = data[n:]
             except BlockingIOError:
-                self.read()
+                # A small PTY input buffer can split a batch of terminal
+                # replies into many writes. Wait for write readiness as well
+                # as draining output: discovery may not repaint until every
+                # reply arrives, so a read-only wait wastes its full timeout.
+                readable, _, _ = select.select([self.master], [self.master], [], 0.05)
+                if readable:
+                    self.read(0)
             assert time.monotonic() < end, "input stalled"
 
     def finish(self, expected):
