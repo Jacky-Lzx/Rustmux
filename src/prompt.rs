@@ -178,6 +178,7 @@ impl WindowPrompt {
 
     pub fn overlay_themed(&self, original: &Screen, theme: Theme) -> Screen {
         let mut screen = original.clone();
+        screen.clear_pointer_shapes();
         let (rows, columns) = screen.dimensions();
         let panel = Style {
             foreground: rgb(theme.foreground),

@@ -2705,6 +2705,7 @@ fn forward(
                             crate::screen::MouseTracking::Off
                         });
                         view.set_sgr_mouse(*outer_rows > 1);
+                        view.clear_pointer_shapes();
                         view.set_bracketed_paste(false);
                         view.set_focus_reporting(false);
                         view.set_kitty_keyboard_flags(0, 1);

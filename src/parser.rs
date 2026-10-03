@@ -508,6 +508,12 @@ impl Parser {
             return;
         };
         let (code, values) = (&control[..separator], &control[separator + 1..]);
+        if code == b"22" {
+            if let Ok(value) = std::str::from_utf8(values) {
+                screen.apply_pointer(value, reply);
+            }
+            return;
+        }
         if code == b"4" {
             let mut fields = values.split(|&byte| byte == b';');
             let mut count = 0;

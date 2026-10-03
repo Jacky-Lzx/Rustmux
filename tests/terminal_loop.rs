@@ -216,3 +216,8 @@ fn focus_control() {
 fn themes() {
     run_scenario("themes");
 }
+
+#[test]
+fn pointer_shapes() {
+    run_scenario("pointer_shapes");
+}

@@ -123,6 +123,8 @@ pub struct Screen {
     insert_mode: bool,
     bracketed_paste: bool,
     focus_reporting: bool,
+    pointer_main: crate::pointer::Stack,
+    pointer_alternate: crate::pointer::Stack,
     keyboard_main: KeyboardMode,
     keyboard_alternate: KeyboardMode,
     synchronized_output: bool,
@@ -296,6 +298,8 @@ impl Screen {
             insert_mode: false,
             bracketed_paste: false,
             focus_reporting: false,
+            pointer_main: crate::pointer::Stack::default(),
+            pointer_alternate: crate::pointer::Stack::default(),
             keyboard_main: KeyboardMode::default(),
             keyboard_alternate: KeyboardMode::default(),
             synchronized_output: false,
@@ -400,6 +404,7 @@ impl Screen {
     /// RIS: restore initial model state at the current size without allocating.
     /// Both grids and saved cursors are cleared; the active grid becomes main.
     pub fn reset(&mut self) {
+        self.clear_pointer_shapes();
         self.cells.fill(Cell::default());
         self.inactive_cells.fill(Cell::default());
         self.clear_history();
@@ -443,6 +448,7 @@ impl Screen {
     /// DECSTR: reset supported modes while retaining cells, cursor coordinates,
     /// active grid and tab stops. Autowrap follows the XTerm default (enabled).
     pub fn soft_reset(&mut self) {
+        self.clear_pointer_shapes();
         self.cursor_visible = true;
         self.synchronized_output = false;
         self.cursor_shape = CursorShape::default();
@@ -612,6 +618,10 @@ impl Screen {
         }
         resized.cursor_visible = self.cursor_visible;
         resized.cursor_shape = self.cursor_shape;
+        resized.pointer_main.clone_from(&self.pointer_main);
+        resized
+            .pointer_alternate
+            .clone_from(&self.pointer_alternate);
         resized.insert_mode = self.insert_mode;
         resized.bracketed_paste = self.bracketed_paste;
         resized.focus_reporting = self.focus_reporting;
@@ -981,6 +991,30 @@ impl Screen {
     /// Visibility is a global terminal mode, independent of saved cursor state.
     pub fn set_cursor_visible(&mut self, visible: bool) {
         self.cursor_visible = visible;
+    }
+
+    /// Current OSC 22 mouse pointer; None lets the terminal choose its default.
+    /// Main and alternate screens have independent bounded stacks.
+    pub fn pointer_shape(&self) -> Option<&'static str> {
+        if self.alternate {
+            self.pointer_alternate.current()
+        } else {
+            self.pointer_main.current()
+        }
+    }
+
+    pub(crate) fn apply_pointer(&mut self, value: &str, reply: &mut impl FnMut(&[u8])) {
+        let stack = if self.alternate {
+            &mut self.pointer_alternate
+        } else {
+            &mut self.pointer_main
+        };
+        stack.apply(value, reply);
+    }
+
+    pub(crate) fn clear_pointer_shapes(&mut self) {
+        self.pointer_main.clear();
+        self.pointer_alternate.clear();
     }
 
     pub fn cursor_shape(&self) -> CursorShape {

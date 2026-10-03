@@ -36,6 +36,7 @@
 - [Kitty Graphics Input](reference/kitty-graphics.md)
 - [Terminal Mode Queries](reference/mode-queries.md)
 - [Mouse Reporting](reference/mouse-reporting.md)
+- [Mouse Pointer Shapes](reference/pointer-shapes.md)
 - [Synchronized Output](reference/synchronized-output.md)
 - [Device Attributes](reference/device-attributes.md)
 - [Rendering Measurements](reference/rendering-performance.md)

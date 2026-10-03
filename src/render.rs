@@ -40,6 +40,7 @@ struct OutputModes {
     cursor_keys: bool,
     keypad: bool,
     backarrow: bool,
+    pointer_shape: Option<&'static str>,
     cursor_shape: CursorShape,
     cursor_color: (u8, u8, u8),
     focus: bool,
@@ -54,6 +55,7 @@ impl OutputModes {
             cursor_keys: screen.application_cursor_keys(),
             keypad: screen.application_keypad(),
             backarrow: screen.backarrow_sends_backspace(),
+            pointer_shape: screen.pointer_shape(),
             cursor_shape: screen.cursor_shape(),
             cursor_color: screen.cursor_color(),
             focus: screen.focus_reporting(),
@@ -143,6 +145,15 @@ fn render_frame(
     // Set shape while hidden; the frame ending restores requested visibility.
     if previous_modes.is_none_or(|modes| modes.cursor_shape != screen.cursor_shape()) {
         write!(output, "\x1b[{} q", screen.cursor_shape() as u8)?;
+    }
+    // Set, never push, the selected pane's current shape. Child stacks remain
+    // virtualized; redrawing or switching focus cannot grow the outer stack.
+    if previous_modes.is_none_or(|modes| modes.pointer_shape != screen.pointer_shape()) {
+        write!(
+            output,
+            "\x1b]22;{}\x1b\\",
+            screen.pointer_shape().unwrap_or("")
+        )?;
     }
     if previous_modes.is_none_or(|modes| modes.cursor_color != screen.cursor_color()) {
         let (red, green, blue) = screen.cursor_color();
