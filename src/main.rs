@@ -46,6 +46,7 @@ fn execute(cli: rustmux::cli::Cli) -> Result<u8, String> {
                 println!("shell: {} ({})", report.settings.shell, report.shell_source);
                 println!("scrollback_lines: {}", report.settings.scrollback_lines);
                 println!("remain_on_exit: {}", report.settings.remain_on_exit);
+                println!("mouse_hover_cursor: {}", report.settings.mouse_hover_cursor);
                 println!("clear_defaults: {}", report.settings.clear_defaults);
                 println!(
                     "autosave_interval_seconds: {}",

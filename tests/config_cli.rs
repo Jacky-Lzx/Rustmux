@@ -61,6 +61,10 @@ fn exported_defaults_round_trip_and_ignore_active_broken_config() {
     );
     assert_eq!(settings(&checked)["save_scrollback"].as_bool(), Some(false));
     assert_eq!(settings(&checked)["remain_on_exit"].as_bool(), Some(false));
+    assert_eq!(
+        settings(&checked)["mouse_hover_cursor"].as_bool(),
+        Some(false)
+    );
     assert!(!root.join("state").exists());
     assert_eq!(
         fs::read_to_string(root.join("rustmux/config.toml")).unwrap(),
@@ -114,6 +118,7 @@ fn reports_effective_settings_and_environment_shell_precedence_without_execution
             r#"shell={:?}
 scrollback_lines=0
 remain_on_exit=true
+mouse_hover_cursor=true
 autosave_interval_seconds=12
 save_scrollback=true
 save_scrollback_colors=true
@@ -135,6 +140,10 @@ command_duration_seconds=9
     assert!(configured.status.success());
     let configured = report(&configured);
     assert_eq!(configured["shell_source"].as_str(), Some("config"));
+    assert_eq!(
+        settings(&configured)["mouse_hover_cursor"].as_bool(),
+        Some(true)
+    );
     assert_eq!(
         settings(&configured)["scrollback_lines"].as_integer(),
         Some(0)
@@ -219,6 +228,7 @@ fn rejects_invalid_supported_settings_and_conflicting_bindings() {
     for source in [
         "scrollback_lines=-1",
         "remain_on_exit='yes'",
+        "mouse_hover_cursor='true'",
         "save_scrollback=1",
         "clear_defaults=true",
         "[notifications]\ncommand_duration_seconds=0",

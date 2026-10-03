@@ -60,8 +60,8 @@ The outer terminal's main-screen pointer stack is preserved by its screen switch
 Actual pointer appearance requires an outer terminal implementing OSC 22.
 The virtual defaults and support replies describe Rustmux's model; they do not
 report the emulator's configured default/grabbed shapes or prove that its GUI
-supports a requested shape. This increment does not add the independent `main`
-track's optional `mouse_hover_cursor` control-hover behavior.
+supports a requested shape. Optional window-control overrides are documented in
+[Mouse Hover Feedback](mouse-hover.md).
 Pointer stacks are live terminal state and are not serialized into workspace
 snapshots; restored workspaces start fresh child programs with empty stacks.
 

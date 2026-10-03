@@ -221,3 +221,8 @@ fn themes() {
 fn pointer_shapes() {
     run_scenario("pointer_shapes");
 }
+
+#[test]
+fn mouse_hover() {
+    run_scenario("mouse_hover");
+}

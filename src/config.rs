@@ -593,6 +593,7 @@ pub struct Config {
     shortcuts: Shortcuts,
     persistence: PersistenceOptions,
     remain_on_exit: bool,
+    mouse_hover_cursor: bool,
 }
 
 /// Disk saving is opt-in; explicit manual saves remain available with defaults.
@@ -604,6 +605,9 @@ pub struct PersistenceOptions {
 }
 
 impl Config {
+    pub fn mouse_hover_cursor(&self) -> bool {
+        self.mouse_hover_cursor
+    }
     pub(crate) fn theme(&self) -> crate::theme::Theme {
         self.theme
     }
@@ -643,6 +647,7 @@ struct ParsedConfig {
     shortcuts: Shortcuts,
     persistence: PersistenceOptions,
     remain_on_exit: bool,
+    mouse_hover_cursor: bool,
 }
 
 /// Load and validate the complete configuration used by a new session.
@@ -690,6 +695,7 @@ fn resolve_config(configured: ParsedConfig) -> Config {
         shortcuts: configured.shortcuts,
         persistence: configured.persistence,
         remain_on_exit: configured.remain_on_exit,
+        mouse_hover_cursor: configured.mouse_hover_cursor,
     }
 }
 
@@ -822,6 +828,7 @@ fn parse_config(source: &str) -> Result<ParsedConfig, String> {
         shortcuts,
         persistence,
         remain_on_exit: boolean("remain_on_exit")?,
+        mouse_hover_cursor: boolean("mouse_hover_cursor")?,
     })
 }
 
@@ -1917,6 +1924,7 @@ preset = "mocha"
                 shortcuts: Shortcuts::default(),
                 persistence: PersistenceOptions::default(),
                 remain_on_exit: false,
+                mouse_hover_cursor: false,
             }
         );
         assert_eq!(

@@ -21,6 +21,7 @@ pub struct Settings {
     pub shell: String,
     pub scrollback_lines: usize,
     pub remain_on_exit: bool,
+    pub mouse_hover_cursor: bool,
     pub clear_defaults: bool,
     pub autosave_interval_seconds: u64,
     pub save_scrollback: bool,
@@ -71,6 +72,7 @@ impl From<&Config> for Settings {
             shell: config.shell.to_string_lossy().into_owned(),
             scrollback_lines: config.scrollback_lines,
             remain_on_exit: config.remain_on_exit,
+            mouse_hover_cursor: config.mouse_hover_cursor,
             clear_defaults: config.shortcuts.clear_defaults,
             autosave_interval_seconds: config.persistence.autosave_interval_seconds,
             save_scrollback: config.persistence.save_scrollback,
@@ -94,6 +96,7 @@ fn ignored_options(source: &str) -> Vec<String> {
             "shell"
                 | "scrollback_lines"
                 | "remain_on_exit"
+                | "mouse_hover_cursor"
                 | "clear_defaults"
                 | "autosave_interval_seconds"
                 | "save_scrollback"
@@ -182,6 +185,7 @@ pub fn default_config() -> String {
 # shell = "/bin/sh"
 scrollback_lines = {DEFAULT_SCROLLBACK_LINES}
 remain_on_exit = false
+mouse_hover_cursor = false
 clear_defaults = false
 autosave_interval_seconds = 0
 save_scrollback = false
@@ -224,6 +228,22 @@ backspace = ["backspace"]
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn hover_option_is_typed_reported_and_recognized_in_strict_diagnostics() {
+        assert!(!resolve_config(parse_config("").unwrap()).mouse_hover_cursor());
+        let source = "mouse_hover_cursor=true";
+        let config = resolve_config(parse_config(source).unwrap());
+        assert!(config.mouse_hover_cursor());
+        assert!(Settings::from(&config).mouse_hover_cursor);
+        assert!(ignored_options(source).is_empty());
+        for source in ["mouse_hover_cursor=1", "mouse_hover_cursor='true'"] {
+            assert!(
+                parse_config(source)
+                    .unwrap_err()
+                    .contains("must be a boolean")
+            );
+        }
+    }
     #[test]
     fn exported_template_preserves_all_builtin_defaults() {
         assert_eq!(

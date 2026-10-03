@@ -1,5 +1,7 @@
 //! Multi-window PTY polling, prefix input and model-based terminal rendering.
 
+mod hover;
+
 use std::collections::VecDeque;
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
@@ -959,6 +961,7 @@ struct WindowInput {
     tail: VecDeque<u8>,
     mouse: Vec<u8>,
     mouse_since: Option<Instant>,
+    pointer_position: Option<(usize, usize)>,
     pane_height: usize,
     pane_top: usize,
     pane_left: usize,
@@ -1088,6 +1091,7 @@ impl WindowInput {
                     .and_then(|text| {
                         let parts: Vec<_> = text.split(';').collect();
                         if parts.len() == 3
+                            && parts[0].parse::<u16>().is_ok()
                             && parts
                                 .iter()
                                 .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
@@ -1181,6 +1185,13 @@ impl WindowInput {
             return;
         }
         if let Some((column, row)) = coordinates {
+            self.pointer_position = Some((column, row));
+            // Unpressed motion is observational. It must not execute shortcuts
+            // or leave a Rustmux input mode just because hover reporting is on.
+            let hovering = mouse_motion(&bytes) && !motion_has_button(&bytes);
+            if hovering && self.mode != InputMode::Locked {
+                return;
+            }
             let release = (bytes.starts_with(b"\x1b[<") && bytes.last() == Some(&b'm'))
                 || (bytes.starts_with(b"\x1b[M")
                     && bytes[3]
@@ -1193,7 +1204,9 @@ impl WindowInput {
                 return;
             }
             let footer_mode = self.mode;
-            self.mode = InputMode::Locked;
+            if !hovering {
+                self.mode = InputMode::Locked;
+            }
             if let Some(mut drag) = self.pane_drag {
                 if release {
                     self.pane_drag = None;
@@ -2039,6 +2052,7 @@ fn service_pane(
 
 struct RuntimeConfig {
     theme: crate::theme::Theme,
+    mouse_hover_cursor: bool,
     shell: OsString,
     notifications: crate::config::Notifications,
     scrollback_lines: usize,
@@ -2048,6 +2062,7 @@ struct RuntimeConfig {
 impl RuntimeConfig {
     fn update(&mut self, config: &crate::config::Config) {
         self.theme = config.theme();
+        self.mouse_hover_cursor = config.mouse_hover_cursor();
         self.shell = config.shell().clone();
         self.notifications = config.notifications();
         self.scrollback_lines = config.scrollback_lines();
@@ -2097,6 +2112,9 @@ fn forward(
     let mut session_name = context.session_name.map(str::to_owned);
     let mut renamed_notice: Option<String> = None;
     let mut runtime = RuntimeConfig {
+        mouse_hover_cursor: reload
+            .as_ref()
+            .is_some_and(|r| r.current().mouse_hover_cursor()),
         theme: reload
             .as_ref()
             .map_or_else(crate::theme::Theme::default, |r| r.current().theme()),
@@ -2685,15 +2703,7 @@ fn forward(
                         session_name.as_deref(),
                         &names,
                         active_index,
-                        match keys.mode {
-                            InputMode::Normal => FooterMode::Normal,
-                            InputMode::Pane => FooterMode::Pane,
-                            InputMode::Resize => FooterMode::Resize,
-                            InputMode::Move => FooterMode::Move,
-                            InputMode::Tab => FooterMode::Tab,
-                            InputMode::Session => FooterMode::Session,
-                            InputMode::Locked | InputMode::History => FooterMode::Locked,
-                        },
+                        keys.footer_mode(),
                         shortcuts,
                     )?;
                     if panes.active().retain_after_exit(remain_on_exit)
@@ -2786,7 +2796,7 @@ fn forward(
                                 .as_ref()
                                 .map(|error| format!("Save failed: {error}"))
                         });
-                    if let Some(error) = status_error
+                    if let Some(error) = &status_error
                         && prompt.is_none()
                         && history.is_none()
                         && help.is_none()
@@ -2812,6 +2822,29 @@ fn forward(
                             used += width;
                         }
                         view.restore_cursor();
+                    }
+                    if runtime.mouse_hover_cursor
+                        && prompt.is_none()
+                        && help.is_none()
+                        && history.is_none()
+                    {
+                        let bar = crate::chrome::window_hitboxes(
+                            view.dimensions().1,
+                            session_name.as_deref(),
+                            &names,
+                            active_index,
+                        );
+                        let footer = if status_error.is_none() {
+                            crate::chrome::footer_hitboxes_for_mode(
+                                view.dimensions().1,
+                                keys.footer_mode(),
+                                session_name.is_some(),
+                                shortcuts,
+                            )
+                        } else {
+                            Vec::new()
+                        };
+                        keys.decorate_hover(&mut view, panes.layout(), &bar, &footer, *outer_rows);
                     }
                     if let Some(prompt) = &prompt {
                         renderer.render(
@@ -3167,15 +3200,7 @@ fn forward(
                 );
                 keys.footer_hitboxes = crate::chrome::footer_hitboxes_for_mode(
                     usize::from(columns),
-                    match keys.mode {
-                        InputMode::Normal => FooterMode::Normal,
-                        InputMode::Pane => FooterMode::Pane,
-                        InputMode::Resize => FooterMode::Resize,
-                        InputMode::Move => FooterMode::Move,
-                        InputMode::Tab => FooterMode::Tab,
-                        InputMode::Session => FooterMode::Session,
-                        InputMode::Locked | InputMode::History => FooterMode::Locked,
-                    },
+                    keys.footer_mode(),
                     session_name.is_some(),
                     shortcuts,
                 );
@@ -3192,7 +3217,16 @@ fn forward(
                 actions.push(action);
             } else {
                 let input_mode = keys.mode;
+                let pointer_before = (keys.pointer_position, keys.pane_drag);
                 keys.feed(input.pop_front().unwrap(), &mut actions);
+                if runtime.mouse_hover_cursor
+                    && pointer_before != (keys.pointer_position, keys.pane_drag)
+                {
+                    // Hover is observational: respect frame pacing and an
+                    // application's synchronized-output batch. Local actions
+                    // may still explicitly force their own UI transitions.
+                    bar_dirty = true;
+                }
                 if keys.mode != input_mode {
                     bar_dirty = true;
                     force_redraw = true;

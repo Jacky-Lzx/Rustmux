@@ -53,7 +53,7 @@ and paths and shell names use their UTF-8 display representation.
 | `file_loaded` | Whether configuration came from a file rather than defaults |
 | `shell_source` | `RUSTMUX_SHELL`, `config`, `SHELL`, or `fallback` |
 | `warnings` | Diagnostics for ignored options or bindings |
-| `[settings]` | Effective shell, scrollback limit, retention, clear-defaults flag, saving settings, and notification settings |
+| `[settings]` | Effective shell, scrollback limit, retention, hover feedback, theme, clear-defaults flag, saving settings, and notification settings |
 | `[session_manager]` | Effective manager action keys, including disabled actions as empty arrays |
 
 Supported configuration errors, unreadable selected files, invalid TOML and
@@ -77,7 +77,8 @@ inside otherwise supported action tables. It does not check that the selected
 shell executable exists or can start, and it does not certify editor or terminal
 compatibility. Shell startup still performs its own executable validation.
 See [configuration hot reload](config-reload.md) for live updates and restart-only
-settings. Theme configuration is not supported.
+settings. See [Interface Themes](interface-themes.md) and
+[Mouse Hover Feedback](mouse-hover.md) for the supported display settings.
 
 ## Review and verification
 
