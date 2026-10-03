@@ -43,6 +43,7 @@
 - [Windows](reference/windows.md)
 - [Notification Filters](reference/notification-filters.md)
 - [Desktop Command Notifications](reference/desktop-notifications.md)
+- [Interface Themes](reference/interface-themes.md)
 - [Shortcut Help](reference/shortcut-help.md)
 - [Session Endpoints](reference/session-endpoints.md)
 - [Session Protocol](reference/session-protocol.md)

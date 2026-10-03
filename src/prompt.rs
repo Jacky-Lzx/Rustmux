@@ -3,17 +3,14 @@
 use crate::{
     chrome::{clipped, prepare_row},
     screen::{CursorShape, EraseMode, MouseTracking, Screen},
-    style::{Color, Style},
+    style::Style,
+    theme::{Theme, rgb},
 };
 use std::time::{Duration, Instant};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const MAX_NAME_BYTES: usize = 128;
 const ESCAPE_DELAY: Duration = Duration::from_millis(30);
-const BASE: Color = Color::Rgb(0x1e, 0x1e, 0x2e);
-const TEXT: Color = Color::Rgb(0xcd, 0xd6, 0xf4);
-const PINK: Color = Color::Rgb(0xf5, 0xc2, 0xe7);
-const LAVENDER: Color = Color::Rgb(0xb4, 0xbe, 0xfe);
 const MIN_INPUT_COLUMNS_WITH_HINTS: usize = 4;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -174,12 +171,17 @@ impl WindowPrompt {
         EditResult::Continue
     }
 
+    #[cfg(test)]
     pub fn overlay(&self, original: &Screen) -> Screen {
+        self.overlay_themed(original, Theme::default())
+    }
+
+    pub fn overlay_themed(&self, original: &Screen, theme: Theme) -> Screen {
         let mut screen = original.clone();
         let (rows, columns) = screen.dimensions();
         let panel = Style {
-            foreground: TEXT,
-            background: BASE,
+            foreground: rgb(theme.foreground),
+            background: rgb(theme.background),
             ..Style::default()
         };
         if self.is_rename() {
@@ -187,14 +189,21 @@ impl WindowPrompt {
                 screen.save_cursor();
                 prepare_prompt_row(&mut screen, rows - 1, panel);
                 screen.set_style(Style {
-                    foreground: LAVENDER,
+                    foreground: rgb(theme.secondary),
                     bold: true,
                     ..panel
                 });
                 print(&mut screen, &clipped(" RENAME ", columns));
                 let hint_width = format!("<Enter> {}  <Esc> Cancel", self.submit_label()).width();
                 if " RENAME ".width() + 1 + hint_width <= columns {
-                    draw_action_hints(&mut screen, rows - 1, columns, self.submit_label(), panel);
+                    draw_action_hints(
+                        theme,
+                        &mut screen,
+                        rows - 1,
+                        columns,
+                        self.submit_label(),
+                        panel,
+                    );
                 }
                 screen.restore_cursor();
             }
@@ -206,7 +215,7 @@ impl WindowPrompt {
 
         let label = clipped(self.label(), columns.saturating_sub(1));
         screen.set_style(Style {
-            foreground: LAVENDER,
+            foreground: rgb(theme.secondary),
             bold: true,
             ..panel
         });
@@ -239,7 +248,7 @@ impl WindowPrompt {
         let cursor_column = screen.cursor().1;
 
         if show_hint {
-            draw_action_hints(&mut screen, 0, columns, self.submit_label(), panel);
+            draw_action_hints(theme, &mut screen, 0, columns, self.submit_label(), panel);
         }
 
         screen.position(0, cursor_column);
@@ -278,15 +287,15 @@ fn print(screen: &mut Screen, text: &str) {
     }
 }
 
-fn draw_hint(screen: &mut Screen, key: &str, label: &str, panel: Style) {
+fn draw_hint(theme: Theme, screen: &mut Screen, key: &str, label: &str, panel: Style) {
     screen.set_style(Style {
-        foreground: PINK,
+        foreground: rgb(theme.key),
         bold: true,
         ..panel
     });
     print(screen, key);
     screen.set_style(Style {
-        foreground: LAVENDER,
+        foreground: rgb(theme.secondary),
         ..panel
     });
     print(screen, " ");
@@ -294,6 +303,7 @@ fn draw_hint(screen: &mut Screen, key: &str, label: &str, panel: Style) {
 }
 
 fn draw_action_hints(
+    theme: Theme,
     screen: &mut Screen,
     row: usize,
     columns: usize,
@@ -306,9 +316,9 @@ fn draw_action_hints(
         return;
     }
     screen.position(row, columns - hint_width);
-    draw_hint(screen, "<Enter>", submit_label, panel);
+    draw_hint(theme, screen, "<Enter>", submit_label, panel);
     print(screen, "  ");
-    draw_hint(screen, "<Esc>", "Cancel", panel);
+    draw_hint(theme, screen, "<Esc>", "Cancel", panel);
 }
 
 #[cfg(test)]
@@ -427,14 +437,17 @@ mod tests {
         assert!(text.starts_with("Close window? Type yes: "));
         assert!(text.ends_with("<Enter> Close  <Esc> Cancel"));
         assert_eq!(view.cursor(), (0, "Close window? Type yes: ".len()));
-        assert_eq!(row[0].style.foreground, LAVENDER);
+        assert_eq!(row[0].style.foreground, rgb(Theme::default().secondary));
         assert!(row[0].style.bold);
-        assert_eq!(row[8].style.foreground, LAVENDER);
+        assert_eq!(row[8].style.foreground, rgb(Theme::default().secondary));
 
         let hint = 80 - "<Enter> Close  <Esc> Cancel".len();
-        assert_eq!(row[hint].style.foreground, PINK);
+        assert_eq!(row[hint].style.foreground, rgb(Theme::default().key));
         assert!(row[hint].style.bold);
-        assert_eq!(row[hint + "<Enter> ".len()].style.foreground, LAVENDER);
+        assert_eq!(
+            row[hint + "<Enter> ".len()].style.foreground,
+            rgb(Theme::default().secondary)
+        );
 
         let move_pane = WindowPrompt::move_pane(Vec::new()).overlay(&screen);
         let move_text: String = move_pane

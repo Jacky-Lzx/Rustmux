@@ -17,6 +17,7 @@ pub struct Inspection {
 
 #[derive(Debug, Serialize)]
 pub struct Settings {
+    pub theme: std::collections::BTreeMap<String, String>,
     pub shell: String,
     pub scrollback_lines: usize,
     pub remain_on_exit: bool,
@@ -66,6 +67,7 @@ pub fn inspect(path: Option<&Path>) -> Result<Inspection, String> {
 impl From<&Config> for Settings {
     fn from(config: &Config) -> Self {
         Self {
+            theme: config.theme.report(),
             shell: config.shell.to_string_lossy().into_owned(),
             scrollback_lines: config.scrollback_lines,
             remain_on_exit: config.remain_on_exit,
@@ -100,6 +102,7 @@ fn ignored_options(source: &str) -> Vec<String> {
                 | "shortcuts"
                 | "keybinds"
                 | "session_manager"
+                | "theme"
         ) {
             warnings.push(format!("ignored top-level option {key:?}"));
         }
@@ -184,6 +187,10 @@ autosave_interval_seconds = 0
 save_scrollback = false
 save_scrollback_colors = false
 
+[theme]
+preset = "mocha"
+# Optional [theme.colors] overrides use exact #RRGGBB values.
+
 [notifications]
 enabled = true
 desktop = false
@@ -229,7 +236,7 @@ mod tests {
     fn reports_ignored_fields_modes_and_incomplete_action_chains() {
         let source = r#"
 scrolback_lines=0
-theme="light"
+future_option="light"
 [notifications]
 long_command_bell=false
 typo=true

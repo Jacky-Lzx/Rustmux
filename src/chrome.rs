@@ -2,7 +2,7 @@
 use crate::{
     screen::{EraseMode, MouseTracking, Screen},
     style::{Color, Style},
-    theme::{DEFAULT_BACKGROUND, DEFAULT_FOREGROUND},
+    theme::{Theme, rgb},
 };
 use std::io;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -12,14 +12,19 @@ const BOTTOM_BAR_ROWS: u16 = 1;
 const MIN_PANE_ROWS: u16 = 1;
 const POWERLINE_RIGHT: char = '';
 const HISTORY_MINIMUM_STATUS_COLUMNS: usize = 24;
-const BADGE_TEXT: Color = Color::Rgb(0x11, 0x11, 0x1b);
-const BASE: Color = DEFAULT_BACKGROUND;
+#[cfg(test)]
+const BASE: Color = crate::theme::DEFAULT_BACKGROUND;
+#[cfg(test)]
 const SUBTEXT0: Color = Color::Rgb(0xa6, 0xad, 0xc8);
-const TEXT: Color = DEFAULT_FOREGROUND;
-const PINK: Color = Color::Rgb(0xf5, 0xc2, 0xe7);
+#[cfg(test)]
+const TEXT: Color = crate::theme::DEFAULT_FOREGROUND;
+#[cfg(test)]
 const LAVENDER: Color = Color::Rgb(0xb4, 0xbe, 0xfe);
+#[cfg(test)]
 const RED: Color = Color::Rgb(0xf3, 0x8b, 0xa8);
+#[cfg(test)]
 const GREEN: Color = Color::Rgb(0xa6, 0xe3, 0xa1);
+#[cfg(test)]
 const PEACH: Color = Color::Rgb(0xfa, 0xb3, 0x87);
 const HISTORY_MODE: &str = " HISTORY ";
 
@@ -32,37 +37,41 @@ pub(crate) fn footer_enabled(outer_rows: u16) -> bool {
     outer_rows >= TOP_BAR_ROWS + BOTTOM_BAR_ROWS + MIN_PANE_ROWS
 }
 
-pub(crate) fn bar_style(active: bool) -> Style {
-    // Match main's Catppuccin Mocha powerline badges.
+pub(crate) fn bar_style(theme: Theme, active: bool) -> Style {
+    // Interface badges use the applied session palette.
     Style {
-        foreground: BADGE_TEXT,
-        background: if active { GREEN } else { TEXT },
+        foreground: rgb(theme.badge_text),
+        background: if active {
+            rgb(theme.accent)
+        } else {
+            rgb(theme.foreground)
+        },
         bold: true,
         ..Style::default()
     }
 }
 
-fn bar_background_style() -> Style {
+fn bar_background_style(theme: Theme) -> Style {
     Style {
-        foreground: TEXT,
-        background: BASE,
+        foreground: rgb(theme.foreground),
+        background: rgb(theme.background),
         ..Style::default()
     }
 }
 
-fn shortcut_key_style() -> Style {
+fn shortcut_key_style(theme: Theme) -> Style {
     Style {
-        foreground: PINK,
-        background: BASE,
+        foreground: rgb(theme.key),
+        background: rgb(theme.background),
         bold: true,
         ..Style::default()
     }
 }
 
-fn shortcut_label_style() -> Style {
+fn shortcut_label_style(theme: Theme) -> Style {
     Style {
-        foreground: BADGE_TEXT,
-        background: LAVENDER,
+        foreground: rgb(theme.badge_text),
+        background: rgb(theme.secondary),
         bold: true,
         ..Style::default()
     }
@@ -76,16 +85,16 @@ fn separator_style(foreground: Color, background: Color) -> Style {
     }
 }
 
-pub(crate) fn pane_border_style(active: bool, history: bool, bell: bool) -> Style {
+pub(crate) fn pane_border_style(theme: Theme, active: bool, history: bool, bell: bool) -> Style {
     Style {
         foreground: if history {
-            PEACH
+            rgb(theme.orange)
         } else if active {
-            GREEN
+            rgb(theme.accent)
         } else if bell {
-            PEACH
+            rgb(theme.orange)
         } else {
-            SUBTEXT0
+            rgb(theme.muted)
         },
         bold: active || history || bell,
         ..Style::default()
@@ -627,26 +636,32 @@ fn visible_shortcuts(
 }
 
 fn draw_shortcut_segment(
+    theme: Theme,
     screen: &mut Screen,
     hint: ShortcutHint,
     mode: FooterMode,
     bindings: crate::config::Shortcuts,
 ) {
-    draw_key_label_segment(screen, &hint_key_for_mode(hint, mode, bindings), hint.label);
+    draw_key_label_segment(
+        theme,
+        screen,
+        &hint_key_for_mode(hint, mode, bindings),
+        hint.label,
+    );
 }
 
-fn draw_key_label_segment(screen: &mut Screen, key: &str, label: &str) {
-    screen.set_style(shortcut_key_style());
+fn draw_key_label_segment(theme: Theme, screen: &mut Screen, key: &str, label: &str) {
+    screen.set_style(shortcut_key_style(theme));
     print(screen, " ");
     print(screen, key);
     print(screen, " ");
-    screen.set_style(separator_style(BASE, LAVENDER));
+    screen.set_style(separator_style(rgb(theme.background), rgb(theme.secondary)));
     screen.print(POWERLINE_RIGHT);
-    screen.set_style(shortcut_label_style());
+    screen.set_style(shortcut_label_style(theme));
     print(screen, " ");
     print(screen, label);
     print(screen, " ");
-    screen.set_style(separator_style(LAVENDER, BASE));
+    screen.set_style(separator_style(rgb(theme.secondary), rgb(theme.background)));
     screen.print(POWERLINE_RIGHT);
 }
 
@@ -742,6 +757,7 @@ fn powerline_width(label: &str) -> usize {
 }
 
 fn draw_colored_powerline_segment(
+    theme: Theme,
     screen: &mut Screen,
     label: &str,
     background: Color,
@@ -751,14 +767,14 @@ fn draw_colored_powerline_segment(
     if *remaining < 3 {
         return;
     }
-    screen.set_style(separator_style(BASE, background));
+    screen.set_style(separator_style(rgb(theme.background), background));
     screen.print(POWERLINE_RIGHT);
     *remaining -= 1;
 
     let label = clipped(label, remaining.saturating_sub(1));
     let label_width = display_width(&label);
     screen.set_style(Style {
-        foreground: BADGE_TEXT,
+        foreground: rgb(theme.badge_text),
         background,
         bold: true,
         ..Style::default()
@@ -771,12 +787,23 @@ fn draw_colored_powerline_segment(
     *remaining -= 1;
 }
 
-fn draw_powerline_segment(screen: &mut Screen, label: &str, active: bool, remaining: &mut usize) {
+fn draw_powerline_segment(
+    theme: Theme,
+    screen: &mut Screen,
+    label: &str,
+    active: bool,
+    remaining: &mut usize,
+) {
     draw_colored_powerline_segment(
+        theme,
         screen,
         label,
-        if active { GREEN } else { TEXT },
-        BASE,
+        if active {
+            rgb(theme.accent)
+        } else {
+            rgb(theme.foreground)
+        },
+        rgb(theme.background),
         remaining,
     );
 }
@@ -810,6 +837,7 @@ fn footer_shortcuts(
 }
 
 fn draw_footer(
+    theme: Theme,
     screen: &mut Screen,
     row: usize,
     columns: usize,
@@ -822,32 +850,32 @@ fn draw_footer(
     screen.set_auto_wrap(false);
     screen.designate_character_set(false, false);
     screen.select_character_set(false);
-    screen.set_style(bar_background_style());
+    screen.set_style(bar_background_style(theme));
     screen.position(row, 0);
     screen.erase_line(EraseMode::All);
     let mode_width = footer_mode_width(columns, mode);
     let shortcuts = footer_shortcuts(columns, mode, session, bindings);
     screen.set_style(Style {
-        foreground: BADGE_TEXT,
+        foreground: rgb(theme.badge_text),
         background: match mode {
-            FooterMode::Normal => GREEN,
-            FooterMode::Pane => LAVENDER,
-            FooterMode::Resize => PEACH,
-            FooterMode::Move => PEACH,
-            FooterMode::Tab => LAVENDER,
-            FooterMode::Session => LAVENDER,
-            FooterMode::Locked => RED,
+            FooterMode::Normal => rgb(theme.accent),
+            FooterMode::Pane => rgb(theme.secondary),
+            FooterMode::Resize => rgb(theme.orange),
+            FooterMode::Move => rgb(theme.orange),
+            FooterMode::Tab => rgb(theme.secondary),
+            FooterMode::Session => rgb(theme.secondary),
+            FooterMode::Locked => rgb(theme.error),
         },
         bold: true,
         ..Style::default()
     });
     print(screen, &clipped(mode_label(mode), mode_width));
     if !shortcuts.is_empty() {
-        screen.set_style(bar_background_style());
+        screen.set_style(bar_background_style(theme));
         print(screen, " ");
     }
     for hint in shortcuts {
-        draw_shortcut_segment(screen, hint, mode, bindings);
+        draw_shortcut_segment(theme, screen, hint, mode, bindings);
     }
 }
 
@@ -884,6 +912,7 @@ pub(crate) fn history_footer_status_columns(columns: usize, hints: &[(&str, &str
 }
 
 pub(crate) fn draw_history_footer(
+    theme: Theme,
     screen: &mut Screen,
     status: &str,
     hints: &[(&str, &str)],
@@ -899,12 +928,12 @@ pub(crate) fn draw_history_footer(
     screen.set_auto_wrap(false);
     screen.designate_character_set(false, false);
     screen.select_character_set(false);
-    screen.set_style(bar_background_style());
+    screen.set_style(bar_background_style(theme));
     screen.position(row, 0);
     screen.erase_line(EraseMode::All);
     screen.set_style(Style {
-        foreground: BADGE_TEXT,
-        background: PEACH,
+        foreground: rgb(theme.badge_text),
+        background: rgb(theme.orange),
         bold: true,
         ..Style::default()
     });
@@ -913,7 +942,7 @@ pub(crate) fn draw_history_footer(
     let used = mode.width();
     let content_start = used + usize::from(used < columns);
     if used < columns {
-        screen.set_style(bar_background_style());
+        screen.set_style(bar_background_style(theme));
         print(screen, " ");
         let visible_hints = visible_history_hints(columns, hints);
         let status_columns = history_footer_status_columns(columns, hints);
@@ -922,7 +951,7 @@ pub(crate) fn draw_history_footer(
             print(screen, " ");
         }
         for (key, label) in visible_hints {
-            draw_key_label_segment(screen, key, label);
+            draw_key_label_segment(theme, screen, key, label);
         }
     }
     screen.restore_cursor();
@@ -1059,6 +1088,7 @@ pub(crate) fn compose_with_shortcuts(
     shortcuts: crate::config::Shortcuts,
 ) -> io::Result<Screen> {
     compose_with_mode(
+        Theme::default(),
         child,
         outer_rows,
         session_name,
@@ -1073,7 +1103,9 @@ pub(crate) fn compose_with_shortcuts(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn compose_with_mode(
+    theme: Theme,
     child: &Screen,
     outer_rows: u16,
     session_name: Option<&str>,
@@ -1107,16 +1139,16 @@ pub(crate) fn compose_with_mode(
         screen.append_display_row()?;
     }
     screen.save_cursor();
-    prepare_row(&mut screen, bar_background_style());
+    prepare_row(&mut screen, bar_background_style(theme));
     let layout = bar_layout(columns, session_name, names, active);
     screen.set_style(Style {
         bold: true,
-        ..bar_background_style()
+        ..bar_background_style(theme)
     });
     print(&mut screen, &layout.session);
     let mut remaining = columns.saturating_sub(layout.session_width);
     for (index, label) in layout.labels.iter().enumerate().skip(layout.start) {
-        draw_powerline_segment(&mut screen, label, index == active, &mut remaining);
+        draw_powerline_segment(theme, &mut screen, label, index == active, &mut remaining);
         if remaining < 3 {
             break;
         }
@@ -1124,6 +1156,7 @@ pub(crate) fn compose_with_mode(
     if footer {
         let row = screen.dimensions().0 - 1;
         draw_footer(
+            theme,
             &mut screen,
             row,
             columns,
@@ -1144,7 +1177,7 @@ mod tests {
     #[test]
     fn pane_borders_use_main_colors_without_an_opaque_background() {
         assert_eq!(
-            pane_border_style(true, false, false),
+            pane_border_style(Theme::default(), true, false, false),
             Style {
                 foreground: GREEN,
                 background: Color::Default,
@@ -1152,14 +1185,26 @@ mod tests {
                 ..Style::default()
             }
         );
-        assert_eq!(pane_border_style(false, false, false).foreground, SUBTEXT0);
-        assert_eq!(pane_border_style(false, true, false).foreground, PEACH);
-        assert_eq!(pane_border_style(false, false, true).foreground, PEACH);
-        assert_eq!(pane_border_style(true, false, true).foreground, GREEN);
+        assert_eq!(
+            pane_border_style(Theme::default(), false, false, false).foreground,
+            SUBTEXT0
+        );
+        assert_eq!(
+            pane_border_style(Theme::default(), false, true, false).foreground,
+            PEACH
+        );
+        assert_eq!(
+            pane_border_style(Theme::default(), false, false, true).foreground,
+            PEACH
+        );
+        assert_eq!(
+            pane_border_style(Theme::default(), true, false, true).foreground,
+            GREEN
+        );
         for style in [
-            pane_border_style(false, false, false),
-            pane_border_style(false, true, false),
-            pane_border_style(false, false, true),
+            pane_border_style(Theme::default(), false, false, false),
+            pane_border_style(Theme::default(), false, true, false),
+            pane_border_style(Theme::default(), false, false, true),
         ] {
             assert_eq!(style.background, Color::Default);
         }
@@ -1193,10 +1238,10 @@ mod tests {
         assert!(bar.contains(POWERLINE_RIGHT));
         let row = view.row(0).unwrap();
         assert_eq!(row[0].style, separator_style(BASE, TEXT));
-        assert_eq!(row[1].style, bar_style(false));
+        assert_eq!(row[1].style, bar_style(Theme::default(), false));
         assert_eq!(row[10].style, separator_style(TEXT, BASE));
         assert_eq!(row[11].style, separator_style(BASE, GREEN));
-        assert_eq!(row[12].style, bar_style(true));
+        assert_eq!(row[12].style, bar_style(Theme::default(), true));
         let footer: String = view
             .row(4)
             .unwrap()
@@ -1211,11 +1256,11 @@ mod tests {
         let footer_row = view.row(4).unwrap();
         assert_eq!(footer_row[0].style.background, RED);
         assert!(footer_row[0].style.bold);
-        assert_eq!(footer_row[8].style, bar_background_style());
-        assert_eq!(footer_row[9].style, shortcut_key_style());
-        assert_eq!(footer_row[10].style, shortcut_key_style());
+        assert_eq!(footer_row[8].style, bar_background_style(Theme::default()));
+        assert_eq!(footer_row[9].style, shortcut_key_style(Theme::default()));
+        assert_eq!(footer_row[10].style, shortcut_key_style(Theme::default()));
         assert_eq!(footer_row[17].style, separator_style(BASE, LAVENDER));
-        assert_eq!(footer_row[18].style, shortcut_label_style());
+        assert_eq!(footer_row[18].style, shortcut_label_style(Theme::default()));
 
         let mut mouse_child = Screen::new(2, 20).unwrap();
         mouse_child.set_mouse_tracking(MouseTracking::Drag);
@@ -1407,7 +1452,10 @@ mod tests {
         let saved_top = history.row(0).unwrap().to_vec();
         let saved_cursor = history.cursor();
         let hints = &[("/?", "Search"), ("q", "Exit")];
-        assert_eq!(draw_history_footer(&mut history, "2/40", hints), Some(10));
+        assert_eq!(
+            draw_history_footer(Theme::default(), &mut history, "2/40", hints),
+            Some(10)
+        );
         assert_eq!(history.row(0).unwrap(), saved_top);
         assert_eq!(history.cursor(), saved_cursor);
         let footer = history.row(2).unwrap();
@@ -1431,7 +1479,12 @@ mod tests {
 
         let narrow_child = Screen::new(1, 40).unwrap();
         let mut narrow = compose(&narrow_child, 3, None, &["shell".into()], 0, false).unwrap();
-        draw_history_footer(&mut narrow, "Search /still-in-history", hints);
+        draw_history_footer(
+            Theme::default(),
+            &mut narrow,
+            "Search /still-in-history",
+            hints,
+        );
         let narrow_text: String = narrow
             .row(2)
             .unwrap()
@@ -1459,6 +1512,7 @@ esc = { actions = [{ action = "switch-mode", mode = "locked" }] }
         let child = Screen::new(1, 120).unwrap();
         let footer_text = |mode| {
             let view = compose_with_mode(
+                Theme::default(),
                 &child,
                 3,
                 Some("work"),
@@ -1493,6 +1547,7 @@ esc = { actions = [{ action = "switch-mode", mode = "locked" }] }
         );
         let child = Screen::new(1, 80).unwrap();
         let view = compose_with_mode(
+            Theme::default(),
             &child,
             3,
             None,
@@ -1527,6 +1582,7 @@ c = { actions = ["new-window", { action = "switch-mode", mode = "locked" }] }
         let child = Screen::new(1, 120).unwrap();
         let row = |mode| {
             let view = compose_with_mode(
+                Theme::default(),
                 &child,
                 3,
                 Some("work"),

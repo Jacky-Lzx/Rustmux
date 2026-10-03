@@ -211,3 +211,8 @@ fn attach_create() {
 fn focus_control() {
     run_scenario("focus_control");
 }
+
+#[test]
+fn themes() {
+    run_scenario("themes");
+}

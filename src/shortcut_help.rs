@@ -3,7 +3,8 @@
 use crate::{
     chrome::clipped,
     screen::{MouseTracking, Screen},
-    style::{Color, Style},
+    style::Style,
+    theme::{Theme, rgb},
 };
 use std::time::{Duration, Instant};
 use unicode_width::UnicodeWidthStr;
@@ -12,12 +13,6 @@ const ESCAPE_DELAY: Duration = Duration::from_millis(30);
 const MAX_ESCAPE_BYTES: usize = 64;
 const KEY_WIDTH: usize = 11;
 const TWO_COLUMN_WIDTH: usize = 58;
-const BASE: Color = Color::Rgb(0x1e, 0x1e, 0x2e);
-const SURFACE: Color = Color::Rgb(0x31, 0x32, 0x44);
-const TEXT: Color = Color::Rgb(0xcd, 0xd6, 0xf4);
-const MUTED: Color = Color::Rgb(0xa6, 0xad, 0xc8);
-const PINK: Color = Color::Rgb(0xf5, 0xc2, 0xe7);
-const LAVENDER: Color = Color::Rgb(0xb4, 0xbe, 0xfe);
 
 #[derive(Clone, Copy)]
 struct Command {
@@ -341,7 +336,12 @@ impl ShortcutHelp {
         }
     }
 
+    #[cfg(test)]
     pub fn overlay(&mut self, original: &Screen) -> Screen {
+        self.overlay_themed(original, Theme::default())
+    }
+
+    pub fn overlay_themed(&mut self, original: &Screen, theme: Theme) -> Screen {
         let mut screen = original.clone();
         let (rows, columns) = screen.dimensions();
         screen.set_origin_mode(false);
@@ -375,13 +375,13 @@ impl ShortcutHelp {
         self.page = self.page.min(self.pages - 1);
 
         let panel = Style {
-            foreground: TEXT,
-            background: BASE,
+            foreground: rgb(theme.foreground),
+            background: rgb(theme.background),
             ..Style::default()
         };
         let border = Style {
-            foreground: LAVENDER,
-            background: BASE,
+            foreground: rgb(theme.secondary),
+            background: rgb(theme.background),
             bold: true,
             ..Style::default()
         };
@@ -393,8 +393,8 @@ impl ShortcutHelp {
             return screen;
         }
         let title = Style {
-            foreground: PINK,
-            background: BASE,
+            foreground: rgb(theme.key),
+            background: rgb(theme.background),
             bold: true,
             ..Style::default()
         };
@@ -420,18 +420,18 @@ impl ShortcutHelp {
                 let row = top + 1 + row_index;
                 match item {
                     HelpRow::Heading(group) => {
-                        self.draw_heading(&mut screen, row, column, column_width, *group, panel);
+                        self.draw_heading(theme, &mut screen, row, column, column_width, *group);
                     }
                     HelpRow::Command(command) => {
-                        self.draw_command(&mut screen, row, column, column_width, *command, panel)
+                        self.draw_command(theme, &mut screen, row, column, column_width, *command)
                     }
                 }
             }
         }
 
         let footer = Style {
-            foreground: MUTED,
-            background: SURFACE,
+            foreground: rgb(theme.muted),
+            background: rgb(theme.surface),
             ..Style::default()
         };
         let footer_row = top + height - 2;
@@ -494,17 +494,18 @@ impl ShortcutHelp {
 
     fn draw_heading(
         &self,
+        theme: Theme,
         screen: &mut Screen,
         row: usize,
         column: usize,
         width: usize,
         group: CommandGroup,
-        panel: Style,
     ) {
         let style = Style {
-            foreground: MUTED,
+            foreground: rgb(theme.purple),
+            background: rgb(theme.background),
             bold: true,
-            ..panel
+            ..Style::default()
         };
         write_at(screen, row, column, group.label(), style, width);
     }
@@ -613,13 +614,18 @@ impl ShortcutHelp {
 
     fn draw_command(
         &mut self,
+        theme: Theme,
         screen: &mut Screen,
         row: usize,
         column: usize,
         width: usize,
         command: Command,
-        panel: Style,
     ) {
+        let panel = Style {
+            foreground: rgb(theme.foreground),
+            background: rgb(theme.background),
+            ..Style::default()
+        };
         let key_width = KEY_WIDTH.min(width);
         let literal_prefix = command.actions == [(2, 2)];
         let prefix_label = format!(
@@ -665,7 +671,7 @@ impl ShortcutHelp {
         let key = clipped(&display_key, key_width);
         let key_text = format!("{key:<key_width$}");
         let key_style = Style {
-            foreground: PINK,
+            foreground: rgb(theme.key),
             bold: true,
             ..panel
         };
@@ -675,7 +681,7 @@ impl ShortcutHelp {
             command.label.to_owned()
         };
         let label_style = Style {
-            foreground: LAVENDER,
+            foreground: rgb(theme.secondary),
             ..panel
         };
         write_at(screen, row, column, &key_text, key_style, key_width);
@@ -806,14 +812,20 @@ mod tests {
         assert!(!view.bracketed_paste());
         let first_heading = view.row(1).unwrap();
         assert_eq!(first_heading[6].character, 'W');
-        assert_eq!(first_heading[6].style.foreground, MUTED);
+        assert_eq!(
+            first_heading[6].style.foreground,
+            rgb(Theme::default().purple)
+        );
         assert!(first_heading[6].style.bold);
         let first_command = view.row(2).unwrap();
         assert_eq!(first_command[6].character, 'c');
-        assert_eq!(first_command[6].style.foreground, PINK);
+        assert_eq!(first_command[6].style.foreground, rgb(Theme::default().key));
         assert!(first_command[6].style.bold);
         assert_eq!(first_command[17].character, 'N');
-        assert_eq!(first_command[17].style.foreground, LAVENDER);
+        assert_eq!(
+            first_command[17].style.foreground,
+            rgb(Theme::default().secondary)
+        );
 
         let mut named = ShortcutHelp::new(true);
         assert!(text(&named.overlay(&original)).contains("Session Manager"));

@@ -279,6 +279,7 @@ fn run_picker(
                         .or(list_error.as_deref()),
                 },
                 size,
+                reload.current().theme(),
             ))?;
             previous_size = Some(size);
             dirty = false;
@@ -546,14 +547,6 @@ fn search_navigation_target(selected: usize, count: usize, key: Key) -> Option<u
     action_navigation(selected, count, Bindings::default().action(key, true))
 }
 
-const BASE: (u8, u8, u8) = (30, 30, 46);
-const SURFACE: (u8, u8, u8) = (49, 50, 68);
-const TEXT: (u8, u8, u8) = (205, 214, 244);
-const MUTED: (u8, u8, u8) = (166, 173, 200);
-const BLUE: (u8, u8, u8) = (137, 180, 250);
-const TEAL: (u8, u8, u8) = (148, 226, 213);
-const PEACH: (u8, u8, u8) = (250, 179, 135);
-
 struct PickerView<'a> {
     sessions: &'a [SessionInfo],
     selected: usize,
@@ -589,9 +582,10 @@ fn render(
             status: None,
         },
         size,
+        crate::theme::Theme::default(),
     )
 }
-fn render_view(view: &PickerView<'_>, size: (u16, u16)) -> Vec<u8> {
+fn render_view(view: &PickerView<'_>, size: (u16, u16), theme: crate::theme::Theme) -> Vec<u8> {
     let PickerView {
         sessions,
         selected,
@@ -614,8 +608,8 @@ fn render_view(view: &PickerView<'_>, size: (u16, u16)) -> Vec<u8> {
             box_column,
             "",
             width,
-            TEXT,
-            BASE,
+            theme.foreground,
+            theme.background,
             false,
         );
     }
@@ -624,14 +618,22 @@ fn render_view(view: &PickerView<'_>, size: (u16, u16)) -> Vec<u8> {
     }
 
     let inner_width = width - 2;
-    write_at(&mut frame, box_row, box_column, "┌", BLUE, BASE, true);
+    write_at(
+        &mut frame,
+        box_row,
+        box_column,
+        "┌",
+        theme.border,
+        theme.background,
+        true,
+    );
     write_at(
         &mut frame,
         box_row,
         box_column + 1,
         &"─".repeat(inner_width),
-        BLUE,
-        BASE,
+        theme.border,
+        theme.background,
         true,
     );
     write_at(
@@ -639,8 +641,8 @@ fn render_view(view: &PickerView<'_>, size: (u16, u16)) -> Vec<u8> {
         box_row,
         box_column + width - 1,
         "┐",
-        BLUE,
-        BASE,
+        theme.border,
+        theme.background,
         true,
     );
     for row in 1..height - 1 {
@@ -649,8 +651,8 @@ fn render_view(view: &PickerView<'_>, size: (u16, u16)) -> Vec<u8> {
             box_row + row,
             box_column,
             "│",
-            BLUE,
-            BASE,
+            theme.border,
+            theme.background,
             false,
         );
         write_at(
@@ -658,8 +660,8 @@ fn render_view(view: &PickerView<'_>, size: (u16, u16)) -> Vec<u8> {
             box_row + row,
             box_column + width - 1,
             "│",
-            BLUE,
-            BASE,
+            theme.border,
+            theme.background,
             false,
         );
     }
@@ -668,8 +670,8 @@ fn render_view(view: &PickerView<'_>, size: (u16, u16)) -> Vec<u8> {
         box_row + height - 1,
         box_column,
         &format!("└{}┘", "─".repeat(inner_width)),
-        BLUE,
-        BASE,
+        theme.border,
+        theme.background,
         false,
     );
 
@@ -679,8 +681,8 @@ fn render_view(view: &PickerView<'_>, size: (u16, u16)) -> Vec<u8> {
         box_row,
         box_column + 1,
         &title,
-        BLUE,
-        BASE,
+        theme.blue,
+        theme.background,
         true,
     );
     let count = format!(
@@ -695,14 +697,19 @@ fn render_view(view: &PickerView<'_>, size: (u16, u16)) -> Vec<u8> {
             box_row,
             box_column + width - 1 - count_width,
             &count,
-            MUTED,
-            BASE,
+            theme.muted,
+            theme.background,
             true,
         );
     }
 
     if height < 8 {
-        draw_compact_sessions(&mut frame, view, (box_row, box_column, height, width));
+        draw_compact_sessions(
+            &mut frame,
+            view,
+            (box_row, box_column, height, width),
+            theme,
+        );
         return frame.into_bytes();
     }
 
@@ -744,11 +751,11 @@ fn render_view(view: &PickerView<'_>, size: (u16, u16)) -> Vec<u8> {
         &navigation,
         body_width,
         if name_input.is_some() || search_input.is_some() {
-            BLUE
+            theme.blue
         } else {
-            MUTED
+            theme.muted
         },
-        BASE,
+        theme.background,
         name_input.is_some() || search_input.is_some(),
     );
     write_at(
@@ -756,8 +763,8 @@ fn render_view(view: &PickerView<'_>, size: (u16, u16)) -> Vec<u8> {
         box_row + 2,
         box_column + 1,
         &"─".repeat(inner_width),
-        SURFACE,
-        BASE,
+        theme.surface,
+        theme.background,
         false,
     );
 
@@ -775,13 +782,20 @@ fn render_view(view: &PickerView<'_>, size: (u16, u16)) -> Vec<u8> {
         column,
         "",
         marker_width,
-        MUTED,
-        BASE,
+        theme.muted,
+        theme.background,
         false,
     );
     column += marker_width;
     write_field(
-        &mut frame, header_row, column, "SESSION", name_width, MUTED, BASE, true,
+        &mut frame,
+        header_row,
+        column,
+        "SESSION",
+        name_width,
+        theme.muted,
+        theme.background,
+        true,
     );
     column += name_width;
     if status_width > 0 {
@@ -791,8 +805,8 @@ fn render_view(view: &PickerView<'_>, size: (u16, u16)) -> Vec<u8> {
             column,
             "STATUS",
             status_width,
-            MUTED,
-            BASE,
+            theme.muted,
+            theme.background,
             true,
         );
         column += status_width;
@@ -804,15 +818,22 @@ fn render_view(view: &PickerView<'_>, size: (u16, u16)) -> Vec<u8> {
             column,
             "LAST CONNECTED",
             last_connected_width,
-            MUTED,
-            BASE,
+            theme.muted,
+            theme.background,
             true,
         );
         column += last_connected_width;
     }
     if pid_width > 0 {
         write_field(
-            &mut frame, header_row, column, "PID", pid_width, MUTED, BASE, true,
+            &mut frame,
+            header_row,
+            column,
+            "PID",
+            pid_width,
+            theme.muted,
+            theme.background,
+            true,
         );
     }
 
@@ -829,7 +850,11 @@ fn render_view(view: &PickerView<'_>, size: (u16, u16)) -> Vec<u8> {
     for (offset, session) in sessions[start..start + visible].iter().enumerate() {
         let index = start + offset;
         let selected = index == selected;
-        let background = if selected { SURFACE } else { BASE };
+        let background = if selected {
+            theme.surface_highlight
+        } else {
+            theme.background
+        };
         let row = box_row + 4 + offset;
         let mut column = box_column + 2;
         write_field(
@@ -838,7 +863,7 @@ fn render_view(view: &PickerView<'_>, size: (u16, u16)) -> Vec<u8> {
             column,
             if selected { "› " } else { "  " },
             marker_width,
-            if selected { BLUE } else { MUTED },
+            if selected { theme.blue } else { theme.muted },
             background,
             selected,
         );
@@ -849,7 +874,7 @@ fn render_view(view: &PickerView<'_>, size: (u16, u16)) -> Vec<u8> {
             column,
             session.name.as_str(),
             name_width,
-            TEAL,
+            theme.teal,
             background,
             true,
         );
@@ -862,9 +887,9 @@ fn render_view(view: &PickerView<'_>, size: (u16, u16)) -> Vec<u8> {
                 &format!("[{}]", session.status(current)),
                 status_width,
                 if current == Some(&session.name) || session.attached {
-                    PEACH
+                    theme.orange
                 } else {
-                    MUTED
+                    theme.muted
                 },
                 background,
                 true,
@@ -878,7 +903,7 @@ fn render_view(view: &PickerView<'_>, size: (u16, u16)) -> Vec<u8> {
                 column,
                 &session.last_connected_label(current, now),
                 last_connected_width,
-                MUTED,
+                theme.muted,
                 background,
                 false,
             );
@@ -893,7 +918,7 @@ fn render_view(view: &PickerView<'_>, size: (u16, u16)) -> Vec<u8> {
                     .server_pid
                     .map_or_else(|| "—".to_owned(), |pid| pid.to_string()),
                 pid_width,
-                MUTED,
+                theme.muted,
                 background,
                 false,
             );
@@ -907,8 +932,12 @@ fn render_view(view: &PickerView<'_>, size: (u16, u16)) -> Vec<u8> {
         box_column + 2,
         &footer,
         body_width,
-        if delete_armed.is_some() { PEACH } else { TEXT },
-        BASE,
+        if delete_armed.is_some() {
+            theme.warning
+        } else {
+            theme.foreground
+        },
+        theme.background,
         delete_armed.is_some(),
     );
     frame.into_bytes()
@@ -918,6 +947,7 @@ fn draw_compact_sessions(
     frame: &mut String,
     view: &PickerView<'_>,
     (box_row, box_column, height, width): (usize, usize, usize, usize),
+    theme: crate::theme::Theme,
 ) {
     let visible = height.saturating_sub(3).min(view.sessions.len());
     let start = view
@@ -938,8 +968,16 @@ fn draw_compact_sessions(
                 session.status(view.current)
             ),
             width.saturating_sub(2),
-            if selected { BLUE } else { TEXT },
-            if selected { SURFACE } else { BASE },
+            if selected {
+                theme.blue
+            } else {
+                theme.foreground
+            },
+            if selected {
+                theme.surface_highlight
+            } else {
+                theme.background
+            },
             selected,
         );
     }
@@ -952,11 +990,11 @@ fn draw_compact_sessions(
             &footer,
             width.saturating_sub(2),
             if view.delete_armed.is_some() {
-                PEACH
+                theme.warning
             } else {
-                MUTED
+                theme.muted
             },
-            BASE,
+            theme.background,
             view.delete_armed.is_some(),
         );
     }
@@ -1441,7 +1479,8 @@ mod tests {
             ((24, 160), "Rename session: new-name_"),
             ((6, 160), "Rename: new-name_"),
         ] {
-            let frame = String::from_utf8(render_view(&view, size)).unwrap();
+            let frame = String::from_utf8(render_view(&view, size, crate::theme::Theme::default()))
+                .unwrap();
             assert!(frame.contains(title), "{frame}");
             assert!(frame.contains("<Enter> Rename"));
             assert!(!frame.contains("Search: saved"));

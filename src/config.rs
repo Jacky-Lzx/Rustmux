@@ -586,6 +586,7 @@ impl Notifications {
 pub struct Config {
     source: Option<reload::Source>,
     manager: manager::Bindings,
+    theme: crate::theme::Theme,
     shell: OsString,
     notifications: Notifications,
     scrollback_lines: usize,
@@ -603,6 +604,9 @@ pub struct PersistenceOptions {
 }
 
 impl Config {
+    pub(crate) fn theme(&self) -> crate::theme::Theme {
+        self.theme
+    }
     pub(crate) fn manager(&self) -> &manager::Bindings {
         &self.manager
     }
@@ -632,6 +636,7 @@ impl Config {
 #[derive(Debug, Default, Eq, PartialEq)]
 struct ParsedConfig {
     manager: manager::Bindings,
+    theme: crate::theme::Theme,
     shell: Option<String>,
     notifications: Notifications,
     scrollback_lines: Option<usize>,
@@ -672,6 +677,7 @@ fn resolve_config(configured: ParsedConfig) -> Config {
     Config {
         source: None,
         manager: configured.manager,
+        theme: configured.theme,
         shell: select_shell(
             env::var_os("RUSTMUX_SHELL"),
             configured.shell.map(OsString::from),
@@ -799,6 +805,17 @@ fn parse_config(source: &str) -> Result<ParsedConfig, String> {
         .transpose()?;
     Ok(ParsedConfig {
         manager: manager::Bindings::parse(document.get("session_manager"))?,
+        theme: document
+            .get("theme")
+            .map(|value| {
+                value
+                    .clone()
+                    .try_into::<crate::theme::ThemeConfig>()
+                    .map_err(|error| format!("theme: {error}"))?
+                    .resolve()
+            })
+            .transpose()?
+            .unwrap_or_default(),
         shell,
         notifications,
         scrollback_lines,
@@ -1893,6 +1910,7 @@ preset = "mocha"
             .unwrap(),
             ParsedConfig {
                 manager: manager::Bindings::default(),
+                theme: crate::theme::Theme::default(),
                 shell: Some("/opt/homebrew/bin/fish".to_owned()),
                 notifications: Notifications::default(),
                 scrollback_lines: Some(5000),

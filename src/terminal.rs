@@ -2038,6 +2038,7 @@ fn service_pane(
 }
 
 struct RuntimeConfig {
+    theme: crate::theme::Theme,
     shell: OsString,
     notifications: crate::config::Notifications,
     scrollback_lines: usize,
@@ -2046,6 +2047,7 @@ struct RuntimeConfig {
 }
 impl RuntimeConfig {
     fn update(&mut self, config: &crate::config::Config) {
+        self.theme = config.theme();
         self.shell = config.shell().clone();
         self.notifications = config.notifications();
         self.scrollback_lines = config.scrollback_lines();
@@ -2095,6 +2097,9 @@ fn forward(
     let mut session_name = context.session_name.map(str::to_owned);
     let mut renamed_notice: Option<String> = None;
     let mut runtime = RuntimeConfig {
+        theme: reload
+            .as_ref()
+            .map_or_else(crate::theme::Theme::default, |r| r.current().theme()),
         shell: context.shell_path.to_owned(),
         notifications: context.notifications,
         scrollback_lines: context.scrollback_lines,
@@ -2665,14 +2670,16 @@ fn forward(
                         .iter()
                         .filter_map(|(pane_id, pane)| pane.io().bell_pending.then_some(pane_id))
                         .collect();
-                    let content = pane_view::compose_with_titles(
+                    let content = pane_view::compose_themed(
                         panes.layout(),
                         &screens,
                         history.as_ref().map(|_| focused),
                         &titles,
                         &bells,
+                        runtime.theme,
                     )?;
                     let mut view = compose_with_mode(
+                        runtime.theme,
                         &content,
                         *outer_rows,
                         session_name.as_deref(),
@@ -2742,16 +2749,22 @@ fn forward(
                             let status_columns =
                                 crate::chrome::history_footer_status_columns(columns, hints);
                             let (status, cursor) = history.footer_status(status_columns);
-                            if let Some(start) =
-                                crate::chrome::draw_history_footer(&mut view, &status, hints)
-                                && let Some(column) = cursor
+                            if let Some(start) = crate::chrome::draw_history_footer(
+                                runtime.theme,
+                                &mut view,
+                                &status,
+                                hints,
+                            ) && let Some(column) = cursor
                             {
                                 view.position(rows - 1, start + column);
                                 view.set_cursor_visible(true);
                                 view.set_cursor_shape(crate::screen::CursorShape::SteadyBar);
                             }
                         } else if *outer_rows > 1 {
-                            crate::chrome::prepare_row(&mut view, crate::chrome::bar_style(true));
+                            crate::chrome::prepare_row(
+                                &mut view,
+                                crate::chrome::bar_style(runtime.theme, true),
+                            );
                             for character in
                                 crate::chrome::clipped(&history.label(columns), columns).chars()
                             {
@@ -2782,7 +2795,8 @@ fn forward(
                         view.save_cursor();
                         view.position(rows - 1, 0);
                         view.set_style(crate::style::Style {
-                            foreground: crate::style::Color::Rgb(243, 139, 168),
+                            foreground: crate::theme::rgb(runtime.theme.error),
+                            background: crate::theme::rgb(runtime.theme.background),
                             ..crate::style::Style::default()
                         });
                         view.erase_line(crate::screen::EraseMode::All);
@@ -2799,11 +2813,15 @@ fn forward(
                         view.restore_cursor();
                     }
                     if let Some(prompt) = &prompt {
-                        renderer
-                            .render(&prompt.overlay(&view), &mut FrameWriter(&mut to_terminal))?;
+                        renderer.render(
+                            &prompt.overlay_themed(&view, runtime.theme),
+                            &mut FrameWriter(&mut to_terminal),
+                        )?;
                     } else if let Some(help) = &mut help {
-                        renderer
-                            .render(&help.overlay(&view), &mut FrameWriter(&mut to_terminal))?;
+                        renderer.render(
+                            &help.overlay_themed(&view, runtime.theme),
+                            &mut FrameWriter(&mut to_terminal),
+                        )?;
                     } else {
                         renderer.render(&view, &mut FrameWriter(&mut to_terminal))?;
                     }

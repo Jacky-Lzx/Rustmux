@@ -14,6 +14,7 @@ rustmux show-config -s work
 | Setting | Effect of a successful reload |
 | --- | --- |
 | Supported shortcuts and mode bindings | Update together at the next safe input boundary; footer and Help use the new bindings |
+| Theme | Update interface colors together; existing child cells and terminal defaults retain their colors |
 | Notifications | Update existing panes, including the hidden pane retained for undo; running commands use the latest policy at completion |
 | `remain_on_exit` | Update the session policy; disabling it also removes already drained, exited panes that use this default. Explicit project/pane overrides still apply |
 | `shell` | Used when creating or respawning panes; existing child processes keep running |
@@ -30,8 +31,8 @@ sessions; foreground unnamed sessions do not gain snapshot storage.
 The LOCKED entry key (normally Ctrl-B) and `clear_defaults` still require a
 server restart. A file changing either is rejected as a whole, including its
 other settings. Connected clients continue using the server's existing entry
-policy. This increment does not add theme settings or additional binding actions
-from the independent `main` track.
+policy. See [Interface Themes](interface-themes.md) for presets, color overrides
+and client/server ownership.
 
 ## Applying updates and handling errors
 

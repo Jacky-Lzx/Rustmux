@@ -182,7 +182,7 @@ fn ignored_options_warn_and_strict_failure_keeps_a_parseable_report() {
     fs::write(
         &path,
         r#"scrolback_lines=0
-theme="light"
+future_option="light"
 [keybinds.normal]
 X={actions=["toggle-floating-terminal"]}
 "#,
@@ -349,4 +349,50 @@ unimplemented=[]
             .contains("conflicts")
     );
     assert!(!temporary.path().join("state").exists());
+}
+
+#[test]
+fn theme_diagnostics_validate_and_report_the_resolved_palette() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    let path = root.join("selected.toml");
+    fs::write(
+        &path,
+        "[theme]\npreset='light'\n[theme.colors]\naccent='#01AbEF'\n",
+    )
+    .unwrap();
+    let output = command(
+        root,
+        &[
+            "check-config",
+            "--config",
+            path.to_str().unwrap(),
+            "--strict",
+            "--toml",
+        ],
+    );
+    assert!(output.status.success(), "{:?}", output);
+    let inspected = report(&output);
+    let colors = &settings(&inspected)["theme"];
+    assert_eq!(colors["accent"].as_str(), Some("#01abef"));
+    assert_eq!(colors["background"].as_str(), Some("#f5f6fa"));
+    assert_eq!(colors.as_table().unwrap().len(), 16);
+    for source in [
+        "theme='light'",
+        "[theme]\npreset='Light'",
+        "[theme]\ncolors=[]",
+        "[theme]\nunknown='x'",
+        "[theme.colors]\naccent=123",
+        "[theme.colors]\naccent='#1234'",
+        "[theme.colors]\nacent='#112233'",
+    ] {
+        fs::write(&path, source).unwrap();
+        let output = command(root, &["check-config", "--config", path.to_str().unwrap()]);
+        assert!(!output.status.success(), "accepted: {source}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("theme"),
+            "{:?}",
+            output
+        );
+    }
 }
