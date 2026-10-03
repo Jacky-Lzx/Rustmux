@@ -622,18 +622,16 @@ impl TerminalSession {
             };
 
             for ((window_id, pane_id, requested), ready) in interests.into_iter().zip(pane_events) {
-                service_pane(
-                    self.windows
-                        .get_mut(window_id)
-                        .unwrap()
-                        .content_mut()
-                        .get_mut(pane_id)
-                        .expect("polled pane exists"),
-                    requested,
-                    ready,
-                    self.cell_pixels,
-                    false,
-                )?;
+                let pane = self
+                    .windows
+                    .get_mut(window_id)
+                    .unwrap()
+                    .content_mut()
+                    .get_mut(pane_id)
+                    .expect("polled pane exists");
+                service_pane(pane, requested, ready, self.cell_pixels, false)?;
+                // Completion while detached retains activity, never delivery for a later client.
+                let _ = pane.take_command_reminder();
             }
 
             if listener_events.contains(PollFlags::POLLNVAL) {
@@ -2106,6 +2104,7 @@ fn forward(
     let shortcuts = runtime.shortcuts;
     let mut renderer = Renderer::default();
     let mut kitty_overlays = KittyOverlays::default();
+    let mut notification_ids = crate::notification::Ids::default();
     let mut outer_image_replies = OuterImageReplies::default();
     let mut graphics_ready = false;
     let mut to_terminal = VecDeque::new();
@@ -3777,9 +3776,8 @@ fn forward(
         // One bounded read/write per pane per iteration prevents a busy background
         // process from starving the other panes, keyboard or signal handling.
         for ((id, pane_id, inner_events), inner) in interests.into_iter().zip(events) {
-            let pane = windows
-                .get_mut(id)
-                .unwrap()
+            let window = windows.get_mut(id).unwrap();
+            let pane = window
                 .content_mut()
                 .get_mut(pane_id)
                 .expect("polled pane exists");
@@ -3793,10 +3791,31 @@ fn forward(
                     && *graphics_support == Some(GraphicsSupport::Supported)
                     && cell_pixels.is_some(),
             )?;
-            let command_bell = pane.take_command_bell();
+            let reminder = pane.take_command_reminder();
             bar_dirty |= !bell_was_pending && pane.io().bell_pending;
-            if command_bell && connection == ConnectionState::Attached {
-                to_terminal.push_back(7);
+            if let Some(reminder) = reminder
+                && connection == ConnectionState::Attached
+            {
+                if reminder.bell {
+                    to_terminal.push_back(7);
+                }
+                if reminder.desktop
+                    && let Some(identifier) = notification_ids.allocate()
+                {
+                    let pane_id = pane.control_id();
+                    let title = pane.terminal_title().to_owned();
+                    let message = crate::notification::encode(
+                        &identifier,
+                        window.name(),
+                        pane_id,
+                        &title,
+                        reminder.duration,
+                    );
+                    // Desktop delivery is best effort; keep the terminal output queue bounded.
+                    if message.len() <= LIMIT.saturating_sub(to_terminal.len()) {
+                        to_terminal.extend(message);
+                    }
+                }
             }
         }
     }

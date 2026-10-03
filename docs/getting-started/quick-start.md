@@ -32,6 +32,7 @@ remain_on_exit = false
 
 [notifications]
 enabled = true
+desktop = false
 long_command_bell = true
 command_duration_seconds = 5
 exclude_applications = ["yazi", "nvim", "lazygit"]
@@ -48,7 +49,9 @@ All notification values are optional. The defaults above suppress completion
 reminders for observed `yazi`, `nvim` and `lazygit` processes. Set
 `exclude_applications = []` to allow all applications, or `enabled = false` to
 disable automatic completion reminders. Ordinary application BEL markers still
-work. See [Notification Filters](../reference/notification-filters.md) for matching
+work. Enable `desktop = true` for OSC 99 desktop messages; see
+[Desktop Command Notifications](../reference/desktop-notifications.md).
+See [Notification Filters](../reference/notification-filters.md) for matching
 and process-observation limits. Configuration is read at startup and checked for
 changes every 500 ms. `scrollback_lines`
 is an optional nonnegative integer that defaults to `1000`; set it to `0` to

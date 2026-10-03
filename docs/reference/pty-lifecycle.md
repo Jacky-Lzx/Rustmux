@@ -33,7 +33,8 @@ Invalid paths fail without fallback. Shell selection reads the top-level `shell`
 value from `$XDG_CONFIG_HOME/rustmux/config.toml` or
 `~/.config/rustmux/config.toml`; `RUSTMUX_SHELL` overrides it and `$SHELL`
 provides the default. The optional `[notifications]` table accepts Boolean
-`enabled` and `long_command_bell` values (both default `true`), a positive integer
+`enabled` and `long_command_bell` values (both default `true`), Boolean `desktop`
+(default `false`), a positive integer
 `command_duration_seconds` (default `5`), and `exclude_applications` (default
 `["yazi", "nvim", "lazygit"]`). See [Notification Filters](notification-filters.md).
 Unknown keys are ignored. Invalid supported values reject startup instead of

@@ -22,7 +22,6 @@ use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-#[cfg(test)]
 use std::time::Duration;
 use std::{collections::VecDeque, ffi::OsStr, io, process::ExitStatus, time::Instant};
 use tempfile::{Builder, NamedTempFile};
@@ -182,6 +181,13 @@ impl PreparedPaneResize<'_> {
 /// State that must follow the child when focus changes. The physical terminal's
 /// output queue, renderer cache and frame cadence remain shared by the event loop.
 #[derive(Debug)]
+pub(crate) struct CommandReminder {
+    pub duration: Duration,
+    pub bell: bool,
+    pub desktop: bool,
+}
+
+#[derive(Debug)]
 pub(crate) struct PaneIo {
     pub to_shell: VecDeque<u8>,
     pub dirty: bool,
@@ -192,7 +198,7 @@ pub(crate) struct PaneIo {
     pub semantic: SemanticOutput,
     pub prompt_start: Option<(usize, usize)>,
     pub bell_pending: bool,
-    command_bell_pending: bool,
+    command_reminder: Option<CommandReminder>,
 }
 
 impl Default for PaneIo {
@@ -207,7 +213,7 @@ impl Default for PaneIo {
             semantic: SemanticOutput::default(),
             prompt_start: None,
             bell_pending: false,
-            command_bell_pending: false,
+            command_reminder: None,
         }
     }
 }
@@ -445,6 +451,7 @@ impl Pane {
             io: PaneIo::default(),
             notifications: crate::config::Notifications {
                 long_command_bell: false,
+                desktop: false,
                 ..Default::default()
             },
             _temporary_file: Some(temporary_file),
@@ -972,11 +979,11 @@ impl Pane {
         }
         let completed_commands = self.io.semantic.take_completed_commands();
         self.track_command_application();
-        if self
+        if let Some(command) = self
             .notifications
-            .command_bell_after()
-            .is_some_and(|threshold| {
-                completed_commands.into_iter().any(|command| {
+            .command_reminder_after()
+            .and_then(|threshold| {
+                completed_commands.into_iter().find(|command| {
                     command.duration >= threshold
                         && !(command.applications_overflowed
                             && !self.notifications.exclude_applications.is_empty())
@@ -988,7 +995,11 @@ impl Pane {
             })
         {
             self.io.bell_pending = true;
-            self.io.command_bell_pending = true;
+            self.io.command_reminder = Some(CommandReminder {
+                duration: command.duration,
+                bell: self.notifications.long_command_bell,
+                desktop: self.notifications.desktop,
+            });
         }
     }
 
@@ -1019,8 +1030,8 @@ impl Pane {
         self.process_output_segment(&bytes[start..], reply);
     }
 
-    pub(crate) fn take_command_bell(&mut self) -> bool {
-        std::mem::take(&mut self.io.command_bell_pending)
+    pub(crate) fn take_command_reminder(&mut self) -> Option<CommandReminder> {
+        self.io.command_reminder.take()
     }
 
     fn process_output_segment(&mut self, bytes: &[u8], reply: &mut impl FnMut(&[u8])) {

@@ -16,6 +16,7 @@ pub(crate) use graphics::{
 };
 mod history_view;
 pub mod layout;
+mod notification;
 pub mod pane;
 mod pane_output;
 pub mod pane_set;

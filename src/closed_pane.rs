@@ -43,6 +43,7 @@ impl ClosedPane {
                         false,
                     );
                     pane.parts_mut().3.to_shell.extend(replies);
+                    let _ = pane.take_command_reminder();
                 }
                 Err(error)
                     if matches!(

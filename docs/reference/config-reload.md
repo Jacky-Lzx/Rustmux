@@ -81,7 +81,8 @@ startup.
 
 `[settings].notifications_enabled` and
 `[settings].notification_excluded_applications` expose the applied notification
-switch and normalized application list. In-flight application observations survive
+switch and normalized application list. `desktop_notifications` reports the
+applied `desktop` option. In-flight application observations survive
 a reload; see [Notification Filters](notification-filters.md).
 
 Pane-mode bindings are validated and applied but are not flattened into this report;

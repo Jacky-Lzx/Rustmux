@@ -88,6 +88,11 @@ fn notifications() {
 }
 
 #[test]
+fn desktop_notifications() {
+    run_scenario("desktop_notifications");
+}
+
+#[test]
 fn notification_filter() {
     run_scenario("notification_filter");
 }

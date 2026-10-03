@@ -545,6 +545,7 @@ impl Shortcuts {
 pub struct Notifications {
     pub enabled: bool,
     pub long_command_bell: bool,
+    pub desktop: bool,
     pub command_duration: Duration,
     pub exclude_applications: std::sync::Arc<[String]>,
 }
@@ -554,6 +555,7 @@ impl Default for Notifications {
         Self {
             enabled: true,
             long_command_bell: true,
+            desktop: false,
             command_duration: Duration::from_secs(DEFAULT_COMMAND_DURATION_SECONDS),
             exclude_applications: ["yazi", "nvim", "lazygit"].map(str::to_owned).into(),
         }
@@ -563,6 +565,10 @@ impl Default for Notifications {
 impl Notifications {
     pub fn command_bell_after(&self) -> Option<Duration> {
         (self.enabled && self.long_command_bell).then_some(self.command_duration)
+    }
+
+    pub(crate) fn command_reminder_after(&self) -> Option<Duration> {
+        (self.enabled && (self.long_command_bell || self.desktop)).then_some(self.command_duration)
     }
 
     pub fn excludes_application(&self, application: &str) -> bool {
@@ -1751,6 +1757,11 @@ fn parse_notifications(value: Option<&toml::Value>) -> Result<Notifications, Str
             .as_bool()
             .ok_or("notifications.enabled must be a boolean")?;
     }
+    if let Some(value) = table.get("desktop") {
+        notifications.desktop = value
+            .as_bool()
+            .ok_or("notifications.desktop must be a boolean")?;
+    }
     if let Some(value) = table.get("exclude_applications") {
         let values = value
             .as_array()
@@ -2485,6 +2496,21 @@ long_command_bell = false
         .unwrap()
         .notifications;
         assert_eq!(disabled.command_bell_after(), None);
+    }
+
+    #[test]
+    fn desktop_delivery_is_opt_in_and_independent_of_bell() {
+        assert!(!Notifications::default().desktop);
+        let configured = parse_config("[notifications]\ndesktop=true\nlong_command_bell=false")
+            .unwrap()
+            .notifications;
+        assert_eq!(configured.command_bell_after(), None);
+        assert!(configured.command_reminder_after().is_some());
+        let disabled = parse_config("[notifications]\ndesktop=true\nenabled=false")
+            .unwrap()
+            .notifications;
+        assert_eq!(disabled.command_reminder_after(), None);
+        assert!(parse_config("[notifications]\ndesktop=1").is_err());
     }
 
     #[test]

@@ -13,7 +13,9 @@ These are the built-in defaults. Rustmux times shell-integrated commands from
 positive whole-second threshold rings the attached terminal once and sets the
 usual pane-specific activity marker, unless an observed foreground application
 matches an exclusion. Heuristic Enter-based output capture does not generate
-completion reminders. Both `enabled` and `long_command_bell` must be true.
+completion reminders. `enabled` must be true, together with at least one delivery option:
+`long_command_bell` for terminal BEL or opt-in `desktop` for OSC 99 messages. See
+[Desktop Command Notifications](desktop-notifications.md).
 
 `exclude_applications` replaces the default list. Use `[]` to allow every
 application, or `enabled = false` to disable automatic completion reminders.
