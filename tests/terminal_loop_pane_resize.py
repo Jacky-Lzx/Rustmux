@@ -129,6 +129,10 @@ while True:
         logs = int(run("new-window", "--name", "logs").stdout)
         start_probe(logs, "logs")
         sizes({"left": (20, 38), "upper": (9, 38), "lower": (9, 38), "logs": (20, 78)})
+        # Child state and server capture can precede the frontend mode update.
+        # Establish the outer-terminal baseline before checking resize keeps it.
+        wait_until(lambda: client.private_modes.get(1),
+                   "frontend did not enable application cursor mode")
         before = panes()
         # Wait for all intentional setup focus events before recording a baseline.
         wait_until(lambda: bytes.fromhex(record("lower")["input"]).endswith(b"\x1b[O"),
