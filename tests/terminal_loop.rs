@@ -23,6 +23,11 @@ fn graphics() {
 }
 
 #[test]
+fn structured_colors() {
+    run_scenario("structured_colors");
+}
+
+#[test]
 fn input() {
     run_scenario("input");
 }

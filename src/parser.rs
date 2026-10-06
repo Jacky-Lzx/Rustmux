@@ -522,6 +522,10 @@ impl Parser {
             return;
         };
         let (code, values) = (&control[..separator], &control[separator + 1..]);
+        if code == b"21" {
+            crate::structured_colors::apply(screen, values, bell_terminated, reply);
+            return;
+        }
         if code == b"8" {
             screen.apply_hyperlink(values);
             return;

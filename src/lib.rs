@@ -35,6 +35,7 @@ mod scrollback;
 mod semantic;
 pub mod session;
 mod shortcut_help;
+mod structured_colors;
 pub mod style;
 pub mod terminal;
 mod terminal_colors;

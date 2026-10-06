@@ -86,9 +86,12 @@ all-feature Clippy with warnings denied, formatting, `git diff --check` and the
 mdBook build passed.
 
 This increment covers the existing foreground/background/cursor/ANSI profile.
-OSC 21 structured color control, selection-specific colors and XTerm
+Selection-specific colors and XTerm
 XTPUSHCOLORS/XTPOPCOLORS/XTREPORTCOLORS aliases remain outside its scope. The shared
 acceptance ledger is unchanged; the new feature awaits owner review.
 
 The branch has not been pushed. Linux CI and actual GUI color appearance have not
 been verified.
+
+The subsequent [OSC 21 increment](structured-colors.md) uses this same saved
+profile for structured color setters, queries and resets.

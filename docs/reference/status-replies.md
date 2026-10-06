@@ -105,6 +105,10 @@ The [Kitty color stack](color-stack.md) saves/restores these pane-local override
 and inheritance bindings using OSC 30001/30101. Those commands generate no
 replies; the existing queries observe the restored profile.
 
+[Kitty OSC 21](structured-colors.md) accesses the same profile using named
+foreground/background/cursor keys and numeric palette keys. Its grouped replies
+return to the same child through the existing reply queue.
+
 ## Parser API and CLI delivery
 
 `Parser::advance_with_replies` takes a synchronous callback receiving each reply
