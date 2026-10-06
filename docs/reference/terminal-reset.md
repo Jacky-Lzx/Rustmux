@@ -49,3 +49,7 @@ synchronizes these input modes with the outer terminal.
 RIS restores the global cursor shape to a blinking block.
 
 RIS disables focus event reporting.
+
+RIS clears the pane [color stack](color-stack.md). As with the existing color
+operations, it retains current pane-local color overrides; only saved profiles
+are discarded.

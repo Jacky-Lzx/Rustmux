@@ -353,4 +353,44 @@ mod tests {
         parser.advance(&mut pane, b"\x1b]4;1;#112233\x07\x1b]104\x07");
         assert_eq!(pane.palette_color(1), next.palette[1]);
     }
+    #[test]
+    fn color_pop_restores_overrides_and_live_outer_inheritance() {
+        use crate::{parser::Parser, screen::Screen};
+        let initial = Arc::new(TerminalColors::default());
+        let mut pane = Screen::new(2, 8).unwrap();
+        pane.inherit_colors(&initial);
+        pane.set_default_foreground((1, 2, 3));
+        pane.set_palette_color(1, (4, 5, 6));
+        Parser::new().advance(&mut pane, b"\x1b]30001\x1b\\");
+        pane.set_default_foreground((30, 31, 32));
+        pane.set_default_background((33, 34, 35));
+        pane.set_cursor_color((36, 37, 38));
+        for index in 0..=255 {
+            pane.set_palette_color(index, (39, 40, 41));
+        }
+        let mut next = (*initial).clone();
+        next.foreground = (10, 11, 12);
+        next.background = (13, 14, 15);
+        next.cursor = (16, 17, 18);
+        next.palette.fill((19, 20, 21));
+        let next = Arc::new(next);
+        pane.inherit_colors(&next);
+        Parser::new().advance(&mut pane, b"\x1b]30101\x1b\\");
+        assert_eq!(pane.default_foreground(), (1, 2, 3));
+        assert_eq!(pane.default_background(), next.background);
+        assert_eq!(pane.cursor_color(), next.cursor);
+        for index in 0..=255 {
+            assert_eq!(
+                pane.palette_color(index),
+                if index == 1 {
+                    (4, 5, 6)
+                } else {
+                    next.palette[usize::from(index)]
+                }
+            );
+        }
+        Parser::new().advance(&mut pane, b"\x1b]110\x1b\\\x1b]104;1\x1b\\");
+        assert_eq!(pane.default_foreground(), next.foreground);
+        assert_eq!(pane.palette_color(1), next.palette[1]);
+    }
 }

@@ -150,7 +150,20 @@ pub struct Screen {
     default_background: Option<(u8, u8, u8)>,
     cursor_color: Option<(u8, u8, u8)>,
     palette: [Option<(u8, u8, u8)>; 256],
+    color_stack: Vec<Arc<SavedColors>>,
 }
+
+// Preserve unset overrides as inheritance, so restoring a shell's profile does
+// not pin it to an obsolete outer-terminal palette after reconnect/theme changes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SavedColors {
+    foreground: Option<crate::terminal_colors::Rgb>,
+    background: Option<crate::terminal_colors::Rgb>,
+    cursor: Option<crate::terminal_colors::Rgb>,
+    palette: [Option<crate::terminal_colors::Rgb>; 256],
+}
+
+const MAX_COLOR_STACK_DEPTH: usize = 32;
 
 /// A physical row shift performed by the screen model, not merely cursor motion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -326,6 +339,7 @@ impl Screen {
             default_background: None,
             cursor_color: None,
             palette: [None; 256],
+            color_stack: Vec::new(),
         })
     }
 
@@ -384,6 +398,28 @@ impl Screen {
         self.palette.fill(None);
     }
 
+    pub(crate) fn push_colors(&mut self) {
+        let colors = Arc::new(SavedColors {
+            foreground: self.default_foreground,
+            background: self.default_background,
+            cursor: self.cursor_color,
+            palette: self.palette,
+        });
+        if self.color_stack.len() == MAX_COLOR_STACK_DEPTH {
+            self.color_stack.remove(0);
+        }
+        self.color_stack.push(colors);
+    }
+
+    pub(crate) fn pop_colors(&mut self) {
+        if let Some(colors) = self.color_stack.pop() {
+            self.default_foreground = colors.foreground;
+            self.default_background = colors.background;
+            self.cursor_color = colors.cursor;
+            self.palette = colors.palette;
+        }
+    }
+
     pub(crate) fn inherit_colors(
         &mut self,
         colors: &Arc<crate::terminal_colors::TerminalColors>,
@@ -406,6 +442,7 @@ impl Screen {
     /// RIS: restore initial model state at the current size without allocating.
     /// Both grids and saved cursors are cleared; the active grid becomes main.
     pub fn reset(&mut self) {
+        self.color_stack.clear();
         self.hyperlinks = crate::hyperlink::Pool::default();
         self.clear_pointer_shapes();
         self.cells.fill(Cell::default());
@@ -621,6 +658,7 @@ impl Screen {
                 .scrollback
                 .push(row, main_continued[index], main_used[index]);
         }
+        resized.color_stack.clone_from(&self.color_stack);
         resized.hyperlinks.clone_from(&self.hyperlinks);
         resized.cursor_visible = self.cursor_visible;
         resized.cursor_shape = self.cursor_shape;

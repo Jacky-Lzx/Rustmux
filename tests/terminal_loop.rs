@@ -231,3 +231,8 @@ fn mouse_hover() {
 fn hyperlinks() {
     run_scenario("hyperlinks");
 }
+
+#[test]
+fn color_stack() {
+    run_scenario("color_stack");
+}

@@ -494,6 +494,14 @@ impl Parser {
         bell_terminated: bool,
         reply: &mut impl FnMut(&[u8]),
     ) {
+        if control == b"30001" {
+            screen.push_colors();
+            return;
+        }
+        if control == b"30101" {
+            screen.pop_colors();
+            return;
+        }
         if control == b"110" {
             screen.reset_default_foreground();
             return;

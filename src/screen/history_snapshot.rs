@@ -133,6 +133,24 @@ mod tests {
     use crate::style::Color;
 
     #[test]
+    fn restoring_history_does_not_restore_a_live_color_stack() {
+        let mut source = Screen::new(2, 20).unwrap();
+        Parser::new().advance(
+            &mut source,
+            b"\x1b]10;#112233\x1b\\\x1b]30001\x1b\\\x1b]10;#aabbcc\x1b\\TEXT",
+        );
+        let rows = source.saved_history(true, 100);
+        assert!(rows.iter().all(|row| !row.text.contains("\x1b]")));
+        let mut restored = Screen::new(2, 20).unwrap();
+        restored.restore_history(&rows, true).unwrap();
+        let initial = restored.default_foreground();
+        Parser::new().advance(&mut restored, b"\x1b]30101\x1b\\");
+        assert_eq!(restored.default_foreground(), initial);
+        Parser::new().advance(&mut source, b"\x1b]30101\x1b\\");
+        assert_eq!(source.default_foreground(), (0x11, 0x22, 0x33));
+    }
+
+    #[test]
     fn saved_history_drops_hyperlink_controls_but_retains_text_and_style() {
         let mut screen = Screen::new(2, 20).unwrap();
         Parser::new().advance(

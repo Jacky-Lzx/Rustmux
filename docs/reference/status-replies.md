@@ -101,6 +101,10 @@ command is validated first: an odd, empty, malformed or overflowing field makes
 all setters and query replies atomic no-ops. The bounded 64-byte OSC payload holds
 at most 15 minimum-length pairs.
 
+The [Kitty color stack](color-stack.md) saves/restores these pane-local overrides
+and inheritance bindings using OSC 30001/30101. Those commands generate no
+replies; the existing queries observe the restored profile.
+
 ## Parser API and CLI delivery
 
 `Parser::advance_with_replies` takes a synchronous callback receiving each reply

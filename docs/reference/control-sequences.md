@@ -39,6 +39,7 @@ CSI below means the two bytes ESC followed by `[`. The command subset follows
 | CSI > q | Reply with the Rustmux name and compile-time package version |
 | OSC 10 / 11 / 12 ; color | Set the pane's foreground / background / cursor color; `?` queries it; see [Terminal Status Replies](status-replies.md) |
 | OSC 110 / 111 / 112 | Reset the pane's foreground / background / cursor color |
+| OSC 30001 / 30101 | Push / pop the pane [color stack](color-stack.md) |
 | OSC 8 ; parameters ; URI | Set / close cell [hyperlinks](hyperlinks.md) |
 | OSC 4 ; index ; color ... | Set or query pane-local 256-color palette entries |
 | OSC 104 ; index ... | Reset selected palette entries; omit indices to reset all |

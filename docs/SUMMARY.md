@@ -39,6 +39,7 @@
 - [Mouse Pointer Shapes](reference/pointer-shapes.md)
 - [Mouse Hover Feedback](reference/mouse-hover.md)
 - [OSC 8 Hyperlinks](reference/hyperlinks.md)
+- [Kitty Color Stack](reference/color-stack.md)
 - [Synchronized Output](reference/synchronized-output.md)
 - [Device Attributes](reference/device-attributes.md)
 - [Rendering Measurements](reference/rendering-performance.md)
