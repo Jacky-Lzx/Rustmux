@@ -179,6 +179,7 @@ impl WindowPrompt {
     pub fn overlay_themed(&self, original: &Screen, theme: Theme) -> Screen {
         let mut screen = original.clone();
         screen.clear_pointer_shapes();
+        screen.close_hyperlink();
         let (rows, columns) = screen.dimensions();
         let panel = Style {
             foreground: rgb(theme.foreground),
@@ -396,6 +397,25 @@ mod tests {
         assert_eq!(prompt.text, "yes");
         assert_eq!(prompt.feed(3, Instant::now()), EditResult::Cancel);
         assert_eq!(prompt.feed(b'\r', Instant::now()), EditResult::Save);
+    }
+
+    #[test]
+    fn overlay_never_inherits_an_unclosed_child_hyperlink() {
+        let mut child = Screen::new(3, 80).unwrap();
+        Parser::new().advance(
+            &mut child,
+            b"\x1b]8;id=child;https://example.test\x1b\\LINK",
+        );
+        let saved = child.clone();
+        let view = WindowPrompt::new("title").overlay(&child);
+        assert_eq!(view.row(0), child.row(0));
+        assert!(
+            view.row(2)
+                .unwrap()
+                .iter()
+                .all(|cell| cell.hyperlink.is_none())
+        );
+        assert_eq!(child, saved);
     }
 
     #[test]

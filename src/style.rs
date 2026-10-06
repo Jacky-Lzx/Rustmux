@@ -60,6 +60,8 @@ pub struct Cell {
     /// At most 16 zero-width scalars; only leaders carry suffixes.
     pub combining: Vec<char>,
     pub style: Style,
+    /// OSC 8 metadata at the time this cell was painted.
+    pub hyperlink: Option<std::sync::Arc<crate::Hyperlink>>,
 }
 
 impl Default for Cell {
@@ -69,6 +71,7 @@ impl Default for Cell {
             width: 1,
             combining: Vec::new(),
             style: Style::default(),
+            hyperlink: None,
         }
     }
 }

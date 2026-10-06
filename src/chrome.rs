@@ -103,6 +103,7 @@ pub(crate) fn pane_border_style(theme: Theme, active: bool, history: bool, bell:
 
 /// Set up the UI row on a clone, never on the child's actual grid.
 pub(crate) fn prepare_row(screen: &mut Screen, style: Style) {
+    screen.close_hyperlink();
     screen.set_origin_mode(false);
     screen.set_insert_mode(false);
     screen.set_auto_wrap(false);
@@ -1115,6 +1116,7 @@ pub(crate) fn compose_with_mode(
     shortcuts: crate::config::Shortcuts,
 ) -> io::Result<Screen> {
     let mut screen = child.clone();
+    screen.close_hyperlink();
     if screen.is_alternate()
         && screen.alternate_scroll()
         && screen.mouse_tracking() == MouseTracking::Off

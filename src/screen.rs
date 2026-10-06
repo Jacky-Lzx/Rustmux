@@ -138,6 +138,7 @@ pub struct Screen {
     scroll_region: (usize, usize),
     inactive_scroll_region: (usize, usize),
     style: Style,
+    hyperlinks: crate::hyperlink::Pool,
     row: usize,
     column: usize,
     wrap_pending: bool,
@@ -313,6 +314,7 @@ impl Screen {
             scroll_region: (0, rows - 1),
             inactive_scroll_region: (0, rows - 1),
             style: Style::default(),
+            hyperlinks: crate::hyperlink::Pool::default(),
             row: 0,
             column: 0,
             wrap_pending: false,
@@ -404,6 +406,7 @@ impl Screen {
     /// RIS: restore initial model state at the current size without allocating.
     /// Both grids and saved cursors are cleared; the active grid becomes main.
     pub fn reset(&mut self) {
+        self.hyperlinks = crate::hyperlink::Pool::default();
         self.clear_pointer_shapes();
         self.cells.fill(Cell::default());
         self.inactive_cells.fill(Cell::default());
@@ -448,6 +451,7 @@ impl Screen {
     /// DECSTR: reset supported modes while retaining cells, cursor coordinates,
     /// active grid and tab stops. Autowrap follows the XTerm default (enabled).
     pub fn soft_reset(&mut self) {
+        self.close_hyperlink();
         self.clear_pointer_shapes();
         self.cursor_visible = true;
         self.synchronized_output = false;
@@ -558,6 +562,7 @@ impl Screen {
 
     /// Resize a disposable render canvas without archiving or restoring history.
     pub(crate) fn resize_display(&mut self, rows: usize, columns: usize) -> io::Result<()> {
+        self.close_hyperlink();
         self.resize_grid(rows, columns, false)
     }
 
@@ -616,6 +621,7 @@ impl Screen {
                 .scrollback
                 .push(row, main_continued[index], main_used[index]);
         }
+        resized.hyperlinks.clone_from(&self.hyperlinks);
         resized.cursor_visible = self.cursor_visible;
         resized.cursor_shape = self.cursor_shape;
         resized.pointer_main.clone_from(&self.pointer_main);
@@ -896,6 +902,7 @@ impl Screen {
     }
 
     fn swap_screen_buffers(&mut self) {
+        self.close_hyperlink();
         std::mem::swap(&mut self.cells, &mut self.inactive_cells);
         std::mem::swap(&mut self.continued, &mut self.inactive_continued);
         std::mem::swap(&mut self.used, &mut self.inactive_used);
@@ -1362,12 +1369,14 @@ impl Screen {
             character,
             width: width as u8,
             style: self.style,
+            hyperlink: self.hyperlinks.active.clone(),
             ..Cell::default()
         };
         if width == 2 {
             self.cells[index + 1] = Cell {
                 width: 0,
                 style: self.style,
+                hyperlink: self.hyperlinks.active.clone(),
                 ..Cell::default()
             };
         }
@@ -1420,11 +1429,13 @@ impl Screen {
         self.clear_range(index..index + old_width.max(width));
         cell.width = width as u8;
         let style = cell.style;
+        let hyperlink = cell.hyperlink.clone();
         self.cells[index] = cell;
         if width == 2 {
             self.cells[index + 1] = Cell {
                 width: 0,
                 style,
+                hyperlink,
                 ..Cell::default()
             };
         }
@@ -1466,6 +1477,14 @@ impl Screen {
     /// Changing attributes leaves the cursor and pending wrap unchanged.
     pub fn set_style(&mut self, style: Style) {
         self.style = style;
+    }
+
+    pub(crate) fn apply_hyperlink(&mut self, payload: &[u8]) {
+        self.hyperlinks.apply(payload);
+    }
+
+    pub(crate) fn close_hyperlink(&mut self) {
+        self.hyperlinks.active = None;
     }
 
     fn blank(&self) -> Cell {

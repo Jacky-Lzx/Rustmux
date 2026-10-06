@@ -4,6 +4,7 @@ pub(crate) mod frame;
 
 use std::io::{self, Write};
 
+use crate::hyperlink::{CLOSE, Hyperlink};
 use crate::screen::{CursorShape, MouseTracking, Screen};
 use crate::style::{Cell, Style, write_sgr};
 
@@ -17,7 +18,7 @@ use crate::style::{Cell, Style, write_sgr};
 /// It does not flush. Errors may leave a partial frame; the caller must handle
 /// cleanup or redraw. For nonblocking output, render into a buffer and queue it.
 pub fn render(screen: &Screen, output: &mut impl Write) -> io::Result<()> {
-    render_frame(screen, output, None, None)
+    render_frame(screen, output, None, None, hyperlinks_fit(screen))
 }
 
 /// Changed-cell rendering for an ordered output stream. Each successful frame must
@@ -29,6 +30,7 @@ pub struct Renderer {
     modes: Option<OutputModes>,
     dimensions: Option<(usize, usize)>,
     rows: Vec<Vec<Cell>>,
+    hyperlinks: bool,
 }
 
 // A successful frame establishes these outer-terminal modes. Cursor visibility
@@ -72,9 +74,11 @@ impl Renderer {
     }
 
     pub fn render(&mut self, screen: &Screen, output: &mut impl Write) -> io::Result<()> {
-        let previous =
-            (self.dimensions == Some(screen.dimensions())).then_some(self.rows.as_slice());
-        if let Err(error) = render_frame(screen, output, self.modes, previous) {
+        let hyperlinks = hyperlinks_fit(screen);
+        let previous = (self.dimensions == Some(screen.dimensions())
+            && self.hyperlinks == hyperlinks)
+            .then_some(self.rows.as_slice());
+        if let Err(error) = render_frame(screen, output, self.modes, previous, hyperlinks) {
             // Partly written rows can no longer be compared against the old grid.
             self.invalidate();
             return Err(error);
@@ -90,6 +94,7 @@ impl Renderer {
                 cached.extend_from_slice(cells);
             }
         }
+        self.hyperlinks = hyperlinks;
         self.dimensions = Some(screen.dimensions());
         self.modes = Some(OutputModes::from_screen(screen));
         Ok(())
@@ -101,7 +106,11 @@ fn render_frame(
     output: &mut impl Write,
     previous_modes: Option<OutputModes>,
     previous: Option<&[Vec<Cell>]>,
+    hyperlinks: bool,
 ) -> io::Result<()> {
+    if previous_modes.is_none() {
+        output.write_all(CLOSE)?;
+    }
     output.write_all(b"\x1b[?25l\x1b[0m")?;
     // The active pane owns Kitty keyboard encoding. Setting, rather than
     // pushing, prevents pane switches and redraws from growing the outer stack.
@@ -191,7 +200,7 @@ fn render_frame(
             let ranges = changed_ranges(&cached[row], cells);
             // A whole changed row needs no alternative plan or temporary output.
             if ranges.len() == 1 && ranges[0] == (0..cells.len()) {
-                write_run(output, row, 0, cells, &mut style)?;
+                write_run(output, row, 0, cells, &mut style, hyperlinks)?;
                 continue;
             }
             let mut partial = Vec::new();
@@ -200,11 +209,16 @@ fn render_frame(
             for range in ranges {
                 if let Some(end) = previous_end {
                     let gap = &cells[end..range.start];
-                    if bridge_cost(gap, cells[range.start].style, partial_style)?
+                    if bridge_cost(gap, cells[range.start].style, partial_style, hyperlinks)?
                         < restart_cost(row, range.start, cells[range.start].style, partial_style)?
                     {
-                        write_cells(&mut partial, gap, &mut partial_style)?;
-                        write_cells(&mut partial, &cells[range.clone()], &mut partial_style)?;
+                        write_cells(&mut partial, gap, &mut partial_style, hyperlinks)?;
+                        write_cells(
+                            &mut partial,
+                            &cells[range.clone()],
+                            &mut partial_style,
+                            hyperlinks,
+                        )?;
                         previous_end = Some(range.end);
                         continue;
                     }
@@ -216,16 +230,17 @@ fn render_frame(
                     range.start,
                     &cells[range],
                     &mut partial_style,
+                    hyperlinks,
                 )?;
             }
             // Include positioning, SGR and UTF-8 bytes, not just changed-cell count.
-            if partial.len() < row_cost(row, cells, style)? {
+            if partial.len() < row_cost(row, cells, style, hyperlinks)? {
                 output.write_all(&partial)?;
                 style = partial_style;
                 continue;
             }
         }
-        write_run(output, row, 0, cells, &mut style)?;
+        write_run(output, row, 0, cells, &mut style, hyperlinks)?;
     }
     let (row, column) = screen.cursor();
     // CUP also cancels physical delayed wrap; logical pending wrap stays in Screen.
@@ -272,16 +287,37 @@ fn write_run(
     column: usize,
     cells: &[Cell],
     style: &mut Style,
+    hyperlinks: bool,
 ) -> io::Result<()> {
     // CUP cancels delayed wrap and positions each span independently.
     write!(output, "\x1b[{};{}H", row + 1, column + 1)?;
-    write_cells(output, cells, style)
+    write_cells(output, cells, style, hyperlinks)
 }
 
-fn write_cells(output: &mut impl Write, cells: &[Cell], style: &mut Style) -> io::Result<()> {
+fn write_cells(
+    output: &mut impl Write,
+    cells: &[Cell],
+    style: &mut Style,
+    hyperlinks: bool,
+) -> io::Result<()> {
+    let mut active: Option<&Hyperlink> = None;
     for cell in cells {
         if cell.width == 0 {
             continue;
+        }
+        let next = if hyperlinks {
+            cell.hyperlink.as_deref()
+        } else {
+            None
+        };
+        if next != active {
+            if active.is_some() {
+                output.write_all(CLOSE)?;
+            }
+            if let Some(link) = next {
+                link.write_open(output)?;
+            }
+            active = next;
         }
         if cell.style != *style {
             write_style(output, cell.style)?;
@@ -293,7 +329,44 @@ fn write_cells(output: &mut impl Write, cells: &[Cell], style: &mut Style) -> io
             output.write_all(character.encode_utf8(&mut bytes).as_bytes())?;
         }
     }
+    if active.is_some() {
+        output.write_all(CLOSE)?;
+    }
     Ok(())
+}
+
+// Count complete row transitions before painting. If hostile alternating links
+// would exceed this budget, paint the entire frame as plain text. Cache changes
+// force a repaint in both directions, removing stale physical links as well.
+const MAX_HYPERLINK_FRAME_BYTES: usize = 1024 * 1024;
+fn hyperlinks_fit(screen: &Screen) -> bool {
+    let mut count = ByteCount::default();
+    for row in 0..screen.dimensions().0 {
+        let mut active = None;
+        for cell in screen.row(row).expect("row is in bounds") {
+            if cell.width == 0 {
+                continue;
+            }
+            let next = cell.hyperlink.as_deref();
+            if next != active {
+                if active.is_some() {
+                    count.0 += CLOSE.len();
+                }
+                if let Some(link) = next {
+                    link.write_open(&mut count)
+                        .expect("infallible byte counter");
+                }
+                active = next;
+                if count.0 > MAX_HYPERLINK_FRAME_BYTES {
+                    return false;
+                }
+            }
+        }
+        if active.is_some() {
+            count.0 += CLOSE.len();
+        }
+    }
+    count.0 <= MAX_HYPERLINK_FRAME_BYTES
 }
 
 #[derive(Default)]
@@ -308,23 +381,20 @@ impl Write for ByteCount {
     }
 }
 
-fn row_cost(row: usize, cells: &[Cell], mut style: Style) -> io::Result<usize> {
+fn row_cost(row: usize, cells: &[Cell], mut style: Style, hyperlinks: bool) -> io::Result<usize> {
     let mut count = ByteCount::default();
     write!(&mut count, "\x1b[{};1H", row + 1)?;
-    count_cells(&mut count, cells, &mut style)?;
+    count_cells(&mut count, cells, &mut style, hyperlinks)?;
     Ok(count.0)
 }
 
-fn count_cells(count: &mut ByteCount, cells: &[Cell], style: &mut Style) -> io::Result<()> {
-    for cell in cells {
-        if cell.width == 0 {
-            continue;
-        }
-        count_style(count, cell.style, style)?;
-        count.0 += cell.character.len_utf8();
-        count.0 += cell.combining.iter().map(|c| c.len_utf8()).sum::<usize>();
-    }
-    Ok(())
+fn count_cells(
+    count: &mut ByteCount,
+    cells: &[Cell],
+    style: &mut Style,
+    hyperlinks: bool,
+) -> io::Result<()> {
+    write_cells(count, cells, style, hyperlinks)
 }
 
 fn count_style(count: &mut ByteCount, next: Style, style: &mut Style) -> io::Result<()> {
@@ -338,9 +408,9 @@ fn count_style(count: &mut ByteCount, next: Style, style: &mut Style) -> io::Res
 // Both alternatives finish at the next span's first style. Its glyph and the
 // rest of the span therefore have identical costs and need not be counted.
 // Wide-glyph boundaries have already been expanded by changed_ranges.
-fn bridge_cost(gap: &[Cell], next: Style, mut style: Style) -> io::Result<usize> {
+fn bridge_cost(gap: &[Cell], next: Style, mut style: Style, hyperlinks: bool) -> io::Result<usize> {
     let mut count = ByteCount::default();
-    count_cells(&mut count, gap, &mut style)?;
+    count_cells(&mut count, gap, &mut style, hyperlinks)?;
     count_style(&mut count, next, &mut style)?;
     Ok(count.0)
 }
@@ -368,7 +438,8 @@ mod cost_tests {
         let mut screen = Screen::new(1, 20).unwrap();
         Parser::new().advance(
             &mut screen,
-            "中e\u{301}\x1b[1;38;2;7;8;9mX\x1b[0mY".as_bytes(),
+            "\x1b]8;id=test;https://example.test\x1b\\中e\u{301}\x1b[1;38;2;7;8;9mX\x1b[0mY"
+                .as_bytes(),
         );
         for initial in [
             Style::default(),
@@ -380,9 +451,9 @@ mod cost_tests {
             for row in [0, 9, 999] {
                 let mut bytes = Vec::new();
                 let mut style = initial;
-                write_run(&mut bytes, row, 0, screen.row(0).unwrap(), &mut style).unwrap();
+                write_run(&mut bytes, row, 0, screen.row(0).unwrap(), &mut style, true).unwrap();
                 assert_eq!(
-                    row_cost(row, screen.row(0).unwrap(), initial).unwrap(),
+                    row_cost(row, screen.row(0).unwrap(), initial, true).unwrap(),
                     bytes.len()
                 );
             }

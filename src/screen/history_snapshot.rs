@@ -133,6 +133,38 @@ mod tests {
     use crate::style::Color;
 
     #[test]
+    fn saved_history_drops_hyperlink_controls_but_retains_text_and_style() {
+        let mut screen = Screen::new(2, 20).unwrap();
+        Parser::new().advance(
+            &mut screen,
+            b"\x1b]8;id=test;https://example.test\x1b\\\x1b[31mLINK\r\nNEXT",
+        );
+        assert!(screen.row(0).unwrap()[0].hyperlink.is_some());
+        let rows = screen.saved_history(true, 100);
+        assert!(rows.iter().all(|row| !row.text.contains("\x1b]")));
+        assert!(rows[0].text.ends_with("LINK"));
+        let mut restored = Screen::new(2, 20).unwrap();
+        restored.restore_history(&rows, true).unwrap();
+        assert!(
+            restored
+                .history_row(0)
+                .unwrap()
+                .iter()
+                .all(|cell| cell.hyperlink.is_none())
+        );
+        assert!(
+            validate_rows(
+                &[SavedRow {
+                    text: "\x1b]8;;https://example.test\x1b\\LINK".into(),
+                    continued: false
+                }],
+                true
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn roundtrip_reflows_unicode_styles_and_explicit_spaces_into_history_only() {
         let mut screen = Screen::new(3, 8).unwrap();
         Parser::new().advance(

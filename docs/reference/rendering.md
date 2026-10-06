@@ -51,7 +51,8 @@ path. The renderer does not retry WouldBlock or flush.
 ## Changed-cell rendering
 
 Renderer keeps a copy of the last active grid, comparing complete cells including
-style, width and combining suffixes. Identical rows emit no drawing commands.
+style, width, combining suffixes and [hyperlinks](hyperlinks.md). Identical rows
+emit no drawing commands.
 Within a changed row, contiguous differing cells form spans. Span boundaries
 expand to include complete old and new wide glyphs, and overlapping/touching
 spans merge. This ensures replacement of both halves and never starts output on
@@ -61,8 +62,8 @@ visibility and supported input modes are still synchronized even when no rows
 change. The model still uses full-grid comparison, not per-cell dirty flags.
 
 For each changed row, Renderer encodes the span candidate and counts the bytes
-of a whole-row candidate, including CUP, SGR, UTF-8 and combining suffixes from
-the current output style. It chooses spans only when strictly smaller; ties use
+of a whole-row candidate, including CUP, SGR, OSC 8, UTF-8 and combining suffixes
+from the current output style. It chooses spans only when strictly smaller; ties use
 the whole row. A completely changed row goes straight to whole-row output.
 Before comparing against the whole row, each unchanged gap is considered for
 bridging: compare rewriting its complete cells and switching to the next span's
@@ -77,7 +78,8 @@ split a wide character. Each gap is counted once, keeping planning linear in the
 row width. This remains a per-row decision, not a globally optimal frame plan.
 Style state is updated according to the selected candidate.
 
-First render and dimension changes repaint every row. The CLI calls
+First render, dimension changes and changes to the hyperlink output-budget
+fallback repaint every row. The CLI calls
 `Renderer::invalidate` after valid resize notifications, including unchanged
 reported dimensions. Call it after external screen damage or discarded output.
 A rendering error invalidates the cache automatically, since partly written rows

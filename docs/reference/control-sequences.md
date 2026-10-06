@@ -39,6 +39,7 @@ CSI below means the two bytes ESC followed by `[`. The command subset follows
 | CSI > q | Reply with the Rustmux name and compile-time package version |
 | OSC 10 / 11 / 12 ; color | Set the pane's foreground / background / cursor color; `?` queries it; see [Terminal Status Replies](status-replies.md) |
 | OSC 110 / 111 / 112 | Reset the pane's foreground / background / cursor color |
+| OSC 8 ; parameters ; URI | Set / close cell [hyperlinks](hyperlinks.md) |
 | OSC 4 ; index ; color ... | Set or query pane-local 256-color palette entries |
 | OSC 104 ; index ... | Reset selected palette entries; omit indices to reset all |
 | CSI n J | Erase display: 0 cursor through end, 1 start through cursor, 2 whole grid |
@@ -83,11 +84,11 @@ at most two; one-parameter commands reject extra parameters. Parser storage is c
 sequence length. Unsupported ESC sequences are consumed without printing their
 sequence bytes.
 
-The display parser retains at most 64 OSC payload bytes to recognize OSC 10/11
-default-color operations and OSC 110/111 resets, and otherwise discards OSC
-through BEL or ST (ESC followed by backslash). A separate bounded observer
-recognizes OSC 7 working-directory metadata and OSC 133 command-output boundaries
-for Ctrl-B `e`; other OSC payload remains uninterpreted.
+The display parser retains at most 64 bytes for supported OSC color/pointer
+operations; [OSC 8 hyperlinks](hyperlinks.md) alone have a separate 2,342-byte
+payload limit. Unsupported OSC is discarded through BEL or ST (ESC followed by
+backslash). A separate bounded observer recognizes OSC 7 working-directory
+metadata and OSC 133 command-output boundaries for Ctrl-B `e`.
 DCS retains at most 64 bytes to recognize the supported DECRQSS queries; other
 DCS, SOS and PM payloads are discarded through ST. Each pane's
 [Kitty graphics framer](kitty-graphics.md) extracts APC G commands before text

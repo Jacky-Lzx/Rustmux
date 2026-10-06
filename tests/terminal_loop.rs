@@ -226,3 +226,8 @@ fn pointer_shapes() {
 fn mouse_hover() {
     run_scenario("mouse_hover");
 }
+
+#[test]
+fn hyperlinks() {
+    run_scenario("hyperlinks");
+}

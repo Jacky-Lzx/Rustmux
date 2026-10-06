@@ -103,6 +103,8 @@ class Session:
                     # Retain the raw frame for graphics assertions, but remove
                     # complete APCs before reconstructing the text plane.
                     text_frame = re.sub(rb"\x1b_G[^\x1b]*\x1b\\", b"", frame)
+                    # OSC 8 metadata wraps glyphs but never occupies cells.
+                    text_frame = re.sub(rb"\x1b\]8;[^\x1b\x07]*(?:\x1b\\|\x07)", b"", text_frame)
                     positions = list(re.finditer(rb"\x1b\[([0-9]+);([0-9]+)H", text_frame))
                     height = struct.unpack("HHHH", fcntl.ioctl(self.slave, termios.TIOCGWINSZ, b"\0" * 8))[0]
                     height = height or len(self.last_rows)

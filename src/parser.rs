@@ -55,8 +55,6 @@ enum State {
         osc: bool,
         dcs: bool,
         escape: bool,
-        bytes: [u8; MAX_STRING_CONTROL_BYTES],
-        len: u8,
         overflowed: bool,
     },
 }
@@ -151,6 +149,7 @@ impl Parameters {
 #[derive(Debug, Default)]
 pub struct Parser {
     state: State,
+    string: Vec<u8>,
     parameters: Parameters,
     utf8: [u8; 4],
     utf8_len: usize,
@@ -246,8 +245,6 @@ impl Parser {
             osc,
             dcs,
             escape,
-            mut bytes,
-            mut len,
             mut overflowed,
         } = self.state
         {
@@ -257,10 +254,16 @@ impl Parser {
             if bell_terminated || (escape && byte == b'\\') {
                 if !overflowed && (!bell_terminated || !escape) {
                     if osc {
-                        Self::osc(screen, &bytes[..usize::from(len)], byte == 7, reply);
+                        Self::osc(screen, &self.string, byte == 7, reply);
                     } else if dcs {
-                        Self::dcs(screen, &bytes[..usize::from(len)], reply);
+                        Self::dcs(screen, &self.string, reply);
                     }
+                }
+                if (overflowed || (bell_terminated && escape))
+                    && osc
+                    && self.string.starts_with(b"8;")
+                {
+                    screen.close_hyperlink();
                 }
                 self.state = State::Ground;
             } else {
@@ -270,9 +273,13 @@ impl Parser {
                 }
                 let next_escape = byte == 0x1b;
                 if (osc || dcs) && !next_escape && !overflowed {
-                    if let Some(slot) = bytes.get_mut(usize::from(len)) {
-                        *slot = byte;
-                        len += 1;
+                    let limit = if osc && self.string.starts_with(b"8;") {
+                        crate::hyperlink::MAX_CONTROL_BYTES
+                    } else {
+                        MAX_STRING_CONTROL_BYTES
+                    };
+                    if self.string.len() < limit {
+                        self.string.push(byte);
                     } else {
                         overflowed = true;
                     }
@@ -281,8 +288,6 @@ impl Parser {
                     osc,
                     dcs,
                     escape: next_escape,
-                    bytes,
-                    len,
                     overflowed,
                 };
             }
@@ -371,14 +376,15 @@ impl Parser {
                     self.parameters = Parameters::default();
                     State::Csi
                 }
-                b']' | b'P' | b'X' | b'^' | b'_' => State::String {
-                    osc: byte == b']',
-                    dcs: byte == b'P',
-                    escape: false,
-                    bytes: [0; MAX_STRING_CONTROL_BYTES],
-                    len: 0,
-                    overflowed: false,
-                },
+                b']' | b'P' | b'X' | b'^' | b'_' => {
+                    self.string.clear();
+                    State::String {
+                        osc: byte == b']',
+                        dcs: byte == b'P',
+                        escape: false,
+                        overflowed: false,
+                    }
+                }
                 0x20..=0x2f => State::EscapeIntermediate,
                 _ => State::Ground,
             },
@@ -508,6 +514,10 @@ impl Parser {
             return;
         };
         let (code, values) = (&control[..separator], &control[separator + 1..]);
+        if code == b"8" {
+            screen.apply_hyperlink(values);
+            return;
+        }
         if code == b"22" {
             if let Ok(value) = std::str::from_utf8(values) {
                 screen.apply_pointer(value, reply);
@@ -1414,5 +1424,27 @@ mod tests {
         parser.advance(&mut screen, b"\x1b\\C");
         assert_eq!(lines(&screen), ["ABC "]);
         assert_eq!(screen.cursor(), (0, 3));
+    }
+}
+
+#[cfg(test)]
+mod hyperlink_bounds {
+    use super::*;
+    #[test]
+    fn hostile_payload_is_bounded_and_state_stays_small() {
+        let mut parser = Parser::new();
+        let mut screen = Screen::new(1, 5).unwrap();
+        parser.advance(&mut screen, b"\x1b]8;;");
+        for _ in 0..10000 {
+            parser.advance(&mut screen, b"xxxxxxxxxxxxxxxx");
+        }
+        assert_eq!(parser.string.len(), crate::hyperlink::MAX_CONTROL_BYTES);
+        assert!(std::mem::size_of::<State>() < 32);
+        parser.advance(&mut screen, b"\x1b\\X\x1b]4;");
+        parser.advance(&mut screen, &[b'x'; 10000]);
+        assert_eq!(parser.string.len(), MAX_STRING_CONTROL_BYTES);
+        parser.advance(&mut screen, b"\x1b\\Y");
+        assert_eq!(screen.row(0).unwrap()[0].character, 'X');
+        assert_eq!(screen.row(0).unwrap()[1].character, 'Y');
     }
 }

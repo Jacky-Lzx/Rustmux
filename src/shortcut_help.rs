@@ -344,6 +344,7 @@ impl ShortcutHelp {
     pub fn overlay_themed(&mut self, original: &Screen, theme: Theme) -> Screen {
         let mut screen = original.clone();
         screen.clear_pointer_shapes();
+        screen.close_hyperlink();
         let (rows, columns) = screen.dimensions();
         screen.set_origin_mode(false);
         screen.set_insert_mode(false);

@@ -15,6 +15,8 @@ pub(crate) use graphics::{
     reply as graphics_reply, shared_memory_output as graphics_shared_memory_output,
 };
 mod history_view;
+mod hyperlink;
+pub use hyperlink::Hyperlink;
 pub mod layout;
 mod notification;
 pub mod pane;
