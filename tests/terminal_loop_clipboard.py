@@ -73,10 +73,12 @@ while True:
         path=root/f"{label}.jsonl"
         if not path.exists(): return []
         return [json.loads(line) for line in path.read_text().splitlines(keepends=True) if line.endswith("\n")]
-    def wait(predicate,detail="timeout"):
-        deadline=time.monotonic()+6
+    def wait(predicate,detail="timeout",timeout=6):
+        deadline=time.monotonic()+timeout
         while not predicate():
-            if client: client.read(0.01)
+            if client:
+                client.read(0.01)
+                assert client.child.poll() is None,(detail,"client exited",client.child.returncode)
             assert time.monotonic() < deadline,(detail, client.physical_rows if client else None, bytes(client.output[-1500:]) if client else None)
             time.sleep(0.005)
     def status(): return tomllib.loads(run("show-config"))
@@ -88,11 +90,11 @@ while True:
     def packets():
         return [(selection,base64.b64decode(data,validate=True)) for selection,data in
                 re.findall(rb"\x1b\]52;([cpqs0-7]*);([A-Za-z0-9+/=]*)\x07",client.output)]
-    def command(pane,label,data=b"",operation="send",value=None):
+    def command(pane,label,data=b"",operation="send",value=None,timeout=6):
         global counter
         counter+=1
         run("send-keys","-p",pane,"--literal",f"{counter}:{operation}:{value if value is not None else data.hex()}\n")
-        wait(lambda: any(row["token"]==counter for row in records(label)),"probe completion")
+        wait(lambda: any(row["token"]==counter for row in records(label)),"probe completion",timeout)
         if client:
             # The DSR barrier confirms parsing. Drain the asynchronously queued outer write.
             deadline=time.monotonic()+0.15
@@ -101,7 +103,9 @@ while True:
         client.read(0.01); client.output.clear()
     def attach():
         global client
-        client=Session(extra_env=env,arguments=("attach",name))
+        # This attachment covers close/undo, resizing and a backpressured flood.
+        # Its total lifetime must exceed the individual operation deadlines.
+        client=Session(extra_env=env,arguments=("attach",name),lifetime=30)
         raw=client.expect(b"PROBE_B"); assert b"\x1b]52;" not in raw
     def detach():
         global client
@@ -162,7 +166,9 @@ while True:
         assert packets()==[(b"c",b"alternate")]
         fcntl.ioctl(client.slave,termios.TIOCSWINSZ,struct.pack("HHHH",26,100,0,0)); os.kill(client.app_pid,signal.SIGWINCH)
         wait(lambda: len(client.physical_rows)==26)
-        clear(); command(left,"A",operation="flood",value=200)
+        # The DSR barrier follows more than half a MiB of child output. Keep
+        # draining the outer PTY and allow its bounded writes time on busy CI.
+        clear(); command(left,"A",operation="flood",value=200,timeout=12)
         assert packets() and all(data==b"F"*2048 for _,data in packets())
         clear(); command(left,"A",clipboard(b"c",b"after flood")); assert packets()==[(b"c",b"after flood")]
         # The foreground unnamed path uses the same config and event routing.

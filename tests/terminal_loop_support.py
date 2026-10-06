@@ -19,10 +19,10 @@ if sys.argv[1] == "--supervisor":
     # macOS revokes the slave when its controlling session leader exits.
     report = int(sys.argv[3])
     original = termios.tcgetattr(0)
-    app = subprocess.Popen([sys.argv[2], *sys.argv[4:]])
+    app = subprocess.Popen([sys.argv[2], *sys.argv[5:]])
     os.write(report, (json.dumps({"pid": app.pid}) + "\n").encode())
     try:
-        code = app.wait(timeout=12)
+        code = app.wait(timeout=float(sys.argv[4]))
     except subprocess.TimeoutExpired:
         app.kill()
         code = app.wait()
@@ -38,7 +38,7 @@ BINARY = sys.argv[1]
 DEFAULT_CONFIG_DIR = tempfile.TemporaryDirectory(prefix="rustmux-test-default-config-")
 
 class Session:
-    def __init__(self, shell="/bin/sh", extra_env=None, arguments=(), pixels=(0, 0)):
+    def __init__(self, shell="/bin/sh", extra_env=None, arguments=(), pixels=(0, 0), lifetime=12):
         self.master, self.slave = os.openpty()
         fcntl.ioctl(self.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, *pixels))
         self.original = termios.tcgetattr(self.slave)
@@ -51,7 +51,7 @@ class Session:
             fcntl.ioctl(0, termios.TIOCSCTTY, 0)
         read_report, write_report = os.pipe()
         self.child = subprocess.Popen(
-            [sys.executable, __file__, "--supervisor", BINARY, str(write_report), *arguments],
+            [sys.executable, __file__, "--supervisor", BINARY, str(write_report), str(lifetime), *arguments],
             stdin=self.slave, stdout=self.slave, stderr=self.slave, env=env,
             preexec_fn=child_setup, pass_fds=(write_report,))
         os.close(write_report)

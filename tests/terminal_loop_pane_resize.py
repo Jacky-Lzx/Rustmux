@@ -70,6 +70,10 @@ while True:
         run("send-keys", "-p", pane, "--literal", "--enter",
             "exec python3 -u " + shlex.quote(str(probe)) + " " + shlex.quote(str(root / f"{label}.json")))
         wait_until(lambda: record(label) is not None, f"probe {label} did not start")
+        # Publishing the child log does not prove the server has parsed DECSET
+        # 1004. Await its following marker before setup can change focus.
+        wait_until(lambda: "RESIZE_PROBE_READY" in run("capture-pane", "-p", pane).stdout,
+                   f"server did not parse probe {label}'s focus-reporting setup")
 
     def sizes(expected):
         def matches():
