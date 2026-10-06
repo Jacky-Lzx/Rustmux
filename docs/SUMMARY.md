@@ -41,6 +41,7 @@
 - [OSC 8 Hyperlinks](reference/hyperlinks.md)
 - [Kitty Color Stack](reference/color-stack.md)
 - [Kitty Structured Colors](reference/structured-colors.md)
+- [Child Clipboard Writes](reference/pane-clipboard.md)
 - [Synchronized Output](reference/synchronized-output.md)
 - [Device Attributes](reference/device-attributes.md)
 - [Rendering Measurements](reference/rendering-performance.md)

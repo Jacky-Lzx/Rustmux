@@ -23,6 +23,11 @@ fn graphics() {
 }
 
 #[test]
+fn clipboard() {
+    run_scenario("clipboard");
+}
+
+#[test]
 fn structured_colors() {
     run_scenario("structured_colors");
 }

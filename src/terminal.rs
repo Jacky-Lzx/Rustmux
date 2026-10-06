@@ -631,7 +631,7 @@ impl TerminalSession {
                     .content_mut()
                     .get_mut(pane_id)
                     .expect("polled pane exists");
-                service_pane(pane, requested, ready, self.cell_pixels, false)?;
+                service_pane(pane, requested, ready, self.cell_pixels, false, false)?;
                 // Completion while detached retains activity, never delivery for a later client.
                 let _ = pane.take_command_reminder();
             }
@@ -1998,7 +1998,9 @@ fn service_pane(
     ready: PollFlags,
     cell_pixels: Option<CellPixelSize>,
     answer_graphics: bool,
+    clipboard_write: bool,
 ) -> io::Result<()> {
+    pane.configure_clipboard(clipboard_write);
     pane.track_command_application();
     if ready.contains(PollFlags::POLLNVAL) {
         return Err(io::Error::new(
@@ -2051,6 +2053,7 @@ fn service_pane(
 }
 
 struct RuntimeConfig {
+    clipboard_write: bool,
     theme: crate::theme::Theme,
     mouse_hover_cursor: bool,
     shell: OsString,
@@ -2063,6 +2066,7 @@ impl RuntimeConfig {
     fn update(&mut self, config: &crate::config::Config) {
         self.theme = config.theme();
         self.mouse_hover_cursor = config.mouse_hover_cursor();
+        self.clipboard_write = config.clipboard_write();
         self.shell = config.shell().clone();
         self.notifications = config.notifications();
         self.scrollback_lines = config.scrollback_lines();
@@ -2080,10 +2084,14 @@ fn apply_config(
     for window in windows.iter_mut() {
         for (_, pane) in window.content_mut().iter_mut() {
             pane.configure_notifications(config.notifications());
+            if !config.clipboard_write() {
+                pane.configure_clipboard(false);
+            }
         }
     }
     if let Some(pane) = closed.as_mut().and_then(|saved| saved.pane.as_mut()) {
         pane.configure_notifications(config.notifications());
+        pane.configure_clipboard(false);
     }
     if let Some(service) = persistence {
         service.configure(config.persistence(), config.scrollback_lines());
@@ -2111,7 +2119,16 @@ fn forward(
     } = capabilities;
     let mut session_name = context.session_name.map(str::to_owned);
     let mut renamed_notice: Option<String> = None;
+    // A new attachment cannot complete a write captured for the previous client.
+    for window in windows.iter_mut() {
+        for (_, pane) in window.content_mut().iter_mut() {
+            pane.configure_clipboard(false);
+        }
+    }
     let mut runtime = RuntimeConfig {
+        clipboard_write: reload
+            .as_ref()
+            .is_some_and(|r| r.current().clipboard_write()),
         mouse_hover_cursor: reload
             .as_ref()
             .is_some_and(|r| r.current().mouse_hover_cursor()),
@@ -3843,7 +3860,15 @@ fn forward(
                 connection == ConnectionState::Attached
                     && *graphics_support == Some(GraphicsSupport::Supported)
                     && cell_pixels.is_some(),
+                connection == ConnectionState::Attached && runtime.clipboard_write,
             )?;
+            if let Some(copy) = pane.take_clipboard()
+                && connection == ConnectionState::Attached
+                && runtime.clipboard_write
+                && copy.len() <= LIMIT.saturating_sub(to_terminal.len())
+            {
+                to_terminal.extend(copy);
+            }
             let reminder = pane.take_command_reminder();
             bar_dirty |= !bell_was_pending && pane.io().bell_pending;
             if let Some(reminder) = reminder
@@ -4529,7 +4554,15 @@ mod tests {
         let mut pane = Pane::spawn(shell.as_os_str(), 3, 8).unwrap();
         let deadline = Instant::now() + Duration::from_secs(3);
         while pane.io().prompt_start != Some((0, 0)) {
-            service_pane(&mut pane, PollFlags::POLLIN, PollFlags::POLLIN, None, false).unwrap();
+            service_pane(
+                &mut pane,
+                PollFlags::POLLIN,
+                PollFlags::POLLIN,
+                None,
+                false,
+                false,
+            )
+            .unwrap();
             assert!(Instant::now() < deadline, "prompt marker was not parsed");
             thread::sleep(Duration::from_millis(5));
         }
@@ -4559,6 +4592,7 @@ mod tests {
                     PollFlags::POLLIN,
                     PollFlags::POLLIN,
                     cell_pixels,
+                    false,
                     false,
                 )
                 .unwrap();

@@ -89,7 +89,9 @@ sequence bytes.
 The display parser retains at most 64 bytes for supported OSC color/pointer
 operations; [OSC 8 hyperlinks](hyperlinks.md) alone have a separate 2,342-byte
 payload limit. Unsupported OSC is discarded through BEL or ST (ESC followed by
-backslash). A separate bounded observer recognizes OSC 7 working-directory
+backslash). An opt-in pane observer separately handles bounded
+[OSC 52 clipboard writes](pane-clipboard.md); the display parser and replay paths
+still discard these controls. A separate bounded observer recognizes OSC 7 working-directory
 metadata and OSC 133 command-output boundaries for Ctrl-B `e`.
 DCS retains at most 64 bytes to recognize the supported DECRQSS queries; other
 DCS, SOS and PM payloads are discarded through ST. Each pane's

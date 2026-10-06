@@ -594,6 +594,7 @@ pub struct Config {
     persistence: PersistenceOptions,
     remain_on_exit: bool,
     mouse_hover_cursor: bool,
+    clipboard_write: bool,
 }
 
 /// Disk saving is opt-in; explicit manual saves remain available with defaults.
@@ -605,6 +606,9 @@ pub struct PersistenceOptions {
 }
 
 impl Config {
+    pub fn clipboard_write(&self) -> bool {
+        self.clipboard_write
+    }
     pub fn mouse_hover_cursor(&self) -> bool {
         self.mouse_hover_cursor
     }
@@ -648,6 +652,7 @@ struct ParsedConfig {
     persistence: PersistenceOptions,
     remain_on_exit: bool,
     mouse_hover_cursor: bool,
+    clipboard_write: bool,
 }
 
 /// Load and validate the complete configuration used by a new session.
@@ -696,6 +701,7 @@ fn resolve_config(configured: ParsedConfig) -> Config {
         persistence: configured.persistence,
         remain_on_exit: configured.remain_on_exit,
         mouse_hover_cursor: configured.mouse_hover_cursor,
+        clipboard_write: configured.clipboard_write,
     }
 }
 
@@ -829,6 +835,7 @@ fn parse_config(source: &str) -> Result<ParsedConfig, String> {
         persistence,
         remain_on_exit: boolean("remain_on_exit")?,
         mouse_hover_cursor: boolean("mouse_hover_cursor")?,
+        clipboard_write: boolean("clipboard_write")?,
     })
 }
 
@@ -1925,6 +1932,7 @@ preset = "mocha"
                 persistence: PersistenceOptions::default(),
                 remain_on_exit: false,
                 mouse_hover_cursor: false,
+                clipboard_write: false,
             }
         );
         assert_eq!(

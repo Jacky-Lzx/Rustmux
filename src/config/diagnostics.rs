@@ -22,6 +22,7 @@ pub struct Settings {
     pub scrollback_lines: usize,
     pub remain_on_exit: bool,
     pub mouse_hover_cursor: bool,
+    pub clipboard_write: bool,
     pub clear_defaults: bool,
     pub autosave_interval_seconds: u64,
     pub save_scrollback: bool,
@@ -73,6 +74,7 @@ impl From<&Config> for Settings {
             scrollback_lines: config.scrollback_lines,
             remain_on_exit: config.remain_on_exit,
             mouse_hover_cursor: config.mouse_hover_cursor,
+            clipboard_write: config.clipboard_write,
             clear_defaults: config.shortcuts.clear_defaults,
             autosave_interval_seconds: config.persistence.autosave_interval_seconds,
             save_scrollback: config.persistence.save_scrollback,
@@ -97,6 +99,7 @@ fn ignored_options(source: &str) -> Vec<String> {
                 | "scrollback_lines"
                 | "remain_on_exit"
                 | "mouse_hover_cursor"
+                | "clipboard_write"
                 | "clear_defaults"
                 | "autosave_interval_seconds"
                 | "save_scrollback"
@@ -186,6 +189,7 @@ pub fn default_config() -> String {
 scrollback_lines = {DEFAULT_SCROLLBACK_LINES}
 remain_on_exit = false
 mouse_hover_cursor = false
+clipboard_write = false
 clear_defaults = false
 autosave_interval_seconds = 0
 save_scrollback = false
@@ -228,6 +232,22 @@ backspace = ["backspace"]
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn clipboard_policy_is_opt_in_typed_and_visible_in_diagnostics() {
+        assert!(!resolve_config(parse_config("").unwrap()).clipboard_write());
+        let config = resolve_config(parse_config("clipboard_write=true").unwrap());
+        assert!(config.clipboard_write());
+        assert!(Settings::from(&config).clipboard_write);
+        assert!(ignored_options("clipboard_write=true").is_empty());
+        assert!(!resolve_config(parse_config(&default_config()).unwrap()).clipboard_write());
+        for value in ["1", "'true'", "[]"] {
+            assert!(
+                parse_config(&format!("clipboard_write={value}"))
+                    .unwrap_err()
+                    .contains("must be a boolean")
+            );
+        }
+    }
     #[test]
     fn hover_option_is_typed_reported_and_recognized_in_strict_diagnostics() {
         assert!(!resolve_config(parse_config("").unwrap()).mouse_hover_cursor());

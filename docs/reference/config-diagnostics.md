@@ -1,5 +1,8 @@
 # Configuration diagnostics and default export
 
+`[settings].clipboard_write` reports the Boolean policy for
+[child OSC 52 writes](pane-clipboard.md), defaulting to `false`.
+
 Inspect configuration before starting a terminal or named-session server:
 
 ```sh

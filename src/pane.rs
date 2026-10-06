@@ -42,6 +42,7 @@ pub struct Pane {
     remain_on_exit: Option<bool>,
     shell: PtyShell,
     parser: Parser,
+    clipboard: crate::clipboard::Observer,
     graphics_framer: GraphicsFramer,
     graphics_transfer: DirectTransferAssembler,
     image_store: ImageStore,
@@ -316,6 +317,12 @@ impl Pane {
     pub(crate) fn control_id(&self) -> u64 {
         self.control_id
     }
+    pub(crate) fn configure_clipboard(&mut self, enabled: bool) {
+        self.clipboard.configure(enabled);
+    }
+    pub(crate) fn take_clipboard(&mut self) -> Option<Vec<u8>> {
+        self.clipboard.take()
+    }
     pub(crate) fn configure_notifications(&mut self, notifications: crate::config::Notifications) {
         self.notifications = notifications;
     }
@@ -402,6 +409,7 @@ impl Pane {
             remain_on_exit: None,
             shell,
             parser: Parser::new(),
+            clipboard: crate::clipboard::Observer::default(),
             graphics_framer: GraphicsFramer::new(),
             graphics_transfer: DirectTransferAssembler::new(),
             image_store: ImageStore::new(),
@@ -444,6 +452,7 @@ impl Pane {
             remain_on_exit: Some(false),
             shell,
             parser: Parser::new(),
+            clipboard: crate::clipboard::Observer::default(),
             graphics_framer: GraphicsFramer::new(),
             graphics_transfer: DirectTransferAssembler::new(),
             image_store: ImageStore::new(),
@@ -465,10 +474,12 @@ impl Pane {
             return Ok(());
         }
         let stopped = self.shell.stop_foreground()?;
+        self.clipboard.configure(false);
         self.io.semantic.cancel_current();
         if stopped {
             // A killed full-screen job cannot restore these modes itself.
             self.parser = Parser::new();
+            self.clipboard = crate::clipboard::Observer::default();
             self.graphics_framer = GraphicsFramer::new();
             self.graphics_transfer.reset();
             self.image_store.clear();
@@ -856,6 +867,7 @@ impl Pane {
     ) {
         self.track_command_application();
         self.output.append(bytes);
+        self.clipboard.advance(bytes);
         self.io.dirty = true;
         let cell_pixels = match &graphics {
             GraphicsSink::Store { cell_pixels, .. } => *cell_pixels,

@@ -22,6 +22,7 @@ impl ClosedPane {
     // so output and terminal queries drain without scheduling redraws.
     pub fn service(&mut self, cell_pixels: Option<CellPixelSize>) -> io::Result<bool> {
         let pane = self.pane.as_mut().unwrap();
+        pane.configure_clipboard(false);
         if pane.shell_mut().try_wait()?.is_some() {
             return Ok(false);
         }
