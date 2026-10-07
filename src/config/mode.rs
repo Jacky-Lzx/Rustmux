@@ -53,6 +53,7 @@ impl DefaultMode {
             Self::Locked => shortcuts.locked_configured,
             Self::Normal => {
                 shortcuts.normal_action_len != 0
+                    || shortcuts.normal_arrows.iter().any(Option::is_some)
                     || shortcuts.normal_exit_len != 0
                     || shortcuts.legacy_configured.contains(&true)
                     || [

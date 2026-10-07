@@ -1135,6 +1135,7 @@ impl WindowInput {
                     || self.bar_enabled
                     || self.footer_row.is_some()
                     || self.pane_hitboxes.len() > 1
+                    || (self.mode == InputMode::Normal && self.shortcuts.has_normal_arrows())
                     || matches!(
                         self.mode,
                         InputMode::Pane
@@ -1195,6 +1196,15 @@ impl WindowInput {
             _ => None,
         };
         let mut bytes = self.take_mouse();
+        if self.mode == InputMode::Normal
+            && let Some((direction, event_type)) = arrow_key_event(&bytes)
+            && self.shortcuts.normal_arrow_binding(direction).is_some()
+        {
+            if event_type != 3 {
+                self.normal_arrow_shortcut(direction, output);
+            }
+            return;
+        }
         if let Some(key) = kitty_key_event(&bytes) {
             if key.shortcut_byte() == Some(self.shortcuts.locked_entry_key()) {
                 if key.event_type != 3 {
@@ -1328,7 +1338,10 @@ impl WindowInput {
                         .find(|(start, end, _)| column >= *start && column < *end)
                         .copied()
                     {
-                        if self.shortcuts.has_display(footer_mode.binding_mode()) {
+                        if self
+                            .shortcuts
+                            .uses_binding_hints(footer_mode.binding_mode())
+                        {
                             self.mode = footer_mode;
                             let key = crate::config::HistoryKey::from_footer_code(action);
                             if let crate::config::HistoryKey::Byte(byte) = key {
@@ -1359,6 +1372,9 @@ impl WindowInput {
                                 _ => None,
                             } {
                                 match footer_mode {
+                                    InputMode::Normal => {
+                                        self.normal_arrow_shortcut(direction, output)
+                                    }
                                     InputMode::Pane => self.pane_arrow_shortcut(direction, output),
                                     InputMode::Resize => {
                                         self.resize_arrow_shortcut(direction, output)
@@ -1606,6 +1622,18 @@ impl WindowInput {
             output.push(WindowKey::Byte(self.shortcuts.locked_entry_key()));
             output.push(WindowKey::Byte(byte));
         }
+    }
+
+    fn normal_arrow_shortcut(&mut self, direction: Direction, output: &mut Vec<WindowKey>) {
+        let Some(binding) = self.shortcuts.normal_arrow_binding(direction) else {
+            return;
+        };
+        self.mode = if binding.stay {
+            InputMode::Normal
+        } else {
+            InputMode::Locked
+        };
+        output.push(WindowKey::FocusPane(binding.direction));
     }
 
     fn pane_shortcut(&mut self, byte: u8, output: &mut Vec<WindowKey>) {
@@ -5785,6 +5813,114 @@ r = { actions = ["new-pane-right", { action = "switch-mode", mode = "locked" }] 
             }
             assert_eq!(actions, [expected]);
             assert_eq!(keys.mode, InputMode::Locked);
+        }
+    }
+
+    #[test]
+    fn normal_arrows_dispatch_complete_sequences_and_preserve_mode_policy() {
+        let shortcuts = crate::config::Shortcuts::test_from_config(
+            r#"
+[keybinds.normal]
+left={actions=["focus-up"]}
+right={actions=["focus-left",{action="switch-mode",mode="locked"}]}
+"#,
+        );
+        let mut keys = WindowInput {
+            mode: InputMode::Normal,
+            shortcuts,
+            ..WindowInput::default()
+        };
+        let mut actions = Vec::new();
+        // CSI, SS3, Kitty press/repeat/release, including fragmented byte feeds.
+        for byte in b"\x1b[D\x1bOD\x1b[1;1:1D\x1b[1;1:2D\x1b[1;1:3D" {
+            keys.feed(*byte, &mut actions);
+        }
+        assert_eq!(
+            actions,
+            (0..4)
+                .map(|_| WindowKey::FocusPane(Direction::Up))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(keys.mode, InputMode::Normal);
+        assert!(keys.mouse.is_empty());
+        actions.clear();
+        for byte in b"\x1b[C" {
+            keys.feed(*byte, &mut actions);
+        }
+        assert_eq!(actions, [WindowKey::FocusPane(Direction::Left)]);
+        assert_eq!(keys.mode, InputMode::Locked);
+        actions.clear();
+        for byte in b"\x1b[D" {
+            keys.feed(*byte, &mut actions);
+        }
+        assert_eq!(
+            actions,
+            b"\x1b[D"
+                .iter()
+                .copied()
+                .map(WindowKey::Byte)
+                .collect::<Vec<_>>()
+        );
+        // Normal's unbound arrows retain the existing literal-prefix fallback.
+        keys.mode = InputMode::Normal;
+        actions.clear();
+        for byte in b"\x1b[A" {
+            keys.feed(*byte, &mut actions);
+        }
+        assert_eq!(
+            actions,
+            b"\x02\x1b[A"
+                .iter()
+                .copied()
+                .map(WindowKey::Byte)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(keys.mode, InputMode::Locked);
+        keys.mode = InputMode::Normal;
+        actions.clear();
+        for byte in b"\x1b[1;2D" {
+            keys.feed(*byte, &mut actions);
+        }
+        assert!(actions.iter().all(|a| matches!(a, WindowKey::Byte(_))));
+    }
+
+    #[test]
+    fn normal_arrow_footer_click_uses_the_same_binding_without_display_metadata() {
+        let shortcuts = crate::config::Shortcuts::test_from_config(
+            "[keybinds.normal]\nleft={actions=['focus-up']}\nright={actions=['focus-left',{action='switch-mode',mode='locked'}]}",
+        );
+        let hitboxes =
+            crate::chrome::footer_hitboxes_for_mode(300, FooterMode::Normal, false, shortcuts);
+        for (key, direction, mode) in [
+            (
+                crate::config::HistoryKey::Left,
+                Direction::Up,
+                InputMode::Normal,
+            ),
+            (
+                crate::config::HistoryKey::Right,
+                Direction::Left,
+                InputMode::Locked,
+            ),
+        ] {
+            let column = hitboxes
+                .iter()
+                .find(|(_, _, action)| *action == key.footer_code())
+                .unwrap()
+                .0;
+            let mut keys = WindowInput {
+                mode: InputMode::Normal,
+                shortcuts,
+                footer_row: Some(24),
+                footer_hitboxes: hitboxes.clone(),
+                ..WindowInput::default()
+            };
+            let mut actions = Vec::new();
+            for byte in format!("\x1b[<0;{column};24M\x1b[<0;{column};24m").bytes() {
+                keys.feed(byte, &mut actions);
+            }
+            assert_eq!(actions, [WindowKey::FocusPane(direction)]);
+            assert_eq!(keys.mode, mode);
         }
     }
 

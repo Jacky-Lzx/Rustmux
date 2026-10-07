@@ -18,6 +18,11 @@ fn run_scenario(name: &str) {
 }
 
 #[test]
+fn normal_focus_arrows() {
+    run_scenario("normal_focus_arrows");
+}
+
+#[test]
 fn compact() {
     run_scenario("compact");
 }

@@ -768,7 +768,7 @@ pub(crate) fn footer_hitboxes_for_mode(
     bindings: crate::config::Shortcuts,
 ) -> Vec<(usize, usize, u8)> {
     let mut hitboxes = Vec::new();
-    if bindings.has_display(mode.binding_mode()) {
+    if bindings.uses_binding_hints(mode.binding_mode()) {
         let hints = displayed_hints(columns, mode, session, bindings);
         let mut used = footer_mode_width(columns, mode) + usize::from(!hints.is_empty());
         for hint in hints {
@@ -942,7 +942,7 @@ fn draw_footer(
     screen.erase_line(EraseMode::All);
     let mode_width = footer_mode_width(columns, mode);
     let display_hints = bindings
-        .has_display(mode.binding_mode())
+        .uses_binding_hints(mode.binding_mode())
         .then(|| displayed_hints(columns, mode, session, bindings));
     let shortcuts = if display_hints.is_some() {
         Vec::new()

@@ -338,6 +338,21 @@ impl ShortcutHelp {
             if self.paste {
                 return HelpEvent::Continue;
             }
+            // Normal's configured focus arrows share their physical dispatch with
+            // Help. Unbound arrows and PageUp/PageDown still navigate pages.
+            if self.mode == crate::config::BindingMode::Normal
+                && let Some(key) = crate::config::HistoryKey::from_sequence(&sequence)
+                && matches!(
+                    key,
+                    crate::config::HistoryKey::Left | crate::config::HistoryKey::Right
+                )
+                && self
+                    .shortcuts
+                    .binding_label(self.mode, key, self.session)
+                    .is_some()
+            {
+                return HelpEvent::Binding(key);
+            }
             if matches!(sequence.as_slice(), b"\x1b[D" | b"\x1b[5~") {
                 return self.change_page(-1);
             }
@@ -497,7 +512,14 @@ impl ShortcutHelp {
         };
         let footer_row = top + height - 2;
         let footer_text = if self.pages > 1 {
-            format!("←/→ Pages  {}/{}  Esc/q/? Close", self.page + 1, self.pages)
+            let paging = if self.mode == crate::config::BindingMode::Normal
+                && self.shortcuts.has_normal_arrows()
+            {
+                "PgUp/PgDn"
+            } else {
+                "←/→ Pages"
+            };
+            format!("{paging}  {}/{}  Esc/q/? Close", self.page + 1, self.pages)
         } else {
             "Esc / q / ?  Close".to_owned()
         };
@@ -534,7 +556,8 @@ impl ShortcutHelp {
     }
 
     fn dynamic(&self) -> bool {
-        self.mode != crate::config::BindingMode::Normal || self.shortcuts.has_display(self.mode)
+        self.mode != crate::config::BindingMode::Normal
+            || self.shortcuts.uses_binding_hints(self.mode)
     }
 
     fn commands(&self) -> Vec<Command> {
@@ -977,6 +1000,32 @@ x={actions=["resize-pane-left"],display="hidden"}
             help.feed(b'x', Instant::now()),
             HelpEvent::Binding(crate::config::HistoryKey::Byte(b'x'))
         );
+    }
+
+    #[test]
+    fn normal_focus_arrows_in_help_take_priority_over_page_navigation() {
+        let shortcuts = crate::config::Shortcuts::test_from_config(
+            "[keybinds.normal]\nright={actions=['focus-left'],display='hidden'}",
+        );
+        let mut help = ShortcutHelp::for_mode(false, shortcuts, crate::config::BindingMode::Normal);
+        let body = text(&help.overlay(&Screen::new(18, 40).unwrap()));
+        assert!(help.pages > 1);
+        assert!(body.contains("PgUp/PgDn"));
+        for sequence in [b"\x1b[C".as_slice(), b"\x1bOC"] {
+            for byte in &sequence[..sequence.len() - 1] {
+                assert_eq!(help.feed(*byte, Instant::now()), HelpEvent::Continue);
+            }
+            assert_eq!(
+                help.feed(*sequence.last().unwrap(), Instant::now()),
+                HelpEvent::Binding(crate::config::HistoryKey::Right)
+            );
+            assert_eq!(help.page, 0);
+        }
+        for byte in b"\x1b[6" {
+            assert_eq!(help.feed(*byte, Instant::now()), HelpEvent::Continue);
+        }
+        assert_eq!(help.feed(b'~', Instant::now()), HelpEvent::Redraw);
+        assert_eq!(help.page, 1);
     }
 
     #[test]

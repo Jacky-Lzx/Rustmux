@@ -137,6 +137,11 @@ impl Shortcuts {
         self.displays.iter().flatten().any(|(m, _, _)| *m == mode)
     }
 
+    pub(crate) fn uses_binding_hints(&self, mode: BindingMode) -> bool {
+        self.has_display(mode)
+            || (mode == BindingMode::Normal && self.normal_arrows.iter().any(Option::is_some))
+    }
+
     /// Enumerate actual supported physical bindings, including aliases and arrows.
     /// Explicit display entries precede implicit defaults in a bounded footer.
     pub(crate) fn hints(&self, mode: BindingMode, session: bool, help: bool) -> Vec<BindingHint> {
@@ -162,7 +167,10 @@ impl Shortcuts {
         } else {
             keys.extend((1..=127).map(HistoryKey::Byte));
         }
-        if help || !matches!(mode, BindingMode::Normal | BindingMode::History) {
+        if help
+            || !matches!(mode, BindingMode::Normal | BindingMode::History)
+            || (mode == BindingMode::Normal && self.normal_arrows.iter().any(Option::is_some))
+        {
             keys.extend([
                 HistoryKey::Up,
                 HistoryKey::Down,
@@ -224,6 +232,14 @@ impl Shortcuts {
                 }
             }
             BindingMode::Normal => {
+                if let Some(direction) = direction {
+                    return Some(match self.normal_arrow_binding(direction)?.direction {
+                        Direction::Left => "Focus left",
+                        Direction::Down => "Focus down",
+                        Direction::Up => "Focus up",
+                        Direction::Right => "Focus right",
+                    });
+                }
                 let byte = byte?;
                 if self.enters_pane(byte) {
                     "Pane"

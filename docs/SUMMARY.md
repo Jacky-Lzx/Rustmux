@@ -5,6 +5,7 @@
 - [Configuration Diagnostics](reference/config-diagnostics.md)
 - [Configuration Hot Reload](reference/config-reload.md)
 - [Compact Layout](reference/compact-layout.md)
+- [Normal Focus Arrows](reference/normal-focus-arrows.md)
 - [Development and Contributions](reference/development.md)
 - [PTY Lifecycle](reference/pty-lifecycle.md)
 - [Input and Rendering Loop](reference/input-loop.md)

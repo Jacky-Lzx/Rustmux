@@ -193,6 +193,12 @@ pub struct PaneArrowBinding {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NormalFocusBinding {
+    pub direction: Direction,
+    pub stay: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ResizeAction {
     Help,
     Resize(Direction),
@@ -294,6 +300,7 @@ pub struct Shortcuts {
     history_binding_len: usize,
     normal_actions: [Option<(u8, u8)>; 48],
     normal_action_len: usize,
+    normal_arrows: [Option<NormalFocusBinding>; 4],
     pane_enter: Option<u8>,
     resize_enter: Option<u8>,
     move_enter: Option<u8>,
@@ -331,6 +338,7 @@ impl Default for Shortcuts {
             history_binding_len: 0,
             normal_actions: [None; 48],
             normal_action_len: 0,
+            normal_arrows: [None; 4],
             pane_enter: None,
             resize_enter: None,
             move_enter: None,
@@ -357,6 +365,14 @@ impl Default for Shortcuts {
 }
 
 impl Shortcuts {
+    pub(crate) fn has_normal_arrows(self) -> bool {
+        self.normal_arrows.iter().any(Option::is_some)
+    }
+
+    pub fn normal_arrow_binding(self, direction: Direction) -> Option<NormalFocusBinding> {
+        self.normal_arrows[arrow_index(direction)]
+    }
+
     pub fn clear_defaults(self) -> bool {
         self.clear_defaults
     }
@@ -1098,7 +1114,24 @@ fn parse_keybinds(
                     })
                 })
                 .collect();
-            if history_switch(binding) {
+            if let Some(arrow) = parse_arrow_key(key) {
+                let direction = match actions.first().and_then(toml::Value::as_str) {
+                    Some("focus-left") => Direction::Left,
+                    Some("focus-down") => Direction::Down,
+                    Some("focus-up") => Direction::Up,
+                    Some("focus-right") => Direction::Right,
+                    _ => continue,
+                };
+                let stay = actions.len() == 1;
+                let locks = actions.len() == 2
+                    && actions[1].get("action").and_then(toml::Value::as_str)
+                        == Some("switch-mode")
+                    && actions[1].get("mode").and_then(toml::Value::as_str) == Some("locked");
+                if stay || locks {
+                    shortcuts.normal_arrows[arrow_index(arrow)] =
+                        Some(NormalFocusBinding { direction, stay });
+                }
+            } else if history_switch(binding) {
                 let byte = parse_mode_key(key).ok_or_else(|| {
                     format!("keybinds.normal.{key} must be a supported history-mode key")
                 })?;
@@ -2234,6 +2267,46 @@ preset = "mocha"
         ] {
             assert!(parse_config(source).is_err(), "accepted {source:?}");
         }
+    }
+
+    #[test]
+    fn normal_focus_arrows_support_remapping_and_explicit_lock() {
+        let shortcuts = parse_config(
+            r#"
+clear_defaults=true
+default_mode="normal"
+[keybinds.locked]
+"Ctrl b"={actions=[{action="switch-mode",mode="normal"}]}
+[keybinds.normal]
+left={actions=["focus-up"]}
+right={actions=["focus-left",{action="switch-mode",mode="locked"}]}
+up={actions=["focus-down",{action="switch-mode",mode="pane"}]}
+down={actions=["focus-right","close-pane"]}
+"#,
+        )
+        .unwrap()
+        .shortcuts;
+        assert_eq!(
+            shortcuts.normal_arrow_binding(Direction::Left),
+            Some(NormalFocusBinding {
+                direction: Direction::Up,
+                stay: true,
+            })
+        );
+        assert_eq!(
+            shortcuts.normal_arrow_binding(Direction::Right),
+            Some(NormalFocusBinding {
+                direction: Direction::Left,
+                stay: false,
+            })
+        );
+        assert_eq!(shortcuts.normal_arrow_binding(Direction::Up), None);
+        assert_eq!(shortcuts.normal_arrow_binding(Direction::Down), None);
+        assert_eq!(shortcuts.resolve(b'h'), None);
+        assert_eq!(
+            Shortcuts::default().normal_arrow_binding(Direction::Left),
+            None
+        );
     }
 
     #[test]

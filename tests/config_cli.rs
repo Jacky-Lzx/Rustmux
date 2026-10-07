@@ -74,6 +74,63 @@ fn exported_defaults_round_trip_and_ignore_active_broken_config() {
 }
 
 #[test]
+fn strict_normal_focus_arrows_accept_complete_chains_only() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    let config = root.join("normal.toml");
+    fs::write(
+        &config,
+        r#"
+clear_defaults=true
+default_mode="normal"
+[keybinds.locked]
+"Ctrl b"={actions=[{action="switch-mode",mode="normal"}]}
+[keybinds.normal]
+left={actions=["focus-left"],display="always"}
+down={actions=["focus-down"],display="help"}
+up={actions=["focus-up"],display="hidden"}
+right={actions=["focus-right",{action="switch-mode",mode="locked"}]}
+"#,
+    )
+    .unwrap();
+    let output = command(
+        root,
+        &[
+            "check-config",
+            "--config",
+            config.to_str().unwrap(),
+            "--toml",
+            "--strict",
+        ],
+    );
+    assert!(output.status.success(), "{output:?}");
+    assert!(report(&output)["warnings"].as_array().unwrap().is_empty());
+    for chain in [
+        "'focus-left','close-pane'",
+        "'focus-left',{action='switch-mode',mode='pane'}",
+        "{action='switch-mode',mode='locked'},'focus-left'",
+    ] {
+        fs::write(
+            &config,
+            format!("[keybinds.normal]\nleft={{actions=[{chain}],display='always'}}"),
+        )
+        .unwrap();
+        let output = command(
+            root,
+            &[
+                "check-config",
+                "--config",
+                config.to_str().unwrap(),
+                "--toml",
+                "--strict",
+            ],
+        );
+        assert!(!output.status.success(), "{output:?}");
+        assert_eq!(report(&output)["warnings"].as_array().unwrap().len(), 1);
+    }
+}
+
+#[test]
 fn compact_is_boolean_and_reported_without_ignored_option_warnings() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path();
