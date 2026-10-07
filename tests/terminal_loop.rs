@@ -28,6 +28,11 @@ fn clipboard() {
 }
 
 #[test]
+fn capabilities() {
+    run_scenario("capabilities");
+}
+
+#[test]
 fn structured_colors() {
     run_scenario("structured_colors");
 }

@@ -128,6 +128,8 @@ fn status_string_reports_the_current_cursor_style() {
 
 #[test]
 fn unsupported_malformed_and_cancelled_status_strings_are_bounded() {
+    // +q is XTGETTCAP, distinct from DECRQSS; this name is malformed hex.
+    assert_eq!(replies(b"\x1bP+q q\x1b\\").1, b"\x1bP0+r\x1b\\");
     for input in [
         b"\x1bP$q\"q\x1b\\".as_slice(),
         b"\x1bP$q\x1b\\",
@@ -137,7 +139,7 @@ fn unsupported_malformed_and_cancelled_status_strings_are_bounded() {
         assert_eq!(replies(input).1, b"\x1bP0$r\x1b\\");
     }
     for input in [
-        b"\x1bP+q q\x1b\\".as_slice(),
+        b"\x1bP+Q q\x1b\\".as_slice(),
         b"\x1bP1$r6 q\x1b\\",
         b"\x1bP$q q\x18",
         b"\x1bP$q q\x1bX\x1b\\",

@@ -1,5 +1,6 @@
 //! Building blocks for the human-reviewed Rustmux implementation.
 
+mod capability;
 mod chrome;
 pub mod cli;
 mod clipboard;

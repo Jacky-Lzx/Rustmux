@@ -43,13 +43,14 @@ parameter is accepted.
 
 The reply is constant and independent of the outer terminal or TERM environment.
 It does not enumerate Rustmux's RGB, mouse or other extensions. Supported mode
-states can be queried through [DECRQM](mode-queries.md). No capabilities are
+states can be queried through [DECRQM](mode-queries.md), and color support through
+[XTGETTCAP](terminal-capabilities.md). No capabilities are
 inferred from Kitty or another outer terminal and passed through to the child.
 
 Only zero or omitted DA1/DA2/DA3 parameters are accepted. Nonzero values, extra
 parameters, colon groups, intermediates and overflow are ignored. An echoed DA1,
 DA2 or DA3 response is not a request and produces no reply.
-OSC/DCS payloads remain uninterpreted. C0 controls and cancellation keep the
+OSC/DCS payloads do not trigger identity queries. C0 controls and cancellation keep the
 existing parser rules.
 
 Replies use the existing bounded input queue and leave screen state unchanged,

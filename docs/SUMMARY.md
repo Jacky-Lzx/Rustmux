@@ -44,6 +44,7 @@
 - [Child Clipboard Writes](reference/pane-clipboard.md)
 - [Synchronized Output](reference/synchronized-output.md)
 - [Device Attributes](reference/device-attributes.md)
+- [Terminal Capability Queries](reference/terminal-capabilities.md)
 - [Rendering Measurements](reference/rendering-performance.md)
 
 - [Windows](reference/windows.md)

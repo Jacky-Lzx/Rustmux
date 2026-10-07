@@ -249,7 +249,7 @@ impl Parser {
         } = self.state
         {
             // OSC accepts BEL or ST (ESC backslash); other strings require ST.
-            // Retain only enough payload for bounded OSC/DECRQSS operations.
+            // Retain only enough payload for bounded OSC and DCS queries.
             let bell_terminated = osc && byte == 7;
             if bell_terminated || (escape && byte == b'\\') {
                 if !overflowed && (!bell_terminated || !escape) {
@@ -644,7 +644,9 @@ impl Parser {
     }
 
     fn dcs(screen: &Screen, control: &[u8], reply: &mut impl FnMut(&[u8])) {
-        if control == b"$q q" {
+        if let Some(names) = control.strip_prefix(b"+q") {
+            reply(&crate::capability::reply(names));
+        } else if control == b"$q q" {
             let response = format!("\x1bP1$r{} q\x1b\\", screen.cursor_shape() as u8);
             debug_assert!(response.len() <= MAX_REPLY_BYTES);
             reply(response.as_bytes());

@@ -35,6 +35,7 @@ CSI below means the two bytes ESC followed by `[`. The command subset follows
 | DCS $ q SP q ST | Reply with the current DECSCUSR cursor style through DECRQSS |
 | DCS $ q r ST | Reply with the current DECSTBM vertical margins through DECRQSS |
 | DCS $ q m ST | Reply with the current SGR writing style through DECRQSS |
+| DCS + q hex-names ST | Reply to bounded [XTGETTCAP capability queries](terminal-capabilities.md) |
 | CSI c / > c / = c | Reply with conservative primary / secondary / tertiary [device attributes](device-attributes.md) |
 | CSI > q | Reply with the Rustmux name and compile-time package version |
 | OSC 10 / 11 / 12 ; color | Set the pane's foreground / background / cursor color; `?` queries it; see [Terminal Status Replies](status-replies.md) |
@@ -93,7 +94,7 @@ backslash). An opt-in pane observer separately handles bounded
 [OSC 52 clipboard writes](pane-clipboard.md); the display parser and replay paths
 still discard these controls. A separate bounded observer recognizes OSC 7 working-directory
 metadata and OSC 133 command-output boundaries for Ctrl-B `e`.
-DCS retains at most 64 bytes to recognize the supported DECRQSS queries; other
+DCS retains at most 64 bytes to recognize supported DECRQSS and XTGETTCAP queries; other
 DCS, SOS and PM payloads are discarded through ST. Each pane's
 [Kitty graphics framer](kitty-graphics.md) extracts APC G commands before text
 and shell-output parsing; the normal runtime still discards them rather than
