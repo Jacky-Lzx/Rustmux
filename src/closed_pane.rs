@@ -24,6 +24,7 @@ impl ClosedPane {
         let pane = self.pane.as_mut().unwrap();
         pane.configure_clipboard(false);
         pane.configure_rich_clipboard(None);
+        pane.configure_rich_clipboard_write(None);
         if pane.shell_mut().try_wait()?.is_some() {
             return Ok(false);
         }

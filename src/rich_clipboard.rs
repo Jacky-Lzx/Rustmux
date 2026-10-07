@@ -1,9 +1,11 @@
-//! Attachment-local OSC 5522 read transactions. Never access the OS clipboard.
+//! Attachment-local OSC 5522 transactions. Never access the OS clipboard.
 use base64::{Engine, engine::general_purpose::STANDARD};
 use std::{
     collections::VecDeque,
     time::{Duration, Instant},
 };
+
+mod write;
 
 const PREFIX: &[u8] = b"\x1b]5522;";
 const MAX_PACKET: usize = 8192;
@@ -37,6 +39,7 @@ struct Framer {
     state: State,
     paste: bool,
     prefix_since: Option<Instant>,
+    bad_packet: bool,
 }
 impl Framer {
     fn advance(&mut self, byte: u8, pass: &mut Vec<u8>) -> Option<Vec<u8>> {
@@ -134,10 +137,13 @@ impl Framer {
                 mut valid,
             } => {
                 if matches!(byte, 7 | 0x18 | 0x1a) {
+                    self.bad_packet = true;
                     State::Ground
                 } else if escape && byte == b'\\' {
                     if valid {
                         packet = Some(bytes);
+                    } else {
+                        self.bad_packet = true;
                     }
                     State::Ground
                 } else {
@@ -291,45 +297,114 @@ pub(crate) struct Request {
 pub(crate) struct Observer {
     framer: Framer,
     permission: Option<bool>,
-    pending: Option<Request>,
+    write_permission: Option<bool>,
+    write_started: bool,
+    pending: VecDeque<Request>,
+    pending_bytes: usize,
 }
 impl Observer {
+    fn invalidate_partial(&mut self) {
+        let partial = !self.pending.is_empty()
+            || matches!(
+                self.framer.state,
+                State::Escape | State::Prefix(_) | State::Packet { .. }
+            );
+        self.framer.cancel_packet();
+        self.pending.clear();
+        self.pending_bytes = 0;
+        if partial && self.write_started {
+            self.pending.push_back(Request { body: Vec::new() });
+        }
+    }
     pub fn configure(&mut self, permission: Option<bool>) {
         if self.permission != permission {
-            self.framer.cancel_packet();
-            self.pending = None;
+            self.invalidate_partial();
         }
         self.permission = permission;
     }
+    pub fn configure_write(&mut self, permission: Option<bool>) {
+        if self.write_permission != permission {
+            self.invalidate_partial();
+        }
+        self.write_permission = permission;
+        if permission != Some(true) {
+            self.write_started = false;
+        }
+    }
     pub fn take(&mut self) -> Option<Request> {
-        self.pending.take()
+        let request = self.pending.pop_front()?;
+        self.pending_bytes -= request.body.len();
+        Some(request)
+    }
+    fn push(&mut self, body: Vec<u8>, reply: &mut impl FnMut(&[u8])) {
+        if body.len() > 2 * MAX_PACKET - self.pending_bytes {
+            if let Some(packet) = Packet::parse(&body)
+                && let Some(kind @ ("read" | "write")) = packet.value("type")
+            {
+                reply(&error(kind, packet.value("id"), "EBUSY"));
+            }
+            if self.write_started && !self.pending.iter().any(|request| request.body.is_empty()) {
+                self.pending.push_back(Request { body: Vec::new() });
+            }
+            self.write_started = false;
+            return;
+        }
+        self.pending_bytes += body.len();
+        self.pending.push_back(Request { body });
     }
     pub fn advance(&mut self, bytes: &[u8], reply: &mut impl FnMut(&[u8])) {
         let mut ignored = Vec::new();
         for &byte in bytes {
-            if let Some(body) = self.framer.advance(byte, &mut ignored)
-                && let Some(packet) = Packet::parse(&body)
-            {
-                let kind = packet.value("type");
-                let id = packet.value("id");
-                if kind == Some("write") {
-                    reply(&error("write", id, "ENOSYS"));
-                } else if kind == Some("read") && packet.value("status").is_none() {
-                    let mime = STANDARD.decode(packet.payload).ok();
-                    let valid = mime.as_ref().is_some_and(|mime| {
-                        !mime.is_empty()
-                            && mime.len() <= 4096
-                            && mime.iter().all(|b| (0x20..=0x7e).contains(b))
-                    });
-                    if !valid {
-                        continue;
+            let framed = self.framer.advance(byte, &mut ignored);
+            if std::mem::take(&mut self.framer.bad_packet) && self.write_started {
+                self.push(Vec::new(), reply);
+                self.write_started = false;
+            }
+            if let Some(body) = framed {
+                if let Some(packet) = Packet::parse(&body) {
+                    let kind = packet.value("type");
+                    let id = packet.value("id");
+                    match kind {
+                        Some("write") => {
+                            self.write_started = false;
+                            match self.write_permission {
+                                None => reply(&error("write", id, "ENOSYS")),
+                                Some(false) => reply(&error("write", id, "EPERM")),
+                                Some(true) => {
+                                    self.write_started = true;
+                                    self.push(body, reply);
+                                }
+                            }
+                        }
+                        Some("wdata" | "walias") if self.write_started => self.push(body, reply),
+                        Some("read") if packet.value("status").is_none() => {
+                            let mime = STANDARD.decode(packet.payload).ok();
+                            let valid = mime.as_ref().is_some_and(|mime| {
+                                !mime.is_empty()
+                                    && mime.len() <= 4096
+                                    && mime.iter().all(|b| (0x20..=0x7e).contains(b))
+                            });
+                            if valid {
+                                match self.permission {
+                                    None => reply(&error("read", id, "ENOSYS")),
+                                    Some(false) => reply(&error("read", id, "EPERM")),
+                                    Some(true)
+                                        if self.pending.iter().any(|r| {
+                                            Packet::parse(&r.body)
+                                                .is_some_and(|p| p.value("type") == Some("read"))
+                                        }) =>
+                                    {
+                                        reply(&error("read", id, "EBUSY"))
+                                    }
+                                    Some(true) => self.push(body, reply),
+                                }
+                            }
+                        }
+                        _ => {}
                     }
-                    match self.permission {
-                        None => reply(&error("read", id, "ENOSYS")),
-                        Some(false) => reply(&error("read", id, "EPERM")),
-                        Some(true) if self.pending.is_some() => reply(&error("read", id, "EBUSY")),
-                        Some(true) => self.pending = Some(Request { body }),
-                    }
+                } else if self.write_started {
+                    self.push(Vec::new(), reply);
+                    self.write_started = false;
                 }
             }
             ignored.clear();
@@ -350,6 +425,7 @@ struct Lease {
     started: bool,
     finished: bool,
     deadline: Instant,
+    write: Option<write::Transaction>,
 }
 
 pub(crate) struct Router {
@@ -392,23 +468,80 @@ impl Router {
         outer: &mut VecDeque<u8>,
         capacity: usize,
     ) {
-        let packet = Packet::parse(&request.body).expect("validated request");
+        let Some(packet) = Packet::parse(&request.body) else {
+            if self.lease.as_ref().is_some_and(|lease| {
+                lease.owner == owner && lease.write.as_ref().is_some_and(|write| write.collecting())
+            }) {
+                self.fail_write(owner, "EINVAL", outer);
+            }
+            return;
+        };
+        let kind = packet.value("type").unwrap_or("");
+        if matches!(kind, "wdata" | "walias") {
+            let Some(lease) = self.lease.as_mut() else {
+                return;
+            };
+            if lease.owner != owner {
+                return;
+            }
+            if lease.write.as_ref().is_none_or(|write| !write.collecting()) {
+                return;
+            }
+            if packet
+                .value("id")
+                .is_some_and(|id| Some(id) != lease.original_id.as_deref())
+            {
+                self.fail_write(owner, "EINVAL", outer);
+                return;
+            }
+            let transaction = lease.write.as_mut().unwrap();
+            let result = transaction.accept(&packet);
+            lease.deadline = now + IDLE;
+            if let Err(status) = result {
+                self.fail_write(owner, status, outer);
+            }
+            return;
+        }
+        if !matches!(kind, "read" | "write") {
+            return;
+        }
+        // A new write from the same source restarts its unrelayed staging.
+        if kind == "write"
+            && self.lease.as_ref().is_some_and(|l| {
+                l.owner == owner && l.write.as_ref().is_some_and(|w| w.collecting())
+            })
+        {
+            self.fail_write(owner, "EBUSY", outer);
+        }
         if self.lease.is_some() || !self.can_receive() {
-            self.queue(owner, error("read", packet.value("id"), "EBUSY"), false);
+            self.queue(owner, error(kind, packet.value("id"), "EBUSY"), false);
             return;
         }
         let Some(sequence) = self.sequence.checked_add(1) else {
-            self.queue(owner, error("read", packet.value("id"), "EBUSY"), false);
+            self.queue(owner, error(kind, packet.value("id"), "EBUSY"), false);
             return;
         };
         self.sequence = sequence;
         let id = format!("rmc-{}-{sequence:x}", self.namespace);
-        let encoded = packet.encode(Some(&id));
-        if encoded.len() > capacity.saturating_sub(outer.len()) {
-            self.queue(owner, error("read", packet.value("id"), "EBUSY"), false);
-            return;
+        let write = if kind == "write" {
+            match write::Transaction::new(&packet) {
+                Ok(write) => Some(write),
+                Err(status) => {
+                    self.queue(owner, error("write", packet.value("id"), status), false);
+                    return;
+                }
+            }
+        } else {
+            None
+        };
+        if write.is_none() {
+            let encoded = packet.encode(Some(&id));
+            if encoded.len() > capacity.saturating_sub(outer.len()) {
+                self.queue(owner, error(kind, packet.value("id"), "EBUSY"), false);
+                return;
+            }
+            outer.extend(encoded);
         }
-        outer.extend(encoded);
         self.lease = Some(Lease {
             owner,
             id,
@@ -416,7 +549,52 @@ impl Router {
             started: false,
             finished: false,
             deadline: now + IDLE,
+            write,
         });
+    }
+    pub fn idle(&self) -> bool {
+        self.lease.is_none()
+    }
+    fn fail_write(&mut self, owner: Owner, status: &str, outer: &mut VecDeque<u8>) {
+        if self
+            .lease
+            .as_ref()
+            .is_none_or(|lease| lease.owner != owner || lease.write.is_none())
+        {
+            return;
+        }
+        let lease = self.lease.take().unwrap();
+        lease.write.as_ref().unwrap().abort(&lease.id, outer);
+        self.pending
+            .retain(|(target, _, revocable)| *target != owner || !revocable);
+        self.pending_bytes = self.pending.iter().map(|(_, b, _)| b.len()).sum();
+        self.queue(
+            owner,
+            error("write", lease.original_id.as_deref(), status),
+            false,
+        );
+    }
+    pub fn pump(&mut self, now: Instant, outer: &mut VecDeque<u8>, capacity: usize) {
+        let Some(lease) = self.lease.as_mut() else {
+            return;
+        };
+        if lease.finished {
+            return;
+        }
+        let Some(write) = lease.write.as_mut() else {
+            return;
+        };
+        if !write.collecting() && !write.ended {
+            let before = outer.len();
+            let result = write.pump(&lease.id, outer, capacity);
+            if outer.len() != before {
+                lease.deadline = now + IDLE;
+            }
+            let owner = lease.owner;
+            if let Err(status) = result {
+                self.fail_write(owner, status, outer);
+            }
+        }
     }
     pub fn advance(&mut self, bytes: &[u8], pass: &mut Vec<u8>, now: Instant) {
         for &byte in bytes {
@@ -432,10 +610,33 @@ impl Router {
         let Some(lease) = self.lease.as_mut() else {
             return;
         };
+        let kind = if lease.write.is_some() {
+            "write"
+        } else {
+            "read"
+        };
         if lease.finished
             || packet.value("id") != Some(lease.id.as_str())
-            || packet.value("type") != Some("read")
+            || packet.value("type") != Some(kind)
         {
+            return;
+        }
+        if let Some(write) = lease.write.as_ref() {
+            if !write.started || !packet.payload.is_empty() {
+                return;
+            }
+            match packet.value("status") {
+                Some("DONE") if write.ended => {}
+                Some("EIO" | "EINVAL" | "ENOSYS" | "EPERM" | "EBUSY" | "EFBIG") => {}
+                _ => return,
+            }
+            lease.finished = true;
+            if packet.value("status") != Some("DONE") {
+                lease.write.as_mut().unwrap().discard();
+            }
+            let owner = lease.owner;
+            let response = packet.encode(lease.original_id.as_deref());
+            self.queue(owner, response, true);
             return;
         }
         let terminal = match packet.value("status") {
@@ -489,52 +690,90 @@ impl Router {
         &mut self,
         now: Instant,
         enabled: bool,
+        write_enabled: bool,
         mut live: impl FnMut(Owner) -> bool,
         pass: &mut Vec<u8>,
+        outer: &mut VecDeque<u8>,
     ) {
         self.framer.expire_prefix(now, pass);
-        if !enabled {
-            self.pending.retain(|(_, _, revocable)| !revocable);
-            self.pending_bytes = self.pending.iter().map(|(_, bytes, _)| bytes.len()).sum();
-        }
+        self.pending.retain(|(_, bytes, revocable)| {
+            !revocable
+                || Packet::parse(&bytes[PREFIX.len()..bytes.len() - 2]).is_some_and(|p| {
+                    if p.value("type") == Some("write") {
+                        write_enabled
+                    } else {
+                        enabled
+                    }
+                })
+        });
+        self.pending_bytes = self.pending.iter().map(|(_, bytes, _)| bytes.len()).sum();
         let Some(lease) = self.lease.as_ref() else {
             return;
         };
-        if !live(lease.owner) {
-            self.lease = None;
-        } else if !enabled || (!lease.finished && now >= lease.deadline) {
+        let alive = live(lease.owner);
+        let permitted = if lease.write.is_some() {
+            write_enabled
+        } else {
+            enabled
+        };
+        if !alive || !permitted || (!lease.finished && now >= lease.deadline) {
             let lease = self.lease.take().unwrap();
-            self.queue(
-                lease.owner,
-                error(
-                    "read",
-                    lease.original_id.as_deref(),
-                    if enabled { "EBUSY" } else { "EPERM" },
-                ),
-                false,
-            );
+            let kind = if lease.write.is_some() {
+                "write"
+            } else {
+                "read"
+            };
+            if let Some(write) = lease.write {
+                write.abort(&lease.id, outer);
+            }
+            if alive {
+                self.queue(
+                    lease.owner,
+                    error(
+                        kind,
+                        lease.original_id.as_deref(),
+                        if permitted { "EBUSY" } else { "EPERM" },
+                    ),
+                    false,
+                );
+            }
         }
     }
     /// Hiding and undoing a pane can both happen before the next loop tick.
     /// Invalidate at the ownership transition, not merely on a later liveness scan.
-    pub fn forget(&mut self, owner: Owner) {
+    pub fn forget(&mut self, owner: Owner, outer: &mut VecDeque<u8>) {
         if self
             .lease
             .as_ref()
             .is_some_and(|lease| lease.owner == owner)
         {
-            self.lease = None;
+            let lease = self.lease.take().unwrap();
+            if let Some(write) = lease.write {
+                write.abort(&lease.id, outer);
+            }
         }
         self.pending.retain(|(target, _, _)| *target != owner);
         self.pending_bytes = self.pending.iter().map(|(_, bytes, _)| bytes.len()).sum();
     }
-    pub fn cancel(&mut self, mut deliver: impl FnMut(Owner, &[u8]) -> bool) {
+    pub fn cancel(
+        &mut self,
+        outer: &mut VecDeque<u8>,
+        mut deliver: impl FnMut(Owner, &[u8]) -> bool,
+    ) {
         self.pending.clear();
         self.pending_bytes = 0;
         if let Some(lease) = self.lease.take() {
+            let kind = if lease.write.is_some() {
+                "write"
+            } else {
+                "read"
+            };
+            if let Some(write) = lease.write {
+                write.abort(&lease.id, outer);
+            }
             deliver(
                 lease.owner,
-                &error("read", lease.original_id.as_deref(), "EBUSY"),
+                &error(kind, lease.original_id.as_deref(), "EBUSY"),
             );
         }
     }
@@ -543,6 +782,15 @@ impl Router {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn read_tick(
+        router: &mut Router,
+        now: Instant,
+        enabled: bool,
+        live: impl FnMut(Owner) -> bool,
+        pass: &mut Vec<u8>,
+    ) {
+        router.tick(now, enabled, false, live, pass, &mut VecDeque::new());
+    }
     const A: Owner = Owner {
         pane: 1,
         incarnation: 1,
@@ -729,7 +977,13 @@ mod tests {
         assert_eq!(pass, data);
         assert!(take(&mut router).is_empty());
         router.advance(b"\x1b", &mut pass, now);
-        router.tick(now + Duration::from_secs(1), true, |_| true, &mut pass);
+        read_tick(
+            &mut router,
+            now + Duration::from_secs(1),
+            true,
+            |_| true,
+            &mut pass,
+        );
         assert_eq!(pass.last(), Some(&0x1b));
     }
     #[test]
@@ -738,7 +992,8 @@ mod tests {
         let now = Instant::now();
         let id = start(&mut router, A, Some("a"));
         response(&mut router, &id, "OK", "");
-        router.tick(
+        read_tick(
+            &mut router,
             now + IDLE + Duration::from_secs(1),
             true,
             |_| true,
@@ -750,15 +1005,15 @@ mod tests {
         );
         let id = start(&mut router, A, Some("b"));
         response(&mut router, &id, "OK", "");
-        router.tick(now, false, |_| true, &mut Vec::new());
+        read_tick(&mut router, now, false, |_| true, &mut Vec::new());
         assert_eq!(take(&mut router), [(A, error("read", Some("b"), "EPERM"))]);
         start(&mut router, A, None);
-        router.tick(now, true, |_| false, &mut Vec::new());
+        read_tick(&mut router, now, true, |_| false, &mut Vec::new());
         assert!(router.lease.is_none());
         let id = start(&mut router, A, Some("c"));
         response(&mut router, &id, "OK", "");
         let mut cancellations = Vec::new();
-        router.cancel(|owner, bytes| {
+        router.cancel(&mut VecDeque::new(), |owner, bytes| {
             cancellations.push((owner, bytes.to_vec()));
             true
         });
@@ -814,16 +1069,29 @@ mod tests {
         response(&mut router, &id, "DONE", "");
         router.drain(|_, _| false);
         assert!(router.lease.is_some());
-        router.tick(
+        read_tick(
+            &mut router,
             Instant::now() + IDLE + Duration::from_secs(1),
             true,
             |_| true,
             &mut Vec::new(),
         );
         assert_eq!(router.pending.len(), 2); // Source backpressure does not append an error after DONE.
-        router.tick(Instant::now(), false, |_| true, &mut Vec::new());
+        read_tick(
+            &mut router,
+            Instant::now(),
+            false,
+            |_| true,
+            &mut Vec::new(),
+        );
         router.drain(|_, _| false);
-        router.tick(Instant::now(), false, |_| true, &mut Vec::new());
+        read_tick(
+            &mut router,
+            Instant::now(),
+            false,
+            |_| true,
+            &mut Vec::new(),
+        );
         assert_eq!(take(&mut router), [(A, error("read", Some("a"), "EPERM"))]);
     }
     #[test]
@@ -831,7 +1099,7 @@ mod tests {
         let mut router = Router::default();
         let old = start(&mut router, A, Some("a"));
         response(&mut router, &old, "OK", "");
-        router.forget(A);
+        router.forget(A, &mut VecDeque::new());
         let new = start(&mut router, A, Some("a"));
         response(&mut router, &old, "DATA", ":mime=YQ==;YQ==");
         response(&mut router, &old, "DONE", "");
@@ -853,5 +1121,306 @@ mod tests {
             observer.advance(&query, &mut |_| panic!());
             assert!(observer.take().is_some());
         }
+    }
+    fn write_request(router: &mut Router, owner: Owner, body: &[u8], outer: &mut VecDeque<u8>) {
+        router.request(
+            owner,
+            Request {
+                body: body.to_vec(),
+            },
+            Instant::now(),
+            outer,
+            65536,
+        );
+    }
+    fn write_response(router: &mut Router, status: &str) {
+        let id = router.lease.as_ref().unwrap().id.clone();
+        router.advance(
+            &wire(format!("type=write:id={id}:status={status}").as_bytes()),
+            &mut Vec::new(),
+            Instant::now(),
+        );
+    }
+    #[test]
+    fn write_serializes_with_reads_and_routes_final_ack_to_original_owner() {
+        for original in [None, Some("app")] {
+            let mut router = Router::default();
+            let mut outer = VecDeque::new();
+            write_request(
+                &mut router,
+                A,
+                format!(
+                    "type=write{}",
+                    original.map(|id| format!(":id={id}")).unwrap_or_default()
+                )
+                .as_bytes(),
+                &mut outer,
+            );
+            assert!(outer.is_empty());
+            router.request(B, request(Some("read")), Instant::now(), &mut outer, 65536);
+            write_request(&mut router, B, b"type=write:id=other", &mut outer);
+            write_request(
+                &mut router,
+                B,
+                b"type=wdata:mime=dGV4dC9wbGFpbg==;YmFk",
+                &mut outer,
+            );
+            assert_eq!(
+                take(&mut router),
+                [
+                    (B, error("read", Some("read"), "EBUSY")),
+                    (B, error("write", Some("other"), "EBUSY"))
+                ]
+            );
+            write_request(
+                &mut router,
+                A,
+                b"type=wdata:mime=dGV4dC9wbGFpbg==;Z29vZA==",
+                &mut outer,
+            );
+            write_request(&mut router, A, b"type=wdata", &mut outer);
+            router.pump(Instant::now(), &mut outer, 65536);
+            write_response(&mut router, "DONE");
+            assert!(take(&mut router).is_empty());
+            for _ in 0..2 {
+                router.pump(Instant::now(), &mut outer, 65536);
+            }
+            write_response(&mut router, "DONE");
+            router.drain(|_, _| false);
+            assert!(!router.idle());
+            assert_eq!(take(&mut router), [(A, error("write", original, "DONE"))]);
+            assert!(router.idle());
+            let mut router = Router::default();
+            start(&mut router, A, None);
+            write_request(&mut router, B, b"type=write:id=other", &mut outer);
+            assert_eq!(
+                take(&mut router),
+                [(B, error("write", Some("other"), "EBUSY"))]
+            );
+        }
+    }
+    #[test]
+    fn write_early_host_error_stops_relay_and_releases_spool() {
+        let mut router = Router::default();
+        let mut outer = VecDeque::new();
+        write_request(&mut router, A, b"type=write:id=app", &mut outer);
+        write_request(
+            &mut router,
+            A,
+            b"type=wdata:mime=dGV4dC9wbGFpbg==;YQ==",
+            &mut outer,
+        );
+        write_request(&mut router, A, b"type=wdata", &mut outer);
+        router.pump(Instant::now(), &mut outer, 65536);
+        outer.clear();
+        write_response(&mut router, "EPERM");
+        assert!(router.lease.as_ref().unwrap().write.as_ref().unwrap().ended);
+        router.pump(Instant::now(), &mut outer, 65536);
+        assert!(outer.is_empty());
+        assert_eq!(
+            take(&mut router),
+            [(A, error("write", Some("app"), "EPERM"))]
+        );
+    }
+    #[test]
+    fn write_restart_bad_continuation_and_cancellation_never_commit_partial_data() {
+        for stop in 0..5 {
+            let mut router = Router::default();
+            let mut outer = VecDeque::new();
+            write_request(&mut router, A, b"type=write:id=old", &mut outer);
+            write_request(
+                &mut router,
+                A,
+                b"type=wdata:mime=dGV4dC9wbGFpbg==;YQ==",
+                &mut outer,
+            );
+            write_request(&mut router, A, b"type=write:id=app", &mut outer);
+            assert_eq!(
+                take(&mut router),
+                [(A, error("write", Some("old"), "EBUSY"))]
+            );
+            write_request(
+                &mut router,
+                A,
+                b"type=wdata:mime=dGV4dC9wbGFpbg==;Yg==",
+                &mut outer,
+            );
+            write_request(&mut router, A, b"type=wdata", &mut outer);
+            router.pump(Instant::now(), &mut outer, 65536);
+            outer.clear();
+            match stop {
+                0 => router.tick(
+                    Instant::now(),
+                    true,
+                    false,
+                    |_| true,
+                    &mut Vec::new(),
+                    &mut outer,
+                ),
+                1 => router.tick(
+                    Instant::now() + IDLE,
+                    true,
+                    true,
+                    |_| true,
+                    &mut Vec::new(),
+                    &mut outer,
+                ),
+                2 => router.forget(A, &mut outer),
+                3 => router.cancel(&mut outer, |_, _| true),
+                _ => router.tick(
+                    Instant::now(),
+                    true,
+                    true,
+                    |_| false,
+                    &mut Vec::new(),
+                    &mut outer,
+                ),
+            }
+            let bytes = outer.into_iter().collect::<Vec<_>>();
+            assert_eq!(
+                Packet::parse(&bytes[PREFIX.len()..bytes.len() - 2])
+                    .unwrap()
+                    .payload,
+                b"!"
+            );
+            assert!(router.idle());
+        }
+        let mut router = Router::default();
+        let mut outer = VecDeque::new();
+        write_request(&mut router, A, b"type=write:id=app", &mut outer);
+        write_request(
+            &mut router,
+            A,
+            b"type=wdata:id=wrong:mime=dGV4dC9wbGFpbg==;YQ==",
+            &mut outer,
+        );
+        write_request(&mut router, A, b"type=wdata", &mut outer);
+        assert_eq!(
+            take(&mut router),
+            [(A, error("write", Some("app"), "EINVAL"))]
+        );
+        assert!(outer.is_empty());
+    }
+    #[test]
+    fn observer_write_framing_errors_and_policy_changes_fail_closed() {
+        for bad in [
+            wire(b"type=wdata:mime=bad:id=x:id=y"),
+            [PREFIX, b"type=wdata\x18"].concat(),
+            [PREFIX, &vec![b'a'; MAX_PACKET + 1], b"\x1b\\"].concat(),
+        ] {
+            let mut observer = Observer::default();
+            observer.configure_write(Some(true));
+            observer.advance(&wire(b"type=write:id=app"), &mut |_| panic!());
+            assert!(observer.take().is_some());
+            observer.advance(&bad, &mut |_| panic!());
+            assert!(observer.take().unwrap().body.is_empty());
+            observer.advance(&wire(b"type=wdata"), &mut |_| panic!());
+            assert!(observer.take().is_none());
+        }
+        for permission in [None, Some(false)] {
+            let mut observer = Observer::default();
+            observer.configure_write(permission);
+            let mut replies = Vec::new();
+            observer.advance(&wire(b"type=write:id=app"), &mut |b| {
+                replies.extend_from_slice(b)
+            });
+            assert_eq!(
+                replies,
+                error(
+                    "write",
+                    Some("app"),
+                    if permission.is_none() {
+                        "ENOSYS"
+                    } else {
+                        "EPERM"
+                    }
+                )
+            );
+        }
+        let mut observer = Observer::default();
+        observer.configure(Some(false));
+        observer.configure_write(Some(true));
+        observer.advance(&wire(b"type=write:id=app"), &mut |_| panic!());
+        observer.take().unwrap();
+        observer.advance(
+            b"\x1b]5522;type=wdata:mime=dGV4dC9wbGFpbg==;Y",
+            &mut |_| panic!(),
+        );
+        observer.configure(Some(true));
+        assert!(observer.take().unwrap().body.is_empty());
+        observer.advance(b"Q==\x1b\\", &mut |_| panic!());
+        assert!(observer.take().unwrap().body.is_empty());
+    }
+    #[test]
+    fn observer_overflow_aborts_staging_and_bounds_even_repeated_starts() {
+        let mut observer = Observer::default();
+        observer.configure_write(Some(true));
+        let data = wire(
+            format!(
+                "type=wdata:mime=dGV4dC9wbGFpbg==;{}",
+                STANDARD.encode([1; 4095])
+            )
+            .as_bytes(),
+        );
+        observer.advance(
+            &[
+                wire(b"type=write:id=app"),
+                data.repeat(8),
+                wire(b"type=wdata"),
+            ]
+            .concat(),
+            &mut |_| panic!(),
+        );
+        assert!(observer.pending_bytes <= 2 * MAX_PACKET);
+        assert_eq!(
+            observer
+                .pending
+                .iter()
+                .filter(|r| r.body.is_empty())
+                .count(),
+            1
+        );
+        let mut router = Router::default();
+        let mut outer = VecDeque::new();
+        while let Some(request) = observer.take() {
+            router.request(A, request, Instant::now(), &mut outer, 65536);
+        }
+        assert_eq!(
+            take(&mut router),
+            [(A, error("write", Some("app"), "EINVAL"))]
+        );
+        assert!(outer.is_empty());
+        observer.advance(&wire(b"type=write").repeat(20000), &mut |_| {});
+        assert!(observer.pending_bytes <= 2 * MAX_PACKET);
+        assert_eq!(
+            observer
+                .pending
+                .iter()
+                .filter(|r| r.body.is_empty())
+                .count(),
+            1
+        );
+    }
+    #[test]
+    fn completed_write_keeps_final_reply_despite_stray_continuations() {
+        let mut router = Router::default();
+        let mut outer = VecDeque::new();
+        write_request(&mut router, A, b"type=write:id=app", &mut outer);
+        write_request(&mut router, A, b"type=wdata", &mut outer);
+        for _ in 0..2 {
+            router.pump(Instant::now(), &mut outer, 65536);
+        }
+        write_response(&mut router, "DONE");
+        write_request(
+            &mut router,
+            A,
+            b"type=wdata:id=wrong:mime=dGV4dC9wbGFpbg==;YQ==",
+            &mut outer,
+        );
+        write_request(&mut router, A, b"", &mut outer);
+        assert_eq!(
+            take(&mut router),
+            [(A, error("write", Some("app"), "DONE"))]
+        );
     }
 }

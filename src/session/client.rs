@@ -7,6 +7,7 @@ use std::os::fd::AsFd;
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 
 use nix::errno::Errno;
 use nix::poll::{PollFd, PollFlags, poll};
@@ -75,6 +76,7 @@ fn bridge(
     let mut input =
         ClientInput::with_keybinds(peer.locked_entry_key(), peer.legacy_client_shortcuts());
     let mut client_exit = None;
+    let mut detach_deadline = None;
 
     apply_server_messages(
         peer.decode(&[])?,
@@ -109,12 +111,12 @@ fn bridge(
         if let Some(control) = server_control
             && to_terminal.is_empty()
         {
-            return Ok(control);
+            return Ok(client_exit.unwrap_or(control));
         }
-        if let Some(client_exit) = client_exit
-            && outbound.is_empty()
-        {
-            return Ok(client_exit);
+
+        if detach_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            // Keep local detach available if a peer or output consumer stalls.
+            return Ok(client_exit.unwrap());
         }
 
         let (terminal_ready, socket_ready) = {
@@ -131,11 +133,7 @@ fn bridge(
                 terminal_flags |= PollFlags::POLLOUT;
             }
             let mut socket_flags = PollFlags::empty();
-            if exit.is_none()
-                && server_control.is_none()
-                && client_exit.is_none()
-                && to_terminal.is_empty()
-            {
+            if exit.is_none() && server_control.is_none() && to_terminal.is_empty() {
                 socket_flags |= PollFlags::POLLIN;
             }
             if !outbound.is_empty() {
@@ -177,6 +175,7 @@ fn bridge(
                         outbound.push(ClientMessage::Input(forwarded))?;
                     }
                     if client_exit.is_some() {
+                        detach_deadline = Some(Instant::now() + Duration::from_secs(5));
                         outbound.push(ClientMessage::Detach)?;
                     }
                 }
@@ -193,13 +192,16 @@ fn bridge(
         }
         if socket_ready.intersects(PollFlags::POLLIN | PollFlags::POLLHUP | PollFlags::POLLERR)
             && exit.is_none()
-            && client_exit.is_none()
             && to_terminal.is_empty()
         {
             let mut bytes = [0; READ_BYTES];
             match peer.stream_mut().read(&mut bytes) {
                 Ok(0) => {
                     peer.finish()?;
+                    // Older servers close after Detach without a control acknowledgment.
+                    if let Some(requested) = client_exit {
+                        return Ok(requested);
+                    }
                     return Err(io::Error::new(
                         io::ErrorKind::UnexpectedEof,
                         "session server disconnected without an exit status",

@@ -136,8 +136,9 @@ impl ServerFrontend {
     }
 
     /// Write at most once, retaining source bytes until their whole protocol frame is sent.
+    /// Explicit Detach still permits final output before the server acknowledgment.
     pub fn send_output(&mut self, pending: &mut VecDeque<u8>) -> io::Result<()> {
-        if self.state != ConnectionState::Attached {
+        if self.state == ConnectionState::Disconnected {
             return Err(io::Error::new(
                 io::ErrorKind::NotConnected,
                 "session client is no longer attached",
@@ -185,7 +186,7 @@ impl ServerFrontend {
     }
 
     fn send_control(&mut self, message: ServerMessage) -> io::Result<()> {
-        if self.state != ConnectionState::Attached {
+        if self.state == ConnectionState::Disconnected {
             return Err(io::Error::new(
                 io::ErrorKind::NotConnected,
                 "session client is no longer attached",
@@ -561,6 +562,33 @@ mod tests {
         assert_eq!(
             decoder.push(&writer.0).unwrap(),
             [ServerMessage::Output(b"abcdef".to_vec())]
+        );
+    }
+    #[test]
+    fn requested_detach_flushes_final_output_before_acknowledgment() {
+        let (mut client, mut frontend) = connected(24, 80);
+        write_messages(&mut client, &[ClientMessage::Detach]);
+        assert_eq!(frontend.receive().unwrap(), ConnectionState::Detached);
+        let mut output = VecDeque::from(b"clipboard abort".to_vec());
+        while !output.is_empty() {
+            frontend.send_output(&mut output).unwrap();
+        }
+        frontend.send_detach().unwrap();
+        let mut messages = Vec::new();
+        let mut bytes = [0; 128];
+        while messages.len() < 2 {
+            match client.stream_mut().read(&mut bytes) {
+                Ok(count) => messages.extend(client.decode(&bytes[..count]).unwrap()),
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => thread::yield_now(),
+                Err(error) => panic!("{error}"),
+            }
+        }
+        assert_eq!(
+            messages,
+            [
+                ServerMessage::Output(b"clipboard abort".to_vec()),
+                ServerMessage::Detach
+            ]
         );
     }
 }

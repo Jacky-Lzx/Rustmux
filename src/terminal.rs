@@ -1964,6 +1964,16 @@ enum DetachedEvent {
     Process(u8),
 }
 
+fn transport_closed(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::BrokenPipe
+            | io::ErrorKind::ConnectionReset
+            | io::ErrorKind::NotConnected
+            | io::ErrorKind::UnexpectedEof
+    )
+}
+
 fn frontend_exit(state: ConnectionState, input: &VecDeque<u8>) -> Option<ForwardExit> {
     if !input.is_empty() {
         return None;
@@ -2003,6 +2013,7 @@ fn service_pane(
 ) -> io::Result<()> {
     pane.configure_clipboard(clipboard_write);
     pane.configure_rich_clipboard(clipboard_read);
+    pane.configure_rich_clipboard_write(clipboard_read.map(|_| clipboard_write));
     pane.track_command_application();
     if ready.contains(PollFlags::POLLNVAL) {
         return Err(io::Error::new(
@@ -2093,6 +2104,7 @@ fn apply_config(
             }
             if !config.clipboard_write() {
                 pane.configure_clipboard(false);
+                pane.configure_rich_clipboard_write(Some(false));
             }
         }
     }
@@ -2100,6 +2112,7 @@ fn apply_config(
         pane.configure_notifications(config.notifications());
         pane.configure_clipboard(false);
         pane.configure_rich_clipboard(None);
+        pane.configure_rich_clipboard_write(None);
     }
     if let Some(service) = persistence {
         service.configure(config.persistence(), config.scrollback_lines());
@@ -2132,6 +2145,7 @@ fn forward(
         for (_, pane) in window.content_mut().iter_mut() {
             pane.configure_clipboard(false);
             pane.configure_rich_clipboard(None);
+            pane.configure_rich_clipboard_write(None);
         }
     }
     let mut runtime = RuntimeConfig {
@@ -2189,11 +2203,19 @@ fn forward(
     let mut connection = ConnectionState::Attached;
     let mut session_manager_requested = false;
     let mut detach_requested = false;
+    let mut client_detach_pending = false;
     let mut pane_resize_pending: Option<(WindowId, Instant)> = None;
     let mut pending_outer_resize = None;
     let mut save_error = None;
     let mut reload_error = None;
     loop {
+        if connection == ConnectionState::Detached {
+            // The client has stopped sending input but still drains final output.
+            // Preserve preceding input and flush clipboard aborts before acknowledging.
+            client_detach_pending = true;
+            detach_requested = true;
+            connection = ConnectionState::Attached;
+        }
         if let Some(service) = reload.as_deref_mut() {
             service.poll();
             if service.pending()
@@ -2335,8 +2357,10 @@ fn forward(
         rich_clipboard.tick(
             Instant::now(),
             runtime.clipboard_read,
+            runtime.clipboard_write,
             |owner| rich_clipboard_live(windows, owner),
             &mut expired,
+            &mut to_terminal,
         );
         input.extend(expired);
         rich_clipboard.drain(|owner, bytes| deliver_rich_clipboard(windows, owner, bytes));
@@ -2400,7 +2424,9 @@ fn forward(
             to_terminal.clear();
         }
         if let Some(exit) = frontend_exit(connection, &input) {
-            rich_clipboard.cancel(|owner, bytes| deliver_rich_clipboard(windows, owner, bytes));
+            rich_clipboard.cancel(&mut to_terminal, |owner, bytes| {
+                deliver_rich_clipboard(windows, owner, bytes)
+            });
             return Ok(exit);
         }
         let received = signals.pending.load(Ordering::Relaxed);
@@ -2434,7 +2460,7 @@ fn forward(
                         .content_mut()
                         .get_mut(pane_id)
                         .unwrap();
-                    rich_clipboard.forget(pane.rich_clipboard_owner());
+                    rich_clipboard.forget(pane.rich_clipboard_owner(), &mut to_terminal);
                     pane.stop_for_hide()?;
                     let (mut pane, after) = if sole_pane {
                         (windows.close(id)?.into_content().into_single(), None)
@@ -2458,7 +2484,7 @@ fn forward(
                         return Ok(ForwardExit::Process(0));
                     }
                     for (_, pane) in windows.get_mut(id).unwrap().content_mut().iter_mut() {
-                        rich_clipboard.forget(pane.rich_clipboard_owner());
+                        rich_clipboard.forget(pane.rich_clipboard_owner(), &mut to_terminal);
                         pane.shell_mut().terminate()?;
                     }
                     drop(windows.close(id)?);
@@ -2489,6 +2515,9 @@ fn forward(
             let view = history.as_mut().unwrap();
             let exited = view.expire_escape();
             if let Some(copy) = view.take_copy() {
+                rich_clipboard.cancel(&mut to_terminal, |owner, bytes| {
+                    deliver_rich_clipboard(windows, owner, bytes)
+                });
                 to_terminal.extend(copy);
             }
             if exited {
@@ -3053,6 +3082,9 @@ fn forward(
                     bar_dirty = true;
                 }
                 if let Some(sequence) = copy {
+                    rich_clipboard.cancel(&mut to_terminal, |owner, bytes| {
+                        deliver_rich_clipboard(windows, owner, bytes)
+                    });
                     to_terminal.extend(sequence);
                 }
                 force_redraw = true;
@@ -3682,21 +3714,38 @@ fn forward(
             && renamed_notice.is_none()
             && to_terminal.is_empty()
         {
+            rich_clipboard.cancel(&mut to_terminal, |owner, bytes| {
+                deliver_rich_clipboard(windows, owner, bytes)
+            });
+            if !to_terminal.is_empty() {
+                continue;
+            }
             if frontend.open_session_manager()? {
-                rich_clipboard.cancel(|owner, bytes| deliver_rich_clipboard(windows, owner, bytes));
                 return Ok(ForwardExit::Detached);
             }
             session_manager_requested = false;
         }
         if detach_requested && renamed_notice.is_none() && to_terminal.is_empty() {
-            if frontend.detach_client()? {
-                rich_clipboard.cancel(|owner, bytes| deliver_rich_clipboard(windows, owner, bytes));
-                return Ok(ForwardExit::Detached);
+            rich_clipboard.cancel(&mut to_terminal, |owner, bytes| {
+                deliver_rich_clipboard(windows, owner, bytes)
+            });
+            if !to_terminal.is_empty() {
+                continue;
+            }
+            match frontend.detach_client() {
+                Ok(true) => return Ok(ForwardExit::Detached),
+                Err(error) if client_detach_pending && transport_closed(&error) => {
+                    return Ok(ForwardExit::Detached);
+                }
+                Err(error) => return Err(error),
+                Ok(false) => {}
             }
             detach_requested = false;
         }
         if let Some(exit) = frontend_exit(connection, &input) {
-            rich_clipboard.cancel(|owner, bytes| deliver_rich_clipboard(windows, owner, bytes));
+            rich_clipboard.cancel(&mut to_terminal, |owner, bytes| {
+                deliver_rich_clipboard(windows, owner, bytes)
+            });
             return Ok(exit);
         }
         // A changed focus needs a frame before returning to a blocking poll.
@@ -3714,6 +3763,9 @@ fn forward(
                 && !(history.is_some() && id == active_set.layout().active())
                 && pane.io().dirty
         });
+        if !detach_requested && !session_manager_requested {
+            rich_clipboard.pump(Instant::now(), &mut to_terminal, LIMIT);
+        }
         let mut outer_events = PollFlags::empty();
         if connection == ConnectionState::Attached
             && !session_manager_requested
@@ -3868,8 +3920,17 @@ fn forward(
         let mut expired_reply = Vec::new();
         outer_image_replies.expire(Instant::now(), &mut expired_reply);
         input.extend(expired_reply);
-        if connection == ConnectionState::Attached && outer.contains(PollFlags::POLLOUT) {
-            frontend.send(&mut to_terminal)?;
+        if connection == ConnectionState::Attached
+            && outer.contains(PollFlags::POLLOUT)
+            && let Err(error) = frontend.send(&mut to_terminal)
+        {
+            if client_detach_pending && transport_closed(&error) {
+                rich_clipboard.cancel(&mut to_terminal, |owner, bytes| {
+                    deliver_rich_clipboard(windows, owner, bytes)
+                });
+                return Ok(ForwardExit::Detached);
+            }
+            return Err(error);
         }
         // A resize may have arrived in the same poll as pane output. Defer
         // those pane reads until the new grid is applied on the next turn;
@@ -3902,7 +3963,7 @@ fn forward(
                 connection == ConnectionState::Attached && runtime.clipboard_write,
                 (connection == ConnectionState::Attached).then_some(runtime.clipboard_read),
             )?;
-            if let Some(request) = pane.take_rich_clipboard() {
+            while let Some(request) = pane.take_rich_clipboard() {
                 rich_clipboard.request(
                     pane.rich_clipboard_owner(),
                     request,
@@ -3914,6 +3975,7 @@ fn forward(
             if let Some(copy) = pane.take_clipboard()
                 && connection == ConnectionState::Attached
                 && runtime.clipboard_write
+                && rich_clipboard.idle()
                 && copy.len() <= LIMIT.saturating_sub(to_terminal.len())
             {
                 to_terminal.extend(copy);

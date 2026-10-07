@@ -16,8 +16,8 @@ rustmux show-config -s work
 | Supported shortcuts and mode bindings | Update together at the next safe input boundary; footer and Help use the new bindings |
 | Theme | Update interface colors together; existing child cells and terminal defaults retain their colors |
 | `mouse_hover_cursor` | Enable or disable window-control pointer feedback; disabling restores the application's latest pointer shape |
-| `clipboard_read` | Enable or disable [rich clipboard reads](rich-clipboard.md); disabling cancels the active lease and drops undelivered data |
-| `clipboard_write` | Enable or disable [child OSC 52 writes](pane-clipboard.md); disabling invalidates partial capture |
+| `clipboard_read` | Enable or disable [rich clipboard reads](rich-clipboard.md); disabling cancels the active read lease and drops undelivered data |
+| `clipboard_write` | Enable or disable [child OSC 52 writes](pane-clipboard.md) and [rich writes](rich-clipboard.md); disabling invalidates capture and cancels the write lease |
 | Notifications | Update existing panes, including the hidden pane retained for undo; running commands use the latest policy at completion |
 | `remain_on_exit` | Update the session policy; disabling it also removes already drained, exited panes that use this default. Explicit project/pane overrides still apply |
 | `shell` | Used when creating or respawning panes; existing child processes keep running |

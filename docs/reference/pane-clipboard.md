@@ -20,8 +20,9 @@ requests; it does not access the operating-system clipboard directly or confirm
 that the outer terminal accepted them. This works in foreground unnamed sessions
 and attached named sessions, including background panes and windows.
 
-[Kitty rich clipboard reads](rich-clipboard.md) use a separate `clipboard_read`
-option. This page describes OSC 52 writes.
+[Kitty rich clipboard transactions](rich-clipboard.md) use the same `clipboard_write`
+option for writes and a separate `clipboard_read` option for reads. This page
+describes OSC 52 writes.
 
 ## Supported requests
 
@@ -40,7 +41,7 @@ Base64, cancellation and unfinished strings produce no request.
 
 Clipboard reads (`?`) are unsupported and receive no response. Rustmux does not
 forward them to the outer terminal. Kitty OSC 5522 reads use the separate [rich clipboard policy](rich-clipboard.md);
-rich writes and file transfer OSC 5113 remain unsupported. Clipboard-like sequences inside other
+rich writes use `clipboard_write`, while file transfer OSC 5113 remains unsupported. Clipboard-like sequences inside other
 OSC/DCS/APC/SOS/PM strings never trigger a write.
 
 ## Lifetime and delivery
@@ -66,6 +67,8 @@ At most one completed request is pending per pane. Within one bounded PTY read,
 the latest valid request replaces earlier requests. A request is delivered through
 the existing 64 KiB terminal-output queue only if the entire packet fits. Otherwise
 it is dropped, without blocking the child, retrying or growing a clipboard queue.
+Pane OSC 52 requests are dropped while a rich read/write lease is active.
+Explicit History copying cancels that lease before emitting its own copy.
 Once queued, ordinary partial writes preserve transport progress. Each pane has
 its own observer; completion order determines writes to the shared outer clipboard.
 The existing child-reply reservation and session wire format are unchanged.

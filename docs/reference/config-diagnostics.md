@@ -1,7 +1,8 @@
 # Configuration diagnostics and default export
 
 `[settings].clipboard_write` reports the Boolean policy for
-[child OSC 52 writes](pane-clipboard.md), defaulting to `false`. `[settings].clipboard_read` independently reports
+[child OSC 52 writes](pane-clipboard.md) and [rich writes](rich-clipboard.md),
+defaulting to `false`. `[settings].clipboard_read` independently reports
 [rich clipboard reads](rich-clipboard.md), also disabled by default.
 
 Inspect configuration before starting a terminal or named-session server:

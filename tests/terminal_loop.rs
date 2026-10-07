@@ -33,6 +33,11 @@ fn rich_clipboard() {
 }
 
 #[test]
+fn rich_clipboard_writes() {
+    run_scenario("rich_clipboard_writes");
+}
+
+#[test]
 fn capabilities() {
     run_scenario("capabilities");
 }

@@ -331,6 +331,9 @@ impl Pane {
     pub(crate) fn configure_rich_clipboard(&mut self, permission: Option<bool>) {
         self.rich_clipboard.configure(permission);
     }
+    pub(crate) fn configure_rich_clipboard_write(&mut self, permission: Option<bool>) {
+        self.rich_clipboard.configure_write(permission);
+    }
     pub(crate) fn take_rich_clipboard(&mut self) -> Option<crate::rich_clipboard::Request> {
         self.rich_clipboard.take()
     }
@@ -494,6 +497,7 @@ impl Pane {
         let stopped = self.shell.stop_foreground()?;
         self.clipboard.configure(false);
         self.rich_clipboard.configure(None);
+        self.rich_clipboard.configure_write(None);
         self.io.semantic.cancel_current();
         if stopped {
             // A killed full-screen job cannot restore these modes itself.
