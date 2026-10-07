@@ -108,6 +108,8 @@ fn run_inner(
         shortcuts,
     )?;
     session.remain_on_exit = remain_on_exit;
+    session.default_mode =
+        config.map_or_else(crate::config::DefaultMode::default, |c| c.default_mode());
     session.reload = config
         .map(crate::config::reload::Reload::new)
         .transpose()?
@@ -222,6 +224,8 @@ fn serve_inner(
         context.scrollback_lines,
     )?);
     session.remain_on_exit = remain_on_exit;
+    session.default_mode =
+        config.map_or_else(crate::config::DefaultMode::default, |c| c.default_mode());
     session.rename = Some(endpoint.rename_identity());
     let mut control = crate::control::Service::bind(name)?;
     control.track_identity(endpoint.rename_identity());
@@ -275,6 +279,7 @@ fn serve_inner(
 /// State that must survive one frontend disconnect and a later attachment.
 struct TerminalSession {
     remain_on_exit: bool,
+    default_mode: crate::config::DefaultMode,
     shell_path: OsString,
     session_name: Option<String>,
     windows: Windows<PaneSet<Pane>>,
@@ -303,6 +308,7 @@ struct SessionContext<'a> {
 
 struct AttachmentCapabilities<'a> {
     remain_on_exit: bool,
+    default_mode: crate::config::DefaultMode,
     reload: Option<&'a mut crate::config::reload::Reload>,
     control: Option<&'a mut crate::control::Service>,
     rename: Option<&'a crate::session::rename::Identity>,
@@ -379,6 +385,7 @@ impl TerminalSession {
         };
         Ok(Self {
             remain_on_exit: false,
+            default_mode: crate::config::DefaultMode::default(),
             shell_path: shell_path.to_owned(),
             session_name: session_name.map(str::to_owned),
             windows,
@@ -426,6 +433,7 @@ impl TerminalSession {
             &mut self.outer_rows,
             AttachmentCapabilities {
                 remain_on_exit: self.remain_on_exit,
+                default_mode: self.default_mode,
                 reload: self.reload.as_mut(),
                 control: self.control.as_mut(),
                 rename: self.rename.as_ref(),
@@ -460,6 +468,7 @@ impl TerminalSession {
     }
 
     fn import_config(&mut self, config: &crate::config::Config) {
+        self.default_mode = config.default_mode();
         self.shell_path = config.shell().clone();
         self.shortcuts = config.shortcuts();
         self.notifications = config.notifications();
@@ -1049,6 +1058,34 @@ fn history_exit_input(
 }
 
 impl WindowInput {
+    fn default_input_mode(mode: crate::config::DefaultMode, session_available: bool) -> InputMode {
+        use crate::config::DefaultMode;
+        match mode {
+            DefaultMode::Locked => InputMode::Locked,
+            DefaultMode::Normal => InputMode::Normal,
+            DefaultMode::Pane => InputMode::Pane,
+            DefaultMode::Resize => InputMode::Resize,
+            DefaultMode::Move => InputMode::Move,
+            DefaultMode::Tab => InputMode::Tab,
+            DefaultMode::Session if session_available => InputMode::Session,
+            // The unnamed foreground entry point has no manager or detach target.
+            DefaultMode::Session => InputMode::Locked,
+        }
+    }
+
+    fn new(
+        shortcuts: crate::config::Shortcuts,
+        default_mode: crate::config::DefaultMode,
+        session_available: bool,
+    ) -> Self {
+        Self {
+            mode: Self::default_input_mode(default_mode, session_available),
+            shortcuts,
+            session_available,
+            ..Self::default()
+        }
+    }
+
     fn can_reload(&self) -> bool {
         self.mode == InputMode::Locked
             && !self.paste
@@ -2197,6 +2234,7 @@ fn service_pane(
 }
 
 struct RuntimeConfig {
+    default_mode: crate::config::DefaultMode,
     clipboard_write: bool,
     clipboard_read: bool,
     file_transfer: bool,
@@ -2212,6 +2250,7 @@ struct RuntimeConfig {
 }
 impl RuntimeConfig {
     fn update(&mut self, config: &crate::config::Config) {
+        self.default_mode = config.default_mode();
         self.theme = config.theme();
         self.mouse_hover_cursor = config.mouse_hover_cursor();
         self.clipboard_write = config.clipboard_write();
@@ -2283,6 +2322,7 @@ fn forward(
 ) -> io::Result<ForwardExit> {
     let AttachmentCapabilities {
         remain_on_exit,
+        default_mode,
         mut reload,
         mut control,
         rename,
@@ -2305,6 +2345,7 @@ fn forward(
         }
     }
     let mut runtime = RuntimeConfig {
+        default_mode,
         clipboard_read: reload
             .as_ref()
             .is_some_and(|r| r.current().clipboard_read()),
@@ -2350,10 +2391,7 @@ fn forward(
     let mut shm_probe_deadline = None;
     let mut shm_support = None;
     let mut input = VecDeque::new();
-    let mut keys = WindowInput {
-        shortcuts,
-        ..WindowInput::default()
-    };
+    let mut keys = WindowInput::new(shortcuts, default_mode, session_name.is_some());
     let mut actions = Vec::new();
     let mut next_frame = Instant::now();
     let mut force_redraw = true;
@@ -2408,6 +2446,7 @@ fn forward(
         let notifications = runtime.notifications.clone();
         let scrollback_lines = runtime.scrollback_lines;
         let shortcuts = runtime.shortcuts;
+        let default_mode = runtime.default_mode;
         let remain_on_exit = runtime.remain_on_exit;
         let context = SessionContext {
             shell_path,
@@ -2471,10 +2510,7 @@ fn forward(
                 history = None;
                 help = None;
                 prompt = None;
-                keys = WindowInput {
-                    shortcuts,
-                    ..WindowInput::default()
-                };
+                keys = WindowInput::new(shortcuts, default_mode, session_name.is_some());
                 pane_resize_pending = None;
                 renderer.invalidate();
                 force_redraw = true;
@@ -2746,7 +2782,7 @@ fn forward(
                 bar_dirty = true;
                 queue_focus_transition(windows, old, active_focus(windows));
                 input.clear();
-                keys = WindowInput::default();
+                keys = WindowInput::new(shortcuts, default_mode, session_name.is_some());
                 prompt = None;
                 help = None;
                 renderer.invalidate();
@@ -2758,7 +2794,14 @@ fn forward(
             .as_ref()
             .is_some_and(|prompt| prompt.cancel_due(Instant::now()))
         {
+            let return_to_tab = prompt.as_ref().is_some_and(|editor| {
+                editor.kind == PromptKind::Rename && keys.mode == InputMode::Tab
+            });
             prompt = None;
+            keys = WindowInput::new(shortcuts, default_mode, session_name.is_some());
+            if return_to_tab {
+                keys.mode = InputMode::Tab;
+            }
             renderer.invalidate();
             force_redraw = true;
         }
@@ -2801,7 +2844,7 @@ fn forward(
             keys = WindowInput {
                 mode: help_return_mode,
                 shortcuts,
-                ..WindowInput::default()
+                ..WindowInput::new(shortcuts, default_mode, session_name.is_some())
             };
             renderer.invalidate();
             force_redraw = true;
@@ -2834,7 +2877,7 @@ fn forward(
             if history.take().is_some() {
                 help = None;
                 input.clear();
-                keys = WindowInput::default();
+                keys = WindowInput::new(shortcuts, default_mode, session_name.is_some());
             }
             renderer.invalidate();
             force_redraw = true;
@@ -2857,10 +2900,13 @@ fn forward(
                             mode: if history.is_some() {
                                 InputMode::History
                             } else {
-                                InputMode::Locked
+                                WindowInput::default_input_mode(
+                                    default_mode,
+                                    session_name.is_some(),
+                                )
                             },
                             shortcuts,
-                            ..WindowInput::default()
+                            ..WindowInput::new(shortcuts, default_mode, session_name.is_some())
                         };
                     }
                 }
@@ -3284,11 +3330,11 @@ fn forward(
                 if was_active {
                     if history.take().is_some() {
                         input.clear();
-                        keys = WindowInput::default();
+                        keys = WindowInput::new(shortcuts, default_mode, session_name.is_some());
                     }
                     if was_focused {
                         input.clear();
-                        keys = WindowInput::default();
+                        keys = WindowInput::new(shortcuts, default_mode, session_name.is_some());
                         prompt = None;
                     }
                     renderer.invalidate();
@@ -3447,10 +3493,13 @@ fn forward(
                             mode: if return_to_tab {
                                 InputMode::Tab
                             } else {
-                                InputMode::Locked
+                                WindowInput::default_input_mode(
+                                    default_mode,
+                                    session_name.is_some(),
+                                )
                             },
                             shortcuts,
-                            ..WindowInput::default()
+                            ..WindowInput::new(shortcuts, default_mode, session_name.is_some())
                         };
                         renderer.invalidate();
                     }
@@ -3460,10 +3509,13 @@ fn forward(
                             mode: if return_to_tab {
                                 InputMode::Tab
                             } else {
-                                InputMode::Locked
+                                WindowInput::default_input_mode(
+                                    default_mode,
+                                    session_name.is_some(),
+                                )
                             },
                             shortcuts,
-                            ..WindowInput::default()
+                            ..WindowInput::new(shortcuts, default_mode, session_name.is_some())
                         };
                         renderer.invalidate();
                     }
@@ -3488,7 +3540,7 @@ fn forward(
                         keys = WindowInput {
                             mode: help_action_mode,
                             shortcuts,
-                            ..WindowInput::default()
+                            ..WindowInput::new(shortcuts, default_mode, session_name.is_some())
                         };
                         let sequence = match key {
                             crate::config::HistoryKey::Byte(byte) => vec![byte],
@@ -3506,7 +3558,7 @@ fn forward(
                         keys = WindowInput {
                             mode: help_return_mode,
                             shortcuts,
-                            ..WindowInput::default()
+                            ..WindowInput::new(shortcuts, default_mode, session_name.is_some())
                         };
                         renderer.invalidate();
                         force_redraw = true;
@@ -3520,7 +3572,7 @@ fn forward(
                         keys = WindowInput {
                             mode: InputMode::Session,
                             shortcuts,
-                            ..WindowInput::default()
+                            ..WindowInput::new(shortcuts, default_mode, session_name.is_some())
                         };
                         renderer.invalidate();
                         force_redraw = true;
@@ -3536,7 +3588,12 @@ fn forward(
             };
             if help_action.is_some() {
                 help = None;
-                keys = WindowInput::default();
+                // Legacy Normal Help rows represent the same one-shot Locked
+                // action chains as their physical Normal bindings.
+                keys = WindowInput {
+                    mode: InputMode::Locked,
+                    ..WindowInput::new(shortcuts, default_mode, session_name.is_some())
+                };
                 renderer.invalidate();
                 force_redraw = true;
             }
@@ -3641,12 +3698,12 @@ fn forward(
                     }
                     WindowKey::SessionManager => {
                         input.clear();
-                        keys = WindowInput::default();
+                        keys = WindowInput::new(shortcuts, default_mode, session_name.is_some());
                         session_manager_requested = true;
                     }
                     WindowKey::Detach => {
                         input.clear();
-                        keys = WindowInput::default();
+                        keys = WindowInput::new(shortcuts, default_mode, session_name.is_some());
                         detach_requested = true;
                     }
                     WindowKey::Help => {
@@ -3662,7 +3719,7 @@ fn forward(
                             shortcuts,
                             mode,
                         ));
-                        keys = WindowInput::default();
+                        keys = WindowInput::new(shortcuts, default_mode, session_name.is_some());
                         renderer.invalidate();
                         force_redraw = true;
                     }
@@ -3727,10 +3784,13 @@ fn forward(
                             mode: if history.is_some() {
                                 InputMode::History
                             } else {
-                                InputMode::Locked
+                                WindowInput::default_input_mode(
+                                    default_mode,
+                                    session_name.is_some(),
+                                )
                             },
                             shortcuts,
-                            ..WindowInput::default()
+                            ..WindowInput::new(shortcuts, default_mode, session_name.is_some())
                         };
                         if let Some(view) = &mut history {
                             view.set_shortcuts(shortcuts, session_name.is_some());
@@ -3933,10 +3993,8 @@ fn forward(
                             input.clear();
                             prompt = None;
                             help = None;
-                            keys = WindowInput {
-                                shortcuts,
-                                ..WindowInput::default()
-                            };
+                            keys =
+                                WindowInput::new(shortcuts, default_mode, session_name.is_some());
                             renderer.invalidate();
                             force_redraw = true;
                             bar_dirty = true;

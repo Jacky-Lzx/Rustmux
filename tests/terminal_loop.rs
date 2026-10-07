@@ -18,6 +18,11 @@ fn run_scenario(name: &str) {
 }
 
 #[test]
+fn default_mode() {
+    run_scenario("default_mode");
+}
+
+#[test]
 fn graphics() {
     run_scenario("graphics");
 }

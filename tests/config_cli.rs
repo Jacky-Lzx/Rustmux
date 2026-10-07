@@ -61,6 +61,7 @@ fn exported_defaults_round_trip_and_ignore_active_broken_config() {
     );
     assert_eq!(settings(&checked)["save_scrollback"].as_bool(), Some(false));
     assert_eq!(settings(&checked)["remain_on_exit"].as_bool(), Some(false));
+    assert_eq!(settings(&checked)["default_mode"].as_str(), Some("locked"));
     assert_eq!(
         settings(&checked)["mouse_hover_cursor"].as_bool(),
         Some(false)
@@ -70,6 +71,52 @@ fn exported_defaults_round_trip_and_ignore_active_broken_config() {
         fs::read_to_string(root.join("rustmux/config.toml")).unwrap(),
         "shell=[invalid"
     );
+}
+
+#[test]
+fn default_mode_is_reported_and_invalid_modes_fail_strict_checks() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    let config = root.join("mode.toml");
+    for mode in [
+        "locked", "normal", "pane", "resize", "move", "tab", "session",
+    ] {
+        fs::write(
+            &config,
+            format!("default_mode=' {} '", mode.to_ascii_uppercase()),
+        )
+        .unwrap();
+        let output = command(
+            root,
+            &[
+                "check-config",
+                "--config",
+                config.to_str().unwrap(),
+                "--toml",
+                "--strict",
+            ],
+        );
+        assert!(output.status.success(), "{output:?}");
+        let checked = report(&output);
+        assert_eq!(settings(&checked)["default_mode"].as_str(), Some(mode));
+        assert!(checked["warnings"].as_array().unwrap().is_empty());
+    }
+    for value in ["false", "'history'", "'custom'"] {
+        fs::write(&config, format!("default_mode={value}")).unwrap();
+        let output = command(
+            root,
+            &[
+                "check-config",
+                "--config",
+                config.to_str().unwrap(),
+                "--toml",
+            ],
+        );
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("default_mode"));
+    }
+    assert!(!root.join("state").exists());
 }
 
 #[test]

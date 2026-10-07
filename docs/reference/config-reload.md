@@ -14,6 +14,7 @@ rustmux show-config -s work
 | Setting | Effect of a successful reload |
 | --- | --- |
 | Supported shortcuts and mode bindings | Update together at the next safe input boundary; footer and Help use the new bindings |
+| `default_mode` | Update the mode used for subsequent runtime resets and attachments; preserve the current mode. Explicit switch-mode bindings keep their target |
 | Theme | Update interface colors together; existing child cells and terminal defaults retain their colors |
 | `mouse_hover_cursor` | Enable or disable window-control pointer feedback; disabling restores the application's latest pointer shape |
 | `clipboard_read` | Enable or disable [rich clipboard reads](rich-clipboard.md); disabling cancels the active read lease and drops undelivered data |

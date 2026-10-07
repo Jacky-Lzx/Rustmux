@@ -62,8 +62,42 @@ and paths and shell names use their UTF-8 display representation.
 | `file_loaded` | Whether configuration came from a file rather than defaults |
 | `shell_source` | `RUSTMUX_SHELL`, `config`, `SHELL`, or `fallback` |
 | `warnings` | Diagnostics for ignored options or bindings |
-| `[settings]` | Effective shell, scrollback limit, retention, hover feedback, theme, clear-defaults flag, saving settings, and notification settings |
+| `[settings]` | Effective default mode, shell, scrollback limit, retention, hover feedback, theme, clear-defaults flag, saving settings, and notification settings |
 | `[session_manager]` | Effective manager action keys, including disabled actions as empty arrays |
+
+## Default input mode
+
+```toml
+default_mode = "locked"
+```
+
+`default_mode` accepts `locked` (the default), `normal`, `pane`, `resize`,
+`move`, `tab` and `session`. Names are trimmed and case-insensitive. It sets
+the input mode when a foreground session starts or a client attaches, and after
+runtime resets such as ending a rename/move/close prompt, resizing a History
+snapshot, respawning or losing the focused process, or changing layout through
+script control. A Tab rename binding that stays in Tab retains that mode.
+`session` requires a named session; the unnamed foreground entry point uses
+Locked for that setting.
+
+This setting does not rewrite bindings. Actions explicitly switching to
+`locked`, including built-in Normal actions and ordinary History exits, still
+return to Locked. Modal actions that stay in their mode retain that behavior.
+For example, starting in Normal allows `c` to create a window without a prefix,
+then its built-in action returns to Locked. History and arbitrary custom modes
+are not supported as defaults. With `clear_defaults = true`, the selected mode
+must have at least one supported binding, even if it is hidden from Help.
+The existing requirement for a Locked-to-Normal entry binding still applies.
+
+Both `check-config` and `show-config` report the normalized value in
+`[settings].default_mode`. Attaching with another `--config` file uses the
+server's applied policy. Hot reload updates the policy at the existing safe
+Locked boundary, preserving the current mode until a subsequent runtime reset
+or attachment. Invalid mode names, incorrect types and cleared modes without
+supported bindings fail configuration loading and preserve the previous policy
+on reload.
+
+## Ignored options and errors
 
 Supported configuration errors, unreadable selected files, invalid TOML and
 binding conflicts return exit status 1, with an error on stderr and no report.

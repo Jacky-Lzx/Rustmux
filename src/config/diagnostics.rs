@@ -20,6 +20,7 @@ pub struct Settings {
     pub theme: std::collections::BTreeMap<String, String>,
     pub shell: String,
     pub scrollback_lines: usize,
+    pub default_mode: DefaultMode,
     pub remain_on_exit: bool,
     pub mouse_hover_cursor: bool,
     pub clipboard_write: bool,
@@ -76,6 +77,7 @@ impl From<&Config> for Settings {
             theme: config.theme.report(),
             shell: config.shell.to_string_lossy().into_owned(),
             scrollback_lines: config.scrollback_lines,
+            default_mode: config.default_mode,
             remain_on_exit: config.remain_on_exit,
             mouse_hover_cursor: config.mouse_hover_cursor,
             clipboard_write: config.clipboard_write,
@@ -104,6 +106,7 @@ fn ignored_options(source: &str) -> Vec<String> {
         if !matches!(
             key.as_str(),
             "shell"
+                | "default_mode"
                 | "scrollback_lines"
                 | "remain_on_exit"
                 | "mouse_hover_cursor"
@@ -206,6 +209,7 @@ pub fn default_config() -> String {
         r#"# Rustmux main-human built-in settings.
 # Shell precedence: RUSTMUX_SHELL, uncommented shell setting, SHELL, /bin/sh.
 # shell = "/bin/sh"
+default_mode = "locked"
 scrollback_lines = {DEFAULT_SCROLLBACK_LINES}
 remain_on_exit = false
 mouse_hover_cursor = false

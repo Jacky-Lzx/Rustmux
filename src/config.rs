@@ -10,7 +10,9 @@ use crate::layout::Direction;
 
 mod diagnostics;
 mod display;
+mod mode;
 pub(crate) use display::{BindingDisplay, BindingHint, BindingMode};
+pub use mode::DefaultMode;
 pub(crate) mod manager;
 pub(crate) mod reload;
 pub use diagnostics::{Inspection, Settings, default_config, inspect};
@@ -668,6 +670,7 @@ pub struct Config {
     shell: OsString,
     notifications: Notifications,
     scrollback_lines: usize,
+    default_mode: DefaultMode,
     shortcuts: Shortcuts,
     persistence: PersistenceOptions,
     remain_on_exit: bool,
@@ -688,6 +691,9 @@ pub struct PersistenceOptions {
 }
 
 impl Config {
+    pub fn default_mode(&self) -> DefaultMode {
+        self.default_mode
+    }
     pub fn drop_target(&self) -> bool {
         self.drop_target
     }
@@ -742,6 +748,7 @@ struct ParsedConfig {
     shell: Option<String>,
     notifications: Notifications,
     scrollback_lines: Option<usize>,
+    default_mode: DefaultMode,
     shortcuts: Shortcuts,
     persistence: PersistenceOptions,
     remain_on_exit: bool,
@@ -795,6 +802,7 @@ fn resolve_config(configured: ParsedConfig) -> Config {
         scrollback_lines: configured
             .scrollback_lines
             .unwrap_or(DEFAULT_SCROLLBACK_LINES),
+        default_mode: configured.default_mode,
         shortcuts: configured.shortcuts,
         persistence: configured.persistence,
         remain_on_exit: configured.remain_on_exit,
@@ -933,6 +941,7 @@ fn parse_config(source: &str) -> Result<ParsedConfig, String> {
         shell,
         notifications,
         scrollback_lines,
+        default_mode: DefaultMode::parse(document.get("default_mode"), shortcuts)?,
         shortcuts,
         persistence,
         remain_on_exit: boolean("remain_on_exit")?,
@@ -2116,6 +2125,7 @@ preset = "mocha"
                 shell: Some("/opt/homebrew/bin/fish".to_owned()),
                 notifications: Notifications::default(),
                 scrollback_lines: Some(5000),
+                default_mode: DefaultMode::Locked,
                 shortcuts: Shortcuts::default(),
                 persistence: PersistenceOptions::default(),
                 remain_on_exit: false,
