@@ -1965,6 +1965,40 @@ fn spawn_editor_window(
     )
 }
 
+/// Open only the editor staged by a History binding; existing spawn/cleanup owns its file.
+fn dispatch_history_editor(
+    editor: Option<(&'static str, String)>,
+    windows: &mut Windows<PaneSet<Pane>>,
+    scrollback_lines: usize,
+    to_terminal: &mut VecDeque<u8>,
+) -> io::Result<()> {
+    let Some((name, text)) = editor else {
+        return Ok(());
+    };
+    if windows.iter().len() == MAX_WINDOWS {
+        if to_terminal.is_empty() {
+            to_terminal.push_back(7);
+        }
+        return Ok(());
+    }
+    let old = active_focus(windows);
+    let (rows, columns) = windows.active().unwrap().content().layout().dimensions();
+    match spawn_editor_window(&text, rows, columns, scrollback_lines) {
+        Ok(pane) => {
+            windows.create(name.into(), pane)?;
+            queue_focus_transition(windows, old, active_focus(windows));
+            windows
+                .active_mut()
+                .unwrap()
+                .content_mut()
+                .synchronize_sizes()?;
+        }
+        Err(_) if to_terminal.is_empty() => to_terminal.push_back(7),
+        Err(_) => {}
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ForwardExit {
     Process(u8),
@@ -2658,12 +2692,14 @@ fn forward(
             renderer.invalidate();
             force_redraw = true;
         }
-        if history
-            .as_ref()
-            .is_some_and(|view| view.escape_expired(Instant::now()))
+        if to_terminal.is_empty()
+            && history
+                .as_ref()
+                .is_some_and(|view| view.escape_expired(Instant::now()))
         {
             let view = history.as_mut().unwrap();
             let exited = view.expire_escape();
+            let editor = view.take_editor();
             if let Some(copy) = view.take_copy() {
                 rich_clipboard.cancel(&mut to_terminal, |owner, bytes| {
                     deliver_rich_clipboard(windows, owner, bytes)
@@ -2674,6 +2710,7 @@ fn forward(
                 keys = history_exit_input(history.as_mut().unwrap(), shortcuts);
                 history = None;
             }
+            dispatch_history_editor(editor, windows, scrollback_lines, &mut to_terminal)?;
             renderer.invalidate();
             force_redraw = true;
         }
@@ -3234,6 +3271,7 @@ fn forward(
                 }
                 let exited = view.feed(input.pop_front().unwrap());
                 let copy = view.take_copy();
+                let editor = view.take_editor();
                 if exited {
                     keys = history_exit_input(view, shortcuts);
                     history = None;
@@ -3246,6 +3284,7 @@ fn forward(
                     });
                     to_terminal.extend(sequence);
                 }
+                dispatch_history_editor(editor, windows, scrollback_lines, &mut to_terminal)?;
                 force_redraw = true;
                 continue;
             }
@@ -3568,6 +3607,14 @@ fn forward(
                         };
                         if let Some(view) = &mut history {
                             view.set_shortcuts(shortcuts, session_name.is_some());
+                            view.set_last_output(
+                                windows
+                                    .active()
+                                    .unwrap()
+                                    .content()
+                                    .active()
+                                    .last_command_output(),
+                            );
                             renderer.invalidate();
                             force_redraw = true;
                         }

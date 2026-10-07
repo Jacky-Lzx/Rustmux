@@ -1,5 +1,5 @@
 //! Read-only navigation over a frozen primary-screen snapshot.
-use crate::config::{HistoryAction, HistoryKey, HistoryMode, Shortcuts};
+use crate::config::{HistoryAction, HistoryBinding, HistoryKey, HistoryMode, Shortcuts};
 use crate::screen::{MouseTracking, Screen};
 use crate::style::Cell;
 use base64::Engine;
@@ -10,7 +10,12 @@ const MAX_HISTORY_ESCAPE_BYTES: usize = 64;
 const ESCAPE_TIMEOUT: Duration = Duration::from_millis(30);
 const COPY_STATUS_DURATION: Duration = Duration::from_secs(1);
 
-const BROWSE_FOOTER_HINTS: &[(&str, &str)] = &[("/?", "Search"), ("n/N", "Match"), ("q", "Exit")];
+const BROWSE_FOOTER_HINTS: &[(&str, &str)] = &[
+    ("/?", "Search"),
+    ("n/N", "Match"),
+    ("q", "Exit"),
+    ("E/e", "Edit"),
+];
 const SEARCH_FOOTER_HINTS: &[(&str, &str)] =
     &[("↑/↓", "Recall"), ("Enter", "Find"), ("Ctrl-C", "Cancel")];
 const SELECTION_FOOTER_HINTS: &[(&str, &str)] = &[
@@ -36,6 +41,7 @@ enum SelectionSource {
 enum CopyStatus {
     Sent,
     TooLarge,
+    NoOutput,
 }
 
 #[derive(Clone, Copy)]
@@ -129,6 +135,8 @@ pub(crate) struct HistoryView {
     shortcuts: Shortcuts,
     session_available: bool,
     mode_pending: Option<HistoryMode>,
+    editor_pending: Option<HistoryAction>,
+    last_output: Option<String>,
     source: Screen,
     offset: usize,
     escape: Vec<u8>,
@@ -166,6 +174,8 @@ impl HistoryView {
             shortcuts: Shortcuts::default(),
             session_available: false,
             mode_pending: None,
+            editor_pending: None,
+            last_output: None,
             source: source.clone(),
             offset: source.history_len().min(source.dimensions().0),
             escape: Vec::new(),
@@ -197,22 +207,66 @@ impl HistoryView {
         self.mode_pending.take()
     }
 
-    fn configured_action(&mut self, action: HistoryAction) -> bool {
-        match action {
-            HistoryAction::SwitchMode(HistoryMode::Session) if !self.session_available => false,
-            HistoryAction::SwitchMode(mode) => {
-                self.mode_pending = Some(mode);
-                true
-            }
-            HistoryAction::Key(HistoryKey::Byte(byte)) => self.feed_raw(byte, false),
-            HistoryAction::Key(key) => {
-                let mut exited = false;
-                for &byte in key.sequence() {
-                    exited |= self.feed_raw(byte, false);
+    pub fn set_last_output(&mut self, output: Option<String>) {
+        self.last_output = output.filter(|text| !text.is_empty());
+    }
+
+    pub fn take_editor(&mut self) -> Option<(&'static str, String)> {
+        match self.editor_pending.take()? {
+            HistoryAction::EditHistory => Some(("history", export_text(&self.source))),
+            HistoryAction::EditLastOutput => Some(("output", self.last_output.clone()?)),
+            _ => unreachable!("only editor actions are staged"),
+        }
+    }
+
+    fn configured_action(&mut self, binding: HistoryBinding) -> bool {
+        if !self.session_available
+            && binding.contains(HistoryAction::SwitchMode(HistoryMode::Session))
+        {
+            return false;
+        }
+        let mut mode = None;
+        let mut edit = None;
+        for action in binding.actions.into_iter().flatten() {
+            match action {
+                HistoryAction::SwitchMode(target) => mode = Some(target),
+                HistoryAction::EditHistory => edit = Some(action),
+                HistoryAction::EditLastOutput | HistoryAction::CopyLastOutput => {
+                    let Some(output) = &self.last_output else {
+                        self.copy_status = Some(CopyStatus::NoOutput);
+                        self.copy_status_until = Some(Instant::now() + COPY_STATUS_DURATION);
+                        return false;
+                    };
+                    if action == HistoryAction::EditLastOutput {
+                        edit = Some(action);
+                    } else {
+                        let sequence = osc52(output);
+                        let success = sequence.is_some();
+                        self.stage_copy(sequence);
+                        if !success {
+                            return false;
+                        }
+                    }
                 }
-                exited
+                HistoryAction::Key(HistoryKey::Byte(byte)) => {
+                    self.feed_raw(byte, false);
+                    if byte == b'y' && self.copy_pending.is_none() {
+                        return false;
+                    }
+                }
+                HistoryAction::Key(key) => {
+                    for &byte in key.sequence() {
+                        self.feed_raw(byte, false);
+                    }
+                }
             }
         }
+        if let Some(action) = edit {
+            self.editor_pending = Some(action);
+            mode = Some(HistoryMode::Locked);
+        }
+        self.mode_pending = mode;
+        mode.is_some()
     }
 
     // Zero-based outer-terminal origin, including the window bar when present.
@@ -258,6 +312,7 @@ impl HistoryView {
                 "v" => b"v",
                 "h/j/k/l" => b"hjkl",
                 "b/e" => b"be",
+                "E/e" => b"Ee",
                 _ => &[],
             };
             let keys: Vec<_> = bytes
@@ -267,7 +322,9 @@ impl HistoryView {
                     self.shortcuts
                         .history_bindings()
                         .find_map(|(key, action)| {
-                            (action == HistoryAction::Key(canonical)).then_some(key.label())
+                            action
+                                .contains(HistoryAction::Key(canonical))
+                                .then_some(key.label())
                         })
                         .or_else(|| {
                             (!self.shortcuts.clear_defaults()
@@ -280,8 +337,28 @@ impl HistoryView {
                 result.push((keys.join("/"), label.to_owned()));
             }
         }
-        for (key, action) in self.shortcuts.history_bindings() {
-            if let HistoryAction::SwitchMode(mode) = action {
+        for (key, binding) in self.shortcuts.history_bindings() {
+            if let Some(label) = binding
+                .actions
+                .iter()
+                .flatten()
+                .find_map(|action| match action {
+                    HistoryAction::EditHistory => Some("Edit history"),
+                    HistoryAction::EditLastOutput => Some("Edit output"),
+                    HistoryAction::CopyLastOutput => Some("Copy output"),
+                    _ => None,
+                })
+            {
+                result.push((key.label(), label.into()));
+                continue;
+            }
+            if let Some(HistoryAction::SwitchMode(mode)) = binding
+                .actions
+                .iter()
+                .flatten()
+                .find(|action| matches!(action, HistoryAction::SwitchMode(_)))
+            {
+                let mode = *mode;
                 let label = match mode {
                     HistoryMode::Locked => "Exit",
                     HistoryMode::Normal => "Normal",
@@ -306,6 +383,7 @@ impl HistoryView {
         if let Some(status) = self.copy_status {
             let label = match status {
                 CopyStatus::Sent => "Copy sent to terminal",
+                CopyStatus::NoOutput => "No command output",
                 CopyStatus::TooLarge => "Copy too large (32 KiB limit)",
             };
             return (label.to_owned(), None);
@@ -445,6 +523,7 @@ impl HistoryView {
             return match status {
                 CopyStatus::Sent => "Copy sent to terminal · q:exit".to_owned(),
                 CopyStatus::TooLarge => "Copy too large (32 KiB limit) · q:exit".to_owned(),
+                CopyStatus::NoOutput => "No command output · q:exit".to_owned(),
             };
         }
         if let Some(selection) = self
@@ -713,6 +792,13 @@ impl HistoryView {
             }
             if self.shortcuts.clear_defaults() {
                 return false;
+            }
+            if byte == b'E' || (byte == b'e' && !self.keyboard_selection()) {
+                return self.configured_action(HistoryBinding::single(if byte == b'E' {
+                    HistoryAction::EditHistory
+                } else {
+                    HistoryAction::EditLastOutput
+                }));
             }
         }
         if self.keyboard_selection() {
@@ -2597,5 +2683,126 @@ esc = { actions = [{ action = "switch-mode", mode = "locked" }] }
         type_bytes(&mut view, b"v\x1b");
         assert!(!view.expire_escape()); // Esc cancels selection before mode exit.
         assert!(view.selection.is_none());
+    }
+    fn output_history(source: &Screen, output: Option<String>) -> HistoryView {
+        let shortcuts = Shortcuts::test_from_config(
+            r#"
+[keybinds.history]
+E = { actions = ["scroll-bottom", {action="switch-mode", mode="locked"}, "edit-history"] }
+e = { actions = ["edit-last-output"] }
+y = { actions = ["copy-last-output", "scroll-bottom", {action="switch-mode", mode="locked"}] }
+c = { actions = ["copy-history", {action="switch-mode", mode="pane"}] }
+"#,
+        );
+        let mut view = HistoryView::new(source).unwrap();
+        view.set_shortcuts(shortcuts, false);
+        view.set_last_output(output);
+        view
+    }
+
+    #[test]
+    fn output_actions_use_frozen_contents_and_copy_before_mode_transition() {
+        let mut source = Screen::new(2, 20).unwrap();
+        Parser::new().advance(&mut source, b"old\r\nsnapshot\r\nend");
+        let mut view = output_history(&source, Some("result 中\n".into()));
+        Parser::new().advance(&mut source, b"\r\nlate live output");
+        assert!(view.feed(b'y'));
+        assert_eq!(view.take_copy(), osc52("result 中\n"));
+        assert_eq!(view.take_mode(), Some(HistoryMode::Locked));
+        assert!(view.feed(b'E'));
+        let (name, text) = view.take_editor().unwrap();
+        assert_eq!(name, "history");
+        assert_eq!(text, "old\nsnapshot\nend\n");
+        assert!(view.feed(b'e'));
+        assert_eq!(view.take_editor(), Some(("output", "result 中\n".into())));
+        let mut selection = output_history(&source, None);
+        type_bytes(&mut selection, b"vl");
+        let expected = selection.copy_selection();
+        assert!(selection.feed(b'c'));
+        assert_eq!(selection.take_copy(), expected);
+        assert_eq!(selection.take_mode(), Some(HistoryMode::Pane));
+    }
+
+    #[test]
+    fn failed_output_copy_keeps_history_open_and_never_emits_partial_clipboard() {
+        let source = Screen::new(2, 12).unwrap();
+        for output in [None, Some("x".repeat(MAX_COPY_TEXT_BYTES + 1))] {
+            let mut view = output_history(&source, output);
+            assert!(!view.feed(b'y'));
+            assert!(view.take_mode().is_none());
+            assert!(view.take_copy().is_none());
+            assert!(view.take_editor().is_none());
+            assert!(
+                view.footer_status(80)
+                    .0
+                    .contains(if view.last_output.is_none() {
+                        "No command output"
+                    } else {
+                        "Copy too large"
+                    })
+            );
+        }
+        let mut empty = output_history(&source, None);
+        assert!(!empty.feed(b'e'));
+        assert!(empty.take_editor().is_none());
+    }
+
+    #[test]
+    fn editor_and_output_keys_do_not_escape_search_paste_or_selection_cancel() {
+        let mut source = Screen::new(2, 12).unwrap();
+        Parser::new().advance(&mut source, b"some words");
+        let mut view = output_history(&source, Some("output".into()));
+        type_bytes(&mut view, b"/Eey\x1b[200~Eey\x1b[201~");
+        assert!(view.take_editor().is_none());
+        assert!(view.take_copy().is_none());
+        assert!(view.editor.is_some());
+        type_bytes(&mut view, b"\x03\x1b[200~Eey\x1b[201~");
+        assert!(view.take_editor().is_none());
+        assert!(view.take_copy().is_none());
+        type_bytes(&mut view, b"v\x1b");
+        assert!(!view.expire_escape());
+        assert!(view.selection.is_none());
+        let mut defaults = HistoryView::new(&source).unwrap();
+        defaults.set_last_output(Some("output".into()));
+        defaults.set_shortcuts(
+            Shortcuts::test_from_config(
+                "[keybinds.history]\nw={actions=['history-selection-next-word']}",
+            ),
+            false,
+        );
+        assert!(!defaults.feed(b'w'));
+        assert!(defaults.take_editor().is_none());
+        type_bytes(&mut defaults, b"ve"); // default selection e still moves by word.
+        assert!(defaults.take_editor().is_none());
+        type_bytes(&mut defaults, b"v");
+        assert!(defaults.feed(b'e'));
+        assert_eq!(defaults.take_editor(), Some(("output", "output".into())));
+    }
+    #[test]
+    fn escaped_editor_binding_waits_for_modal_cancellation_and_session_copy_is_atomic() {
+        let mut source = Screen::new(2, 12).unwrap();
+        Parser::new().advance(&mut source, b"snapshot");
+        let mut view = HistoryView::new(&source).unwrap();
+        view.set_shortcuts(
+            Shortcuts::test_from_config(
+                r#"
+[keybinds.history]
+esc = { actions = ["edit-history"] }
+s = { actions = ["copy-last-output", {action="switch-mode", mode="session"}] }
+"#,
+            ),
+            false,
+        );
+        view.set_last_output(Some("record".into()));
+        assert!(!view.feed(b's'));
+        assert!(view.take_copy().is_none());
+        assert!(view.take_mode().is_none());
+        type_bytes(&mut view, b"v\x1b");
+        assert!(!view.expire_escape());
+        assert!(view.take_editor().is_none());
+        type_bytes(&mut view, b"\x1b");
+        assert!(view.expire_escape());
+        assert_eq!(view.take_editor(), Some(("history", "snapshot\n".into())));
+        assert_eq!(view.take_mode(), Some(HistoryMode::Locked));
     }
 }

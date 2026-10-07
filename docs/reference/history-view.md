@@ -57,7 +57,7 @@ working and explicit bindings override the same physical key.
 
 History keys accept one printable ASCII character, `Ctrl A` through `Ctrl Z`,
 `enter`, `esc`, `tab`, `up`, `down`, `left`, `right`, `pageup`, `pagedown`, `home`,
-and `end`. A binding contains exactly one action:
+and `end`. Existing navigation/search/selection bindings contain one action:
 
 | Action | Behavior |
 | --- | --- |
@@ -68,6 +68,9 @@ and `end`. A binding contains exactly one action:
 | `history-search-forward`, `history-search-backward` | Open the literal query editor |
 | `history-next-match`, `history-previous-match` | Repeat in the search direction / opposite direction |
 | `copy-history` | Copy selection, current match, or visible snapshot through OSC 52 |
+| `copy-last-output` | Copy the most recent command output captured at History entry through OSC 52 |
+| `edit-history` | Exit History and open its frozen primary history and visible tail in an editor window |
+| `edit-last-output` | Exit History and edit the command output captured at History entry |
 | `toggle-history-selection` | Start or cancel keyboard selection |
 | `history-selection-left`, `history-selection-right` | Extend an active selection horizontally |
 | `history-selection-previous-word`, `history-selection-next-word` | Extend by word |
@@ -83,6 +86,56 @@ The footer shows configured search, selection, and exit keys. Invalid History
 keys, unknown actions, duplicate physical keys (such as Enter / Ctrl-M), and
 conflicting entry keys report configuration errors.
 
+## Editing and copying command output
+
+History captures both the primary-screen snapshot and the latest command-output
+record when it opens. Background output continues updating the live pane, but
+cannot replace the content of a pending History edit/copy. Command capture uses
+existing OSC 133 boundaries and the best-effort shell fallback described in
+[windows](windows.md). `copy-last-output` is distinct from `copy-history`: it
+copies the completed output record, regardless of the viewport or selection.
+
+The default browse keys `E` and `e` open History and command-output editors.
+During keyboard selection, default `e` still extends to the next word. An
+explicit `e = edit-last-output` binding overrides that selection key. Default
+`y` continues copying the selection, match or viewport and staying in History.
+With cleared defaults, configure all desired actions explicitly.
+
+Output operations can be combined with `scroll-bottom` and one `switch-mode`,
+up to three steps per binding. This supports the former Scroll workflow using
+only `[keybinds.history]`:
+
+```toml
+[keybinds.history]
+E = { actions = ["scroll-bottom", { action="switch-mode", mode="locked" }, "edit-history"] }
+e = { actions = ["scroll-bottom", { action="switch-mode", mode="locked" }, "edit-last-output"] }
+y = { actions = ["copy-last-output", "scroll-bottom", { action="switch-mode", mode="locked" }] }
+# Keep selection copying available on a separate key.
+c = { actions = ["copy-history", { action="switch-mode", mode="normal" }] }
+```
+
+Data actions execute in order against the same snapshot; a mode transition is
+committed after a successful operation. Clipboard operations may stay in History
+or transition to any supported mode. Editor actions always return input to
+Locked and may only be combined with a Locked transition. Multiple output
+operations, duplicate bottom/transition steps, and search/selection navigation
+chains are rejected. A Session transition in an unnamed process ignores the
+whole binding, including any copy.
+
+Missing command output reports `No command output` and stays in History.
+Clipboard content over the existing 32 KiB UTF-8 limit reports `Copy too large`,
+sends no partial OSC 52 and skips the requested mode transition. Explicit copy
+operations use the Rustmux UI clipboard channel and do not depend on the child
+`clipboard_write` permission. Search editing and bracketed paste never dispatch
+output actions. Escape retains its selection/search cancellation priority.
+
+Editors use `$VISUAL`, then `$EDITOR`, then `vi`, a private temporary file and a
+new window. Closing the editor removes that file and returns to the original
+window. At the window limit or if the editor PTY cannot be started, History exits
+to Locked, the original pane survives and the terminal rings a best-effort bell.
+An editor command that starts and then fails follows ordinary child-exit cleanup.
+Editing the snapshot does not change the live pane history.
+
 ## Default History keys
 
 | Key in history mode | Action |
@@ -93,6 +146,8 @@ conflicting entry keys report configuration errors.
 | Ctrl-U / Ctrl-D | Half a pane older / newer |
 | Page Up / Page Down | One pane older / newer |
 | `g` / `G` | Oldest retained row / bottom of the snapshot |
+| `E` | Open the frozen history snapshot in an editor |
+| `e` while browsing | Open the command output captured at History entry in an editor |
 | `/` / `?` | Search toward newer / older text |
 | `n` / `N` | Repeat in the submitted search direction / opposite direction |
 | `y` | Copy the current search match, or the visible snapshot when no match is active, through OSC 52 |
@@ -341,10 +396,27 @@ Unicode cursor editing, narrow query views and bounded query recall with draft
 restoration, keyboard and mouse selection, both search
 directions and their row anchors, cancellation, result
 wraparound, wheel bounds, malformed mouse reports and modal
-input isolation. The nested-PTY suite checks browsing inside a split, the other pane's
+input isolation. Output-action checks cover frozen command records, editor staging,
+copy limits, failed operation mode retention and action-chain validation. The nested-PTY suite checks browsing inside a split, the other pane's
 continued visibility, new background output while frozen, snapshot-bottom versus
 live output, viewport and keyboard/mouse-selection OSC 52 copying, forward/backward search submission/result cycling/no-match/cancellation,
 query recall, middle editing, cursor visibility, query paste and draft restoration,
 navigation/paste
 isolation, wheel routing within a split, mouse-mode restoration and return to live
 input after resize.
+
+
+`tests/terminal_loop_history_actions.py` exercises the real binary and shell:
+late OSC 133 output during History, decoded Unicode OSC 52 copies, editing both
+snapshots, private file permissions/removal, query/paste isolation, copy followed
+by a mode transition, absent/oversized output and failed-editor cleanup.
+
+
+Local cumulative verification on macOS, 2026-10-07:
+
+- All-target serial tests: 1,117 passed, zero failed, eight optional tests ignored,
+  across 52 targets. All 54 real PTY scenarios passed, including History actions.
+- Strict configuration inspection accepts both the existing `config-dev.toml`
+  and the output-action example above without ignored bindings.
+- Rust formatting, all-target/all-feature Clippy with warnings denied,
+  `git diff --check` and the mdBook build passed.

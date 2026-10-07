@@ -281,3 +281,8 @@ fn hyperlinks() {
 fn color_stack() {
     run_scenario("color_stack");
 }
+
+#[test]
+fn history_actions() {
+    run_scenario("history_actions");
+}

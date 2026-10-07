@@ -96,6 +96,27 @@ impl HistoryKey {
 pub enum HistoryAction {
     Key(HistoryKey),
     SwitchMode(HistoryMode),
+    EditHistory,
+    EditLastOutput,
+    CopyLastOutput,
+}
+
+/// Bounded History action sequence, executed against the same frozen snapshot.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HistoryBinding {
+    pub actions: [Option<HistoryAction>; 3],
+}
+
+impl HistoryBinding {
+    pub fn single(action: HistoryAction) -> Self {
+        Self {
+            actions: [Some(action), None, None],
+        }
+    }
+
+    pub fn contains(self, action: HistoryAction) -> bool {
+        self.actions.contains(&Some(action))
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -231,7 +252,7 @@ pub struct Shortcuts {
     keys: [u8; 3],
     legacy_configured: [bool; 3],
     locked_history: [Option<u8>; 8],
-    history_bindings: [Option<(HistoryKey, HistoryAction)>; 48],
+    history_bindings: [Option<(HistoryKey, HistoryBinding)>; 48],
     history_binding_len: usize,
     normal_actions: [Option<(u8, u8)>; 48],
     normal_action_len: usize,
@@ -397,14 +418,14 @@ impl Shortcuts {
         self.locked_history.contains(&Some(key))
     }
 
-    pub fn history_binding(self, key: HistoryKey) -> Option<HistoryAction> {
+    pub fn history_binding(self, key: HistoryKey) -> Option<HistoryBinding> {
         self.history_bindings[..self.history_binding_len]
             .iter()
             .flatten()
             .find_map(|(configured, action)| (*configured == key).then_some(*action))
     }
 
-    pub(crate) fn history_bindings(self) -> impl Iterator<Item = (HistoryKey, HistoryAction)> {
+    pub(crate) fn history_bindings(self) -> impl Iterator<Item = (HistoryKey, HistoryBinding)> {
         self.history_bindings
             .into_iter()
             .take(self.history_binding_len)
@@ -1345,62 +1366,110 @@ fn parse_history_bindings(
             .get("actions")
             .and_then(toml::Value::as_array)
             .ok_or_else(|| format!("keybinds.history.{name} requires actions"))?;
-        let [single] = actions.as_slice() else {
+        if actions.is_empty() || actions.len() > 3 {
             return Err(format!(
-                "keybinds.history.{name} requires exactly one action"
+                "keybinds.history.{name} requires one to three actions"
             ));
-        };
-        let action = if single.get("action").and_then(toml::Value::as_str) == Some("switch-mode") {
-            let mode = match single.get("mode").and_then(toml::Value::as_str) {
-                Some("locked") => HistoryMode::Locked,
-                Some("normal") => HistoryMode::Normal,
-                Some("pane") => HistoryMode::Pane,
-                Some("resize") => HistoryMode::Resize,
-                Some("move") => HistoryMode::Move,
-                Some("tab") => HistoryMode::Tab,
-                Some("session") => HistoryMode::Session,
-                _ => {
-                    return Err(format!(
-                        "unsupported keybinds.history.{name} switch-mode target"
-                    ));
-                }
-            };
-            HistoryAction::SwitchMode(mode)
-        } else {
-            let key = match single.as_str() {
-                Some("scroll-up") => HistoryKey::Byte(b'k'),
-                Some("scroll-down") => HistoryKey::Byte(b'j'),
-                Some("scroll-page-up") => HistoryKey::PageUp,
-                Some("scroll-page-down") => HistoryKey::PageDown,
-                Some("scroll-half-page-up") => HistoryKey::Byte(21),
-                Some("scroll-half-page-down") => HistoryKey::Byte(4),
-                Some("scroll-top") => HistoryKey::Byte(b'g'),
-                Some("scroll-bottom") => HistoryKey::Byte(b'G'),
-                Some("history-search-forward") => HistoryKey::Byte(b'/'),
-                Some("history-search-backward") => HistoryKey::Byte(b'?'),
-                Some("history-next-match") => HistoryKey::Byte(b'n'),
-                Some("history-previous-match") => HistoryKey::Byte(b'N'),
-                Some("copy-history") => HistoryKey::Byte(b'y'),
-                Some("toggle-history-selection") => HistoryKey::Byte(b'v'),
-                Some("history-selection-left") => HistoryKey::Byte(b'h'),
-                Some("history-selection-right") => HistoryKey::Byte(b'l'),
-                Some("history-selection-previous-word") => HistoryKey::Byte(b'b'),
-                Some("history-selection-next-word") => HistoryKey::Byte(b'e'),
-                Some("history-selection-line-start") => HistoryKey::Byte(b'0'),
-                Some("history-selection-line-end") => HistoryKey::Byte(b'$'),
-                Some("history-selection-swap") => HistoryKey::Byte(b'o'),
-                _ => return Err(format!("unsupported keybinds.history.{name} action")),
-            };
-            HistoryAction::Key(key)
-        };
+        }
+        let mut binding = HistoryBinding { actions: [None; 3] };
+        for (index, single) in actions.iter().enumerate() {
+            let action =
+                if single.get("action").and_then(toml::Value::as_str) == Some("switch-mode") {
+                    let mode = match single.get("mode").and_then(toml::Value::as_str) {
+                        Some("locked") => HistoryMode::Locked,
+                        Some("normal") => HistoryMode::Normal,
+                        Some("pane") => HistoryMode::Pane,
+                        Some("resize") => HistoryMode::Resize,
+                        Some("move") => HistoryMode::Move,
+                        Some("tab") => HistoryMode::Tab,
+                        Some("session") => HistoryMode::Session,
+                        _ => {
+                            return Err(format!(
+                                "unsupported keybinds.history.{name} switch-mode target"
+                            ));
+                        }
+                    };
+                    HistoryAction::SwitchMode(mode)
+                } else {
+                    let key = match single.as_str() {
+                        Some("edit-history") => {
+                            binding.actions[index] = Some(HistoryAction::EditHistory);
+                            continue;
+                        }
+                        Some("edit-last-output") => {
+                            binding.actions[index] = Some(HistoryAction::EditLastOutput);
+                            continue;
+                        }
+                        Some("copy-last-output") => {
+                            binding.actions[index] = Some(HistoryAction::CopyLastOutput);
+                            continue;
+                        }
+                        Some("scroll-up") => HistoryKey::Byte(b'k'),
+                        Some("scroll-down") => HistoryKey::Byte(b'j'),
+                        Some("scroll-page-up") => HistoryKey::PageUp,
+                        Some("scroll-page-down") => HistoryKey::PageDown,
+                        Some("scroll-half-page-up") => HistoryKey::Byte(21),
+                        Some("scroll-half-page-down") => HistoryKey::Byte(4),
+                        Some("scroll-top") => HistoryKey::Byte(b'g'),
+                        Some("scroll-bottom") => HistoryKey::Byte(b'G'),
+                        Some("history-search-forward") => HistoryKey::Byte(b'/'),
+                        Some("history-search-backward") => HistoryKey::Byte(b'?'),
+                        Some("history-next-match") => HistoryKey::Byte(b'n'),
+                        Some("history-previous-match") => HistoryKey::Byte(b'N'),
+                        Some("copy-history") => HistoryKey::Byte(b'y'),
+                        Some("toggle-history-selection") => HistoryKey::Byte(b'v'),
+                        Some("history-selection-left") => HistoryKey::Byte(b'h'),
+                        Some("history-selection-right") => HistoryKey::Byte(b'l'),
+                        Some("history-selection-previous-word") => HistoryKey::Byte(b'b'),
+                        Some("history-selection-next-word") => HistoryKey::Byte(b'e'),
+                        Some("history-selection-line-start") => HistoryKey::Byte(b'0'),
+                        Some("history-selection-line-end") => HistoryKey::Byte(b'$'),
+                        Some("history-selection-swap") => HistoryKey::Byte(b'o'),
+                        _ => return Err(format!("unsupported keybinds.history.{name} action")),
+                    };
+                    HistoryAction::Key(key)
+                };
+            binding.actions[index] = Some(action);
+        }
+        validate_history_chain(name, binding)?;
         if shortcuts.history_binding(key).is_some() {
             return Err(format!("duplicate keybinds.history key: {name}"));
         }
         if shortcuts.history_binding_len == shortcuts.history_bindings.len() {
             return Err("too many keybinds.history bindings".into());
         }
-        shortcuts.history_bindings[shortcuts.history_binding_len] = Some((key, action));
+        shortcuts.history_bindings[shortcuts.history_binding_len] = Some((key, binding));
         shortcuts.history_binding_len += 1;
+    }
+    Ok(())
+}
+
+fn validate_history_chain(name: &str, binding: HistoryBinding) -> Result<(), String> {
+    let actions: Vec<_> = binding.actions.into_iter().flatten().collect();
+    if actions.len() == 1 {
+        return Ok(());
+    }
+    let mut modes = 0;
+    let mut bottom = 0;
+    let mut operations = 0;
+    let mut editor = false;
+    for action in &actions {
+        match action {
+            HistoryAction::SwitchMode(_) => modes += 1,
+            HistoryAction::Key(HistoryKey::Byte(b'G')) => bottom += 1,
+            HistoryAction::Key(HistoryKey::Byte(b'y')) | HistoryAction::CopyLastOutput => {
+                operations += 1
+            }
+            HistoryAction::EditHistory | HistoryAction::EditLastOutput => {
+                operations += 1;
+                editor = true;
+            }
+            _ => return Err(format!("unsupported keybinds.history.{name} action chain")),
+        }
+    }
+    if modes > 1 || bottom > 1 || operations > 1
+        || (editor && actions.iter().any(|action| matches!(action, HistoryAction::SwitchMode(mode) if *mode != HistoryMode::Locked))) {
+        return Err(format!("conflicting keybinds.history.{name} action chain"));
     }
     Ok(())
 }
@@ -2672,16 +2741,69 @@ p = { actions = [{ action = "switch-mode", mode = "pane" }] }
         }
         assert_eq!(
             shortcuts.history_binding(HistoryKey::Byte(b'u')),
-            Some(HistoryAction::Key(HistoryKey::PageUp))
+            Some(HistoryBinding::single(HistoryAction::Key(
+                HistoryKey::PageUp
+            )))
         );
         assert_eq!(
             shortcuts.history_binding(HistoryKey::Down),
-            Some(HistoryAction::Key(HistoryKey::Byte(b'j')))
+            Some(HistoryBinding::single(HistoryAction::Key(
+                HistoryKey::Byte(b'j')
+            )))
         );
         assert_eq!(
             shortcuts.history_binding(HistoryKey::Byte(b'p')),
-            Some(HistoryAction::SwitchMode(HistoryMode::Pane))
+            Some(HistoryBinding::single(HistoryAction::SwitchMode(
+                HistoryMode::Pane
+            )))
         );
+    }
+
+    #[test]
+    fn history_output_chains_preserve_all_steps_and_reject_ambiguous_commands() {
+        let shortcuts = parse_config(
+            r#"
+[keybinds.history]
+E = { actions = ["scroll-bottom", { action="switch-mode", mode="locked" }, "edit-history"] }
+e = { actions = ["edit-last-output"] }
+y = { actions = ["copy-last-output", "scroll-bottom", { action="switch-mode", mode="pane" }] }
+c = { actions = ["copy-history", { action="switch-mode", mode="normal" }] }
+"#,
+        )
+        .unwrap()
+        .shortcuts;
+        assert_eq!(
+            shortcuts
+                .history_binding(HistoryKey::Byte(b'E'))
+                .unwrap()
+                .actions,
+            [
+                Some(HistoryAction::Key(HistoryKey::Byte(b'G'))),
+                Some(HistoryAction::SwitchMode(HistoryMode::Locked)),
+                Some(HistoryAction::EditHistory)
+            ]
+        );
+        assert!(
+            shortcuts
+                .history_binding(HistoryKey::Byte(b'y'))
+                .unwrap()
+                .contains(HistoryAction::CopyLastOutput)
+        );
+        for actions in [
+            "[]",
+            "['edit-history', 'edit-last-output']",
+            "['copy-history', 'copy-last-output']",
+            "['scroll-bottom', 'scroll-bottom']",
+            "['history-search-forward', 'copy-history']",
+            "[{action='switch-mode',mode='locked'}, {action='switch-mode',mode='normal'}]",
+            "['edit-history', {action='switch-mode',mode='pane'}]",
+            "['scroll-bottom','copy-history',{action='switch-mode',mode='locked'},'edit-history']",
+        ] {
+            assert!(
+                parse_config(&format!("[keybinds.history]\nx={{actions={actions}}}")).is_err(),
+                "{actions}"
+            );
+        }
     }
 
     #[test]
