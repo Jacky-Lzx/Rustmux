@@ -43,6 +43,15 @@ while True:
                 mode = {1:1000, 2:1002, 3:1003, 4:0}[byte]
                 os.write(1, b"\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006h")
                 if mode: os.write(1, f"\x1b[?{mode}h".encode())
+                # Writing the mode is asynchronous: publishing JSON immediately
+                # lets the parent send motion before Rustmux parses the change.
+                # Its ordered DECRQM reply acknowledges that the modes above
+                # have been applied before we publish the new input/mode state.
+                os.write(1, b"\x1b[?1003$p")
+                reply = bytearray()
+                while not reply.endswith(b"$y"): reply.extend(os.read(0,1))
+                expected = b"\x1b[?1003;1$y" if mode == 1003 else b"\x1b[?1003;2$y"
+                assert reply == expected, (mode, reply)
             elif byte == 5: emit("help")
             elif byte == 6:
                 emit("?__current__")
