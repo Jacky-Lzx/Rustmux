@@ -33,6 +33,18 @@ pub(crate) fn pane_rows(outer_rows: u16) -> u16 {
     outer_rows.saturating_sub(chrome_rows).max(MIN_PANE_ROWS)
 }
 
+pub(crate) fn pane_rows_for_layout(outer_rows: u16, compact: bool) -> u16 {
+    if compact {
+        outer_rows.saturating_sub(TOP_BAR_ROWS).max(MIN_PANE_ROWS)
+    } else {
+        pane_rows(outer_rows)
+    }
+}
+
+pub(crate) fn footer_enabled_for_layout(outer_rows: u16, compact: bool) -> bool {
+    !compact && footer_enabled(outer_rows)
+}
+
 pub(crate) fn footer_enabled(outer_rows: u16) -> bool {
     outer_rows >= TOP_BAR_ROWS + BOTTOM_BAR_ROWS + MIN_PANE_ROWS
 }
@@ -866,6 +878,23 @@ fn draw_powerline_segment(
     );
 }
 
+fn mode_style(theme: Theme, mode: FooterMode) -> Style {
+    Style {
+        foreground: rgb(theme.badge_text),
+        background: match mode {
+            FooterMode::Normal => rgb(theme.accent),
+            FooterMode::Pane => rgb(theme.secondary),
+            FooterMode::Resize => rgb(theme.orange),
+            FooterMode::Move => rgb(theme.orange),
+            FooterMode::Tab => rgb(theme.secondary),
+            FooterMode::Session => rgb(theme.secondary),
+            FooterMode::Locked => rgb(theme.error),
+        },
+        bold: true,
+        ..Style::default()
+    }
+}
+
 fn mode_label(mode: FooterMode) -> &'static str {
     match mode {
         FooterMode::Normal => " NORMAL ",
@@ -920,20 +949,7 @@ fn draw_footer(
     } else {
         footer_shortcuts(columns, mode, session, bindings)
     };
-    screen.set_style(Style {
-        foreground: rgb(theme.badge_text),
-        background: match mode {
-            FooterMode::Normal => rgb(theme.accent),
-            FooterMode::Pane => rgb(theme.secondary),
-            FooterMode::Resize => rgb(theme.orange),
-            FooterMode::Move => rgb(theme.orange),
-            FooterMode::Tab => rgb(theme.secondary),
-            FooterMode::Session => rgb(theme.secondary),
-            FooterMode::Locked => rgb(theme.error),
-        },
-        bold: true,
-        ..Style::default()
-    });
+    screen.set_style(mode_style(theme, mode));
     print(screen, &clipped(mode_label(mode), mode_width));
     if !shortcuts.is_empty()
         || display_hints
@@ -1076,6 +1092,31 @@ fn bar_layout(
     }
 }
 
+pub(crate) fn window_hitboxes_for_layout(
+    columns: usize,
+    session_name: Option<&str>,
+    names: &[String],
+    active: usize,
+    mode: FooterMode,
+    compact: bool,
+) -> Vec<(usize, usize, usize)> {
+    window_hitboxes(
+        bar_columns(columns, mode, compact),
+        session_name,
+        names,
+        active,
+    )
+}
+
+fn bar_columns(columns: usize, mode: FooterMode, compact: bool) -> usize {
+    let badge = if compact {
+        mode_label(mode).width().min(columns.saturating_sub(3))
+    } else {
+        0
+    };
+    columns.saturating_sub(badge)
+}
+
 pub(crate) fn window_hitboxes(
     columns: usize,
     session_name: Option<&str>,
@@ -1175,6 +1216,7 @@ pub(crate) fn compose_with_shortcuts(
     )
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn compose_with_mode(
     theme: Theme,
@@ -1185,6 +1227,31 @@ pub(crate) fn compose_with_mode(
     active: usize,
     mode: FooterMode,
     shortcuts: crate::config::Shortcuts,
+) -> io::Result<Screen> {
+    compose_with_layout(
+        theme,
+        child,
+        outer_rows,
+        session_name,
+        names,
+        active,
+        mode,
+        shortcuts,
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn compose_with_layout(
+    theme: Theme,
+    child: &Screen,
+    outer_rows: u16,
+    session_name: Option<&str>,
+    names: &[String],
+    active: usize,
+    mode: FooterMode,
+    shortcuts: crate::config::Shortcuts,
+    compact: bool,
 ) -> io::Result<Screen> {
     let mut screen = child.clone();
     screen.close_hyperlink();
@@ -1207,24 +1274,33 @@ pub(crate) fn compose_with_mode(
         screen.set_mouse_tracking(MouseTracking::Drag);
     }
     screen.prepend_display_row()?;
-    let footer = footer_enabled(outer_rows);
+    let footer = footer_enabled_for_layout(outer_rows, compact);
     if footer {
         screen.append_display_row()?;
     }
     screen.save_cursor();
     prepare_row(&mut screen, bar_background_style(theme));
-    let layout = bar_layout(columns, session_name, names, active);
+    let bar_columns = bar_columns(columns, mode, compact);
+    let layout = bar_layout(bar_columns, session_name, names, active);
     screen.set_style(Style {
         bold: true,
         ..bar_background_style(theme)
     });
     print(&mut screen, &layout.session);
-    let mut remaining = columns.saturating_sub(layout.session_width);
+    let mut remaining = bar_columns.saturating_sub(layout.session_width);
     for (index, label) in layout.labels.iter().enumerate().skip(layout.start) {
         draw_powerline_segment(theme, &mut screen, label, index == active, &mut remaining);
         if remaining < 3 {
             break;
         }
+    }
+    if compact && bar_columns < columns {
+        screen.position(0, bar_columns);
+        screen.set_style(mode_style(theme, mode));
+        print(
+            &mut screen,
+            &clipped(mode_label(mode), columns - bar_columns),
+        );
     }
     if footer {
         let row = screen.dimensions().0 - 1;
@@ -1246,6 +1322,100 @@ pub(crate) fn compose_with_mode(
 mod tests {
     use super::*;
     use crate::parser::Parser;
+
+    #[test]
+    fn compact_preserves_all_child_rows_cursor_and_modes_with_top_badges() {
+        let mut child = Screen::new(4, 60).unwrap();
+        Parser::new().advance(
+            &mut child,
+            b"\x1b[4;1HBOTTOM_CONTENT\x1b[?2004h\x1b[?1049hALT\x1b[?1049l",
+        );
+        let before = child.clone();
+        for mode in [
+            FooterMode::Locked,
+            FooterMode::Normal,
+            FooterMode::Pane,
+            FooterMode::Resize,
+            FooterMode::Move,
+            FooterMode::Tab,
+            FooterMode::Session,
+        ] {
+            let view = compose_with_layout(
+                Theme::default(),
+                &child,
+                5,
+                None,
+                &["中文 long name".into()],
+                0,
+                mode,
+                crate::config::Shortcuts::default(),
+                true,
+            )
+            .unwrap();
+            assert_eq!(child, before);
+            assert_eq!(view.dimensions(), (5, 60));
+            for row in 0..4 {
+                assert_eq!(view.row(row + 1), child.row(row));
+            }
+            assert_eq!(view.cursor(), (child.cursor().0 + 1, child.cursor().1));
+            assert!(view.bracketed_paste());
+            let text: String = view
+                .row(0)
+                .unwrap()
+                .iter()
+                .map(|cell| cell.character)
+                .collect();
+            assert!(text.ends_with(mode_label(mode)), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn compact_bar_hitboxes_reserve_the_mode_badge_even_with_wide_names() {
+        let names = vec!["中文很长的窗口名称".repeat(5), "second".into()];
+        for columns in 1..90 {
+            for active in 0..2 {
+                let child = Screen::new(2, columns).unwrap();
+                let view = compose_with_layout(
+                    Theme::default(),
+                    &child,
+                    3,
+                    Some("workspace"),
+                    &names,
+                    active,
+                    FooterMode::Session,
+                    crate::config::Shortcuts::default(),
+                    true,
+                )
+                .unwrap();
+                assert_eq!(view.dimensions(), (3, columns));
+                let available = bar_columns(columns, FooterMode::Session, true);
+                let hitboxes = window_hitboxes_for_layout(
+                    columns,
+                    Some("workspace"),
+                    &names,
+                    active,
+                    FooterMode::Session,
+                    true,
+                );
+                assert!(
+                    hitboxes
+                        .iter()
+                        .all(|(start, end, _)| *start < *end && *end <= available + 1)
+                );
+                if available >= 3 {
+                    assert!(hitboxes.iter().any(|(_, _, index)| *index == active));
+                }
+                assert_eq!(view.row(2), child.row(1));
+            }
+        }
+        for outer in 1..6 {
+            assert_eq!(
+                pane_rows_for_layout(outer, true),
+                outer.saturating_sub(1).max(1)
+            );
+            assert!(!footer_enabled_for_layout(outer, true));
+        }
+    }
 
     #[test]
     fn pane_borders_use_main_colors_without_an_opaque_background() {

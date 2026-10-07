@@ -47,6 +47,7 @@ pub(crate) fn load(
     path: &Path,
     rows: u16,
     columns: u16,
+    compact: bool,
 ) -> io::Result<crate::persistence::Snapshot> {
     let path = fs::canonicalize(path)?;
     let file = OpenOptions::new()
@@ -61,7 +62,12 @@ pub(crate) fn load(
     if text.len() as u64 > MAX_FILE {
         return Err(invalid("project layout exceeds 64 KiB"));
     }
-    crate::persistence::Snapshot::from_project(parse(&text, path.parent().unwrap())?, rows, columns)
+    crate::persistence::Snapshot::from_project(
+        parse(&text, path.parent().unwrap())?,
+        rows,
+        columns,
+        compact,
+    )
 }
 
 fn parse(text: &str, base: &Path) -> io::Result<Project> {
@@ -140,10 +146,10 @@ mod tests {
             "[[windows]]\nname='dev'\n[[windows.panes]]\n[[windows.panes]]",
         )
         .unwrap();
-        assert!(load(&path, 24, 4).is_err());
-        assert!(load(&path, 40, 120).is_ok());
+        assert!(load(&path, 24, 4, false).is_err());
+        assert!(load(&path, 40, 120, false).is_ok());
         fs::write(&path, " ".repeat(MAX_FILE as usize + 1)).unwrap();
-        assert!(load(&path, 40, 120).is_err());
+        assert!(load(&path, 40, 120, false).is_err());
         assert!(validate_command(Some(&"x".repeat(MAX_COMMAND + 1))).is_err());
         assert!(validate_command(Some("echo\0bad")).is_err());
     }

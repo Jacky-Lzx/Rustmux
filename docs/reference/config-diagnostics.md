@@ -65,6 +65,13 @@ and paths and shell names use their UTF-8 display representation.
 | `[settings]` | Effective default mode, shell, scrollback limit, retention, hover feedback, theme, clear-defaults flag, saving settings, and notification settings |
 | `[session_manager]` | Effective manager action keys, including disabled actions as empty arrays |
 
+## Compact layout
+
+The top-level boolean `compact` defaults to `false`. Set it to `true` to move
+the mode indicator to the window bar and give the footer row to the panes. Both
+configuration inspection and server status report `[settings].compact`. See
+[Compact Layout](compact-layout.md) for geometry, reload, and restore behavior.
+
 ## Default input mode
 
 ```toml

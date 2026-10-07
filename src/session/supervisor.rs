@@ -68,7 +68,12 @@ fn create_with_bootstrap(
     let workspace = super::acquire_workspace(name)?;
     let snapshot = if let Some(layout) = layout {
         let (rows, columns) = size.unwrap();
-        Some(crate::project::load(layout, rows, columns)?)
+        Some(crate::project::load(
+            layout,
+            rows,
+            columns,
+            config.compact(),
+        )?)
     } else {
         crate::persistence::load(&crate::persistence::state_directory()?, name)?
     };

@@ -18,6 +18,11 @@ fn run_scenario(name: &str) {
 }
 
 #[test]
+fn compact() {
+    run_scenario("compact");
+}
+
+#[test]
 fn default_mode() {
     run_scenario("default_mode");
 }

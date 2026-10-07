@@ -378,7 +378,7 @@ pub(super) fn handle(
                 return Err(invalid("window limit reached"));
             }
             let columns = windows.active().unwrap().content().layout().dimensions().1;
-            let rows = pane_rows(rows);
+            let rows = pane_rows_for_layout(rows, context.compact);
             let (content_rows, content_columns) = pane_content_dimensions(rows, columns);
             let directory = cwd.or_else(|| active_directory(windows));
             let set = PaneSet::new(

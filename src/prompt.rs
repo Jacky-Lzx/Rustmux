@@ -176,7 +176,12 @@ impl WindowPrompt {
         self.overlay_themed(original, Theme::default())
     }
 
+    #[cfg(test)]
     pub fn overlay_themed(&self, original: &Screen, theme: Theme) -> Screen {
+        self.overlay_themed_layout(original, theme, false)
+    }
+
+    pub fn overlay_themed_layout(&self, original: &Screen, theme: Theme, compact: bool) -> Screen {
         let mut screen = original.clone();
         screen.clear_pointer_shapes();
         screen.close_hyperlink();
@@ -186,7 +191,7 @@ impl WindowPrompt {
             background: rgb(theme.background),
             ..Style::default()
         };
-        if self.is_rename() {
+        if self.is_rename() && !compact {
             if rows >= 3 {
                 screen.save_cursor();
                 prepare_prompt_row(&mut screen, rows - 1, panel);
@@ -440,6 +445,29 @@ mod tests {
                 assert_eq!(label, " RENAME ");
             }
         }
+    }
+
+    #[test]
+    fn compact_rename_uses_top_editor_and_preserves_the_last_child_row() {
+        let mut original = Screen::new(5, 80).unwrap();
+        crate::parser::Parser::new().advance(&mut original, b"\x1b[5;1HBOTTOM_CONTENT");
+        let before = original.clone();
+        let mut prompt = WindowPrompt::new("shell");
+        prompt.text = "中文".into();
+        let view = prompt.overlay_themed_layout(&original, Theme::default(), true);
+        assert_eq!(original, before);
+        let text: String = view
+            .row(0)
+            .unwrap()
+            .iter()
+            .filter(|cell| cell.width != 0)
+            .map(|cell| cell.character)
+            .collect();
+        assert!(text.starts_with("Rename: 中文"));
+        assert_eq!(view.row(4), original.row(4));
+        assert_eq!(view.cursor(), (0, "Rename: ".len() + 4));
+        assert!(view.cursor_visible());
+        assert!(view.bracketed_paste());
     }
 
     #[test]

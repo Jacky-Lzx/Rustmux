@@ -176,11 +176,19 @@ impl<T> PaneSet<T> {
 
     /// Geometry only; the caller remains responsible for resizing PTYs and screens.
     pub fn resize(&mut self, rows: u16, columns: u16) -> io::Result<()> {
+        self.layout = self.resized_layout(rows, columns)?;
+        Ok(())
+    }
+
+    pub(crate) fn validate_resize(&self, rows: u16, columns: u16) -> io::Result<()> {
+        self.resized_layout(rows, columns).map(|_| ())
+    }
+
+    fn resized_layout(&self, rows: u16, columns: u16) -> io::Result<Layout> {
         let mut candidate = self.layout.clone();
         candidate.resize(rows, columns)?;
         require_content_cells(&candidate)?;
-        self.layout = candidate;
-        Ok(())
+        Ok(candidate)
     }
 
     /// Validate a prospective split before invoking the content factory exactly once.

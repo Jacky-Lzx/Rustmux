@@ -140,6 +140,10 @@ impl Reload {
         self.current = config;
         self.generation += 1;
     }
+    pub fn reject(&mut self, error: impl std::fmt::Display) {
+        self.candidate = None;
+        self.error = Some(format!("configuration layout cannot be applied: {error}"));
+    }
     pub fn current(&self) -> &Config {
         &self.current
     }

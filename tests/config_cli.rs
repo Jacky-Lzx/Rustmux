@@ -74,6 +74,43 @@ fn exported_defaults_round_trip_and_ignore_active_broken_config() {
 }
 
 #[test]
+fn compact_is_boolean_and_reported_without_ignored_option_warnings() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    let config = root.join("compact.toml");
+    for (text, value) in [
+        ("", false),
+        ("compact=false", false),
+        ("compact=true", true),
+    ] {
+        fs::write(&config, text).unwrap();
+        let output = command(
+            root,
+            &[
+                "check-config",
+                "--config",
+                config.to_str().unwrap(),
+                "--toml",
+                "--strict",
+            ],
+        );
+        assert!(output.status.success(), "{output:?}");
+        let checked = report(&output);
+        assert_eq!(settings(&checked)["compact"].as_bool(), Some(value));
+        assert!(checked["warnings"].as_array().unwrap().is_empty());
+    }
+    for value in ["'true'", "1", "[]"] {
+        fs::write(&config, format!("compact={value}")).unwrap();
+        let output = command(
+            root,
+            &["check-config", "--config", config.to_str().unwrap()],
+        );
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("compact"));
+    }
+}
+
+#[test]
 fn default_mode_is_reported_and_invalid_modes_fail_strict_checks() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path();

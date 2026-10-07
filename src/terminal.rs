@@ -23,7 +23,10 @@ use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGWINCH};
 
 use crate::pane::{INPUT_LIMIT as LIMIT, MAX_CELLS, Pane};
 use crate::{
-    chrome::{FooterMode, compose_with_mode, footer_enabled, pane_rows},
+    chrome::{
+        FooterMode, compose_with_layout, footer_enabled, footer_enabled_for_layout,
+        pane_rows_for_layout,
+    },
     graphics::outer::KittyOverlays,
     graphics_capability::{GraphicsCapabilityProbe, GraphicsSupport, OuterImageReplies},
     graphics_shared_memory_output::SharedPixels,
@@ -98,14 +101,19 @@ fn run_inner(
     let size = window_size(&file)?;
     // Start the shell before changing the outer terminal, so exec failures
     // cannot leave it raw. Signal registration below creates no worker threads.
-    let mut session = TerminalSession::new(
-        shell_path,
+    let mut session = TerminalSession::from_snapshot(
+        SessionContext {
+            shell_path,
+            session_name: None,
+            notifications,
+            scrollback_lines,
+            shortcuts,
+            compact: config.is_some_and(|config| config.compact()),
+        },
         size.ws_row,
         size.ws_col,
         None,
-        notifications,
-        scrollback_lines,
-        shortcuts,
+        false,
     )?;
     session.remain_on_exit = remain_on_exit;
     session.default_mode =
@@ -145,6 +153,7 @@ pub fn serve_session(
 ) -> io::Result<u8> {
     serve_inner(
         SessionContext {
+            compact: false,
             shell_path,
             session_name: Some(name.as_str()),
             notifications,
@@ -172,6 +181,7 @@ pub(crate) fn serve_configured_session(
 ) -> io::Result<u8> {
     serve_inner(
         SessionContext {
+            compact: config.compact(),
             shell_path: config.shell(),
             session_name: Some(name.as_str()),
             notifications: config.notifications(),
@@ -278,6 +288,7 @@ fn serve_inner(
 
 /// State that must survive one frontend disconnect and a later attachment.
 struct TerminalSession {
+    compact: bool,
     remain_on_exit: bool,
     default_mode: crate::config::DefaultMode,
     shell_path: OsString,
@@ -299,6 +310,7 @@ struct TerminalSession {
 
 #[derive(Clone)]
 struct SessionContext<'a> {
+    compact: bool,
     shell_path: &'a OsStr,
     session_name: Option<&'a str>,
     notifications: crate::config::Notifications,
@@ -319,6 +331,7 @@ struct AttachmentCapabilities<'a> {
 }
 
 impl TerminalSession {
+    #[cfg(test)]
     fn new(
         shell_path: &OsStr,
         rows: u16,
@@ -330,6 +343,7 @@ impl TerminalSession {
     ) -> io::Result<Self> {
         Self::from_snapshot(
             SessionContext {
+                compact: false,
                 shell_path,
                 session_name,
                 notifications,
@@ -351,6 +365,7 @@ impl TerminalSession {
         restore_history: bool,
     ) -> io::Result<Self> {
         let SessionContext {
+            compact,
             shell_path,
             session_name,
             notifications,
@@ -366,6 +381,7 @@ impl TerminalSession {
                 notifications.clone(),
                 scrollback_lines,
                 restore_history,
+                compact,
             )?,
             None => {
                 let mut windows = Windows::default();
@@ -374,7 +390,7 @@ impl TerminalSession {
                     spawn_window(
                         shell_path,
                         None,
-                        pane_rows(rows),
+                        pane_rows_for_layout(rows, compact),
                         columns,
                         notifications.clone(),
                         scrollback_lines,
@@ -384,6 +400,7 @@ impl TerminalSession {
             }
         };
         Ok(Self {
+            compact,
             remain_on_exit: false,
             default_mode: crate::config::DefaultMode::default(),
             shell_path: shell_path.to_owned(),
@@ -424,6 +441,7 @@ impl TerminalSession {
             &mut self.windows,
             signals,
             SessionContext {
+                compact: self.compact,
                 shell_path: &self.shell_path,
                 session_name: self.session_name.as_deref(),
                 notifications: self.notifications.clone(),
@@ -459,6 +477,7 @@ impl TerminalSession {
     }
 
     fn import_config(&mut self, config: &crate::config::Config) {
+        self.compact = config.compact();
         self.default_mode = config.default_mode();
         self.shell_path = config.shell().clone();
         self.shortcuts = config.shortcuts();
@@ -467,11 +486,20 @@ impl TerminalSession {
         self.remain_on_exit = config.remain_on_exit();
     }
 
-    fn reload_detached(&mut self) {
+    fn reload_detached(&mut self) -> io::Result<()> {
         if let Some(reload) = self.reload.as_mut() {
             reload.poll();
         }
         if let Some(config) = self.reload.as_mut().and_then(|reload| reload.take()) {
+            if self.compact != config.compact() {
+                if let Err(error) =
+                    validate_chrome_resize(&self.windows, self.outer_rows, config.compact())
+                {
+                    self.reload.as_mut().unwrap().reject(error);
+                    return Ok(());
+                }
+                resize_chrome(&mut self.windows, self.outer_rows, config.compact())?;
+            }
             apply_config(
                 &config,
                 &mut self.windows,
@@ -481,6 +509,7 @@ impl TerminalSession {
             self.import_config(&config);
             self.reload.as_mut().unwrap().commit(config);
         }
+        Ok(())
     }
 
     /// Keep every PTY live while waiting for the next session client.
@@ -490,7 +519,7 @@ impl TerminalSession {
         signals: &Signals,
     ) -> io::Result<DetachedEvent> {
         loop {
-            self.reload_detached();
+            self.reload_detached()?;
             if let Some(service) = self.control.as_mut() {
                 let refresh = service.tick(|request| {
                     if let crate::control::Request::DisconnectSession { server_pid } = request {
@@ -529,6 +558,7 @@ impl TerminalSession {
                         request,
                         &mut self.windows,
                         SessionContext {
+                            compact: self.compact,
                             shell_path: &self.shell_path,
                             session_name: self.session_name.as_deref(),
                             notifications: self.notifications.clone(),
@@ -2226,6 +2256,7 @@ fn service_pane(
 }
 
 struct RuntimeConfig {
+    compact: bool,
     default_mode: crate::config::DefaultMode,
     clipboard_write: bool,
     clipboard_read: bool,
@@ -2242,6 +2273,7 @@ struct RuntimeConfig {
 }
 impl RuntimeConfig {
     fn update(&mut self, config: &crate::config::Config) {
+        self.compact = config.compact();
         self.default_mode = config.default_mode();
         self.theme = config.theme();
         self.mouse_hover_cursor = config.mouse_hover_cursor();
@@ -2256,6 +2288,37 @@ impl RuntimeConfig {
         self.shortcuts = config.shortcuts();
         self.remain_on_exit = config.remain_on_exit();
     }
+}
+
+fn validate_chrome_resize(
+    windows: &Windows<PaneSet<Pane>>,
+    outer_rows: u16,
+    compact: bool,
+) -> io::Result<()> {
+    for window in windows.iter() {
+        let set = window.content();
+        set.validate_resize(
+            pane_rows_for_layout(outer_rows, compact),
+            set.layout().dimensions().1,
+        )?;
+    }
+    Ok(())
+}
+
+fn resize_chrome(
+    windows: &mut Windows<PaneSet<Pane>>,
+    outer_rows: u16,
+    compact: bool,
+) -> io::Result<()> {
+    for window in windows.iter_mut() {
+        let set = window.content_mut();
+        set.resize(
+            pane_rows_for_layout(outer_rows, compact),
+            set.layout().dimensions().1,
+        )?;
+        set.synchronize_sizes()?;
+    }
+    Ok(())
 }
 
 fn apply_config(
@@ -2337,6 +2400,7 @@ fn forward(
         }
     }
     let mut runtime = RuntimeConfig {
+        compact: context.compact,
         default_mode,
         clipboard_read: reload
             .as_ref()
@@ -2420,13 +2484,26 @@ fn forward(
                 && prompt.is_none()
                 && let Some(config) = service.take()
             {
-                apply_config(&config, windows, closed, persistence.as_deref_mut());
-                runtime.update(&config);
-                keys.shortcuts = runtime.shortcuts;
-                service.commit(config);
-                renderer.invalidate();
-                force_redraw = true;
-                bar_dirty = true;
+                let validation = if runtime.compact != config.compact() {
+                    validate_chrome_resize(windows, *outer_rows, config.compact())
+                } else {
+                    Ok(())
+                };
+                match validation {
+                    Err(error) => service.reject(error),
+                    Ok(()) => {
+                        if runtime.compact != config.compact() {
+                            resize_chrome(windows, *outer_rows, config.compact())?;
+                        }
+                        apply_config(&config, windows, closed, persistence.as_deref_mut());
+                        runtime.update(&config);
+                        keys.shortcuts = runtime.shortcuts;
+                        service.commit(config);
+                        renderer.invalidate();
+                        force_redraw = true;
+                        bar_dirty = true;
+                    }
+                }
             }
             let error = service.error().map(str::to_owned);
             if reload_error != error {
@@ -2441,6 +2518,7 @@ fn forward(
         let default_mode = runtime.default_mode;
         let remain_on_exit = runtime.remain_on_exit;
         let context = SessionContext {
+            compact: runtime.compact,
             shell_path,
             session_name: session_name.as_deref(),
             notifications: notifications.clone(),
@@ -2906,9 +2984,10 @@ fn forward(
         }
         if let Some(size) = resize {
             for window in windows.iter_mut() {
-                window
-                    .content_mut()
-                    .resize(pane_rows(size.ws_row), size.ws_col)?;
+                window.content_mut().resize(
+                    pane_rows_for_layout(size.ws_row, runtime.compact),
+                    size.ws_col,
+                )?;
             }
             let sizes: Vec<_> = windows
                 .iter()
@@ -3079,7 +3158,7 @@ fn forward(
                         &bells,
                         runtime.theme,
                     )?;
-                    let mut view = compose_with_mode(
+                    let mut view = compose_with_layout(
                         runtime.theme,
                         &content,
                         *outer_rows,
@@ -3088,6 +3167,7 @@ fn forward(
                         active_index,
                         keys.footer_mode(),
                         shortcuts,
+                        runtime.compact,
                     )?;
                     if panes.active().retain_after_exit(remain_on_exit)
                         && (panes.active().io().status.is_some() || panes.active().io().eof)
@@ -3120,7 +3200,8 @@ fn forward(
                         view.set_kitty_keyboard_flags(0, 1);
                         view.set_rich_clipboard_paste(false);
                     }
-                    if prompt.as_ref().is_some_and(|editor| editor.is_rename())
+                    if !runtime.compact
+                        && prompt.as_ref().is_some_and(|editor| editor.is_rename())
                         && *outer_rows > 1
                         && let Some(column) = crate::chrome::active_window_name_cursor_column(
                             view.dimensions().1,
@@ -3135,7 +3216,7 @@ fn forward(
                     }
                     if let Some(history) = &history {
                         let (rows, columns) = view.dimensions();
-                        if footer_enabled(*outer_rows) {
+                        if footer_enabled_for_layout(*outer_rows, runtime.compact) {
                             let owned_hints = history.footer_hints();
                             let hints: Vec<_> = owned_hints
                                 .iter()
@@ -3185,11 +3266,12 @@ fn forward(
                         && prompt.is_none()
                         && history.is_none()
                         && help.is_none()
-                        && footer_enabled(*outer_rows)
+                        && (footer_enabled_for_layout(*outer_rows, runtime.compact)
+                            || (runtime.compact && *outer_rows > 1))
                     {
                         let (rows, columns) = view.dimensions();
                         view.save_cursor();
-                        view.position(rows - 1, 0);
+                        view.position(if runtime.compact { 0 } else { rows - 1 }, 0);
                         view.set_style(crate::style::Style {
                             foreground: crate::theme::rgb(runtime.theme.error),
                             background: crate::theme::rgb(runtime.theme.background),
@@ -3213,13 +3295,19 @@ fn forward(
                         && help.is_none()
                         && history.is_none()
                     {
-                        let bar = crate::chrome::window_hitboxes(
-                            view.dimensions().1,
-                            session_name.as_deref(),
-                            &names,
-                            active_index,
-                        );
-                        let footer = if status_error.is_none() {
+                        let bar = if runtime.compact && status_error.is_some() {
+                            Vec::new()
+                        } else {
+                            crate::chrome::window_hitboxes_for_layout(
+                                view.dimensions().1,
+                                session_name.as_deref(),
+                                &names,
+                                active_index,
+                                keys.footer_mode(),
+                                runtime.compact,
+                            )
+                        };
+                        let footer = if status_error.is_none() && !runtime.compact {
                             crate::chrome::footer_hitboxes_for_mode(
                                 view.dimensions().1,
                                 keys.footer_mode(),
@@ -3233,7 +3321,7 @@ fn forward(
                     }
                     if let Some(prompt) = &prompt {
                         renderer.render(
-                            &prompt.overlay_themed(&view, runtime.theme),
+                            &prompt.overlay_themed_layout(&view, runtime.theme, runtime.compact),
                             &mut FrameWriter(&mut to_terminal),
                         )?;
                     } else if let Some(help) = &mut help {
@@ -3625,7 +3713,8 @@ fn forward(
                 pane.screen().kitty_keyboard_flags()
             };
             keys.bar_enabled = *outer_rows > 1;
-            keys.footer_row = footer_enabled(*outer_rows).then_some(usize::from(*outer_rows));
+            keys.footer_row = footer_enabled_for_layout(*outer_rows, runtime.compact)
+                .then_some(usize::from(*outer_rows));
             if help_action.is_none() && keys.mouse.is_empty() && input.front() == Some(&27) {
                 let active = windows.active().unwrap().id();
                 let names = window_names(windows);
@@ -3634,11 +3723,13 @@ fn forward(
                     .position(|window| window.id() == active)
                     .unwrap();
                 let columns = windows.active().unwrap().content().layout().dimensions().1;
-                keys.window_hitboxes = crate::chrome::window_hitboxes(
+                keys.window_hitboxes = crate::chrome::window_hitboxes_for_layout(
                     usize::from(columns),
                     session_name.as_deref(),
                     &names,
                     active_index,
+                    keys.footer_mode(),
+                    runtime.compact,
                 );
                 keys.footer_hitboxes = crate::chrome::footer_hitboxes_for_mode(
                     usize::from(columns),
@@ -3646,9 +3737,12 @@ fn forward(
                     session_name.is_some(),
                     shortcuts,
                 );
-                if reload_error.is_some() || save_error.is_some() {
+                if runtime.compact || reload_error.is_some() || save_error.is_some() {
                     // Error text replaces the footer hints; it has no actions.
                     keys.footer_hitboxes.clear();
+                    if runtime.compact && (reload_error.is_some() || save_error.is_some()) {
+                        keys.window_hitboxes.clear();
+                    }
                 }
                 keys.active_pane = Some(set.layout().active());
                 keys.pane_hitboxes = pane_view::hitboxes(set.layout());

@@ -671,6 +671,7 @@ pub struct Config {
     notifications: Notifications,
     scrollback_lines: usize,
     default_mode: DefaultMode,
+    compact: bool,
     shortcuts: Shortcuts,
     persistence: PersistenceOptions,
     remain_on_exit: bool,
@@ -691,6 +692,9 @@ pub struct PersistenceOptions {
 }
 
 impl Config {
+    pub fn compact(&self) -> bool {
+        self.compact
+    }
     pub fn default_mode(&self) -> DefaultMode {
         self.default_mode
     }
@@ -749,6 +753,7 @@ struct ParsedConfig {
     notifications: Notifications,
     scrollback_lines: Option<usize>,
     default_mode: DefaultMode,
+    compact: bool,
     shortcuts: Shortcuts,
     persistence: PersistenceOptions,
     remain_on_exit: bool,
@@ -803,6 +808,7 @@ fn resolve_config(configured: ParsedConfig) -> Config {
             .scrollback_lines
             .unwrap_or(DEFAULT_SCROLLBACK_LINES),
         default_mode: configured.default_mode,
+        compact: configured.compact,
         shortcuts: configured.shortcuts,
         persistence: configured.persistence,
         remain_on_exit: configured.remain_on_exit,
@@ -942,6 +948,7 @@ fn parse_config(source: &str) -> Result<ParsedConfig, String> {
         notifications,
         scrollback_lines,
         default_mode: DefaultMode::parse(document.get("default_mode"), shortcuts)?,
+        compact: boolean("compact")?,
         shortcuts,
         persistence,
         remain_on_exit: boolean("remain_on_exit")?,
@@ -2126,6 +2133,7 @@ preset = "mocha"
                 notifications: Notifications::default(),
                 scrollback_lines: Some(5000),
                 default_mode: DefaultMode::Locked,
+                compact: false,
                 shortcuts: Shortcuts::default(),
                 persistence: PersistenceOptions::default(),
                 remain_on_exit: false,

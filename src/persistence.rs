@@ -140,10 +140,12 @@ impl Snapshot {
         project: crate::project::Project,
         rows: u16,
         columns: u16,
+        compact: bool,
     ) -> io::Result<Self> {
         let mut windows = Vec::new();
         for window in project.windows {
-            let mut layout = Layout::new(crate::chrome::pane_rows(rows), columns)?;
+            let mut layout =
+                Layout::new(crate::chrome::pane_rows_for_layout(rows, compact), columns)?;
             let first = layout.active();
             let mut panes = Vec::new();
             for pane in window.panes {
@@ -184,7 +186,7 @@ impl Snapshot {
     pub(crate) fn bootstrap_size(&self) -> (u16, u16) {
         (self.rows, self.columns)
     }
-    fn layouts(&self, rows: u16, columns: u16) -> io::Result<Vec<Layout>> {
+    fn layouts(&self, rows: u16, columns: u16, compact: bool) -> io::Result<Vec<Layout>> {
         if rows == 0
             || columns == 0
             || usize::from(rows) * usize::from(columns) > crate::pane::MAX_CELLS
@@ -194,7 +196,11 @@ impl Snapshot {
         self.windows
             .iter()
             .map(|window| {
-                Layout::from_saved(&window.layout, crate::chrome::pane_rows(rows), columns)
+                Layout::from_saved(
+                    &window.layout,
+                    crate::chrome::pane_rows_for_layout(rows, compact),
+                    columns,
+                )
             })
             .collect()
     }
@@ -209,7 +215,10 @@ impl Snapshot {
         {
             return Err(invalid("invalid saved windows or active window"));
         }
-        let layouts = self.layouts(self.rows, self.columns)?;
+        // Snapshots store physical dimensions, not chrome policy. Validate
+        // structure against the largest supported canvas; restore preflights
+        // every window again against the destination's actual chrome.
+        let layouts = self.layouts(self.rows, self.columns, true)?;
         for (window, layout) in self.windows.iter().zip(layouts) {
             if window.name.len() > 128 || window.name.chars().any(char::is_control) {
                 return Err(invalid("invalid saved window name"));
@@ -241,6 +250,7 @@ impl Snapshot {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn restore(
         &self,
         shell: &OsStr,
@@ -249,11 +259,12 @@ impl Snapshot {
         notifications: Notifications,
         history_limit: usize,
         restore_history: bool,
+        compact: bool,
     ) -> io::Result<Windows<PaneSet<Pane>>> {
         self.validate()?;
         // Validate every destination before any shell starts. RAII cleans up
         // already created panes if a later exec or allocation fails.
-        let layouts = self.layouts(rows, columns)?;
+        let layouts = self.layouts(rows, columns, compact)?;
         let mut windows = Windows::default();
         let mut ids = Vec::new();
         for (window, layout) in self.windows.iter().zip(layouts) {
@@ -534,6 +545,23 @@ fn invalid(message: impl Into<String>) -> io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compact_only_snapshot_validates_and_checks_destination_before_restore() {
+        let mut snapshot = sample();
+        let mut layout = Layout::new(6, 20).unwrap();
+        layout.split_active(crate::layout::SplitAxis::Rows).unwrap();
+        snapshot.rows = 7;
+        snapshot.columns = 20;
+        snapshot.windows[0].layout = layout.saved();
+        snapshot.validate().unwrap();
+        assert_eq!(
+            snapshot.layouts(7, 20, true).unwrap()[0].dimensions(),
+            (6, 20)
+        );
+        assert!(snapshot.layouts(7, 20, false).is_err());
+        assert!(snapshot.layouts(8, 20, false).is_ok());
+    }
 
     fn sample() -> Snapshot {
         let mut layout = Layout::new(crate::chrome::pane_rows(24), 80).unwrap();
