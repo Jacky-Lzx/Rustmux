@@ -2,6 +2,7 @@
 
 - [Overview](index.md)
 - [Build and Run](getting-started/quick-start.md)
+- [Native Development Configuration](reference/dev-config.md)
 - [Configuration Diagnostics](reference/config-diagnostics.md)
 - [Configuration Hot Reload](reference/config-reload.md)
 - [Compact Layout](reference/compact-layout.md)

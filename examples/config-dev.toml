@@ -1,0 +1,231 @@
+# Development configuration for the Rustmux main-human review track.
+# Native main-human configuration. Load this file with --config.
+# Local config-dev.toml can replace config.toml after review.
+# Ctrl-B enters NORMAL; Enter / s enters HISTORY from NORMAL.
+# Ctrl-V enters MOVE in each mode (Ctrl-M is indistinguishable from Enter).
+# Defaults remain enabled, including Ctrl-B [ and Ctrl-B E/e.
+# HISTORY E/e opens the frozen history / captured command-output editor.
+# During keyboard selection, default e still extends by word.
+# HISTORY y copies the selection, match, or viewport and stays in HISTORY.
+# HISTORY Y copies the last command output and returns to LOCKED; H opens Help.
+# [keybinds.history] supports edit-history, edit-last-output, copy-last-output,
+# and optional scroll-bottom / switch-mode steps. See history-view.md examples.
+# Theme, session snapshots/history, notification filters and Manager keys are supported.
+# This file uses Mocha and explicit Session Manager action keys.
+# compact/default_mode are supported; floating terminals remain unimplemented.
+# Named-session Manager: Ctrl-B Ctrl-W, or w in SESSION; j/k or arrows move,
+# / searches, Tab completes, Enter attaches, a creates, dd kills, Esc cancels.
+
+default_mode = "locked"
+compact = false
+clear_defaults = false
+scrollback_lines = 5000
+shell = "/opt/homebrew/bin/fish"
+drag_source = true
+drop_target = true
+
+save_scrollback = true          # 保存历史
+save_scrollback_colors = true   # 同时保存颜色和文字样式
+autosave_interval_seconds = 30  # 每 30 秒自动保存；0 表示关闭
+
+[theme]
+preset = "mocha"
+
+[notifications]
+enabled = true
+exclude_applications = ["yazi", "nvim", "lazygit"]
+long_command_bell = true
+command_duration_seconds = 10
+
+[session_manager]
+up = ["k", "up"]
+down = ["j", "down"]
+search = ["/"]
+complete = ["tab"]
+open = ["enter"]
+rename = ["Ctrl r"]
+save = ["Ctrl a"]
+delete = ["d"]
+disconnect = ["Ctrl x"]
+cancel = ["esc"]
+backspace = ["backspace"]
+
+[keybinds.locked]
+"Ctrl b" = { actions = [{ action = "switch-mode", mode = "normal" }], display = "always" }
+
+[keybinds.normal]
+esc      = { actions = [{ action="switch-mode", mode="locked" }],                      display = "help"   }
+"Ctrl g" = { actions = [{ action="switch-mode", mode="locked" }],                      display = "help"   }
+c        = { actions = ["new-window", { action="switch-mode", mode="locked" }],        display = "always" }
+x        = { actions = ["close-window", { action="switch-mode", mode="locked" }],      display = "always" }
+","      = { actions = ["rename-window"],                                              display = "always" }
+n        = { actions = ["next-window", { action="switch-mode", mode="locked" }],       display = "always" }
+p        = { actions = ["previous-window", { action="switch-mode", mode="locked" }],   display = "always" }
+tab      = { actions = ["previous-window", { action="switch-mode", mode="locked" }],   display = "help"   }
+"<"      = { actions = ["move-window-left", { action="switch-mode", mode="locked" }],  display = "help"   }
+">"      = { actions = ["move-window-right", { action="switch-mode", mode="locked" }], display = "help"   }
+
+1 = { actions = [{ action = "go-to-window", index = 1 }, { action = "switch-mode", mode = "locked" }], display = "hidden" }
+2 = { actions = [{ action = "go-to-window", index = 2 }, { action = "switch-mode", mode = "locked" }], display = "hidden" }
+3 = { actions = [{ action = "go-to-window", index = 3 }, { action = "switch-mode", mode = "locked" }], display = "hidden" }
+4 = { actions = [{ action = "go-to-window", index = 4 }, { action = "switch-mode", mode = "locked" }], display = "hidden" }
+5 = { actions = [{ action = "go-to-window", index = 5 }, { action = "switch-mode", mode = "locked" }], display = "hidden" }
+6 = { actions = [{ action = "go-to-window", index = 6 }, { action = "switch-mode", mode = "locked" }], display = "hidden" }
+7 = { actions = [{ action = "go-to-window", index = 7 }, { action = "switch-mode", mode = "locked" }], display = "hidden" }
+8 = { actions = [{ action = "go-to-window", index = 8 }, { action = "switch-mode", mode = "locked" }], display = "hidden" }
+9 = { actions = [{ action = "go-to-window", index = 9 }, { action = "switch-mode", mode = "locked" }], display = "hidden" }
+
+enter = { actions = [{ action = "switch-mode", mode = "history" }], display = "always" }
+s = { actions = [{ action = "switch-mode", mode = "history" }], display = "help" }
+h = { actions = ["focus-left", { action = "switch-mode", mode = "locked" }], display = "help" }
+j = { actions = ["focus-down", { action = "switch-mode", mode = "locked" }], display = "help" }
+k = { actions = ["focus-up", { action = "switch-mode", mode = "locked" }], display = "help" }
+l = { actions = ["focus-right", { action = "switch-mode", mode = "locked" }], display = "help" }
+left = { actions = ["focus-left"], display = "help" }
+down = { actions = ["focus-down"], display = "help" }
+up = { actions = ["focus-up"], display = "help" }
+right = { actions = ["focus-right"], display = "help" }
+"Ctrl w" = { actions = ["switch-session", { action = "switch-mode", mode = "locked" }], display = "always" }
+"Ctrl p" = { actions = [{ action = "switch-mode", mode = "pane" }], display = "always" }
+"Ctrl t" = { actions = [{ action = "switch-mode", mode = "tab" }], display = "help" }
+"Ctrl v" = { actions = [{ action = "switch-mode", mode = "move" }], display = "help" }
+"Ctrl o" = { actions = [{ action = "switch-mode", mode = "session" }], display = "help" }
+r = { actions = [{ action = "switch-mode", mode = "resize" }], display = "help" }
+"?" = { actions = ["show-help", { action = "switch-mode", mode = "locked" }], display = "always" }
+
+[keybinds.tab]
+left = { actions = ["previous-window"], display = "always" }
+h = { actions = ["previous-window"], display = "always" }
+right = { actions = ["next-window"], display = "always" }
+l = { actions = ["next-window"], display = "always" }
+tab = { actions = ["previous-window"], display = "help" }
+"<" = { actions = ["move-window-left"], display = "always" }
+">" = { actions = ["move-window-right"], display = "always" }
+n = { actions = ["new-window", { action = "switch-mode", mode = "locked" }], display = "always" }
+r = { actions = ["rename-window"], display = "always" }
+x = { actions = ["close-window", { action = "switch-mode", mode = "locked" }], display = "always" }
+1 = { actions = [{ action = "go-to-window", index = 1 }], display = "hidden" }
+2 = { actions = [{ action = "go-to-window", index = 2 }], display = "hidden" }
+3 = { actions = [{ action = "go-to-window", index = 3 }], display = "hidden" }
+4 = { actions = [{ action = "go-to-window", index = 4 }], display = "hidden" }
+5 = { actions = [{ action = "go-to-window", index = 5 }], display = "hidden" }
+6 = { actions = [{ action = "go-to-window", index = 6 }], display = "hidden" }
+7 = { actions = [{ action = "go-to-window", index = 7 }], display = "hidden" }
+8 = { actions = [{ action = "go-to-window", index = 8 }], display = "hidden" }
+9 = { actions = [{ action = "go-to-window", index = 9 }], display = "hidden" }
+"Ctrl p" = { actions = [{ action = "switch-mode", mode = "pane" }], display = "help" }
+"Ctrl v" = { actions = [{ action = "switch-mode", mode = "move" }], display = "help" }
+"Ctrl o" = { actions = [{ action = "switch-mode", mode = "session" }], display = "help" }
+"Ctrl g" = { actions = [{ action = "switch-mode", mode = "locked" }], display = "help" }
+enter = { actions = [{ action = "switch-mode", mode = "locked" }], display = "help" }
+esc = { actions = [{ action = "switch-mode", mode = "locked" }], display = "help" }
+"?" = { actions = ["show-help"], display = "help" }
+
+[keybinds.pane]
+# Match Zellij's b / [ / ] pane workflow; preserve the running process.
+# [ and ] move to the previous/next existing window (wrapping at the ends).
+b = { actions = ["break-pane", { action = "switch-mode", mode = "locked" }], display = "always" }
+"[" = { actions = ["move-pane-previous-window", { action = "switch-mode", mode = "locked" }], display = "always" }
+"]" = { actions = ["move-pane-next-window", { action = "switch-mode", mode = "locked" }], display = "always" }
+left = { actions = ["focus-left"], display = "help" }
+down = { actions = ["focus-down"], display = "help" }
+up = { actions = ["focus-up"], display = "help" }
+right = { actions = ["focus-right"], display = "help" }
+h = { actions = ["focus-left"], display = "always" }
+j = { actions = ["focus-down"], display = "always" }
+k = { actions = ["focus-up"], display = "always" }
+l = { actions = ["focus-right"], display = "always" }
+d = { actions = ["new-pane-down", { action = "switch-mode", mode = "locked" }], display = "always" }
+n = { actions = ["new-pane-right", { action = "switch-mode", mode = "locked" }], display = "help" }
+r = { actions = ["new-pane-right", { action = "switch-mode", mode = "locked" }], display = "always" }
+f = { actions = ["toggle-pane-zoom", { action = "switch-mode", mode = "locked" }], display = "always" }
+x = { actions = ["close-pane", { action = "switch-mode", mode = "locked" }], display = "always" }
+tab = { actions = ["focus-next-pane"], display = "always" }
+p = { actions = [{ action = "switch-mode", mode = "normal" }], display = "help" }
+"Ctrl t" = { actions = [{ action = "switch-mode", mode = "tab" }], display = "help" }
+"Ctrl v" = { actions = [{ action = "switch-mode", mode = "move" }], display = "help" }
+"Ctrl o" = { actions = [{ action = "switch-mode", mode = "session" }], display = "help" }
+"Ctrl g" = { actions = [{ action = "switch-mode", mode = "locked" }], display = "help" }
+enter = { actions = [{ action = "switch-mode", mode = "locked" }], display = "help" }
+esc = { actions = [{ action = "switch-mode", mode = "locked" }], display = "help" }
+
+[keybinds.resize]
+left = { actions = ["resize-pane-left"], display = "help" }
+down = { actions = ["resize-pane-down"], display = "help" }
+up = { actions = ["resize-pane-up"], display = "help" }
+right = { actions = ["resize-pane-right"], display = "help" }
+h = { actions = ["resize-pane-left"], display = "always" }
+j = { actions = ["resize-pane-down"], display = "always" }
+k = { actions = ["resize-pane-up"], display = "always" }
+l = { actions = ["resize-pane-right"], display = "always" }
+r = { actions = [{ action = "switch-mode", mode = "normal" }], display = "always" }
+"Ctrl p" = { actions = [{ action = "switch-mode", mode = "pane" }], display = "help" }
+s = { actions = [{ action = "switch-mode", mode = "history" }], display = "help" }
+"Ctrl v" = { actions = [{ action = "switch-mode", mode = "move" }], display = "help" }
+"Ctrl o" = { actions = [{ action = "switch-mode", mode = "session" }], display = "help" }
+"Ctrl t" = { actions = [{ action = "switch-mode", mode = "tab" }], display = "help" }
+"Ctrl g" = { actions = [{ action = "switch-mode", mode = "locked" }], display = "help" }
+enter = { actions = [{ action = "switch-mode", mode = "locked" }], display = "help" }
+esc = { actions = [{ action = "switch-mode", mode = "locked" }], display = "help" }
+
+[keybinds.move]
+left = { actions = ["move-pane-left"], display = "help" }
+down = { actions = ["move-pane-down"], display = "help" }
+up = { actions = ["move-pane-up"], display = "help" }
+right = { actions = ["move-pane-right"], display = "help" }
+h = { actions = ["move-pane-left"], display = "always" }
+j = { actions = ["move-pane-down"], display = "always" }
+k = { actions = ["move-pane-up"], display = "always" }
+l = { actions = ["move-pane-right"], display = "always" }
+m = { actions = [{ action = "switch-mode", mode = "normal" }], display = "always" }
+"Ctrl p" = { actions = [{ action = "switch-mode", mode = "pane" }], display = "help" }
+s = { actions = [{ action = "switch-mode", mode = "history" }], display = "help" }
+r = { actions = [{ action = "switch-mode", mode = "resize" }], display = "help" }
+"Ctrl t" = { actions = [{ action = "switch-mode", mode = "tab" }], display = "help" }
+"Ctrl o" = { actions = [{ action = "switch-mode", mode = "session" }], display = "help" }
+"Ctrl g" = { actions = [{ action = "switch-mode", mode = "locked" }], display = "help" }
+enter = { actions = [{ action = "switch-mode", mode = "locked" }], display = "help" }
+esc = { actions = [{ action = "switch-mode", mode = "locked" }], display = "help" }
+
+[keybinds.history]
+"/" = { actions = ["history-search-forward"], display = "always" }
+"?" = { actions = ["history-search-backward"], display = "help" }
+n = { actions = ["history-next-match"], display = "help" }
+N = { actions = ["history-previous-match"], display = "help" }
+g = { actions = ["scroll-top"], display = "always" }
+G = { actions = ["scroll-bottom"], display = "always" }
+up = { actions = ["scroll-up"], display = "help" }
+down = { actions = ["scroll-down"], display = "help" }
+j = { actions = ["scroll-down"], display = "always" }
+k = { actions = ["scroll-up"], display = "always" }
+"Ctrl b" = { actions = ["scroll-page-up"], display = "help" }
+"Ctrl f" = { actions = ["scroll-page-down"], display = "help" }
+"Ctrl u" = { actions = ["scroll-page-up"], display = "help" }
+"Ctrl d" = { actions = ["scroll-page-down"], display = "help" }
+pageup = { actions = ["scroll-page-up"], display = "help" }
+pagedown = { actions = ["scroll-page-down"], display = "help" }
+y = { actions = ["copy-history"], display = "always" }
+Y = { actions = ["copy-last-output", "scroll-bottom", { action = "switch-mode", mode = "locked" }], display = "help" }
+H = { actions = ["show-help"], display = "help" }
+v = { actions = ["toggle-history-selection"], display = "help" }
+q = { actions = [{ action = "switch-mode", mode = "locked" }], display = "always" }
+esc = { actions = [{ action = "switch-mode", mode = "locked" }], display = "help" }
+enter = { actions = [{ action = "switch-mode", mode = "locked" }], display = "help" }
+"Ctrl p" = { actions = [{ action = "switch-mode", mode = "pane" }], display = "help" }
+"Ctrl t" = { actions = [{ action = "switch-mode", mode = "tab" }], display = "help" }
+"Ctrl v" = { actions = [{ action = "switch-mode", mode = "move" }], display = "help" }
+"Ctrl o" = { actions = [{ action = "switch-mode", mode = "session" }], display = "help" }
+r = { actions = [{ action = "switch-mode", mode = "resize" }], display = "help" }
+"Ctrl g" = { actions = [{ action = "switch-mode", mode = "locked" }], display = "help" }
+
+[keybinds.session]
+d = { actions = ["detach"], display = "always" }
+w = { actions = ["switch-session", { action = "switch-mode", mode = "locked" }], display = "always" }
+o = { actions = [{ action = "switch-mode", mode = "normal" }], display = "always" }
+"Ctrl p" = { actions = [{ action = "switch-mode", mode = "pane" }], display = "help" }
+"Ctrl t" = { actions = [{ action = "switch-mode", mode = "tab" }], display = "help" }
+"Ctrl v" = { actions = [{ action = "switch-mode", mode = "move" }], display = "help" }
+"Ctrl g" = { actions = [{ action = "switch-mode", mode = "locked" }], display = "help" }
+enter = { actions = [{ action = "switch-mode", mode = "locked" }], display = "help" }
+esc = { actions = [{ action = "switch-mode", mode = "locked" }], display = "help" }
+"?" = { actions = ["show-help"], display = "help" }
