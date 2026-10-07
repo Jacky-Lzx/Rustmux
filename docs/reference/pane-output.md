@@ -49,7 +49,8 @@ an error before writing the incomplete chunk. Existing log bytes remain in the
 file. A burst larger than the buffer can therefore interrupt logging even if
 average output is small. The stream has a fixed memory bound, not a lossless
 backpressure guarantee. With 16 windows of 64 panes, raw tail buffers account
-for at most 64 MiB, plus one hidden undo pane and transient response buffers.
+for at most 64 MiB, plus one floating pane, one hidden undo pane and transient
+response buffers.
 
 Continuous clients poll the bounded control interface every 50 ms after each
 read/write. They release the control connection after each request, and never

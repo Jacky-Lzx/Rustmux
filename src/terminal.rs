@@ -571,7 +571,7 @@ impl TerminalSession {
                     )
                 });
                 if refresh {
-                    for window in self.windows.iter_mut() {
+                    for window in self.windows.all_iter_mut() {
                         window.content_mut().synchronize_sizes()?;
                     }
                 }
@@ -592,7 +592,7 @@ impl TerminalSession {
                 self.closed = None;
             }
 
-            for window in self.windows.iter_mut() {
+            for window in self.windows.all_iter_mut() {
                 for (_, pane) in window.content_mut().iter_mut() {
                     let retained = pane.retain_after_exit(self.remain_on_exit);
                     pane.observe_exit(retained)?;
@@ -605,7 +605,7 @@ impl TerminalSession {
             let mut interests = Vec::new();
             let (listener_events, pane_events) = {
                 let mut fds = vec![PollFd::new(endpoint.listener().as_fd(), PollFlags::POLLIN)];
-                for window in self.windows.iter() {
+                for window in self.windows.all_iter() {
                     for (pane_id, pane) in window.content().iter() {
                         let mut flags = PollFlags::empty();
                         if pane.io().reply_read_limit() != 0 {
@@ -707,7 +707,7 @@ impl TerminalSession {
 
     fn remove_finished_detached(&mut self) -> io::Result<Option<u8>> {
         let mut finished = Vec::new();
-        for window in self.windows.iter() {
+        for window in self.windows.all_iter() {
             for (pane_id, pane) in window.content().iter() {
                 let state = pane.io();
                 if state.eof {
@@ -734,7 +734,7 @@ impl TerminalSession {
                 .expect("finished pane owns a window")
                 .content_mut();
             if panes.iter().len() == 1 {
-                if self.windows.iter().len() == 1 {
+                if self.windows.iter().len() == 1 && !self.windows.is_floating(window_id) {
                     return Ok(Some(code));
                 }
                 drop(self.windows.close(window_id)?);
@@ -968,6 +968,7 @@ enum WindowKey {
     MovePaneNextWindow,
     JoinPane,
     ToggleZoom,
+    ToggleFloating,
     UndoClose,
     History,
     HistoryEditor,
@@ -1678,6 +1679,7 @@ impl WindowInput {
             PaneAction::FocusRight => output.push(WindowKey::FocusPane(Direction::Right)),
             PaneAction::Next => output.push(WindowKey::NextPane),
             PaneAction::Zoom => output.push(WindowKey::ToggleZoom),
+            PaneAction::Floating => output.push(WindowKey::ToggleFloating),
             PaneAction::Close => output.push(WindowKey::ClosePane),
             PaneAction::Respawn => output.push(WindowKey::RespawnPane),
             PaneAction::History => output.push(WindowKey::History),
@@ -1952,6 +1954,7 @@ fn shortcut_action(byte: u8) -> Option<WindowKey> {
         b'm' => WindowKey::JoinPane,
         b'o' => WindowKey::NextPane,
         b'Z' => WindowKey::ToggleZoom,
+        b'i' => WindowKey::ToggleFloating,
         b'z' => WindowKey::UndoClose,
         b'[' => WindowKey::History,
         b'E' => WindowKey::HistoryEditor,
@@ -2323,7 +2326,7 @@ fn validate_chrome_resize(
     outer_rows: u16,
     compact: bool,
 ) -> io::Result<()> {
-    for window in windows.iter() {
+    for window in windows.all_iter() {
         let set = window.content();
         set.validate_resize(
             pane_rows_for_layout(outer_rows, compact),
@@ -2338,7 +2341,7 @@ fn resize_chrome(
     outer_rows: u16,
     compact: bool,
 ) -> io::Result<()> {
-    for window in windows.iter_mut() {
+    for window in windows.all_iter_mut() {
         let set = window.content_mut();
         set.resize(
             pane_rows_for_layout(outer_rows, compact),
@@ -2355,7 +2358,7 @@ fn apply_config(
     closed: &mut Option<crate::closed_pane::ClosedPane>,
     persistence: Option<&mut crate::session::snapshot::SnapshotService>,
 ) {
-    for window in windows.iter_mut() {
+    for window in windows.all_iter_mut() {
         for (_, pane) in window.content_mut().iter_mut() {
             pane.configure_notifications(config.notifications());
             if !config.drop_target() {
@@ -2417,7 +2420,7 @@ fn forward(
     let mut session_name = context.session_name.map(str::to_owned);
     let mut renamed_notice: Option<String> = None;
     // A new attachment cannot complete a write captured for the previous client.
-    for window in windows.iter_mut() {
+    for window in windows.all_iter_mut() {
         for (_, pane) in window.content_mut().iter_mut() {
             pane.configure_clipboard(false);
             pane.configure_rich_clipboard(None);
@@ -2494,6 +2497,7 @@ fn forward(
     let mut pending_outer_resize = None;
     let mut save_error = None;
     let mut reload_error = None;
+    let mut backdrop: Option<(WindowId, Screen)> = None;
     loop {
         if connection == ConnectionState::Detached {
             // The client has stopped sending input but still drains final output.
@@ -2602,7 +2606,7 @@ fn forward(
                 // Script selection or resizing can change an inactive window.
                 // Keep all child sizes synchronized, and propagate I/O failure to
                 // the normal runtime cleanup rather than a controller reply.
-                for window in windows.iter_mut() {
+                for window in windows.all_iter_mut() {
                     window.content_mut().synchronize_sizes()?;
                 }
                 history = None;
@@ -2817,12 +2821,18 @@ fn forward(
                 {
                     continue;
                 }
-                if let Some(pane_id) = pane_id {
+                if windows.is_floating(id) {
+                    for (_, pane) in windows.get_mut(id).unwrap().content_mut().iter_mut() {
+                        rich_clipboard.forget(pane.rich_clipboard_owner(), &mut to_terminal);
+                        pane.shell_mut().terminate()?;
+                    }
+                    drop(windows.close(id)?);
+                } else if let Some(pane_id) = pane_id {
                     let window = windows.get(id).unwrap();
                     let before = window.content().layout().clone();
                     let name = window.name().to_owned();
                     let sole_pane = window.content().iter().len() == 1;
-                    if sole_pane && windows.iter().len() == 1 {
+                    if sole_pane && windows.iter().len() == 1 && !windows.is_floating(id) {
                         // run() restores the terminal, then cleans up visible and hidden shells.
                         file_transfer.cancel_all();
                         flush_protocol_exit(
@@ -2860,7 +2870,7 @@ fn forward(
                         id: pane_id,
                     });
                 } else {
-                    if windows.iter().len() == 1 {
+                    if windows.iter().len() == 1 && !windows.is_floating(id) {
                         file_transfer.cancel_all();
                         flush_protocol_exit(
                             frontend,
@@ -2984,7 +2994,7 @@ fn forward(
             None
         };
         // Observe exits before preparing resizes, so dead panes need no PTY ioctl.
-        for window in windows.iter_mut() {
+        for window in windows.all_iter_mut() {
             let focused = window.content().layout().active();
             let active_window = window.id() == active;
             for (id, pane) in window.content_mut().iter_mut() {
@@ -3011,14 +3021,14 @@ fn forward(
             }
         }
         if let Some(size) = resize {
-            for window in windows.iter_mut() {
+            for window in windows.all_iter_mut() {
                 window.content_mut().resize(
                     pane_rows_for_layout(size.ws_row, runtime.compact),
                     size.ws_col,
                 )?;
             }
             let sizes: Vec<_> = windows
-                .iter()
+                .all_iter()
                 .map(|window| {
                     let layout = window.content().layout();
                     let mut sizes = layout.tiled_content_geometry().panes;
@@ -3031,7 +3041,7 @@ fn forward(
                 .collect();
             // Prepare all destinations across all windows before changing any PTY.
             let mut prepared = Vec::new();
-            for window in windows.iter_mut() {
+            for window in windows.all_iter_mut() {
                 let rectangles = &sizes.iter().find(|(id, _)| *id == window.id()).unwrap().1;
                 for (pane_id, pane) in window.content_mut().iter_mut() {
                     let rect = rectangles.iter().find(|(id, _)| *id == pane_id).unwrap().1;
@@ -3050,7 +3060,7 @@ fn forward(
         // New panes can already match their layout's character dimensions,
         // so PaneSet::synchronize_sizes may have skipped their first ioctl.
         // Keep their PTY pixel fields current before servicing child output.
-        for window in windows.iter_mut() {
+        for window in windows.all_iter_mut() {
             for (_, pane) in window.content_mut().iter_mut() {
                 if pane.io().status.is_none() && !pane.io().eof {
                     pane.sync_pty_cell_pixels(*cell_pixels)?;
@@ -3075,7 +3085,7 @@ fn forward(
         }
         let active_index = windows
             .iter()
-            .position(|window| window.id() == active)
+            .position(|window| Some(window.id()) == windows.tiled_active().map(|w| w.id()))
             .unwrap();
         if connection == ConnectionState::Attached {
             let state = windows
@@ -3095,9 +3105,55 @@ fn forward(
             names[active_index].clone_from(&editor.text);
         }
         let mut active_paused = false;
+        let floating_id = windows.floating().map(|w| w.id());
+        let background_paused = windows.floating_visible()
+            && windows
+                .tiled_active()
+                .unwrap()
+                .content()
+                .iter()
+                .any(|(_, pane)| pane.screen().synchronized_output());
+        let background = if windows.floating_visible() {
+            let base = windows.tiled_active().unwrap();
+            let set = base.content();
+            let (rows, columns) = set.layout().dimensions();
+            if background_paused {
+                Some(
+                    match backdrop.as_ref().filter(|(id, frame)| {
+                        *id == base.id()
+                            && frame.dimensions() == (usize::from(rows), usize::from(columns))
+                    }) {
+                        Some((_, frame)) => frame.clone(),
+                        None => Screen::new(usize::from(rows), usize::from(columns))?,
+                    },
+                )
+            } else {
+                let screens: Vec<_> = set.iter().map(|(id, pane)| (id, pane.screen())).collect();
+                let titles: Vec<_> = set
+                    .iter()
+                    .map(|(id, pane)| (id, pane.terminal_title()))
+                    .collect();
+                let frame = pane_view::compose_themed(
+                    set.layout(),
+                    &screens,
+                    None,
+                    &titles,
+                    &[],
+                    runtime.theme,
+                )?;
+                if set.iter().any(|(_, pane)| pane.io().dirty) {
+                    bar_dirty = true;
+                }
+                backdrop = Some((base.id(), frame.clone()));
+                Some(frame)
+            }
+        } else {
+            None
+        };
         let mut finished = Vec::new();
-        for window in windows.iter_mut() {
+        for window in windows.all_iter_mut() {
             let id = window.id();
+            let window_id_for_title = id;
             let panes = window.content_mut();
             let zoomed = panes.layout().is_zoomed();
             let focused = panes.layout().active();
@@ -3164,6 +3220,8 @@ fn forward(
                                 id,
                                 if pane.retain_after_exit(remain_on_exit) {
                                     pane.display_title()
+                                } else if Some(window_id_for_title) == floating_id {
+                                    format!("floating · {}", pane.terminal_title()).into()
                                 } else {
                                     pane.terminal_title().into()
                                 },
@@ -3186,6 +3244,14 @@ fn forward(
                         &bells,
                         runtime.theme,
                     )?;
+                    if background.is_none() {
+                        backdrop = Some((id, content.clone()));
+                    }
+                    let content = if let Some(base) = background.as_ref() {
+                        pane_view::floating_over(base, content, panes.layout())?
+                    } else {
+                        content
+                    };
                     let mut view = compose_with_layout(
                         runtime.theme,
                         &content,
@@ -3409,6 +3475,12 @@ fn forward(
                 }
             }
         }
+        if background.is_some() && !background_paused && !bar_dirty {
+            let id = windows.tiled_active().unwrap().id();
+            for (_, pane) in windows.get_mut(id).unwrap().content_mut().iter_mut() {
+                pane.parts_mut().3.dirty = false;
+            }
+        }
         if !finished.is_empty() {
             let old = active_focus(windows);
             bar_dirty = true;
@@ -3420,7 +3492,7 @@ fn forward(
                     .content_mut();
                 let was_focused = panes.layout().active() == pane_id;
                 if panes.iter().len() == 1 {
-                    if windows.iter().len() == 1 {
+                    if windows.iter().len() == 1 && !windows.is_floating(id) {
                         flush_protocol_exit(
                             frontend,
                             &mut file_transfer,
@@ -3744,11 +3816,10 @@ fn forward(
             keys.footer_row = footer_enabled_for_layout(*outer_rows, runtime.compact)
                 .then_some(usize::from(*outer_rows));
             if help_action.is_none() && keys.mouse.is_empty() && input.front() == Some(&27) {
-                let active = windows.active().unwrap().id();
                 let names = window_names(windows);
                 let active_index = windows
                     .iter()
-                    .position(|window| window.id() == active)
+                    .position(|window| Some(window.id()) == windows.tiled_active().map(|w| w.id()))
                     .unwrap();
                 let columns = windows.active().unwrap().content().layout().dimensions().1;
                 keys.window_hitboxes = crate::chrome::window_hitboxes_for_layout(
@@ -3799,7 +3870,71 @@ fn forward(
             }
             for action in actions.drain(..) {
                 let old = active_focus(windows);
+                if windows.floating_visible()
+                    && matches!(
+                        action,
+                        WindowKey::Split(_)
+                            | WindowKey::BreakPane
+                            | WindowKey::JoinPane
+                            | WindowKey::MovePanePreviousWindow
+                            | WindowKey::MovePaneNextWindow
+                            | WindowKey::SwapPaneNext
+                            | WindowKey::SwapPanePrevious
+                            | WindowKey::ResizePane(_)
+                            | WindowKey::MovePane(_)
+                            | WindowKey::ToggleZoom
+                            | WindowKey::UndoClose
+                            | WindowKey::MoveLeft
+                            | WindowKey::MoveRight
+                            | WindowKey::Rename
+                    )
+                {
+                    if to_terminal.is_empty() {
+                        to_terminal.push_back(7);
+                    }
+                    continue;
+                }
                 match action {
+                    WindowKey::ToggleFloating => {
+                        if windows.floating_visible() {
+                            windows.hide_floating();
+                        } else if !windows.show_floating() {
+                            let (rows, columns) = windows
+                                .tiled_active()
+                                .unwrap()
+                                .content()
+                                .layout()
+                                .dimensions();
+                            let directory = active_directory(windows);
+                            let layout =
+                                crate::layout::Layout::new(rows, columns)?.into_floating()?;
+                            match PaneSet::from_layout_with(layout, |_, rect| {
+                                Pane::spawn_in(
+                                    shell_path,
+                                    directory.as_deref(),
+                                    rect.rows,
+                                    rect.columns,
+                                    notifications.clone(),
+                                    scrollback_lines,
+                                )
+                            }) {
+                                Ok(set) => {
+                                    windows.create_floating("floating".into(), set)?;
+                                }
+                                Err(_) => {
+                                    if to_terminal.is_empty() {
+                                        to_terminal.push_back(7);
+                                    }
+                                }
+                            }
+                        }
+                        history = None;
+                        prompt = None;
+                        help = None;
+                        renderer.invalidate();
+                        force_redraw = true;
+                        bar_dirty = true;
+                    }
                     WindowKey::Byte(byte) => {
                         let pane = windows.active_mut().unwrap().content_mut().active_mut();
                         if !pane.io().accepts_input() {
@@ -4352,7 +4487,7 @@ fn forward(
         let mut interests = Vec::new();
         let (outer, events) = {
             let mut fds = vec![PollFd::new(frontend.poll_fd(), outer_events)];
-            for window in windows.iter() {
+            for window in windows.all_iter() {
                 for (pane_id, pane) in window.content().iter() {
                     let state = pane.io();
                     let mut flags = PollFlags::empty();
@@ -4728,7 +4863,7 @@ fn drag_source_view(
     })
 }
 fn rich_paste_live(windows: &Windows<PaneSet<Pane>>, owner: crate::rich_clipboard::Owner) -> bool {
-    windows.iter().any(|window| {
+    windows.all_iter().any(|window| {
         window.content().iter().any(|(_, pane)| {
             pane.rich_clipboard_owner() == owner
                 && pane.io().accepts_input()
@@ -4748,7 +4883,7 @@ fn rich_clipboard_live(
     windows: &Windows<PaneSet<Pane>>,
     owner: crate::rich_clipboard::Owner,
 ) -> bool {
-    windows.iter().any(|window| {
+    windows.all_iter().any(|window| {
         window
             .content()
             .iter()
@@ -4760,7 +4895,7 @@ fn deliver_rich_clipboard(
     owner: crate::rich_clipboard::Owner,
     bytes: &[u8],
 ) -> bool {
-    for window in windows.iter_mut() {
+    for window in windows.all_iter_mut() {
         for (_, pane) in window.content_mut().iter_mut() {
             if pane.rich_clipboard_owner() == owner && pane.io().accepts_input() {
                 let state = pane.parts_mut().3;
@@ -4782,7 +4917,7 @@ fn inherit_pane_colors(
     colors: &Arc<TerminalColors>,
 ) -> bool {
     let mut changed = false;
-    for window in windows.iter_mut() {
+    for window in windows.all_iter_mut() {
         for (_, pane) in window.content_mut().iter_mut() {
             let (_, _, screen, state) = pane.parts_mut();
             if screen.inherit_colors(colors) {

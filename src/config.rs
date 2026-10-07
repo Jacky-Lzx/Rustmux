@@ -167,6 +167,7 @@ pub enum PaneAction {
     FocusRight,
     Next,
     Zoom,
+    Floating,
     Close,
     Respawn,
     Normal,
@@ -1188,6 +1189,7 @@ fn parse_keybinds(
             } else if let Some((action, canonical)) = names.iter().find_map(|name| {
                 let canonical = match *name {
                     "respawn-pane" => b'R',
+                    "toggle-floating-terminal" => b'i',
                     "close-window" => b'&',
                     "rename-window" => b',',
                     "next-window" => b'n',
@@ -1664,6 +1666,7 @@ fn parse_pane_bindings(
                     Some("new-pane-right") => Some((PaneAction::SplitRight, false)),
                     Some("new-pane-down") => Some((PaneAction::SplitDown, false)),
                     Some("toggle-pane-zoom") => Some((PaneAction::Zoom, false)),
+                    Some("toggle-floating-terminal") => Some((PaneAction::Floating, false)),
                     Some("close-pane") => Some((PaneAction::Close, false)),
                     Some("respawn-pane") => Some((PaneAction::Respawn, false)),
                     _ => None,
@@ -3002,5 +3005,52 @@ c = { actions = ["copy-history", { action="switch-mode", mode="normal" }] }
         }
         let collision = "[keybinds.normal]\ns = { actions = [{ action = 'switch-mode', mode = 'history' }] }\nenter = { actions = [{ action = 'switch-mode', mode = 'history' }] }\n'Ctrl m' = { actions = [{ action = 'switch-mode', mode = 'move' }] }";
         assert!(parse_config(collision).is_err());
+    }
+}
+
+#[cfg(test)]
+mod floating_tests {
+    use super::*;
+    #[test]
+    fn floating_bindings_are_native_normal_and_pane_actions() {
+        let config = parse_config(
+            r#"
+clear_defaults=true
+[keybinds.locked]
+"Ctrl b"={actions=[{action="switch-mode",mode="normal"}]}
+[keybinds.normal]
+i={actions=["toggle-floating-terminal",{action="switch-mode",mode="locked"}],display="help"}
+[keybinds.pane]
+w={actions=["toggle-floating-terminal",{action="switch-mode",mode="locked"}],display="always"}
+"#,
+        )
+        .unwrap();
+        assert_eq!(config.shortcuts.resolve(b'i'), Some(b'i'));
+        assert_eq!(
+            config.shortcuts.pane_binding(b'w').unwrap().action,
+            PaneAction::Floating
+        );
+        assert!(
+            config
+                .shortcuts
+                .hints(BindingMode::Normal, true, true)
+                .iter()
+                .any(|h| h.label == "Floating terminal")
+        );
+        for actions in [
+            "['toggle-floating-terminal']",
+            "['toggle-floating-terminal','future',{action='switch-mode',mode='locked'}]",
+        ] {
+            let source = format!("[keybinds.normal]\ni={{actions={actions}}}");
+            assert!(
+                !parse_config(&source)
+                    .unwrap()
+                    .shortcuts
+                    .normal_actions
+                    .iter()
+                    .flatten()
+                    .any(|(_, action)| *action == b'i')
+            );
+        }
     }
 }

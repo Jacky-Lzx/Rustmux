@@ -12,7 +12,8 @@
 # and optional scroll-bottom / switch-mode steps. See history-view.md examples.
 # Theme, session snapshots/history, notification filters and Manager keys are supported.
 # This file uses Mocha and explicit Session Manager action keys.
-# compact/default_mode are supported; floating terminals remain unimplemented.
+# compact/default_mode and the session-wide floating terminal are supported.
+# NORMAL i / PANE w toggles the same floating shell without restarting it.
 # Named-session Manager: Ctrl-B Ctrl-W, or w in SESSION; j/k or arrows move,
 # / searches, Tab completes, Enter attaches, a creates, dd kills, Esc cancels.
 
@@ -85,6 +86,7 @@ left = { actions = ["focus-left"], display = "help" }
 down = { actions = ["focus-down"], display = "help" }
 up = { actions = ["focus-up"], display = "help" }
 right = { actions = ["focus-right"], display = "help" }
+i = { actions = ["toggle-floating-terminal", { action = "switch-mode", mode = "locked" }], display = "help" }
 "Ctrl w" = { actions = ["switch-session", { action = "switch-mode", mode = "locked" }], display = "always" }
 "Ctrl p" = { actions = [{ action = "switch-mode", mode = "pane" }], display = "always" }
 "Ctrl t" = { actions = [{ action = "switch-mode", mode = "tab" }], display = "help" }
@@ -122,6 +124,7 @@ esc = { actions = [{ action = "switch-mode", mode = "locked" }], display = "help
 "?" = { actions = ["show-help"], display = "help" }
 
 [keybinds.pane]
+w = { actions = ["toggle-floating-terminal", { action = "switch-mode", mode = "locked" }], display = "help" }
 # Match Zellij's b / [ / ] pane workflow; preserve the running process.
 # [ and ] move to the previous/next existing window (wrapping at the ends).
 b = { actions = ["break-pane", { action = "switch-mode", mode = "locked" }], display = "always" }

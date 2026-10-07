@@ -331,6 +331,7 @@ pub struct Layout {
     next_id: u64,
     count: usize,
     zoomed: bool,
+    floating: bool,
 }
 
 impl Layout {
@@ -346,7 +347,20 @@ impl Layout {
             next_id: 1,
             count: 1,
             zoomed: false,
+            floating: false,
         })
+    }
+
+    pub(crate) fn into_floating(mut self) -> io::Result<Self> {
+        if self.count != 1 {
+            return Err(invalid("floating layout must contain one pane"));
+        }
+        self.floating = true;
+        self.zoomed = false;
+        Ok(self)
+    }
+    pub(crate) fn is_floating(&self) -> bool {
+        self.floating
     }
 
     pub fn active(&self) -> PaneId {
@@ -394,6 +408,29 @@ impl Layout {
 
     /// Full underlying split geometry, including panes hidden by zoom.
     pub fn tiled_geometry(&self) -> Geometry {
+        if self.floating {
+            let width = ((u32::from(self.columns) * 3 / 4) as u16)
+                .max(12)
+                .min(self.columns);
+            let height = ((u32::from(self.rows) * 7 / 10) as u16)
+                .max(5)
+                .min(self.rows);
+            // Interior rectangles expand by one border cell on each non-canvas side.
+            let horizontal = u16::from(width < self.columns);
+            let vertical = u16::from(height < self.rows);
+            return Geometry {
+                panes: vec![(
+                    self.active,
+                    Rect {
+                        row: (self.rows - height) / 2 + vertical,
+                        column: (self.columns - width) / 2 + horizontal,
+                        rows: height - 2 * vertical,
+                        columns: width - 2 * horizontal,
+                    },
+                )],
+                separators: Vec::new(),
+            };
+        }
         let mut geometry = Geometry {
             panes: Vec::with_capacity(self.count),
             separators: Vec::with_capacity(self.count - 1),
@@ -700,6 +737,9 @@ impl Layout {
     /// Split only if the active rectangle can contain content plus both pane borders.
     /// Rejected requests leave IDs, focus, dimensions and the entire tree unchanged.
     pub fn split_active(&mut self, axis: SplitAxis) -> io::Result<PaneId> {
+        if self.floating {
+            return Err(invalid("cannot split a floating terminal"));
+        }
         if self.count == MAX_PANES {
             return Err(invalid("pane limit reached"));
         }
@@ -949,5 +989,38 @@ mod tests {
         layout.toggle_zoom();
         assert!(!layout.resize_separator(0, 1));
         assert!(layout.separator_hitboxes().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod floating_tests {
+    use super::*;
+    #[test]
+    fn floating_geometry_centers_resizes_and_rejects_splits() {
+        let mut layout = Layout::new(22, 80).unwrap().into_floating().unwrap();
+        assert_eq!(
+            layout.content_geometry().panes[0].1,
+            Rect {
+                row: 4,
+                column: 11,
+                rows: 13,
+                columns: 58
+            }
+        );
+        let before = layout.clone();
+        assert!(layout.split_active(SplitAxis::Rows).is_err());
+        assert_eq!(layout, before);
+        for rows in 1..25 {
+            for columns in 1..90 {
+                layout.resize(rows, columns).unwrap();
+                let rect = layout.content_geometry().panes[0].1;
+                assert!(rect.rows > 0 && rect.columns > 0);
+                assert!(rect.row + rect.rows <= rows && rect.column + rect.columns <= columns);
+                assert_eq!(layout.active(), before.active());
+            }
+        }
+        let mut split = Layout::new(22, 80).unwrap();
+        split.split_active(SplitAxis::Columns).unwrap();
+        assert!(split.into_floating().is_err());
     }
 }

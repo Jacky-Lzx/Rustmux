@@ -125,6 +125,7 @@ impl Layout {
             next_id: ids.iter().max().unwrap() + 1,
             count: ids.len(),
             zoomed: saved.zoomed && ids.len() > 1,
+            floating: false,
         };
         layout.resize(rows, columns)?;
         if layout

@@ -44,12 +44,16 @@ impl<T> Window<T> {
 /// Owns window contents in display order; no Clone bound or process operations.
 /// Empty collections have no focus. New windows become active. Closing the active
 /// window selects its successor, or its predecessor when removing the last entry.
+/// A separate floating window may own focus while retaining the selected ordinary
+/// window as its return target. Ordinary iteration excludes that floating content.
 #[derive(Debug)]
 pub struct Windows<T> {
     entries: Vec<Window<T>>,
     active: usize,
     next_id: Option<u64>,
     last_active: Option<WindowId>,
+    floating: Option<Window<T>>,
+    floating_visible: bool,
 }
 
 impl<T> Default for Windows<T> {
@@ -59,6 +63,8 @@ impl<T> Default for Windows<T> {
             active: 0,
             next_id: Some(0),
             last_active: None,
+            floating: None,
+            floating_visible: false,
         }
     }
 }
@@ -71,11 +77,56 @@ impl<T> Windows<T> {
             .next_id
             .ok_or_else(|| io::Error::other("window IDs exhausted"))?;
         let id = WindowId(value);
+        self.floating_visible = false;
         self.last_active = self.active().map(|window| window.id());
         self.entries.push(Window { id, name, content });
         self.next_id = value.checked_add(1);
         self.active = self.entries.len() - 1;
         Ok(id)
+    }
+
+    /// One session-wide overlay, excluded from ordinary window order and history.
+    pub fn create_floating(&mut self, name: String, content: T) -> io::Result<WindowId> {
+        if self.floating.is_some() || self.entries.is_empty() {
+            return Err(io::Error::other(
+                "floating window already exists or has no parent",
+            ));
+        }
+        let value = self
+            .next_id
+            .ok_or_else(|| io::Error::other("window IDs exhausted"))?;
+        let id = WindowId(value);
+        self.next_id = value.checked_add(1);
+        self.floating = Some(Window { id, name, content });
+        self.floating_visible = true;
+        Ok(id)
+    }
+
+    pub fn floating(&self) -> Option<&Window<T>> {
+        self.floating.as_ref()
+    }
+    pub fn floating_visible(&self) -> bool {
+        self.floating_visible
+    }
+    pub fn is_floating(&self, id: WindowId) -> bool {
+        self.floating.as_ref().is_some_and(|window| window.id == id)
+    }
+    pub fn show_floating(&mut self) -> bool {
+        self.floating_visible = self.floating.is_some() && !self.entries.is_empty();
+        self.floating_visible
+    }
+    pub fn hide_floating(&mut self) {
+        self.floating_visible = false;
+    }
+    pub fn tiled_active(&self) -> Option<&Window<T>> {
+        self.entries.get(self.active)
+    }
+    /// Every owned window, including the hidden floating shell, for PTY servicing.
+    pub fn all_iter(&self) -> impl Iterator<Item = &Window<T>> {
+        self.entries.iter().chain(self.floating.iter())
+    }
+    pub fn all_iter_mut(&mut self) -> impl Iterator<Item = &mut Window<T>> {
+        self.entries.iter_mut().chain(self.floating.iter_mut())
     }
 
     pub fn iter(&self) -> impl ExactSizeIterator<Item = &Window<T>> {
@@ -87,23 +138,35 @@ impl<T> Windows<T> {
     }
 
     pub fn active(&self) -> Option<&Window<T>> {
-        self.entries.get(self.active)
+        if self.floating_visible {
+            self.floating.as_ref()
+        } else {
+            self.entries.get(self.active)
+        }
     }
 
     pub fn active_mut(&mut self) -> Option<&mut Window<T>> {
-        self.entries.get_mut(self.active)
+        if self.floating_visible {
+            self.floating.as_mut()
+        } else {
+            self.entries.get_mut(self.active)
+        }
     }
 
     pub fn get(&self, id: WindowId) -> Option<&Window<T>> {
-        self.entries.iter().find(|window| window.id == id)
+        self.all_iter().find(|window| window.id == id)
     }
 
     /// Allows background output to update an inactive window without focusing it.
     pub fn get_mut(&mut self, id: WindowId) -> Option<&mut Window<T>> {
-        self.entries.iter_mut().find(|window| window.id == id)
+        self.all_iter_mut().find(|window| window.id == id)
     }
 
     pub fn select(&mut self, id: WindowId) -> io::Result<()> {
+        if self.is_floating(id) {
+            self.show_floating();
+            return Ok(());
+        }
         let index = self.index(id)?;
         self.activate(index);
         Ok(())
@@ -136,8 +199,10 @@ impl<T> Windows<T> {
     }
 
     /// Switch to the last explicitly active window. Repeated calls toggle the pair.
-    /// No history (or a closed target) leaves focus unchanged and returns None.
+    /// Hides the floating window first. No history (or a closed target) leaves the
+    /// selected ordinary window unchanged and returns None.
     pub fn select_last(&mut self) -> Option<WindowId> {
+        self.floating_visible = false;
         let id = self.last_active?;
         let index = self.entries.iter().position(|window| window.id == id)?;
         self.activate(index);
@@ -145,6 +210,7 @@ impl<T> Windows<T> {
     }
 
     fn activate(&mut self, index: usize) {
+        self.floating_visible = false;
         if index != self.active {
             self.last_active = self.active().map(|window| window.id());
             self.active = index;
@@ -182,6 +248,9 @@ impl<T> Windows<T> {
     }
 
     fn move_window(&mut self, id: WindowId, right: bool) -> io::Result<bool> {
+        if self.is_floating(id) {
+            return Ok(false);
+        }
         let index = self.index(id)?;
         if self.entries.len() <= 1 {
             return Ok(false);
@@ -202,16 +271,24 @@ impl<T> Windows<T> {
     /// Names are opaque metadata, including empty or duplicate names. A UI must
     /// escape controls before displaying them; this model never emits names.
     pub fn rename(&mut self, id: WindowId, name: String) -> io::Result<()> {
-        let index = self.index(id)?;
-        self.entries[index].name = name;
+        self.get_mut(id)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "unknown window ID"))?
+            .name = name;
         Ok(())
     }
 
     /// Return ownership to the caller, which decides how to stop/reap a process.
     /// Removing an inactive entry preserves the active window's identity.
     pub fn close(&mut self, id: WindowId) -> io::Result<Window<T>> {
+        if self.is_floating(id) {
+            self.floating_visible = false;
+            return Ok(self.floating.take().unwrap());
+        }
         let index = self.index(id)?;
         let removed = self.entries.remove(index);
+        if self.entries.is_empty() {
+            self.floating_visible = false;
+        }
         if index < self.active {
             self.active -= 1;
         } else if self.active == self.entries.len() {

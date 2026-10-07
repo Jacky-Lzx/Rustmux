@@ -12,6 +12,7 @@ struct PaneInfo {
     window_name: String,
     active: bool,
     selected: bool,
+    floating: bool,
     directory: Option<String>,
     title: String,
     exited: bool,
@@ -29,7 +30,7 @@ fn invalid(message: &str) -> io::Error {
 }
 fn target(windows: &Windows<PaneSet<Pane>>, id: Option<u64>) -> io::Result<(WindowId, PaneId)> {
     if let Some(id) = id {
-        for window in windows.iter() {
+        for window in windows.all_iter() {
             if let Some((pane, _)) = window
                 .content()
                 .iter()
@@ -88,6 +89,20 @@ pub(super) fn handle(
     remain_on_exit: bool,
     reload: Option<&crate::config::reload::Reload>,
 ) -> io::Result<String> {
+    if let Some(floating) = windows.floating() {
+        let popup = floating.content().active().control_id();
+        let structural = match &request {
+            Request::SplitPane { pane, .. } | Request::BreakPane { pane, .. } => {
+                pane.is_none() && windows.floating_visible() || *pane == Some(popup)
+            }
+            _ => false,
+        };
+        if structural {
+            return Err(invalid(
+                "hide the floating terminal before changing tiled layout",
+            ));
+        }
+    }
     match request {
         Request::RenameSession { .. } => Err(invalid("live rename is unavailable for this server")),
         Request::DisconnectSession { .. } => {
@@ -132,7 +147,7 @@ pub(super) fn handle(
         }
         Request::CloseWindow { window } => {
             let id = window_target(windows, window)?;
-            if windows.iter().len() == 1 {
+            if windows.iter().len() == 1 && !windows.is_floating(id) {
                 return Err(invalid(
                     "cannot close the final session window; use kill SESSION",
                 ));
@@ -182,7 +197,7 @@ pub(super) fn handle(
                 // process; scripted closure does not enter close-undo storage.
                 drop(set.close(id)?);
             } else {
-                if windows.iter().len() == 1 {
+                if windows.iter().len() == 1 && !windows.is_floating(window) {
                     return Err(invalid(
                         "cannot close the final session pane; use kill SESSION",
                     ));
@@ -245,16 +260,21 @@ pub(super) fn handle(
             use std::os::unix::process::ExitStatusExt;
             let active = windows.active().map(|window| window.id());
             let mut panes = Vec::new();
-            for (index, window) in windows.iter().enumerate() {
+            for (index, window) in windows.all_iter().enumerate() {
                 for (id, pane) in window.content().iter() {
                     panes.push(PaneInfo {
                         id: pane.control_id(),
                         pid: pane.shell().id(),
-                        window: index + 1,
+                        window: if windows.is_floating(window.id()) {
+                            0
+                        } else {
+                            index + 1
+                        },
                         window_name: window.name().to_owned(),
                         active: active == Some(window.id())
                             && id == window.content().layout().active(),
                         selected: id == window.content().layout().active(),
+                        floating: windows.is_floating(window.id()),
                         directory: pane
                             .inherited_directory()
                             .map(|p| p.to_string_lossy().into_owned()),

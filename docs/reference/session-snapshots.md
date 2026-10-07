@@ -46,7 +46,9 @@ regular-file metadata without decoding history. A corrupt private snapshot
 remains discoverable; its validation error is reported on restore.
 
 Snapshots include window names/order, split axes/ratios, focused panes, active
-window, zoom state and working directories. Temporary history/output editor
+window, zoom state and working directories. The [floating terminal](floating-terminal.md)
+is saved separately with its visibility, directory and optional history.
+Temporary history/output editor
 windows and hidden undo panes are excluded. A missing directory falls back to the
 server's working directory. Every restored pane starts the currently configured
 shell; shell variables, processes, foreground jobs and command exit state are

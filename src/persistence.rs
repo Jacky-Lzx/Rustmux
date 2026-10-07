@@ -33,6 +33,8 @@ pub(crate) struct Snapshot {
     active_window: usize,
     colors: bool,
     windows: Vec<SavedWindow>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    floating: Option<SavedFloating>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -55,11 +57,44 @@ struct SavedPane {
     history: Vec<SavedRow>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SavedFloating {
+    visible: bool,
+    window: SavedWindow,
+}
+
+fn capture_window(
+    window: &crate::window::Window<PaneSet<Pane>>,
+    options: PersistenceOptions,
+    screens: &mut Vec<(Option<usize>, usize, Screen)>,
+    index: Option<usize>,
+) -> SavedWindow {
+    let mut panes = Vec::new();
+    for (id, pane) in window.content().iter() {
+        if options.save_scrollback {
+            screens.push((index, panes.len(), pane.screen().clone()));
+        }
+        panes.push(SavedPane {
+            id: id.get(),
+            command: pane.startup_command().map(str::to_owned),
+            remain_on_exit: pane.remain_on_exit_override(),
+            directory: pane.inherited_directory(),
+            history: Vec::new(),
+        });
+    }
+    SavedWindow {
+        name: window.name().to_owned(),
+        layout: window.content().layout().saved(),
+        panes,
+    }
+}
+
 /// Metadata and immutable screen copies taken on the event loop. History formatting
 /// and disk work may run elsewhere; that worker never reads live panes or spawns processes.
 pub(crate) struct PreparedSnapshot {
     snapshot: Snapshot,
-    screens: Vec<(usize, usize, Screen)>,
+    screens: Vec<(Option<usize>, usize, Screen)>,
     history_limit: usize,
 }
 
@@ -70,7 +105,7 @@ impl PreparedSnapshot {
         options: PersistenceOptions,
         history_limit: usize,
     ) -> io::Result<Self> {
-        let active = windows.active().map(|w| w.id());
+        let active = windows.tiled_active().map(|w| w.id());
         let mut active_window = 0;
         let mut saved = Vec::new();
         let mut screens = Vec::new();
@@ -83,25 +118,17 @@ impl PreparedSnapshot {
             if Some(window.id()) == active {
                 active_window = window_index;
             }
-            let mut panes = Vec::new();
-            for (id, pane) in window.content().iter() {
-                if options.save_scrollback {
-                    screens.push((window_index, panes.len(), pane.screen().clone()));
-                }
-                panes.push(SavedPane {
-                    id: id.get(),
-                    command: pane.startup_command().map(str::to_owned),
-                    remain_on_exit: pane.remain_on_exit_override(),
-                    directory: pane.inherited_directory(),
-                    history: Vec::new(),
-                });
-            }
-            saved.push(SavedWindow {
-                name: window.name().to_owned(),
-                layout: window.content().layout().saved(),
-                panes,
-            });
+            saved.push(capture_window(
+                window,
+                options,
+                &mut screens,
+                Some(window_index),
+            ));
         }
+        let floating = windows.floating().map(|window| SavedFloating {
+            visible: windows.floating_visible(),
+            window: capture_window(window, options, &mut screens, None),
+        });
         let columns = windows
             .iter()
             .next()
@@ -117,6 +144,7 @@ impl PreparedSnapshot {
             active_window,
             colors: options.save_scrollback_colors,
             windows: saved,
+            floating,
         };
         snapshot.validate()?;
         Ok(Self {
@@ -128,7 +156,11 @@ impl PreparedSnapshot {
 
     pub(crate) fn finish(mut self) -> Snapshot {
         for (window, pane, screen) in self.screens {
-            self.snapshot.windows[window].panes[pane].history =
+            let saved = match window {
+                Some(index) => &mut self.snapshot.windows[index],
+                None => &mut self.snapshot.floating.as_mut().unwrap().window,
+            };
+            saved.panes[pane].history =
                 screen.saved_history(self.snapshot.colors, self.history_limit);
         }
         self.snapshot
@@ -179,6 +211,7 @@ impl Snapshot {
             active_window: 0,
             colors: false,
             windows,
+            floating: None,
         };
         snapshot.validate()?;
         Ok(snapshot)
@@ -193,7 +226,8 @@ impl Snapshot {
         {
             return Err(invalid("saved terminal dimensions exceed limits"));
         }
-        self.windows
+        let mut layouts: Vec<_> = self
+            .windows
             .iter()
             .map(|window| {
                 Layout::from_saved(
@@ -202,7 +236,17 @@ impl Snapshot {
                     columns,
                 )
             })
-            .collect()
+            .collect::<io::Result<_>>()?;
+        if let Some(floating) = &self.floating {
+            let layout = Layout::from_saved(
+                &floating.window.layout,
+                crate::chrome::pane_rows_for_layout(rows, compact),
+                columns,
+            )?
+            .into_floating()?;
+            layouts.push(layout);
+        }
+        Ok(layouts)
     }
 
     fn validate(&self) -> io::Result<()> {
@@ -219,7 +263,12 @@ impl Snapshot {
         // structure against the largest supported canvas; restore preflights
         // every window again against the destination's actual chrome.
         let layouts = self.layouts(self.rows, self.columns, true)?;
-        for (window, layout) in self.windows.iter().zip(layouts) {
+        for (window, layout) in self
+            .windows
+            .iter()
+            .chain(self.floating.iter().map(|f| &f.window))
+            .zip(layouts)
+        {
             if window.name.len() > 128 || window.name.chars().any(char::is_control) {
                 return Err(invalid("invalid saved window name"));
             }
@@ -267,7 +316,7 @@ impl Snapshot {
         let layouts = self.layouts(rows, columns, compact)?;
         let mut windows = Windows::default();
         let mut ids = Vec::new();
-        for (window, layout) in self.windows.iter().zip(layouts) {
+        for (window, layout) in self.windows.iter().zip(layouts.iter().cloned()) {
             let panes = PaneSet::from_layout_with(layout, |id, rect| {
                 let saved = window
                     .panes
@@ -294,6 +343,36 @@ impl Snapshot {
             ids.push(windows.create(window.name.clone(), panes)?);
         }
         windows.select(ids[self.active_window])?;
+        if let Some(floating) = &self.floating {
+            let panes = PaneSet::from_layout_with(layouts.last().unwrap().clone(), |id, rect| {
+                let saved = floating
+                    .window
+                    .panes
+                    .iter()
+                    .find(|p| p.id == id.get())
+                    .unwrap();
+                let mut pane = Pane::spawn_with_startup(
+                    shell,
+                    saved.directory.as_deref(),
+                    rect.rows,
+                    rect.columns,
+                    notifications.clone(),
+                    history_limit,
+                    saved.command.as_deref(),
+                )?;
+                pane.set_remain_on_exit(saved.remain_on_exit);
+                if restore_history {
+                    pane.parts_mut()
+                        .2
+                        .restore_history(&saved.history, self.colors)?;
+                }
+                Ok(pane)
+            })?;
+            windows.create_floating(floating.window.name.clone(), panes)?;
+            if !floating.visible {
+                windows.hide_floating();
+            }
+        }
         Ok(windows)
     }
 }
@@ -563,6 +642,45 @@ mod tests {
         assert!(snapshot.layouts(8, 20, false).is_ok());
     }
 
+    #[test]
+    fn floating_snapshot_round_trips_visibility_and_rejects_a_split_popup() {
+        let mut snapshot = sample();
+        assert!(
+            toml::from_str::<Snapshot>(&toml::to_string(&snapshot).unwrap())
+                .unwrap()
+                .floating
+                .is_none()
+        );
+        let mut popup = snapshot.windows[0].clone();
+        popup.layout = Layout::new(22, 80).unwrap().saved();
+        popup.panes.truncate(1);
+        snapshot.floating = Some(SavedFloating {
+            visible: false,
+            window: popup,
+        });
+        for visible in [false, true] {
+            snapshot.floating.as_mut().unwrap().visible = visible;
+            snapshot.validate().unwrap();
+            let restored: Snapshot = toml::from_str(&toml::to_string(&snapshot).unwrap()).unwrap();
+            restored.validate().unwrap();
+            assert_eq!(restored.floating.unwrap().visible, visible);
+            assert_eq!(
+                snapshot
+                    .layouts(24, 80, false)
+                    .unwrap()
+                    .last()
+                    .unwrap()
+                    .content_geometry()
+                    .panes[0]
+                    .1
+                    .columns,
+                58
+            );
+        }
+        snapshot.floating.as_mut().unwrap().window = snapshot.windows[0].clone();
+        assert!(snapshot.validate().is_err());
+    }
+
     fn sample() -> Snapshot {
         let mut layout = Layout::new(crate::chrome::pane_rows(24), 80).unwrap();
         layout
@@ -574,6 +692,7 @@ mod tests {
             columns: 80,
             active_window: 0,
             colors: false,
+            floating: None,
             windows: vec![SavedWindow {
                 name: "dev".into(),
                 layout: layout.saved(),

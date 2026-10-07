@@ -150,6 +150,13 @@ const COMMANDS: &[Command] = &[
     Command {
         binding: None,
         group: CommandGroup::Pane,
+        key: "i",
+        label: "Floating terminal",
+        actions: &[(0, b'i')],
+    },
+    Command {
+        binding: None,
+        group: CommandGroup::Pane,
         key: "z",
         label: "Restore pane",
         actions: &[(0, b'z')],
@@ -1065,8 +1072,17 @@ x={actions=["resize-pane-left"],display="hidden"}
         );
 
         let mut named = ShortcutHelp::new(true);
-        assert!(text(&named.overlay(&original)).contains("Session Manager"));
-        assert_eq!(named.pages, 1);
+        let mut named_text = text(&named.overlay(&original));
+        assert!(named_text.contains("Floating terminal"));
+        assert!(named.pages > 1);
+        for _ in 1..named.pages {
+            for byte in b"\x1b[6~" {
+                named.feed(*byte, Instant::now());
+            }
+            named_text.push_str(&text(&named.overlay(&original)));
+        }
+        assert!(named_text.contains("Session Manager"));
+        assert!(named.page > 0);
         let mut short = ShortcutHelp::new(false);
         let first = text(&short.overlay(&Screen::new(6, 40).unwrap()));
         assert!(first.contains("1/"));

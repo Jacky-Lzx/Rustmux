@@ -205,3 +205,48 @@ fn reordering_preserves_identity_contents_history_and_uses_current_order() {
     assert_eq!(windows.active().unwrap().id(), a);
     assert_eq!(windows.get(b).unwrap().name(), "b");
 }
+
+#[test]
+fn floating_shell_ownership_preserves_tiled_order_history_and_return_focus() {
+    let mut windows = Windows::default();
+    let a = windows.create("a".into(), String::from("A")).unwrap();
+    let b = windows.create("b".into(), String::from("B")).unwrap();
+    let popup = windows
+        .create_floating("floating".into(), String::from("state"))
+        .unwrap();
+    assert_eq!(windows.iter().len(), 2);
+    assert_eq!(windows.all_iter().count(), 3);
+    assert_eq!(windows.active().unwrap().id(), popup);
+    assert_eq!(windows.tiled_active().unwrap().id(), b);
+    assert!(!windows.move_active_left());
+    assert!(
+        windows
+            .create_floating("duplicate".into(), String::new())
+            .is_err()
+    );
+    windows.hide_floating();
+    windows
+        .get_mut(popup)
+        .unwrap()
+        .content_mut()
+        .push_str(" retained");
+    assert_eq!(windows.select_last(), Some(a));
+    assert!(windows.show_floating());
+    assert_eq!(windows.active().unwrap().content(), "state retained");
+    windows.close(a).unwrap();
+    assert_eq!(windows.tiled_active().unwrap().id(), b);
+    windows.hide_floating();
+    assert_eq!(windows.active().unwrap().id(), b);
+    windows.show_floating();
+    assert_eq!(windows.select_next(), Some(b));
+    assert!(!windows.floating_visible());
+    windows.show_floating();
+    let removed = windows.close(popup).unwrap();
+    assert_eq!(removed.content(), "state retained");
+    assert_eq!(windows.active().unwrap().id(), b);
+    assert!(windows.floating().is_none());
+    let next = windows
+        .create_floating("new".into(), String::new())
+        .unwrap();
+    assert!(next.get() > popup.get());
+}

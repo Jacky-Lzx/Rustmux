@@ -306,3 +306,8 @@ fn history_actions() {
 fn binding_display() {
     run_scenario("binding_display");
 }
+
+#[test]
+fn floating() {
+    run_scenario("floating");
+}

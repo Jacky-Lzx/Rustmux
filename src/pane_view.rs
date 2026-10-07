@@ -161,6 +161,45 @@ pub(crate) fn compose_themed(
     Ok(frame)
 }
 
+/// Preserve the floating pane's input modes/cursor while exposing the live tiled backdrop.
+pub(crate) fn floating_over(
+    base: &Screen,
+    mut overlay: Screen,
+    layout: &Layout,
+) -> io::Result<Screen> {
+    if base.dimensions() != overlay.dimensions() || !layout.is_floating() {
+        return Err(invalid("floating backdrop dimensions do not match"));
+    }
+    let bounds = hitboxes(layout)[0].1;
+    let (rows, columns) = base.dimensions();
+    for row in 0..rows {
+        for column in 0..columns {
+            if row < usize::from(bounds.row)
+                || row >= usize::from(bounds.row + bounds.rows)
+                || column < usize::from(bounds.column)
+                || column >= usize::from(bounds.column + bounds.columns)
+            {
+                let mut cell = base.row(row).unwrap()[column].clone();
+                let intersects_row =
+                    row >= usize::from(bounds.row) && row < usize::from(bounds.row + bounds.rows);
+                if intersects_row
+                    && ((column < usize::from(bounds.column)
+                        && column + usize::from(cell.width) > usize::from(bounds.column))
+                        || (column == usize::from(bounds.column + bounds.columns)
+                            && cell.width == 0))
+                {
+                    cell = Cell {
+                        style: cell.style,
+                        ..Cell::default()
+                    };
+                }
+                overlay.set_display_cell(row, column, cell);
+            }
+        }
+    }
+    Ok(overlay)
+}
+
 fn frame_bounds(rect: Rect, rows: u16, columns: u16) -> (u16, u16, u16, u16) {
     let top = if rect.row == 0 { 0 } else { rect.row - 1 };
     let left = if rect.column == 0 { 0 } else { rect.column - 1 };
@@ -493,5 +532,31 @@ mod tests {
             .map(|cell| cell.character)
             .collect();
         assert!(top.contains("shell [!]"));
+    }
+}
+
+#[cfg(test)]
+mod floating_tests {
+    use super::*;
+    use crate::parser::Parser;
+    #[test]
+    fn floating_composition_preserves_backdrop_cursor_modes_and_clips_wide_edges() {
+        let layout = Layout::new(22, 80).unwrap().into_floating().unwrap();
+        let mut base = Screen::new(22, 80).unwrap();
+        Parser::new().advance(&mut base, "BASE\x1b[5;10H中\x1b[5;70H中".as_bytes());
+        let before = base.clone();
+        let mut popup = Screen::new(13, 58).unwrap();
+        Parser::new().advance(&mut popup, b"\x1b[?2004h\x1b[?1hFLOAT");
+        let overlay = compose(&layout, &[(layout.active(), &popup)]).unwrap();
+        let cursor = overlay.cursor();
+        let frame = floating_over(&base, overlay, &layout).unwrap();
+        assert_eq!(frame.cursor(), cursor);
+        assert!(frame.bracketed_paste() && frame.application_cursor_keys());
+        assert_eq!(frame.row(0).unwrap()[0], base.row(0).unwrap()[0]);
+        assert_eq!(frame.row(4).unwrap()[9].character, ' ');
+        assert_eq!(frame.row(4).unwrap()[70].width, 1);
+        assert_eq!(frame.row(4).unwrap()[11].character, 'F');
+        assert_eq!(base, before);
+        assert!(floating_over(&Screen::new(1, 1).unwrap(), frame, &layout).is_err());
     }
 }

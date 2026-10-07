@@ -6,6 +6,7 @@
 - [Configuration Diagnostics](reference/config-diagnostics.md)
 - [Configuration Hot Reload](reference/config-reload.md)
 - [Compact Layout](reference/compact-layout.md)
+- [Floating Terminal](reference/floating-terminal.md)
 - [Normal Focus Arrows](reference/normal-focus-arrows.md)
 - [Development and Contributions](reference/development.md)
 - [PTY Lifecycle](reference/pty-lifecycle.md)
