@@ -209,12 +209,11 @@ impl ServerFrontend {
         let stream = self.peer.stream_mut();
         stream.set_nonblocking(false)?;
         stream.set_write_timeout(Some(EXIT_WRITE_TIMEOUT))?;
-        let written = stream.write_all(&frame);
-        let timeout = stream.set_write_timeout(None);
-        let nonblocking = stream.set_nonblocking(true);
-        written?;
-        timeout?;
-        nonblocking
+        // Exit, Detach and OpenSessionManager terminate this attachment. Once
+        // the frame reaches the peer it can close immediately; resetting socket
+        // options afterward may fail with EINVAL on macOS and turn a successful
+        // detach into a fatal server error. This stream is discarded, not reused.
+        stream.write_all(&frame)
     }
 }
 
@@ -297,6 +296,46 @@ mod tests {
             .flat_map(|message| message.encode().unwrap())
             .collect();
         client.stream_mut().write_all(&bytes).unwrap();
+    }
+
+    #[test]
+    fn terminal_control_allows_immediate_peer_close_after_acknowledgment() {
+        for _ in 0..128 {
+            for expected in [
+                ServerMessage::Detach,
+                ServerMessage::OpenSessionManager,
+                ServerMessage::Exit { status: 0 },
+            ] {
+                let (mut client, mut frontend) = connected(24, 80);
+                let reply = expected.clone();
+                let receiver = thread::spawn(move || {
+                    client.stream_mut().set_nonblocking(false).unwrap();
+                    client
+                        .stream_mut()
+                        .set_read_timeout(Some(Duration::from_secs(2)))
+                        .unwrap();
+                    let mut decoder = crate::session::protocol::ServerDecoder::default();
+                    loop {
+                        let mut bytes = [0; 128];
+                        let count = client.stream_mut().read(&mut bytes).unwrap();
+                        assert_ne!(count, 0);
+                        let messages = decoder.push(&bytes[..count]).unwrap();
+                        if !messages.is_empty() {
+                            assert_eq!(messages, [reply]);
+                            // Terminal controls permit the client to close immediately.
+                            drop(client);
+                            break;
+                        }
+                    }
+                });
+                let sent = frontend.send_control(expected);
+                receiver.join().unwrap();
+                assert!(
+                    sent.is_ok(),
+                    "successful acknowledgment became an error: {sent:?}"
+                );
+            }
+        }
     }
 
     #[test]
