@@ -76,11 +76,14 @@ while True:
     def wait(predicate,detail="timeout",timeout=6):
         deadline=time.monotonic()+timeout
         while not predicate():
+            # read() already waits when idle. Sleeping after every ready read
+            # throttles small PTY chunks and can prevent the flood from draining.
             if client:
                 client.read(0.01)
                 assert client.child.poll() is None,(detail,"client exited",client.child.returncode)
+            else:
+                time.sleep(0.005)
             assert time.monotonic() < deadline,(detail, client.physical_rows if client else None, bytes(client.output[-1500:]) if client else None)
-            time.sleep(0.005)
     def status(): return tomllib.loads(run("show-config"))
     def write(enabled):
         config.write_text(f"clipboard_write={str(enabled).lower()}\n")
