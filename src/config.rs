@@ -596,6 +596,7 @@ pub struct Config {
     mouse_hover_cursor: bool,
     clipboard_write: bool,
     clipboard_read: bool,
+    file_transfer: bool,
 }
 
 /// Disk saving is opt-in; explicit manual saves remain available with defaults.
@@ -607,6 +608,9 @@ pub struct PersistenceOptions {
 }
 
 impl Config {
+    pub fn file_transfer(&self) -> bool {
+        self.file_transfer
+    }
     pub fn clipboard_read(&self) -> bool {
         self.clipboard_read
     }
@@ -658,6 +662,7 @@ struct ParsedConfig {
     mouse_hover_cursor: bool,
     clipboard_write: bool,
     clipboard_read: bool,
+    file_transfer: bool,
 }
 
 /// Load and validate the complete configuration used by a new session.
@@ -708,6 +713,7 @@ fn resolve_config(configured: ParsedConfig) -> Config {
         mouse_hover_cursor: configured.mouse_hover_cursor,
         clipboard_write: configured.clipboard_write,
         clipboard_read: configured.clipboard_read,
+        file_transfer: configured.file_transfer,
     }
 }
 
@@ -843,6 +849,7 @@ fn parse_config(source: &str) -> Result<ParsedConfig, String> {
         mouse_hover_cursor: boolean("mouse_hover_cursor")?,
         clipboard_write: boolean("clipboard_write")?,
         clipboard_read: boolean("clipboard_read")?,
+        file_transfer: boolean("file_transfer")?,
     })
 }
 
@@ -1941,6 +1948,7 @@ preset = "mocha"
                 mouse_hover_cursor: false,
                 clipboard_write: false,
                 clipboard_read: false,
+                file_transfer: false,
             }
         );
         assert_eq!(

@@ -45,6 +45,7 @@ pub struct Pane {
     parser: Parser,
     clipboard: crate::clipboard::Observer,
     rich_clipboard: crate::rich_clipboard::Observer,
+    file_transfer: crate::file_transfer::Observer,
     graphics_framer: GraphicsFramer,
     graphics_transfer: DirectTransferAssembler,
     image_store: ImageStore,
@@ -337,6 +338,12 @@ impl Pane {
     pub(crate) fn take_rich_clipboard(&mut self) -> Option<crate::rich_clipboard::Request> {
         self.rich_clipboard.take()
     }
+    pub(crate) fn configure_file_transfer(&mut self, permission: Option<bool>) {
+        self.file_transfer.configure(permission);
+    }
+    pub(crate) fn take_file_transfer(&mut self) -> Option<crate::file_transfer::Request> {
+        self.file_transfer.take()
+    }
     pub(crate) fn take_clipboard(&mut self) -> Option<Vec<u8>> {
         self.clipboard.take()
     }
@@ -429,6 +436,7 @@ impl Pane {
             parser: Parser::new(),
             clipboard: crate::clipboard::Observer::default(),
             rich_clipboard: crate::rich_clipboard::Observer::default(),
+            file_transfer: crate::file_transfer::Observer::default(),
             graphics_framer: GraphicsFramer::new(),
             graphics_transfer: DirectTransferAssembler::new(),
             image_store: ImageStore::new(),
@@ -474,6 +482,7 @@ impl Pane {
             parser: Parser::new(),
             clipboard: crate::clipboard::Observer::default(),
             rich_clipboard: crate::rich_clipboard::Observer::default(),
+            file_transfer: crate::file_transfer::Observer::default(),
             graphics_framer: GraphicsFramer::new(),
             graphics_transfer: DirectTransferAssembler::new(),
             image_store: ImageStore::new(),
@@ -498,6 +507,7 @@ impl Pane {
         self.clipboard.configure(false);
         self.rich_clipboard.configure(None);
         self.rich_clipboard.configure_write(None);
+        self.file_transfer.configure(None);
         self.screen.configure_rich_clipboard(false);
         self.io.semantic.cancel_current();
         if stopped {
@@ -893,6 +903,7 @@ impl Pane {
         self.output.append(bytes);
         self.clipboard.advance(bytes);
         self.rich_clipboard.advance(bytes, reply);
+        self.file_transfer.advance(bytes, reply);
         self.io.dirty = true;
         let cell_pixels = match &graphics {
             GraphicsSink::Store { cell_pixels, .. } => *cell_pixels,

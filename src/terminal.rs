@@ -2019,6 +2019,7 @@ fn window_names(windows: &Windows<PaneSet<Pane>>) -> Vec<String> {
 struct ClipboardPolicy {
     attached: bool,
     read: bool,
+    file_transfer: bool,
     write: bool,
 }
 
@@ -2034,6 +2035,7 @@ fn service_pane(
     pane.configure_clipboard(clipboard.attached && clipboard.write);
     pane.configure_rich_clipboard(clipboard.attached.then_some(clipboard.read));
     pane.configure_rich_clipboard_write(clipboard.attached.then_some(clipboard.write));
+    pane.configure_file_transfer(clipboard.attached.then_some(clipboard.file_transfer));
     pane.track_command_application();
     if ready.contains(PollFlags::POLLNVAL) {
         return Err(io::Error::new(
@@ -2088,6 +2090,7 @@ fn service_pane(
 struct RuntimeConfig {
     clipboard_write: bool,
     clipboard_read: bool,
+    file_transfer: bool,
     theme: crate::theme::Theme,
     mouse_hover_cursor: bool,
     shell: OsString,
@@ -2102,6 +2105,7 @@ impl RuntimeConfig {
         self.mouse_hover_cursor = config.mouse_hover_cursor();
         self.clipboard_write = config.clipboard_write();
         self.clipboard_read = config.clipboard_read();
+        self.file_transfer = config.file_transfer();
         self.shell = config.shell().clone();
         self.notifications = config.notifications();
         self.scrollback_lines = config.scrollback_lines();
@@ -2119,6 +2123,9 @@ fn apply_config(
     for window in windows.iter_mut() {
         for (_, pane) in window.content_mut().iter_mut() {
             pane.configure_notifications(config.notifications());
+            if !config.file_transfer() {
+                pane.configure_file_transfer(Some(false));
+            }
             pane.parts_mut()
                 .2
                 .configure_rich_clipboard(config.clipboard_read());
@@ -2136,6 +2143,7 @@ fn apply_config(
         pane.configure_clipboard(false);
         pane.configure_rich_clipboard(None);
         pane.configure_rich_clipboard_write(None);
+        pane.configure_file_transfer(None);
         pane.parts_mut().2.configure_rich_clipboard(false);
     }
     if let Some(service) = persistence {
@@ -2170,12 +2178,14 @@ fn forward(
             pane.configure_clipboard(false);
             pane.configure_rich_clipboard(None);
             pane.configure_rich_clipboard_write(None);
+            pane.configure_file_transfer(None);
         }
     }
     let mut runtime = RuntimeConfig {
         clipboard_read: reload
             .as_ref()
             .is_some_and(|r| r.current().clipboard_read()),
+        file_transfer: reload.as_ref().is_some_and(|r| r.current().file_transfer()),
         clipboard_write: reload
             .as_ref()
             .is_some_and(|r| r.current().clipboard_write()),
@@ -2197,6 +2207,7 @@ fn forward(
     let mut notification_ids = crate::notification::Ids::default();
     let mut outer_image_replies = OuterImageReplies::default();
     let mut rich_clipboard = crate::rich_clipboard::Router::default();
+    let mut file_transfer = crate::file_transfer::Router::default();
     let mut graphics_ready = false;
     let mut to_terminal = VecDeque::new();
     let mut color_probe = Some(ColorProbe::new());
@@ -2386,6 +2397,13 @@ fn forward(
             &mut expired,
             &mut to_terminal,
         );
+        file_transfer.tick(
+            Instant::now(),
+            runtime.file_transfer && connection == ConnectionState::Attached,
+            |owner| rich_clipboard_live(windows, owner),
+        );
+        file_transfer.drain(|owner, bytes| deliver_rich_clipboard(windows, owner, bytes));
+        file_transfer.pump(Instant::now(), &mut to_terminal, LIMIT);
         let old_input_len = input.len();
         input.extend(expired);
         let paste_enabled = connection == ConnectionState::Attached
@@ -2402,10 +2420,15 @@ fn forward(
         // Released prefixes have already passed the clipboard framer, but still
         // belong to the downstream color/graphics probes, not keyboard input.
         let rich_input_len = input.len();
-        if rich_clipboard.can_receive() {
+        if rich_clipboard.can_receive() && file_transfer.can_receive() {
             frontend.drain_input(&mut input);
         }
-        filter_rich_clipboard_input(&mut rich_clipboard, &mut input, rich_input_len);
+        filter_rich_clipboard_input(
+            &mut rich_clipboard,
+            &mut file_transfer,
+            &mut input,
+            rich_input_len,
+        );
         filter_color_probe_input(
             &mut color_probe,
             &mut input,
@@ -2468,6 +2491,8 @@ fn forward(
         }
         let received = signals.pending.load(Ordering::Relaxed);
         if received != 0 {
+            file_transfer.cancel_all();
+            let _ = flush_file_exit(frontend, &mut file_transfer, &mut to_terminal);
             return Ok(ForwardExit::Process((128 + received) as u8));
         }
         if close_requested.is_some() && to_terminal.is_empty() {
@@ -2489,6 +2514,8 @@ fn forward(
                     let sole_pane = window.content().iter().len() == 1;
                     if sole_pane && windows.iter().len() == 1 {
                         // run() restores the terminal, then cleans up visible and hidden shells.
+                        file_transfer.cancel_all();
+                        flush_file_exit(frontend, &mut file_transfer, &mut to_terminal)?;
                         return Ok(ForwardExit::Process(0));
                     }
                     let pane = windows
@@ -2518,6 +2545,8 @@ fn forward(
                     });
                 } else {
                     if windows.iter().len() == 1 {
+                        file_transfer.cancel_all();
+                        flush_file_exit(frontend, &mut file_transfer, &mut to_terminal)?;
                         return Ok(ForwardExit::Process(0));
                     }
                     for (_, pane) in windows.get_mut(id).unwrap().content_mut().iter_mut() {
@@ -3033,6 +3062,7 @@ fn forward(
                 let was_focused = panes.layout().active() == pane_id;
                 if panes.iter().len() == 1 {
                     if windows.iter().len() == 1 {
+                        flush_file_exit(frontend, &mut file_transfer, &mut to_terminal)?;
                         return Ok(ForwardExit::Process(code));
                     }
                     drop(windows.close(id)?);
@@ -3756,6 +3786,9 @@ fn forward(
             rich_clipboard.cancel(&mut to_terminal, |owner, bytes| {
                 deliver_rich_clipboard(windows, owner, bytes)
             });
+            file_transfer.cancel_all();
+            file_transfer.drain(|owner, bytes| deliver_rich_clipboard(windows, owner, bytes));
+            file_transfer.pump(Instant::now(), &mut to_terminal, LIMIT);
             if !to_terminal.is_empty() {
                 continue;
             }
@@ -3768,6 +3801,9 @@ fn forward(
             rich_clipboard.cancel(&mut to_terminal, |owner, bytes| {
                 deliver_rich_clipboard(windows, owner, bytes)
             });
+            file_transfer.cancel_all();
+            file_transfer.drain(|owner, bytes| deliver_rich_clipboard(windows, owner, bytes));
+            file_transfer.pump(Instant::now(), &mut to_terminal, LIMIT);
             if !to_terminal.is_empty() {
                 continue;
             }
@@ -3812,6 +3848,7 @@ fn forward(
             && input.len() < LIMIT
             && frontend.can_receive()
             && rich_clipboard.can_receive()
+            && file_transfer.can_receive()
         {
             outer_events |= PollFlags::POLLIN;
         }
@@ -3864,6 +3901,7 @@ fn forward(
                     // table, not race the outer-terminal discovery replies.
                     if color_probe.is_none()
                         && rich_clipboard.can_receive()
+                        && file_transfer.can_receive()
                         && state.reply_read_limit() != 0
                         && (window.id() != active || to_terminal.is_empty())
                     {
@@ -3934,7 +3972,12 @@ fn forward(
             rich_clipboard.set_paste_target(rich_paste_target(windows, paste_enabled));
             // Consume rich-clipboard responses before other probes can retain
             // and later release their bytes into focused keyboard input.
-            filter_rich_clipboard_input(&mut rich_clipboard, &mut input, old_input_len);
+            filter_rich_clipboard_input(
+                &mut rich_clipboard,
+                &mut file_transfer,
+                &mut input,
+                old_input_len,
+            );
             filter_color_probe_input(
                 &mut color_probe,
                 &mut input,
@@ -3992,7 +4035,7 @@ fn forward(
         // One bounded read/write per pane per iteration prevents a busy background
         // process from starving the other panes, keyboard or signal handling.
         for ((id, pane_id, mut inner_events), inner) in interests.into_iter().zip(events) {
-            if !rich_clipboard.can_receive() {
+            if !rich_clipboard.can_receive() || !file_transfer.can_receive() {
                 inner_events.remove(PollFlags::POLLIN);
             }
             let window = windows.get_mut(id).unwrap();
@@ -4014,11 +4057,15 @@ fn forward(
                     attached: connection == ConnectionState::Attached,
                     read: runtime.clipboard_read,
                     write: runtime.clipboard_write,
+                    file_transfer: runtime.file_transfer,
                 },
             )?;
             // Reset followed by set in one PTY read still revokes old events.
             if paste_generation != pane.screen().rich_paste_generation() {
                 rich_clipboard.forget_paste(pane.rich_clipboard_owner());
+            }
+            while let Some(request) = pane.take_file_transfer() {
+                file_transfer.request(pane.rich_clipboard_owner(), request, Instant::now());
             }
             while let Some(request) = pane.take_rich_clipboard() {
                 rich_clipboard.request(
@@ -4067,15 +4114,50 @@ fn forward(
     }
 }
 
+// Normal EOF can follow the child's finish in the same PTY read. Flush that
+// complete tail (or cancel an unfinished transfer) before delivering exit.
+fn flush_file_exit(
+    frontend: &mut impl Frontend,
+    files: &mut crate::file_transfer::Router,
+    pending: &mut VecDeque<u8>,
+) -> io::Result<()> {
+    if !files.has_activity() {
+        return Ok(());
+    }
+    files.prepare_exit();
+    let deadline = Instant::now() + Duration::from_millis(500);
+    while files.has_outgoing() || !pending.is_empty() {
+        files.pump(Instant::now(), pending, LIMIT);
+        frontend.send(pending)?;
+        if !files.has_outgoing() && pending.is_empty() {
+            break;
+        }
+        if Instant::now() >= deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "file transfer output stalled during exit",
+            ));
+        }
+        let mut descriptors = [PollFd::new(frontend.poll_fd(), PollFlags::POLLOUT)];
+        match poll(&mut descriptors, 50u16) {
+            Ok(_) | Err(Errno::EINTR) => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
+}
+
 fn filter_rich_clipboard_input(
     router: &mut crate::rich_clipboard::Router,
+    files: &mut crate::file_transfer::Router,
     input: &mut VecDeque<u8>,
     old_len: usize,
 ) {
     if input.len() > old_len {
         let raw: Vec<_> = input.drain(old_len..).collect();
         let mut pass = Vec::new();
-        router.advance(&raw, &mut pass, Instant::now());
+        let now = Instant::now();
+        router.advance_with_files(&raw, &mut pass, now, &mut |body| files.response(body, now));
         input.extend(pass);
     }
 }

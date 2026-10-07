@@ -24,6 +24,7 @@ pub struct Settings {
     pub mouse_hover_cursor: bool,
     pub clipboard_write: bool,
     pub clipboard_read: bool,
+    pub file_transfer: bool,
     pub clear_defaults: bool,
     pub autosave_interval_seconds: u64,
     pub save_scrollback: bool,
@@ -77,6 +78,7 @@ impl From<&Config> for Settings {
             mouse_hover_cursor: config.mouse_hover_cursor,
             clipboard_write: config.clipboard_write,
             clipboard_read: config.clipboard_read,
+            file_transfer: config.file_transfer,
             clear_defaults: config.shortcuts.clear_defaults,
             autosave_interval_seconds: config.persistence.autosave_interval_seconds,
             save_scrollback: config.persistence.save_scrollback,
@@ -103,6 +105,7 @@ fn ignored_options(source: &str) -> Vec<String> {
                 | "mouse_hover_cursor"
                 | "clipboard_write"
                 | "clipboard_read"
+                | "file_transfer"
                 | "clear_defaults"
                 | "autosave_interval_seconds"
                 | "save_scrollback"
@@ -194,6 +197,7 @@ remain_on_exit = false
 mouse_hover_cursor = false
 clipboard_write = false
 clipboard_read = false
+file_transfer = false
 clear_defaults = false
 autosave_interval_seconds = 0
 save_scrollback = false
@@ -236,6 +240,23 @@ backspace = ["backspace"]
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn file_transfers_are_opt_in_typed_and_visible_in_diagnostics() {
+        let config = resolve_config(parse_config("file_transfer=true").unwrap());
+        assert!(config.file_transfer());
+        assert!(!config.clipboard_read());
+        assert!(!config.clipboard_write());
+        assert!(Settings::from(&config).file_transfer);
+        assert!(ignored_options("file_transfer=true").is_empty());
+        assert!(!resolve_config(parse_config(&default_config()).unwrap()).file_transfer());
+        for value in ["1", "'true'", "[]"] {
+            assert!(
+                parse_config(&format!("file_transfer={value}"))
+                    .unwrap_err()
+                    .contains("file_transfer must be a boolean")
+            );
+        }
+    }
     #[test]
     fn clipboard_reads_are_opt_in_and_reported_independently_from_writes() {
         let config = resolve_config(parse_config("clipboard_read=true").unwrap());

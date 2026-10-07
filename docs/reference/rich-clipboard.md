@@ -91,7 +91,8 @@ its eventual reply cannot enter a replacement request.
 
 Rich writes use `clipboard_write`, independently of `clipboard_read`, as described
 below. [OSC 52 writes](pane-clipboard.md) use the same write policy. OSC 52 reads,
-Kitty file transfer OSC 5113 and nested tmux wrappers remain unsupported.
+nested tmux wrappers remain unsupported. [Kitty file transfer OSC 5113](file-transfer.md)
+uses its independent `file_transfer` policy and routing.
 Paste events additionally require the application to enable private mode 5522.
 
 Base: reviewed XTGETTCAP commit `5318f20`. Fixed `main` reference:

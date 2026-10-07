@@ -4,6 +4,8 @@
 [child OSC 52 writes](pane-clipboard.md) and [rich writes](rich-clipboard.md),
 defaulting to `false`. `[settings].clipboard_read` independently reports
 [rich clipboard reads](rich-clipboard.md), also disabled by default.
+`[settings].file_transfer` reports the independent [OSC 5113 relay](file-transfer.md),
+also disabled by default.
 
 Inspect configuration before starting a terminal or named-session server:
 

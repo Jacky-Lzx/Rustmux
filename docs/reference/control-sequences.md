@@ -93,7 +93,9 @@ payload limit. Unsupported OSC is discarded through BEL or ST (ESC followed by
 backslash). An opt-in pane observer separately handles bounded
 [OSC 52 clipboard writes](pane-clipboard.md) and an attachment router handles
 [OSC 5522 rich clipboard transactions and private mode 5522 paste events](rich-clipboard.md); the display parser and replay
-paths still discard these controls. A separate bounded observer recognizes OSC 7 working-directory
+paths still discard these controls. [OSC 5113 file transfer](file-transfer.md) has
+an independent opt-in observer and attachment router, sharing outer IPC framing
+with clipboard controls. A separate bounded observer recognizes OSC 7 working-directory
 metadata and OSC 133 command-output boundaries for Ctrl-B `e`.
 DCS retains at most 64 bytes to recognize supported DECRQSS and XTGETTCAP queries; other
 DCS, SOS and PM payloads are discarded through ST. Each pane's

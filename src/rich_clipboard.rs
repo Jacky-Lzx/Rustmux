@@ -7,6 +7,7 @@ use std::{
 
 mod paste;
 mod write;
+use crate::terminal_ipc::{Framer, Protocol, State};
 
 const PREFIX: &[u8] = b"\x1b]5522;";
 const MAX_PACKET: usize = 8192;
@@ -15,201 +16,6 @@ const MAX_ID: usize = 64;
 const MAX_PENDING: usize = 256 * 1024;
 const INPUT_RESERVE: usize = 208 * 1024;
 const IDLE: Duration = Duration::from_secs(30);
-
-#[derive(Debug, Default)]
-enum State {
-    #[default]
-    Ground,
-    Escape,
-    Prefix(Vec<u8>),
-    Csi(Vec<u8>),
-    Other {
-        osc: bool,
-        escape: bool,
-    },
-    Packet {
-        bytes: Vec<u8>,
-        escape: bool,
-        valid: bool,
-    },
-}
-
-/// Recognize top-level seven-bit OSC 5522; BEL is optional for host input only.
-#[derive(Debug, Default)]
-struct Framer {
-    state: State,
-    paste: bool,
-    prefix_since: Option<Instant>,
-    bad_packet: bool,
-    allow_bel: bool,
-}
-impl Framer {
-    fn advance(&mut self, byte: u8, pass: &mut Vec<u8>) -> Option<Vec<u8>> {
-        let mut packet = None;
-        self.state = match std::mem::take(&mut self.state) {
-            State::Ground if byte == 0x1b => {
-                self.prefix_since = Some(Instant::now());
-                State::Escape
-            }
-            State::Ground => {
-                pass.push(byte);
-                State::Ground
-            }
-            State::Escape => match byte {
-                b']' if !self.paste => State::Prefix(b"\x1b]".to_vec()),
-                b'[' => {
-                    pass.extend_from_slice(b"\x1b[");
-                    State::Csi(Vec::new())
-                }
-                b']' | b'P' | b'_' | b'^' | b'X' if !self.paste => {
-                    pass.extend_from_slice(&[0x1b, byte]);
-                    State::Other {
-                        osc: byte == b']',
-                        escape: false,
-                    }
-                }
-                0x1b => {
-                    pass.push(0x1b);
-                    State::Escape
-                }
-                _ => {
-                    pass.extend_from_slice(&[0x1b, byte]);
-                    State::Ground
-                }
-            },
-            State::Prefix(mut bytes) => {
-                bytes.push(byte);
-                if PREFIX.starts_with(&bytes) {
-                    if bytes.len() == PREFIX.len() {
-                        State::Packet {
-                            bytes: Vec::new(),
-                            escape: false,
-                            valid: true,
-                        }
-                    } else {
-                        State::Prefix(bytes)
-                    }
-                } else {
-                    pass.extend_from_slice(&bytes);
-                    if matches!(byte, 7 | 0x18 | 0x1a) {
-                        State::Ground
-                    } else {
-                        State::Other {
-                            osc: true,
-                            escape: byte == 0x1b,
-                        }
-                    }
-                }
-            }
-            State::Csi(mut bytes) => {
-                pass.push(byte);
-                if (0x40..=0x7e).contains(&byte) {
-                    if bytes == b"200" && byte == b'~' {
-                        self.paste = true;
-                    }
-                    if bytes == b"201" && byte == b'~' {
-                        self.paste = false;
-                    }
-                    State::Ground
-                } else if matches!(byte, 0x18 | 0x1a) {
-                    State::Ground
-                } else if byte == 0x1b {
-                    State::Escape
-                } else {
-                    if bytes.len() < 32 {
-                        bytes.push(byte);
-                    }
-                    State::Csi(bytes)
-                }
-            }
-            State::Other { osc, escape } => {
-                pass.push(byte);
-                if matches!(byte, 0x18 | 0x1a) || (osc && byte == 7) || (escape && byte == b'\\') {
-                    State::Ground
-                } else {
-                    State::Other {
-                        osc,
-                        escape: byte == 0x1b,
-                    }
-                }
-            }
-            State::Packet {
-                mut bytes,
-                escape,
-                mut valid,
-            } => {
-                if byte == 7 && self.allow_bel && valid && !escape {
-                    packet = Some(bytes);
-                    State::Ground
-                } else if matches!(byte, 7 | 0x18 | 0x1a) {
-                    self.bad_packet = true;
-                    State::Ground
-                } else if escape && byte == b'\\' {
-                    if valid {
-                        packet = Some(bytes);
-                    } else {
-                        self.bad_packet = true;
-                    }
-                    State::Ground
-                } else {
-                    if escape || (byte != 0x1b && !(0x20..=0x7e).contains(&byte)) {
-                        valid = false;
-                        bytes.clear();
-                    }
-                    if valid && byte != 0x1b {
-                        if bytes.len() == MAX_PACKET {
-                            valid = false;
-                            bytes.clear();
-                        } else {
-                            bytes.push(byte);
-                        }
-                    }
-                    State::Packet {
-                        bytes,
-                        escape: byte == 0x1b,
-                        valid,
-                    }
-                }
-            }
-        };
-        if !matches!(self.state, State::Escape | State::Prefix(_)) {
-            self.prefix_since = None;
-        }
-        packet
-    }
-    fn expire_prefix(&mut self, now: Instant, pass: &mut Vec<u8>) {
-        if self
-            .prefix_since
-            .is_some_and(|since| now.saturating_duration_since(since) >= Duration::from_millis(50))
-        {
-            match std::mem::take(&mut self.state) {
-                State::Escape => pass.push(0x1b),
-                State::Prefix(bytes) => {
-                    pass.extend(bytes);
-                    self.state = State::Other {
-                        osc: true,
-                        escape: false,
-                    };
-                }
-                state => self.state = state,
-            }
-            self.prefix_since = None;
-        }
-    }
-    fn cancel_packet(&mut self) {
-        if matches!(self.state, State::Prefix(_) | State::Escape) {
-            self.state = State::Other {
-                osc: true,
-                escape: false,
-            };
-            self.prefix_since = None;
-        }
-        if let State::Packet { bytes, valid, .. } = &mut self.state {
-            bytes.clear();
-            *valid = false;
-        }
-    }
-}
 
 struct Packet<'a> {
     metadata: &'a str,
@@ -361,11 +167,11 @@ impl Observer {
         let mut ignored = Vec::new();
         for &byte in bytes {
             let framed = self.framer.advance(byte, &mut ignored);
-            if std::mem::take(&mut self.framer.bad_packet) && self.write_started {
+            if self.framer.bad_packet.take() == Some(Protocol::Clipboard) && self.write_started {
                 self.push(Vec::new(), reply);
                 self.write_started = false;
             }
-            if let Some(body) = framed {
+            if let Some((Protocol::Clipboard, body)) = framed {
                 if let Some(packet) = Packet::parse(&body) {
                     let kind = packet.value("type");
                     let id = packet.value("id");
@@ -464,10 +270,7 @@ impl Default for Router {
         let time = u64::try_from(time).unwrap_or(u64::MAX);
         Self {
             namespace: format!("{:x}-{time:x}-{serial:x}", std::process::id()),
-            framer: Framer {
-                allow_bel: true,
-                ..Framer::default()
-            },
+            framer: Framer::host(),
             sequence: 0,
             lease: None,
             pending: VecDeque::new(),
@@ -618,15 +421,28 @@ impl Router {
             }
         }
     }
+    #[cfg(test)]
     pub fn advance(&mut self, bytes: &[u8], pass: &mut Vec<u8>, now: Instant) {
+        self.advance_with_files(bytes, pass, now, &mut |_| {});
+    }
+    pub fn advance_with_files(
+        &mut self,
+        bytes: &[u8],
+        pass: &mut Vec<u8>,
+        now: Instant,
+        file: &mut impl FnMut(&[u8]),
+    ) {
         for &byte in bytes {
             if byte == 0x1b && matches!(self.framer.state, State::Ground | State::Escape) {
                 self.prefix_target = self.paste_target;
             }
-            if let Some(body) = self.framer.advance(byte, pass) {
-                self.response(&body, now);
+            if let Some((protocol, body)) = self.framer.advance(byte, pass) {
+                match protocol {
+                    Protocol::Clipboard => self.response(&body, now),
+                    Protocol::File => file(&body),
+                }
             }
-            if std::mem::take(&mut self.framer.bad_packet) {
+            if self.framer.bad_packet.take() == Some(Protocol::Clipboard) {
                 self.paste = None;
             }
         }

@@ -43,6 +43,7 @@
 - [Kitty Structured Colors](reference/structured-colors.md)
 - [Child Clipboard Writes](reference/pane-clipboard.md)
 - [Rich Clipboard Transactions](reference/rich-clipboard.md)
+- [Kitty File Transfer](reference/file-transfer.md)
 - [Synchronized Output](reference/synchronized-output.md)
 - [Device Attributes](reference/device-attributes.md)
 - [Terminal Capability Queries](reference/terminal-capabilities.md)
