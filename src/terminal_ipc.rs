@@ -1,4 +1,4 @@
-//! Shared bounded framing for Kitty clipboard and file-transfer controls.
+//! Shared bounded framing for Kitty clipboard, file-transfer and drag-source controls.
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -6,18 +6,21 @@ pub(crate) enum Protocol {
     #[default]
     Clipboard,
     File,
+    Drag,
 }
 impl Protocol {
     fn prefix(self) -> &'static [u8] {
         match self {
             Self::Clipboard => b"\x1b]5522;",
             Self::File => b"\x1b]5113;",
+            Self::Drag => b"\x1b]72;",
         }
     }
     fn max_packet(self) -> usize {
         match self {
             Self::Clipboard => 8192,
             Self::File => 16 * 1024,
+            Self::Drag => 8192,
         }
     }
 }
@@ -42,7 +45,7 @@ pub(crate) enum State {
 }
 
 /// Recognize bounded top-level IPC strings; never extract commands from pasted
-/// text or nested DCS/APC/OSC controls. Both protocols share one host framer so
+/// text or nested DCS/APC/OSC controls. IPC protocols share one host framer so
 /// an ambiguous Escape is held for only one timeout.
 #[derive(Debug, Default)]
 pub(crate) struct Framer {
@@ -52,7 +55,7 @@ pub(crate) struct Framer {
     pub(crate) bad_packet: Option<Protocol>,
     allow_bel: bool,
     protocol: Protocol,
-    capture_files: bool,
+    capture_ipc: bool,
     canceled_prefix: Option<Protocol>,
 }
 impl Framer {
@@ -62,10 +65,16 @@ impl Framer {
             ..Self::default()
         }
     }
+    pub(crate) fn drag() -> Self {
+        Self {
+            protocol: Protocol::Drag,
+            ..Self::default()
+        }
+    }
     pub(crate) fn host() -> Self {
         Self {
             allow_bel: true,
-            capture_files: true,
+            capture_ipc: true,
             ..Self::default()
         }
     }
@@ -107,8 +116,10 @@ impl Framer {
                 bytes.push(byte);
                 let protocol = if self.protocol.prefix().starts_with(&bytes) {
                     Some(self.protocol)
-                } else if self.capture_files && Protocol::File.prefix().starts_with(&bytes) {
+                } else if self.capture_ipc && Protocol::File.prefix().starts_with(&bytes) {
                     Some(Protocol::File)
+                } else if self.capture_ipc && Protocol::Drag.prefix().starts_with(&bytes) {
+                    Some(Protocol::Drag)
                 } else {
                     None
                 };
@@ -235,7 +246,7 @@ impl Framer {
         }
     }
     pub(crate) fn cancel_packet(&mut self) {
-        // A clipboard policy/UI change must not interrupt a fragmented file
+        // A clipboard policy/UI change must not interrupt a fragmented file/drag
         // reply sharing this host framer. Defer ambiguous-prefix cancellation
         // until its protocol is known.
         if matches!(self.state, State::Prefix(_) | State::Escape) {

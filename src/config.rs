@@ -597,6 +597,7 @@ pub struct Config {
     clipboard_write: bool,
     clipboard_read: bool,
     file_transfer: bool,
+    drag_source: bool,
 }
 
 /// Disk saving is opt-in; explicit manual saves remain available with defaults.
@@ -608,6 +609,9 @@ pub struct PersistenceOptions {
 }
 
 impl Config {
+    pub fn drag_source(&self) -> bool {
+        self.drag_source
+    }
     pub fn file_transfer(&self) -> bool {
         self.file_transfer
     }
@@ -663,6 +667,7 @@ struct ParsedConfig {
     clipboard_write: bool,
     clipboard_read: bool,
     file_transfer: bool,
+    drag_source: bool,
 }
 
 /// Load and validate the complete configuration used by a new session.
@@ -714,6 +719,7 @@ fn resolve_config(configured: ParsedConfig) -> Config {
         clipboard_write: configured.clipboard_write,
         clipboard_read: configured.clipboard_read,
         file_transfer: configured.file_transfer,
+        drag_source: configured.drag_source,
     }
 }
 
@@ -850,6 +856,7 @@ fn parse_config(source: &str) -> Result<ParsedConfig, String> {
         clipboard_write: boolean("clipboard_write")?,
         clipboard_read: boolean("clipboard_read")?,
         file_transfer: boolean("file_transfer")?,
+        drag_source: boolean("drag_source")?,
     })
 }
 
@@ -1949,6 +1956,7 @@ preset = "mocha"
                 clipboard_write: false,
                 clipboard_read: false,
                 file_transfer: false,
+                drag_source: false,
             }
         );
         assert_eq!(

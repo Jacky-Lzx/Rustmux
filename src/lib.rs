@@ -7,6 +7,7 @@ mod clipboard;
 mod closed_pane;
 pub mod config;
 pub mod control;
+mod drag_source;
 mod file_transfer;
 pub mod graphics;
 mod rich_clipboard;

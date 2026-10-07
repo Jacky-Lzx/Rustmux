@@ -423,14 +423,14 @@ impl Router {
     }
     #[cfg(test)]
     pub fn advance(&mut self, bytes: &[u8], pass: &mut Vec<u8>, now: Instant) {
-        self.advance_with_files(bytes, pass, now, &mut |_| {});
+        self.advance_with_ipc(bytes, pass, now, &mut |_, _| {});
     }
-    pub fn advance_with_files(
+    pub fn advance_with_ipc(
         &mut self,
         bytes: &[u8],
         pass: &mut Vec<u8>,
         now: Instant,
-        file: &mut impl FnMut(&[u8]),
+        ipc: &mut impl FnMut(Protocol, &[u8]),
     ) {
         for &byte in bytes {
             if byte == 0x1b && matches!(self.framer.state, State::Ground | State::Escape) {
@@ -439,7 +439,7 @@ impl Router {
             if let Some((protocol, body)) = self.framer.advance(byte, pass) {
                 match protocol {
                     Protocol::Clipboard => self.response(&body, now),
-                    Protocol::File => file(&body),
+                    Protocol::File | Protocol::Drag => ipc(protocol, &body),
                 }
             }
             if self.framer.bad_packet.take() == Some(Protocol::Clipboard) {

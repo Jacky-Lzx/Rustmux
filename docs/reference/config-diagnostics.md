@@ -4,6 +4,7 @@
 [child OSC 52 writes](pane-clipboard.md) and [rich writes](rich-clipboard.md),
 defaulting to `false`. `[settings].clipboard_read` independently reports
 [rich clipboard reads](rich-clipboard.md), also disabled by default.
+`[settings].drag_source` reports the independent, default-off [OSC 72 source relay](drag-source.md).
 `[settings].file_transfer` reports the independent [OSC 5113 relay](file-transfer.md),
 also disabled by default.
 

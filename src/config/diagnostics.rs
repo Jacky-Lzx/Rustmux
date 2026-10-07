@@ -25,6 +25,7 @@ pub struct Settings {
     pub clipboard_write: bool,
     pub clipboard_read: bool,
     pub file_transfer: bool,
+    pub drag_source: bool,
     pub clear_defaults: bool,
     pub autosave_interval_seconds: u64,
     pub save_scrollback: bool,
@@ -79,6 +80,7 @@ impl From<&Config> for Settings {
             clipboard_write: config.clipboard_write,
             clipboard_read: config.clipboard_read,
             file_transfer: config.file_transfer,
+            drag_source: config.drag_source,
             clear_defaults: config.shortcuts.clear_defaults,
             autosave_interval_seconds: config.persistence.autosave_interval_seconds,
             save_scrollback: config.persistence.save_scrollback,
@@ -106,6 +108,7 @@ fn ignored_options(source: &str) -> Vec<String> {
                 | "clipboard_write"
                 | "clipboard_read"
                 | "file_transfer"
+                | "drag_source"
                 | "clear_defaults"
                 | "autosave_interval_seconds"
                 | "save_scrollback"
@@ -198,6 +201,7 @@ mouse_hover_cursor = false
 clipboard_write = false
 clipboard_read = false
 file_transfer = false
+drag_source = false
 clear_defaults = false
 autosave_interval_seconds = 0
 save_scrollback = false
@@ -240,6 +244,22 @@ backspace = ["backspace"]
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn drag_sources_are_opt_in_typed_and_exposed() {
+        let config = resolve_config(parse_config("drag_source=true").unwrap());
+        assert!(config.drag_source());
+        assert!(Settings::from(&config).drag_source);
+        assert!(ignored_options("drag_source=true").is_empty());
+        assert!(!resolve_config(parse_config(&default_config()).unwrap()).drag_source());
+        for value in ["1", "'true'", "[]"] {
+            assert!(
+                parse_config(&format!("drag_source={value}"))
+                    .unwrap_err()
+                    .contains("drag_source must be a boolean")
+            );
+        }
+    }
+
     #[test]
     fn file_transfers_are_opt_in_typed_and_visible_in_diagnostics() {
         let config = resolve_config(parse_config("file_transfer=true").unwrap());

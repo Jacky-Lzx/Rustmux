@@ -28,6 +28,11 @@ fn clipboard() {
 }
 
 #[test]
+fn drag_source() {
+    run_scenario("drag_source");
+}
+
+#[test]
 fn file_transfer() {
     run_scenario("file_transfer");
 }
