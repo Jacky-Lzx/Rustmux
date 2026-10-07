@@ -22,6 +22,20 @@ def receive(expected):
     assert data == expected, repr(data[:80])
 os.write(1, b"\x1b[2;3H\x1b[5n\x1b[6n\x1b[?6n\x1b[?15n\x1b[?25n")
 receive(b"\x1b[0n\x1b[2;3R\x1b[?2;3R\x1b[?11n\x1b[?21n")
+# Real child DSR observes sequence widths even when components arrive in
+# separate reads. A query/reply between writes forces that boundary.
+for base, suffix, base_column in [("👍", "🏽", 3), ("☝", "🏿", 2), ("🇨", "🇳", 2)]:
+    os.write(1, ("\x1b[2J\x1b[H" + base + "\x1b[6n").encode())
+    receive(f"\x1b[1;{base_column}R".encode())
+    os.write(1, (suffix + "\x1b[6n").encode())
+    receive(b"\x1b[1;3R")
+    os.write(1, b"X\x1b[6n")
+    receive(b"\x1b[1;4R")
+# A late flag suffix grows past the 78-column pane edge as one whole glyph.
+os.write(1, "\x1b[2J\x1b[1;78H🇨\x1b[6n".encode())
+receive(b"\x1b[1;78R")
+os.write(1, "🇳\x1b[6n".encode())
+receive(b"\x1b[2;3R")
 os.write(1, b"\x1b]10;?;?;?\x07")
 receive(b"\x1b]10;rgb:cdcd/d6d6/f4f4\x07\x1b]11;rgb:1e1e/1e1e/2e2e\x07\x1b]12;rgb:f5f5/e0e0/dcdc\x07")
 os.write(1, b"\x1b]10;#010203;rgb:1111/2222/3333;#a0b0c0\x1b\\\x1b]10;?;?;?\x1b\\")

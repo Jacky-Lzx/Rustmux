@@ -50,14 +50,15 @@ pub struct Style {
     pub strikethrough: bool,
 }
 
-/// A stored character with its width and zero-width suffix. The style is a snapshot:
+/// A stored character with its width and text suffix. The style is a snapshot:
 /// subsequent SGR commands cannot restyle existing text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cell {
     pub character: char,
     /// 1 for ordinary cells, 2 for a wide leader, 0 for its trailing placeholder.
     pub width: u8,
-    /// At most 16 zero-width scalars; only leaders carry suffixes.
+    /// At most 16 scalars: combining marks or supported emoji suffixes.
+    /// Only leaders carry suffixes.
     pub combining: Vec<char>,
     pub style: Style,
     /// OSC 8 metadata at the time this cell was painted.

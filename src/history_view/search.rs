@@ -407,6 +407,30 @@ mod tests {
     use crate::parser::Parser;
 
     #[test]
+    fn emoji_suffix_matches_cover_the_complete_two_column_cell() {
+        let mut source = Screen::new(2, 12).unwrap();
+        Parser::new().advance(&mut source, "A👍🏽🇨🇳Z".as_bytes());
+        for query in ["👍🏽", "🏽"] {
+            assert_eq!(
+                find(&source, query),
+                [Hit {
+                    start: (0, 1),
+                    end: (0, 3)
+                }]
+            );
+        }
+        for query in ["🇨🇳", "🇳"] {
+            assert_eq!(
+                find(&source, query),
+                [Hit {
+                    start: (0, 3),
+                    end: (0, 5)
+                }]
+            );
+        }
+    }
+
+    #[test]
     fn logical_search_crosses_history_and_wide_wrap_but_not_hard_breaks() {
         let mut source = Screen::new(3, 4).unwrap();
         Parser::new().advance(&mut source, "ab中e\u{301}Z\r\nhard\r\nnext".as_bytes());

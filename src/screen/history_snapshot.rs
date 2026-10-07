@@ -183,6 +183,33 @@ mod tests {
     }
 
     #[test]
+    fn saved_emoji_sequences_restore_as_whole_styled_history_cells() {
+        let mut source = Screen::new(2, 10).unwrap();
+        Parser::new().advance(&mut source, "\x1b[31m👍🏽🇨🇳X".as_bytes());
+        for colors in [false, true] {
+            let saved = source.saved_history(colors, 100);
+            let mut restored = Screen::new(3, 3).unwrap();
+            restored.restore_history(&saved, colors).unwrap();
+            assert_eq!(restored.cursor(), (0, 0));
+            assert_eq!(restored.row_used_columns(0), Some(0));
+            let first = &restored.history_row(0).unwrap()[0];
+            let flag = &restored.history_row(1).unwrap()[0];
+            assert_eq!((first.character, first.width), ('👍', 2));
+            assert_eq!(first.combining, ['🏽']);
+            assert_eq!((flag.character, flag.width), ('🇨', 2));
+            assert_eq!(flag.combining, ['🇳']);
+            assert_eq!(
+                first.style.foreground,
+                if colors {
+                    Color::Indexed(1)
+                } else {
+                    Color::Default
+                }
+            );
+        }
+    }
+
+    #[test]
     fn roundtrip_reflows_unicode_styles_and_explicit_spaces_into_history_only() {
         let mut screen = Screen::new(3, 8).unwrap();
         Parser::new().advance(

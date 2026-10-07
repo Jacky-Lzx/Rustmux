@@ -63,6 +63,75 @@ fn parse(rows: usize, columns: usize, input: &[u8]) -> Screen {
 }
 
 #[test]
+fn emoji_modifiers_and_flag_pairs_share_a_cell_span() {
+    let screen = parse(2, 20, "\x1b[31m👍\x1b[32m🏽X🇨🇳🇯🇵Z".as_bytes());
+    assert_eq!(screen.cursor(), (0, 8));
+    let cells = screen.row(0).unwrap();
+    assert_eq!(cells[0].combining, ['🏽']);
+    assert_eq!(cells[0].width, 2);
+    assert_eq!(cells[0].style.foreground, Color::Indexed(1));
+    assert_eq!(cells[2].character, 'X');
+    assert_eq!(cells[2].style.foreground, Color::Indexed(2));
+    assert_eq!(cells[3].character, '🇨');
+    assert_eq!(cells[3].combining, ['🇳']);
+    assert_eq!(cells[3].width, 2);
+    assert_eq!(cells[5].combining, ['🇵']);
+    assert_eq!(cells[7].character, 'Z');
+}
+
+#[test]
+fn emoji_sequences_wrap_and_grow_in_insert_mode() {
+    let screen = parse(2, 4, "ab👍🏽X".as_bytes());
+    assert_eq!(text(&screen, 0), "ab👍🏽");
+    assert_eq!(text(&screen, 1), "X   ");
+    let screen = parse(2, 4, "abc🇨🇳X".as_bytes());
+    assert_eq!(text(&screen, 0), "abc ");
+    assert_eq!(text(&screen, 1), "🇨🇳X ");
+    assert_eq!(screen.cursor(), (1, 3));
+    let screen = parse(2, 8, "abcdef\r\x1b[4h🇨🇳".as_bytes());
+    assert_eq!(text(&screen, 0), "🇨🇳abcdef");
+    let screen = parse(2, 1, "🇨🇳".as_bytes());
+    assert_eq!(text(&screen, 0), "�");
+    let screen = parse(2, 4, "\x1b[?7labc🇨🇳".as_bytes());
+    assert_eq!(text(&screen, 0), "abc🇨");
+    assert_eq!(screen.cursor(), (0, 3));
+    for modifier in ['🏻', '🏼', '🏽', '🏾', '🏿'] {
+        let screen = parse(2, 8, format!("☝{modifier}X").as_bytes());
+        assert_eq!(screen.cursor(), (0, 3));
+        assert_eq!(screen.row(0).unwrap()[0].combining, [modifier]);
+    }
+}
+
+#[test]
+fn invalid_modifiers_and_unpaired_indicators_remain_separate() {
+    let screen = parse(2, 20, "A🏽👍🏽🏿🇨🇳🇯".as_bytes());
+    assert!(screen.row(0).unwrap()[0].combining.is_empty());
+    assert_eq!(screen.row(0).unwrap()[1].character, '🏽');
+    assert_eq!(screen.row(0).unwrap()[3].combining, ['🏽']);
+    assert_eq!(screen.row(0).unwrap()[5].character, '🏿');
+    assert_eq!(screen.row(0).unwrap()[9].character, '🇯');
+    assert!(screen.row(0).unwrap()[9].combining.is_empty());
+    // An unrelated zero-width suffix cannot turn two indicators into a flag.
+    let screen = parse(2, 8, "🇨\u{301}🇳".as_bytes());
+    assert_eq!(screen.row(0).unwrap()[0].combining, ['\u{301}']);
+    assert_eq!(screen.row(0).unwrap()[1].character, '🇳');
+}
+
+#[test]
+fn emoji_overwrite_and_reflow_keep_sequences_whole() {
+    for column in [1, 2] {
+        let screen = parse(2, 8, format!("👍🏽🇨🇳\x1b[1;{column}HX").as_bytes());
+        assert!(screen.row(0).unwrap()[0].combining.is_empty());
+        assert!(screen.row(0).unwrap()[1].combining.is_empty());
+    }
+    let mut screen = parse(2, 8, "👍🏽🇨🇳AB".as_bytes());
+    screen.resize(3, 3).unwrap();
+    invariant(&screen);
+    assert_eq!(screen.row(0).unwrap()[0].combining, ['🏽']);
+    assert_eq!(screen.row(1).unwrap()[0].combining, ['🇳']);
+}
+
+#[test]
 fn emoji_selectors_update_width_cursor_and_preserve_style() {
     let screen = parse(2, 16, "\x1b[31m⚠\x1b[32m\u{fe0f}work".as_bytes());
     assert_eq!(screen.cursor(), (0, 6));

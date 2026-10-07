@@ -1390,18 +1390,13 @@ impl Screen {
         let Some(mut width) = character.width() else {
             return;
         };
+        if self.append_emoji_suffix(character) {
+            return;
+        }
         if width == 0 {
-            let column = if self.wrap_pending {
-                self.column
-            } else if self.column > 0 {
-                self.column - 1
-            } else {
+            let Some(index) = self.preceding_cell_index() else {
                 return;
             };
-            let mut index = self.row * self.columns + column;
-            if self.cells[index].width == 0 {
-                index -= 1;
-            }
             if self.cells[index].combining.len() < MAX_COMBINING_SCALARS {
                 self.cells[index].combining.push(character);
                 if matches!(character, '\u{fe0e}' | '\u{fe0f}') {
@@ -1465,7 +1460,66 @@ impl Screen {
         }
     }
 
-    /// VS15/VS16 can change the preceding glyph's width after its base arrived.
+    fn preceding_cell_index(&self) -> Option<usize> {
+        let column = if self.wrap_pending {
+            self.column
+        } else {
+            self.column.checked_sub(1)?
+        };
+        let index = self.row * self.columns + column;
+        Some(if self.cells[index].width == 0 {
+            index - 1
+        } else {
+            index
+        })
+    }
+
+    /// Keep supported positive-width emoji suffixes with their original leader.
+    /// Ordinary scalars take the allocation-free path; each suffix remains bounded.
+    fn append_emoji_suffix(&mut self, character: char) -> bool {
+        let modifier = matches!(character, '\u{1f3fb}'..='\u{1f3ff}');
+        let indicator = matches!(character, '\u{1f1e6}'..='\u{1f1ff}');
+        if !modifier && !indicator {
+            return false;
+        }
+        let Some(index) = self.preceding_cell_index() else {
+            return false;
+        };
+        let cell = &self.cells[index];
+        if cell.combining.len() == MAX_COMBINING_SCALARS {
+            return false;
+        }
+        if indicator {
+            // Only two adjacent regional indicators form one flag. A third
+            // begins another cell, rather than extending the previous pair.
+            if !matches!(cell.character, '\u{1f1e6}'..='\u{1f1ff}') || !cell.combining.is_empty() {
+                return false;
+            }
+        } else {
+            // Let unicode-width's modifier-base tables validate the sequence;
+            // reject repeated modifiers and leave ZWJ shaping to a later step.
+            if cell
+                .combining
+                .iter()
+                .any(|c| matches!(c, '\u{1f3fb}'..='\u{1f3ff}' | '\u{200d}'))
+            {
+                return false;
+            }
+            let sequence: String = std::iter::once(cell.character)
+                .chain(cell.combining.iter().copied())
+                .chain(std::iter::once(character))
+                .collect();
+            let width = sequence.width();
+            if width != 2 || width >= usize::from(cell.width) + character.width().unwrap_or(0) {
+                return false;
+            }
+        }
+        self.cells[index].combining.push(character);
+        self.resize_selected_cell(index);
+        true
+    }
+
+    /// Selectors and emoji suffixes can change the width after their base arrived.
     /// Keep the cell span and delayed-wrap cursor consistent with the sequence.
     fn resize_selected_cell(&mut self, mut index: usize) {
         let mut cell = self.cells[index].clone();

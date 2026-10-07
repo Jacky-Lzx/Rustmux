@@ -18,6 +18,30 @@ fn assert_grid(screen: &Screen, replay: &Screen) {
     assert_eq!(screen.cursor_color(), replay.cursor_color());
 }
 #[test]
+fn modified_emoji_erasure_matches_an_independent_two_column_glyph() {
+    for emoji in ["👍🏽", "🇨🇳", "☝️🏿"] {
+        let mut source = Screen::new(2, 20).unwrap();
+        let mut physical = Screen::new(2, 20).unwrap();
+        let mut renderer = Renderer::default();
+        let mut outer = Parser::new();
+        for input in [format!("{emoji}work"), "\x1b[HOK\x1b[K".into()] {
+            Parser::new().advance(&mut source, input.as_bytes());
+            let bytes = String::from_utf8(frame(&mut renderer, &source)).unwrap();
+            // A known wide scalar checks the emitted cursor and erase geometry
+            // independently of the new sequence recognition in our parser.
+            outer.advance(&mut physical, bytes.replace(emoji, "中").as_bytes());
+        }
+        let row: String = physical
+            .row(0)
+            .unwrap()
+            .iter()
+            .map(|c| c.character)
+            .collect();
+        assert_eq!(row.trim_end(), "OK", "{emoji}");
+    }
+}
+
+#[test]
 fn warning_emoji_erasure_covers_the_external_two_column_glyph() {
     let mut source = Screen::new(2, 40).unwrap();
     let mut physical = Screen::new(2, 40).unwrap();

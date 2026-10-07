@@ -23,7 +23,8 @@ Ambiguous-width characters use the narrow convention. `Cell` now contains:
 
 - `character`: the base scalar (a space for a trailing placeholder).
 - `width`: 1 for an ordinary cell, 2 for a wide leading cell, 0 for its next cell.
-- `combining`: up to 16 zero-width scalars attached to a leading cell.
+- `combining`: up to 16 combining marks or supported emoji suffix scalars attached
+  to a leading cell.
 - `style`: the existing copied text attributes.
 
 Rows remain read-only. Cells are cloneable but no longer Copy. Consumers must
@@ -45,6 +46,20 @@ even when the selector arrives in a later PTY read. Invalid selector/base pairs
 do not widen arbitrary text. Growing a glyph in insert mode inserts the additional
 column; shrinking releases the old trailing cell without shifting later text.
 
+Emoji skin-tone modifiers (U+1F3FB through U+1F3FF) stay with a valid modifier
+base, using the dependency's string-width tables to recognize a two-column
+sequence. Invalid bases and repeated modifiers remain separate scalars. Two
+adjacent regional indicators (U+1F1E6 through U+1F1FF) form one two-column flag
+cell; a third indicator starts another cell. Intervening combining marks prevent
+flag pairing. These suffixes retain the base's style and hyperlink, including
+when SGR or OSC 8 changes between reads. They use the same 16-scalar suffix limit.
+
+The complete sequence is rendered, copied, searched and saved as one cell span.
+Reflow and edits preserve it as a unit. A flag's second indicator can widen its
+initial one-column base; delayed wrap and insert mode use the selector growth
+rules above. With wrapping disabled, a suffix that would widen past the right
+edge is ignored. On a one-column screen, flag growth uses U+FFFD.
+
 ## Boundaries and editing
 
 A two-column character wraps before writing if only one column remains, clearing
@@ -64,11 +79,11 @@ existing active-background policy.
 
 ## Limits and verification
 
-This is scalar-width handling, not full grapheme-cluster shaping. Emoji ZWJ and
-modifier sequences, flags, script ligatures and bidirectional layout are not
-implemented. Individual wide emoji scalars
-work, but complete emoji sequences may occupy a different width from an outer
-terminal. Normalization is not performed.
+This combines scalar-width handling with the specific emoji sequences above,
+not full grapheme-cluster shaping. Emoji ZWJ sequences, script ligatures and
+bidirectional layout are not implemented. The History query editor still moves
+and clips by scalar rather than complete emoji sequences. Other sequences may
+occupy a different width from an outer terminal. Normalization is not performed.
 
 `tests/unicode_screen.rs` covers multi-byte input at every chunk split, single-byte
 feeds, cell-pair invariants, style preservation, wide wrap/scroll, partial erasure,
@@ -76,5 +91,9 @@ combining limits, malformed UTF-8 and end-of-stream handling. Run
 `cargo test --test unicode_screen`.
 The selector cases also cover style retention, insert mode and right-edge
 policies. `tests/incremental_render.rs` independently models a two-column
-warning emoji to verify that erasing a shorter replacement leaves no trailing
-character in the external terminal.
+warning emoji, modifier sequences and flags to verify that erasing a shorter
+replacement leaves no trailing character in the external terminal. History
+snapshot tests cover plain/styled restoration at a narrower width; search tests
+check that matching a suffix selects the whole cell span.
+The real child-PTY input scenario queries the cursor between sequence components
+and after right-edge flag growth, checking the application-visible geometry.
