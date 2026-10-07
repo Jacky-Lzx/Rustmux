@@ -26,6 +26,7 @@ pub struct Settings {
     pub clipboard_read: bool,
     pub file_transfer: bool,
     pub drag_source: bool,
+    pub drop_target: bool,
     pub clear_defaults: bool,
     pub autosave_interval_seconds: u64,
     pub save_scrollback: bool,
@@ -81,6 +82,7 @@ impl From<&Config> for Settings {
             clipboard_read: config.clipboard_read,
             file_transfer: config.file_transfer,
             drag_source: config.drag_source,
+            drop_target: config.drop_target,
             clear_defaults: config.shortcuts.clear_defaults,
             autosave_interval_seconds: config.persistence.autosave_interval_seconds,
             save_scrollback: config.persistence.save_scrollback,
@@ -109,6 +111,7 @@ fn ignored_options(source: &str) -> Vec<String> {
                 | "clipboard_read"
                 | "file_transfer"
                 | "drag_source"
+                | "drop_target"
                 | "clear_defaults"
                 | "autosave_interval_seconds"
                 | "save_scrollback"
@@ -202,6 +205,7 @@ clipboard_write = false
 clipboard_read = false
 file_transfer = false
 drag_source = false
+drop_target = false
 clear_defaults = false
 autosave_interval_seconds = 0
 save_scrollback = false
@@ -244,6 +248,20 @@ backspace = ["backspace"]
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn drop_targets_are_opt_in_independent_typed_and_reported() {
+        let defaults = resolve_config(parse_config("").unwrap());
+        assert!(!defaults.drop_target());
+        let enabled =
+            resolve_config(parse_config("drop_target=true\ndrag_source=false\n").unwrap());
+        assert!(enabled.drop_target());
+        assert!(!enabled.drag_source());
+        assert!(Settings::from(&enabled).drop_target);
+        assert!(ignored_options("drop_target=true").is_empty());
+        assert!(parse_config("drop_target=1").is_err());
+        assert!(default_config().contains("drop_target = false"));
+    }
+
     #[test]
     fn drag_sources_are_opt_in_typed_and_exposed() {
         let config = resolve_config(parse_config("drag_source=true").unwrap());

@@ -28,6 +28,11 @@ fn clipboard() {
 }
 
 #[test]
+fn drop_target() {
+    run_scenario("drop_target");
+}
+
+#[test]
 fn drag_source() {
     run_scenario("drag_source");
 }

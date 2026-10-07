@@ -45,6 +45,7 @@
 - [Rich Clipboard Transactions](reference/rich-clipboard.md)
 - [Kitty File Transfer](reference/file-transfer.md)
 - [Kitty Drag Sources](reference/drag-source.md)
+- [Kitty Drop Targets](reference/drop-target.md)
 - [Synchronized Output](reference/synchronized-output.md)
 - [Device Attributes](reference/device-attributes.md)
 - [Terminal Capability Queries](reference/terminal-capabilities.md)

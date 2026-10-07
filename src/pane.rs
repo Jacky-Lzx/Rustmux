@@ -47,6 +47,7 @@ pub struct Pane {
     rich_clipboard: crate::rich_clipboard::Observer,
     file_transfer: crate::file_transfer::Observer,
     drag_source: crate::drag_source::Observer,
+    drop_target: crate::drop_target::Observer,
     graphics_framer: GraphicsFramer,
     graphics_transfer: DirectTransferAssembler,
     image_store: ImageStore,
@@ -348,6 +349,12 @@ impl Pane {
     pub(crate) fn configure_drag_source(&mut self, permission: Option<bool>) {
         self.drag_source.configure(permission);
     }
+    pub(crate) fn configure_drop_target(&mut self, permission: Option<bool>, source: bool) {
+        self.drop_target.configure(permission, source);
+    }
+    pub(crate) fn take_drop_target(&mut self) -> Option<crate::drop_target::Request> {
+        self.drop_target.take()
+    }
     pub(crate) fn take_drag_source(&mut self) -> Option<crate::drag_source::Request> {
         self.drag_source.take()
     }
@@ -445,6 +452,7 @@ impl Pane {
             rich_clipboard: crate::rich_clipboard::Observer::default(),
             file_transfer: crate::file_transfer::Observer::default(),
             drag_source: crate::drag_source::Observer::default(),
+            drop_target: crate::drop_target::Observer::default(),
             graphics_framer: GraphicsFramer::new(),
             graphics_transfer: DirectTransferAssembler::new(),
             image_store: ImageStore::new(),
@@ -492,6 +500,7 @@ impl Pane {
             rich_clipboard: crate::rich_clipboard::Observer::default(),
             file_transfer: crate::file_transfer::Observer::default(),
             drag_source: crate::drag_source::Observer::default(),
+            drop_target: crate::drop_target::Observer::default(),
             graphics_framer: GraphicsFramer::new(),
             graphics_transfer: DirectTransferAssembler::new(),
             image_store: ImageStore::new(),
@@ -518,6 +527,7 @@ impl Pane {
         self.rich_clipboard.configure_write(None);
         self.file_transfer.configure(None);
         self.drag_source.configure(None);
+        self.drop_target.configure(None, false);
         self.screen.configure_rich_clipboard(false);
         self.io.semantic.cancel_current();
         if stopped {
@@ -915,6 +925,7 @@ impl Pane {
         self.rich_clipboard.advance(bytes, reply);
         self.file_transfer.advance(bytes, reply);
         self.drag_source.advance(bytes, reply);
+        self.drop_target.advance(bytes, reply);
         self.io.dirty = true;
         let cell_pixels = match &graphics {
             GraphicsSink::Store { cell_pixels, .. } => *cell_pixels,

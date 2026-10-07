@@ -1,4 +1,4 @@
-//! Shared bounded framing for Kitty clipboard, file-transfer and drag-source controls.
+//! Shared bounded framing for Kitty clipboard, file-transfer and drag-and-drop controls.
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]

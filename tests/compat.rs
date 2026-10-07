@@ -26,6 +26,28 @@ fn installed_yazi_drags_real_file_through_rustmux() {
     print!("{}", String::from_utf8_lossy(&output.stdout));
 }
 
+/// Installed-Yazi receiving smoke verifies a real copied file.
+#[test]
+#[ignore = "requires an installed Yazi; run with cargo compat"]
+fn installed_yazi_receives_real_file_through_rustmux() {
+    let output = std::process::Command::new("python3")
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/yazi_drop_compat.py"
+        ))
+        .arg(env!("CARGO_BIN_EXE_rustmux"))
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .output()
+        .expect("Python 3 is required for the optional Yazi drop PTY test");
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    print!("{}", String::from_utf8_lossy(&output.stdout));
+}
+
 /// Installed-Yazi preview smoke, excluded from regular CI.
 #[test]
 #[ignore = "requires an installed Yazi; run with cargo compat"]

@@ -95,8 +95,8 @@ backslash). An opt-in pane observer separately handles bounded
 [OSC 5522 rich clipboard transactions and private mode 5522 paste events](rich-clipboard.md); the display parser and replay
 paths still discard these controls. [OSC 5113 file transfer](file-transfer.md) has
 an independent opt-in observer and attachment router, sharing outer IPC framing
-with clipboard controls. [OSC 72 drag sources](drag-source.md) use another opt-in
-observer and the same outer framer; the drop side is not implemented. A separate bounded observer recognizes OSC 7 working-directory
+with clipboard controls. [OSC 72 drag sources](drag-source.md) and [drop targets](drop-target.md) use
+independent opt-in observers and routers with the same outer framer. A separate bounded observer recognizes OSC 7 working-directory
 metadata and OSC 133 command-output boundaries for Ctrl-B `e`.
 DCS retains at most 64 bytes to recognize supported DECRQSS and XTGETTCAP queries; other
 DCS, SOS and PM payloads are discarded through ST. Each pane's

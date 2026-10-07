@@ -17,13 +17,13 @@ const RESERVE: usize = 128 * 1024;
 const IDLE: Duration = Duration::from_secs(30);
 const PROBE: Duration = Duration::from_secs(1);
 
-struct Packet<'a> {
+pub(crate) struct Packet<'a> {
     fields: Vec<(&'a str, &'a str)>,
     payload: &'a str,
     has_payload: bool,
 }
 impl<'a> Packet<'a> {
-    fn parse(body: &'a [u8]) -> Option<Self> {
+    pub(crate) fn parse(body: &'a [u8]) -> Option<Self> {
         let text = std::str::from_utf8(body).ok()?;
         let (metadata, payload) = text.split_once(';').unwrap_or((text, ""));
         if metadata.len() > 512 || payload.len() > 4096 || text.chars().any(char::is_control) {
@@ -66,16 +66,26 @@ impl<'a> Packet<'a> {
             has_payload: text.contains(';'),
         })
     }
-    fn value(&self, key: &str) -> Option<&'a str> {
+    pub(crate) fn value(&self, key: &str) -> Option<&'a str> {
         self.fields.iter().find(|(k, _)| *k == key).map(|(_, v)| *v)
     }
-    fn number(&self, key: &str) -> Option<i64> {
+    pub(crate) fn number(&self, key: &str) -> Option<i64> {
         self.value(key)?.parse().ok()
     }
-    fn more(&self) -> bool {
+    pub(crate) fn payload(&self) -> &str {
+        self.payload
+    }
+    pub(crate) fn payload_empty(&self) -> bool {
+        self.payload.is_empty()
+    }
+    pub(crate) fn more(&self) -> bool {
         self.value("m") == Some("1")
     }
-    fn encode(&self, id: Option<&str>, position: Option<(i64, i64, i64, i64)>) -> Vec<u8> {
+    pub(crate) fn encode(
+        &self,
+        id: Option<&str>,
+        position: Option<(i64, i64, i64, i64)>,
+    ) -> Vec<u8> {
         let mut parts = Vec::new();
         for &(k, v) in &self.fields {
             if k == "i" || (position.is_some() && matches!(k, "x" | "y" | "X" | "Y")) {
@@ -110,7 +120,7 @@ fn error(id: Option<&str>, code: &str) -> Vec<u8> {
     let id = id.map_or(String::new(), |id| format!(":i={id}"));
     format!("\x1b]72;t=E{id};{code}\x1b\\").into_bytes()
 }
-fn next_id() -> Option<u32> {
+pub(crate) fn next_id() -> Option<u32> {
     static NEXT: AtomicU32 = AtomicU32::new(1);
     allocate_id(&NEXT)
 }
@@ -134,6 +144,7 @@ pub(crate) enum Request {
 pub(crate) struct Observer {
     framer: Framer,
     permission: Option<bool>,
+    chunk: Option<u8>,
     pending: VecDeque<Request>,
     bytes: usize,
 }
@@ -142,6 +153,7 @@ impl Default for Observer {
         Self {
             framer: Framer::drag(),
             permission: None,
+            chunk: None,
             pending: VecDeque::new(),
             bytes: 0,
         }
@@ -151,6 +163,7 @@ impl Observer {
     pub fn configure(&mut self, permission: Option<bool>) {
         if self.permission != permission {
             self.framer.cancel_packet();
+            self.chunk = None;
             self.pending.clear();
             self.bytes = 0;
         }
@@ -174,6 +187,17 @@ impl Observer {
                     ignored.clear();
                     continue;
                 };
+                let kind = packet
+                    .value("t")
+                    .and_then(|v| v.bytes().next())
+                    .or(self.chunk);
+                if kind != Some(b'q') {
+                    self.chunk = packet.more().then_some(kind).flatten();
+                }
+                if !matches!(kind, Some(b'q' | b'o' | b'p' | b'P' | b'e' | b'E' | b'k')) {
+                    ignored.clear();
+                    continue;
+                }
                 if self.permission == Some(true) {
                     if self.bytes + body.len() <= 2 * MAX_PACKET {
                         self.bytes += body.len();
@@ -203,6 +227,7 @@ impl Observer {
         }
     }
     fn overflow(&mut self) {
+        self.chunk = None;
         self.pending.clear();
         self.bytes = 0;
         self.pending.push_back(Request::Overflow);

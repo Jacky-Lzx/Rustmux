@@ -27,6 +27,7 @@ impl ClosedPane {
         pane.configure_rich_clipboard_write(None);
         pane.configure_file_transfer(None);
         pane.configure_drag_source(None);
+        pane.configure_drop_target(None, false);
         if pane.shell_mut().try_wait()?.is_some() {
             return Ok(false);
         }

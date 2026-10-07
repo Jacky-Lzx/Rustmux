@@ -8,12 +8,11 @@ This Boolean defaults to `false`, independently of clipboard and file-transfer
 permissions. Configuration diagnostics, `default-config` and live reload expose
 it. The outer terminal must implement the [Kitty OSC 72 drag-and-drop protocol](https://sw.kovidgoyal.net/kitty/dnd-protocol/).
 
-This increment implements the **source side**: dragging data from the focused
-pane into an external application. External drops into Rustmux (`t=a`, `m`, `M`,
-`r`, `R`) and an internal bridge between panes are not implemented. A successful
-`t=q` reply confirms verified outer protocol support and usable cell-pixel
-geometry for this source relay; it does not advertise the missing drop side.
-Applications that require both directions may not work with this increment.
+This relay implements dragging data from the focused pane into an external
+application. The independent [drop target relay](drop-target.md) receives
+external drops when `drop_target=true`. An internal bridge between panes is
+not implemented. Either enabled direction can answer `t=q` after verifying
+host support and cell-pixel geometry; each direction retains its own permission.
 
 ## Registration and routing
 
@@ -104,9 +103,8 @@ existing bounded 500 ms protocol cleanup window and reports stalled output.
 
 ## Review and verification
 
-The base is reviewed `main-human` commit `f90ff3b`, including rebased MIME paste
-notifications `5658702`. Both were fast-forwarded without changing their signed
-commits. This increment remains on its own review branch.
+The source feature and its Kitty gesture-ID repair were reviewed and merged
+into `main-human` as signed commits `95f737a` and `970c052`.
 
 Read `src/drag_source.rs` for parsing, registration, gesture ownership, queues
 and cleanup; `src/terminal_ipc.rs` for shared framing; then the pane observer
@@ -134,5 +132,5 @@ across 52 targets, including all 52 real nested-PTY scenarios, with 7 optional
 ignores. The installed-Yazi drag test was also explicitly run and passed with
 both debug and release binaries. Strict
 all-target/all-feature Clippy, formatting, Python syntax, mdBook and staged diff
-checks passed. The feature commit is local and awaits owner review; it has not
-been merged or pushed.
+checks passed. These results describe the source compatibility repair; receiving-side checks
+are documented in [Kitty drop targets](drop-target.md).

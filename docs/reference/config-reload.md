@@ -20,6 +20,7 @@ rustmux show-config -s work
 | `clipboard_write` | Enable or disable [child OSC 52 writes](pane-clipboard.md) and [rich writes](rich-clipboard.md); disabling invalidates capture and cancels the write lease |
 | `file_transfer` | Enable or disable the [OSC 5113 relay](file-transfer.md); disabling cancels active transfers and discards undelivered host replies |
 | `drag_source` | Enable or disable [OSC 72 drag sources](drag-source.md); disabling cancels the gesture, drops staged data and unregisters the source |
+| `drop_target` | Enable or disable [OSC 72 receiving](drop-target.md); disabling cancels the drop, discards staged data and unregisters all targets |
 | Notifications | Update existing panes, including the hidden pane retained for undo; running commands use the latest policy at completion |
 | `remain_on_exit` | Update the session policy; disabling it also removes already drained, exited panes that use this default. Explicit project/pane overrides still apply |
 | `shell` | Used when creating or respawning panes; existing child processes keep running |

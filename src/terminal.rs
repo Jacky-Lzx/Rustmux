@@ -2021,6 +2021,7 @@ struct ClipboardPolicy {
     read: bool,
     file_transfer: bool,
     drag_source: bool,
+    drop_target: bool,
     write: bool,
 }
 
@@ -2038,6 +2039,10 @@ fn service_pane(
     pane.configure_rich_clipboard_write(clipboard.attached.then_some(clipboard.write));
     pane.configure_file_transfer(clipboard.attached.then_some(clipboard.file_transfer));
     pane.configure_drag_source(clipboard.attached.then_some(clipboard.drag_source));
+    pane.configure_drop_target(
+        clipboard.attached.then_some(clipboard.drop_target),
+        clipboard.drag_source,
+    );
     pane.track_command_application();
     if ready.contains(PollFlags::POLLNVAL) {
         return Err(io::Error::new(
@@ -2094,6 +2099,7 @@ struct RuntimeConfig {
     clipboard_read: bool,
     file_transfer: bool,
     drag_source: bool,
+    drop_target: bool,
     theme: crate::theme::Theme,
     mouse_hover_cursor: bool,
     shell: OsString,
@@ -2110,6 +2116,7 @@ impl RuntimeConfig {
         self.clipboard_read = config.clipboard_read();
         self.file_transfer = config.file_transfer();
         self.drag_source = config.drag_source();
+        self.drop_target = config.drop_target();
         self.shell = config.shell().clone();
         self.notifications = config.notifications();
         self.scrollback_lines = config.scrollback_lines();
@@ -2127,6 +2134,9 @@ fn apply_config(
     for window in windows.iter_mut() {
         for (_, pane) in window.content_mut().iter_mut() {
             pane.configure_notifications(config.notifications());
+            if !config.drop_target() {
+                pane.configure_drop_target(Some(false), config.drag_source());
+            }
             if !config.drag_source() {
                 pane.configure_drag_source(Some(false));
             }
@@ -2152,6 +2162,7 @@ fn apply_config(
         pane.configure_rich_clipboard_write(None);
         pane.configure_file_transfer(None);
         pane.configure_drag_source(None);
+        pane.configure_drop_target(None, false);
         pane.parts_mut().2.configure_rich_clipboard(false);
     }
     if let Some(service) = persistence {
@@ -2188,6 +2199,7 @@ fn forward(
             pane.configure_rich_clipboard_write(None);
             pane.configure_file_transfer(None);
             pane.configure_drag_source(None);
+            pane.configure_drop_target(None, false);
         }
     }
     let mut runtime = RuntimeConfig {
@@ -2196,6 +2208,7 @@ fn forward(
             .is_some_and(|r| r.current().clipboard_read()),
         file_transfer: reload.as_ref().is_some_and(|r| r.current().file_transfer()),
         drag_source: reload.as_ref().is_some_and(|r| r.current().drag_source()),
+        drop_target: reload.as_ref().is_some_and(|r| r.current().drop_target()),
         clipboard_write: reload
             .as_ref()
             .is_some_and(|r| r.current().clipboard_write()),
@@ -2219,6 +2232,7 @@ fn forward(
     let mut rich_clipboard = crate::rich_clipboard::Router::default();
     let mut file_transfer = crate::file_transfer::Router::default();
     let mut drag_source = crate::drag_source::Router::default();
+    let mut drop_target = crate::drop_target::Router::default();
     let mut graphics_ready = false;
     let mut to_terminal = VecDeque::new();
     let mut color_probe = Some(ColorProbe::new());
@@ -2426,6 +2440,21 @@ fn forward(
             drag_source_view(windows, *outer_rows, *cell_pixels),
             |owner| rich_clipboard_live(windows, owner),
         );
+        drop_target.tick(
+            Instant::now(),
+            runtime.drop_target
+                && connection == ConnectionState::Attached
+                && !detach_requested
+                && !session_manager_requested,
+            keys.mode == InputMode::Locked
+                && prompt.is_none()
+                && history.is_none()
+                && help.is_none(),
+            &drop_target_views(windows, *outer_rows, *cell_pixels),
+            |owner| rich_clipboard_live(windows, owner),
+        );
+        drop_target.drain(|owner, bytes| deliver_rich_clipboard(windows, owner, bytes));
+        drop_target.pump(&mut to_terminal, LIMIT);
         drag_source.pump(&mut to_terminal, LIMIT);
         file_transfer.drain(|owner, bytes| deliver_rich_clipboard(windows, owner, bytes));
         file_transfer.pump(Instant::now(), &mut to_terminal, LIMIT);
@@ -2445,7 +2474,10 @@ fn forward(
         // Released prefixes have already passed the clipboard framer, but still
         // belong to the downstream color/graphics probes, not keyboard input.
         let rich_input_len = input.len();
-        if rich_clipboard.can_receive() && file_transfer.can_receive() && drag_source.can_receive()
+        if rich_clipboard.can_receive()
+            && file_transfer.can_receive()
+            && drag_source.can_receive()
+            && drop_target.can_receive()
         {
             frontend.drain_input(&mut input);
         }
@@ -2453,7 +2485,11 @@ fn forward(
             &mut rich_clipboard,
             &mut file_transfer,
             &mut drag_source,
-            drag_source_view(windows, *outer_rows, *cell_pixels),
+            &mut drop_target,
+            (
+                &drop_target_views(windows, *outer_rows, *cell_pixels),
+                drag_source_view(windows, *outer_rows, *cell_pixels),
+            ),
             &mut input,
             rich_input_len,
         );
@@ -2512,6 +2548,8 @@ fn forward(
             to_terminal.clear();
         }
         if let Some(exit) = frontend_exit(connection, &input) {
+            drop_target.cancel_all();
+            drop_target.drain(|owner, bytes| deliver_rich_clipboard(windows, owner, bytes));
             rich_clipboard.cancel(&mut to_terminal, |owner, bytes| {
                 deliver_rich_clipboard(windows, owner, bytes)
             });
@@ -2524,6 +2562,7 @@ fn forward(
                 frontend,
                 &mut file_transfer,
                 &mut drag_source,
+                &mut drop_target,
                 &mut to_terminal,
             );
             return Ok(ForwardExit::Process((128 + received) as u8));
@@ -2552,6 +2591,7 @@ fn forward(
                             frontend,
                             &mut file_transfer,
                             &mut drag_source,
+                            &mut drop_target,
                             &mut to_terminal,
                         )?;
                         return Ok(ForwardExit::Process(0));
@@ -2588,6 +2628,7 @@ fn forward(
                             frontend,
                             &mut file_transfer,
                             &mut drag_source,
+                            &mut drop_target,
                             &mut to_terminal,
                         )?;
                         return Ok(ForwardExit::Process(0));
@@ -3109,6 +3150,7 @@ fn forward(
                             frontend,
                             &mut file_transfer,
                             &mut drag_source,
+                            &mut drop_target,
                             &mut to_terminal,
                         )?;
                         return Ok(ForwardExit::Process(code));
@@ -3841,6 +3883,9 @@ fn forward(
             rich_clipboard.cancel(&mut to_terminal, |owner, bytes| {
                 deliver_rich_clipboard(windows, owner, bytes)
             });
+            drop_target.cancel_all();
+            drop_target.drain(|owner, bytes| deliver_rich_clipboard(windows, owner, bytes));
+            drop_target.pump(&mut to_terminal, LIMIT);
             drag_source.cancel_all();
             drag_source.drain(|owner, bytes| deliver_rich_clipboard(windows, owner, bytes));
             drag_source.pump(&mut to_terminal, LIMIT);
@@ -3859,6 +3904,9 @@ fn forward(
             rich_clipboard.cancel(&mut to_terminal, |owner, bytes| {
                 deliver_rich_clipboard(windows, owner, bytes)
             });
+            drop_target.cancel_all();
+            drop_target.drain(|owner, bytes| deliver_rich_clipboard(windows, owner, bytes));
+            drop_target.pump(&mut to_terminal, LIMIT);
             drag_source.cancel_all();
             drag_source.drain(|owner, bytes| deliver_rich_clipboard(windows, owner, bytes));
             drag_source.pump(&mut to_terminal, LIMIT);
@@ -3879,6 +3927,8 @@ fn forward(
             detach_requested = false;
         }
         if let Some(exit) = frontend_exit(connection, &input) {
+            drop_target.cancel_all();
+            drop_target.drain(|owner, bytes| deliver_rich_clipboard(windows, owner, bytes));
             rich_clipboard.cancel(&mut to_terminal, |owner, bytes| {
                 deliver_rich_clipboard(windows, owner, bytes)
             });
@@ -3911,6 +3961,7 @@ fn forward(
             && rich_clipboard.can_receive()
             && file_transfer.can_receive()
             && drag_source.can_receive()
+            && drop_target.can_receive()
         {
             outer_events |= PollFlags::POLLIN;
         }
@@ -3965,7 +4016,9 @@ fn forward(
                         && rich_clipboard.can_receive()
                         && file_transfer.can_receive()
                         && drag_source.can_receive()
+                        && drop_target.can_receive()
                         && !drag_source.probing()
+                        && !drop_target.probing()
                         && state.reply_read_limit() != 0
                         && (window.id() != active || to_terminal.is_empty())
                     {
@@ -4040,7 +4093,11 @@ fn forward(
                 &mut rich_clipboard,
                 &mut file_transfer,
                 &mut drag_source,
-                drag_source_view(windows, *outer_rows, *cell_pixels),
+                &mut drop_target,
+                (
+                    &drop_target_views(windows, *outer_rows, *cell_pixels),
+                    drag_source_view(windows, *outer_rows, *cell_pixels),
+                ),
                 &mut input,
                 old_input_len,
             );
@@ -4104,6 +4161,7 @@ fn forward(
             if !rich_clipboard.can_receive()
                 || !file_transfer.can_receive()
                 || !drag_source.can_receive()
+                || !drop_target.can_receive()
             {
                 inner_events.remove(PollFlags::POLLIN);
             }
@@ -4128,11 +4186,20 @@ fn forward(
                     write: runtime.clipboard_write,
                     file_transfer: runtime.file_transfer,
                     drag_source: runtime.drag_source,
+                    drop_target: runtime.drop_target,
                 },
             )?;
             // Reset followed by set in one PTY read still revokes old events.
             if paste_generation != pane.screen().rich_paste_generation() {
                 rich_clipboard.forget_paste(pane.rich_clipboard_owner());
+            }
+            while let Some(request) = pane.take_drop_target() {
+                drop_target.request(
+                    pane.rich_clipboard_owner(),
+                    request,
+                    Instant::now(),
+                    cell_pixels.is_some(),
+                );
             }
             while let Some(request) = pane.take_drag_source() {
                 drag_source.request(pane.rich_clipboard_owner(), request, Instant::now());
@@ -4193,19 +4260,27 @@ fn flush_protocol_exit(
     frontend: &mut impl Frontend,
     files: &mut crate::file_transfer::Router,
     drag: &mut crate::drag_source::Router,
+    drop: &mut crate::drop_target::Router,
     pending: &mut VecDeque<u8>,
 ) -> io::Result<()> {
     drag.cancel_all();
-    if !files.has_activity() && !drag.has_outgoing() {
+    drop.cancel_all();
+    if !files.has_activity() && !drag.has_outgoing() && !drop.has_outgoing() {
         return Ok(());
     }
     files.prepare_exit();
     let deadline = Instant::now() + Duration::from_millis(500);
-    while files.has_outgoing() || drag.has_outgoing() || !pending.is_empty() {
+    while files.has_outgoing() || drag.has_outgoing() || drop.has_outgoing() || !pending.is_empty()
+    {
         drag.pump(pending, LIMIT);
+        drop.pump(pending, LIMIT);
         files.pump(Instant::now(), pending, LIMIT);
         frontend.send(pending)?;
-        if !files.has_outgoing() && !drag.has_outgoing() && pending.is_empty() {
+        if !files.has_outgoing()
+            && !drag.has_outgoing()
+            && !drop.has_outgoing()
+            && pending.is_empty()
+        {
             break;
         }
         if Instant::now() >= deadline {
@@ -4227,7 +4302,11 @@ fn filter_rich_clipboard_input(
     router: &mut crate::rich_clipboard::Router,
     files: &mut crate::file_transfer::Router,
     drag: &mut crate::drag_source::Router,
-    view: Option<crate::drag_source::View>,
+    drop: &mut crate::drop_target::Router,
+    views: (
+        &[crate::drag_source::View],
+        Option<crate::drag_source::View>,
+    ),
     input: &mut VecDeque<u8>,
     old_len: usize,
 ) {
@@ -4237,11 +4316,45 @@ fn filter_rich_clipboard_input(
         let now = Instant::now();
         router.advance_with_ipc(&raw, &mut pass, now, &mut |protocol, body| match protocol {
             crate::terminal_ipc::Protocol::File => files.response(body, now),
-            crate::terminal_ipc::Protocol::Drag => drag.response(body, now, view),
+            crate::terminal_ipc::Protocol::Drag => {
+                drag.response(body, now, views.1);
+                drop.response(body, now, views.0);
+            }
             crate::terminal_ipc::Protocol::Clipboard => unreachable!(),
         });
         input.extend(pass);
     }
+}
+fn drop_target_views(
+    windows: &Windows<PaneSet<Pane>>,
+    outer_rows: u16,
+    cell_pixels: Option<CellPixelSize>,
+) -> Vec<crate::drag_source::View> {
+    let Some(pixels) = cell_pixels else {
+        return Vec::new();
+    };
+    let Some(window) = windows.active() else {
+        return Vec::new();
+    };
+    let panes = window.content();
+    panes
+        .layout()
+        .content_geometry()
+        .panes
+        .into_iter()
+        .filter_map(|(id, mut rect)| {
+            let pane = panes.get(id)?;
+            if !pane.io().accepts_input() {
+                return None;
+            }
+            rect.row = rect.row.checked_add(u16::from(outer_rows > 1))?;
+            Some(crate::drag_source::View {
+                owner: pane.rich_clipboard_owner(),
+                rect,
+                pixels: (pixels.width(), pixels.height()),
+            })
+        })
+        .collect()
 }
 fn drag_source_view(
     windows: &Windows<PaneSet<Pane>>,

@@ -5,6 +5,7 @@
 defaulting to `false`. `[settings].clipboard_read` independently reports
 [rich clipboard reads](rich-clipboard.md), also disabled by default.
 `[settings].drag_source` reports the independent, default-off [OSC 72 source relay](drag-source.md).
+`[settings].drop_target` reports the independent, default-off [OSC 72 receiving relay](drop-target.md).
 `[settings].file_transfer` reports the independent [OSC 5113 relay](file-transfer.md),
 also disabled by default.
 
