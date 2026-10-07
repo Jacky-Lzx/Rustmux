@@ -38,6 +38,11 @@ fn rich_clipboard_writes() {
 }
 
 #[test]
+fn rich_clipboard_paste() {
+    run_scenario("rich_clipboard_paste");
+}
+
+#[test]
 fn capabilities() {
     run_scenario("capabilities");
 }

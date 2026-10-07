@@ -3,7 +3,8 @@
 DECRQM asks for one ANSI mode with CSI Ps $ p, or one DEC private mode with
 CSI ? Ps $ p. Rustmux replies with CSI Ps ; Pm $ y or CSI ? Ps ; Pm $ y,
 respectively. Pm is 1 for enabled, 2 for disabled, or 0 for an unrecognized mode.
-The protocol also defines permanent states 3 and 4; Rustmux does not use them.
+Mode 5522 reports 4 (permanently reset) while `clipboard_read` is disabled;
+when enabled by config, it reports the application's requested state as 1 or 2.
 See [XTerm DECRQM/DECRPM](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html).
 
 ## Reported modes
@@ -24,6 +25,7 @@ See [XTerm DECRQM/DECRPM](https://invisible-island.net/xterm/ctlseqs/ctlseqs.htm
 | DEC private | 47 / 1047 / 1049 | Alternate screen |
 | DEC private | 2004 | Bracketed paste |
 | DEC private | 2026 | Synchronized output |
+| DEC private | 5522 | [Kitty MIME paste events](rich-clipboard.md#paste-events) |
 
 All other numbers report 0, including unsupported mouse extensions and mode
 2027. Keypad ESC = / ESC > and CSI ? 66 h/l share one queried state. Cursor

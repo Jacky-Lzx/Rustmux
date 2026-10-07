@@ -39,6 +39,7 @@ pub struct Renderer {
 struct OutputModes {
     keyboard: u8,
     paste: bool,
+    rich_paste: bool,
     cursor_keys: bool,
     keypad: bool,
     backarrow: bool,
@@ -54,6 +55,7 @@ impl OutputModes {
         Self {
             keyboard: screen.kitty_keyboard_flags(),
             paste: screen.bracketed_paste(),
+            rich_paste: screen.rich_clipboard_paste(),
             cursor_keys: screen.application_cursor_keys(),
             keypad: screen.application_keypad(),
             backarrow: screen.backarrow_sends_backspace(),
@@ -124,6 +126,13 @@ fn render_frame(
             b"\x1b[?2004h"
         } else {
             b"\x1b[?2004l"
+        })?;
+    }
+    if previous_modes.is_none_or(|modes| modes.rich_paste != screen.rich_clipboard_paste()) {
+        output.write_all(if screen.rich_clipboard_paste() {
+            b"\x1b[?5522h"
+        } else {
+            b"\x1b[?5522l"
         })?;
     }
     // Let the outer terminal encode cursor keys for the child; the input loop

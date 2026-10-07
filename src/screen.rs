@@ -122,6 +122,9 @@ pub struct Screen {
     cursor_shape: CursorShape,
     insert_mode: bool,
     bracketed_paste: bool,
+    rich_clipboard_paste: bool,
+    rich_clipboard_available: bool,
+    rich_paste_generation: u64,
     focus_reporting: bool,
     pointer_main: crate::pointer::Stack,
     pointer_alternate: crate::pointer::Stack,
@@ -311,6 +314,9 @@ impl Screen {
             cursor_shape: CursorShape::default(),
             insert_mode: false,
             bracketed_paste: false,
+            rich_clipboard_paste: false,
+            rich_clipboard_available: false,
+            rich_paste_generation: 0,
             focus_reporting: false,
             pointer_main: crate::pointer::Stack::default(),
             pointer_alternate: crate::pointer::Stack::default(),
@@ -465,6 +471,7 @@ impl Screen {
         self.application_keypad = false;
         self.backarrow_sends_backspace = false;
         self.bracketed_paste = false;
+        self.set_rich_clipboard_paste(false);
         self.focus_reporting = false;
         self.keyboard_main = KeyboardMode::default();
         self.keyboard_alternate = KeyboardMode::default();
@@ -668,6 +675,9 @@ impl Screen {
             .clone_from(&self.pointer_alternate);
         resized.insert_mode = self.insert_mode;
         resized.bracketed_paste = self.bracketed_paste;
+        resized.rich_clipboard_paste = self.rich_clipboard_paste;
+        resized.rich_clipboard_available = self.rich_clipboard_available;
+        resized.rich_paste_generation = self.rich_paste_generation;
         resized.focus_reporting = self.focus_reporting;
         resized.keyboard_main.clone_from(&self.keyboard_main);
         resized
@@ -1197,6 +1207,34 @@ impl Screen {
     /// A global input mode, independent of saved cursor state and soft reset.
     pub fn set_bracketed_paste(&mut self, enabled: bool) {
         self.bracketed_paste = enabled;
+    }
+
+    pub fn rich_clipboard_paste(&self) -> bool {
+        self.rich_clipboard_paste
+    }
+
+    pub fn rich_clipboard_available(&self) -> bool {
+        self.rich_clipboard_available
+    }
+
+    /// Clipboard capability comes from runtime policy, not child output or snapshots.
+    pub(crate) fn configure_rich_clipboard(&mut self, available: bool) {
+        self.rich_clipboard_available = available;
+        if !available {
+            self.set_rich_clipboard_paste(false);
+        }
+    }
+
+    pub fn set_rich_clipboard_paste(&mut self, enabled: bool) {
+        let enabled = enabled && self.rich_clipboard_available;
+        if !enabled && self.rich_clipboard_paste {
+            self.rich_paste_generation = self.rich_paste_generation.wrapping_add(1);
+        }
+        self.rich_clipboard_paste = enabled;
+    }
+
+    pub(crate) fn rich_paste_generation(&self) -> u64 {
+        self.rich_paste_generation
     }
 
     pub fn insert_mode(&self) -> bool {
@@ -1974,6 +2012,66 @@ mod tests {
             ]
         );
         assert!(screen.take_scroll_events().0.is_empty());
+    }
+
+    #[test]
+    fn rich_paste_capability_queries_and_lifecycle() {
+        use crate::parser::Parser;
+        let mut screen = Screen::new(3, 60).unwrap();
+        let mut parser = Parser::new();
+        let mut replies = Vec::new();
+        parser.advance_with_replies(&mut screen, b"\x1b[?5522h\x1b[?5522$p", &mut |b| {
+            replies.extend_from_slice(b)
+        });
+        assert_eq!(replies, b"\x1b[?5522;4$y");
+        screen.configure_rich_clipboard(true);
+        replies.clear();
+        parser.advance_with_replies(
+            &mut screen,
+            b"\x1b[?5522$p\x1b[?5522h\x1b[?5522$p",
+            &mut |b| replies.extend_from_slice(b),
+        );
+        assert_eq!(replies, b"\x1b[?5522;2$y\x1b[?5522;1$y");
+        parser.advance(&mut screen, b"\x1b[?1049h\x1b[?1049l\x1b[!p");
+        assert!(screen.rich_clipboard_paste());
+        let generation = screen.rich_paste_generation();
+        parser.advance(&mut screen, b"\x1b[?5522l\x1b[?5522h");
+        assert!(screen.rich_clipboard_paste());
+        assert_ne!(screen.rich_paste_generation(), generation);
+        screen.resize_display(4, 60).unwrap();
+        assert!(screen.rich_clipboard_paste());
+        let view = crate::chrome::compose(&screen, 6, None, &["one".into()], 0, false).unwrap();
+        assert!(view.rich_clipboard_paste());
+        screen.configure_rich_clipboard(false);
+        screen.configure_rich_clipboard(true);
+        assert!(!screen.rich_clipboard_paste());
+        screen.set_rich_clipboard_paste(true);
+        parser.advance(&mut screen, b"\x1bc");
+        assert!(screen.rich_clipboard_available());
+        assert!(!screen.rich_clipboard_paste());
+    }
+
+    #[test]
+    fn rich_paste_rendering_is_cached_and_can_restore_after_local_view() {
+        let mut screen = Screen::new(2, 4).unwrap();
+        screen.configure_rich_clipboard(true);
+        screen.set_rich_clipboard_paste(true);
+        screen.set_bracketed_paste(true);
+        let mut renderer = crate::render::Renderer::default();
+        let mut bytes = Vec::new();
+        renderer.render(&screen, &mut bytes).unwrap();
+        assert!(bytes.windows(8).any(|b| b == b"\x1b[?5522h"));
+        bytes.clear();
+        renderer.render(&screen, &mut bytes).unwrap();
+        assert!(!bytes.windows(7).any(|b| b == b"\x1b[?5522"));
+        let mut local = screen.clone();
+        local.set_rich_clipboard_paste(false);
+        renderer.render(&local, &mut bytes).unwrap();
+        assert!(bytes.windows(8).any(|b| b == b"\x1b[?5522l"));
+        assert!(screen.rich_clipboard_paste());
+        bytes.clear();
+        renderer.render(&screen, &mut bytes).unwrap();
+        assert!(bytes.windows(8).any(|b| b == b"\x1b[?5522h"));
     }
 
     #[test]

@@ -801,13 +801,19 @@ impl Parser {
                     (true, 47 | 1047 | 1049) => Some(screen.is_alternate()),
                     (true, 2026) => Some(screen.synchronized_output()),
                     (true, 2004) => Some(screen.bracketed_paste()),
+                    (true, 5522) => Some(screen.rich_clipboard_paste()),
                     _ => None,
                 };
-                let status = match enabled {
-                    Some(true) => 1,
-                    Some(false) => 2,
-                    None => 0,
-                };
+                let status =
+                    if parameters.private && mode == 5522 && !screen.rich_clipboard_available() {
+                        4
+                    } else {
+                        match enabled {
+                            Some(true) => 1,
+                            Some(false) => 2,
+                            None => 0,
+                        }
+                    };
                 let prefix = if parameters.private { "?" } else { "" };
                 let response = format!("\x1b[{prefix}{mode};{status}$y");
                 // One mode per query keeps replies within the existing queue budget.
@@ -895,6 +901,9 @@ impl Parser {
                     }
                     if *mode == Some(2004) {
                         screen.set_bracketed_paste(command == b'h');
+                    }
+                    if *mode == Some(5522) {
+                        screen.set_rich_clipboard_paste(command == b'h');
                     }
                     if *mode == Some(25) {
                         screen.set_cursor_visible(command == b'h');

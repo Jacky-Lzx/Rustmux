@@ -53,8 +53,9 @@ The router accepts `OK`, followed by validated `DATA` packets and `DONE`, or an
 `ENOSYS`, `EPERM` or `EBUSY` error. Payloads and MIME values must be valid padded
 Base64; decoded data chunks are at most 4096 bytes. Binary data, multiple MIME
 types and arbitrarily many chunks can stream without an aggregate payload copy.
-Unknown, stale and missing outer IDs, unsolicited OSC 5522 packets, malformed
-replies and invalid ordering are consumed without reaching another child.
+Unknown and stale outer IDs, malformed replies and invalid ordering are
+consumed without reaching another child. Untagged replies are accepted only as
+validated paste notifications to a pane that requested mode 5522 (below).
 Ordinary keys, other control strings and bracketed pasted text retain their
 normal input path. An isolated Escape is released after 50 ms.
 
@@ -90,9 +91,8 @@ its eventual reply cannot enter a replacement request.
 
 Rich writes use `clipboard_write`, independently of `clipboard_read`, as described
 below. [OSC 52 writes](pane-clipboard.md) use the same write policy. OSC 52 reads,
-rich paste events, DEC private paste-event mode 5522, Kitty file transfer OSC 5113
-and nested tmux wrappers remain unsupported. The mode query continues to report
-paste events as unsupported; read/write transactions do not imply paste events.
+Kitty file transfer OSC 5113 and nested tmux wrappers remain unsupported.
+Paste events additionally require the application to enable private mode 5522.
 
 Base: reviewed XTGETTCAP commit `5318f20`. Fixed `main` reference:
 `57d598657ad7acf00d6a0ddf734fba8f48d50e4c`. The reference forwards OSC 5522 together
@@ -223,3 +223,75 @@ All-target/all-feature Clippy with warnings denied, formatting, Python syntax,
 cleanup, all 12 terminal lifecycle unit tests and both rich clipboard PTY
 scenarios passed again. This review branch has not been pushed; GitHub CI and
 physical Kitty/OS clipboard behavior remain unverified.
+
+
+## Paste events
+
+With `clipboard_read = true`, an application can enable Kitty MIME paste
+notifications with `CSI ? 5522 h` and disable them with `CSI ? 5522 l`.
+`CSI ? 5522 $ p` reports 1 when requested, 2 when reset, or 4 when reading is
+disabled by configuration. This reports Rustmux's configured capability; it does
+not probe or certify support in the outer terminal. The host must implement
+[Kitty paste notifications](https://sw.kovidgoyal.net/kitty/clipboard/).
+
+The active, live pane controls the outer 5522 mode. Background panes retain their
+own requests but do not select the host mode. Kitty gives this mode precedence
+over bracketed paste (2004); Rustmux retains the child's 2004 request so normal
+text pasting resumes when 5522 is reset. Window/pane control modes, History,
+help, editing prompts and retained exited panes reset outer 5522 until ordinary
+child input resumes. Detach and terminal cleanup also reset it. A live process's
+request survives detach/reattach, resizing, alternate-screen changes and DECSTR;
+RIS, respawn, hiding and disabling `clipboard_read` reset it. Re-enabling the
+configuration requires a fresh application DECSET. Reset followed by set in the
+same child output read still cancels older undelivered events. Modes and events are not
+restored from saved sessions.
+
+A physical paste produces three untagged `type=read` packets: `status=OK`,
+`status=DATA:mime=Lg==` with a Base64 MIME listing, then `status=DONE`.
+Optional `loc=primary` and Base64 UTF-8 `pw` metadata are preserved. A password
+or location repeated on subsequent packets must match the initial value.
+Rustmux validates and stages the complete listing before delivering any of it.
+Ownership is fixed when the initial OSC prefix arrives; focus changes during
+fragmented packets cannot redirect the event to a different process. Subsequent
+content reads use the existing read lease and process identity, preserving
+`loc`, `pw` and the `name` field. A typical application uses the granted password
+and `name=UGFzdGUgZXZlbnQ=` (Base64 `Paste event`) to request selected MIME types;
+the outer terminal remains responsible for its grant and permission checks.
+
+Notification staging is limited to 16 KiB of wire data, 4096 decoded MIME-list
+bytes, 128 names, 512 bytes per name and 512 decoded UTF-8 password bytes. Empty
+listings and ASCII whitespace between names, including Kitty's trailing newline,
+are accepted. DATA chunks must each contain complete valid Base64. Host packets
+can use ST or BEL; child delivery is normalized to ST, while application requests
+continue to require ST. Existing framing and metadata limits still apply.
+Notifications do not occupy the read/write lease; a subsequent content request
+can receive `EBUSY` if another transaction already owns that lease.
+
+Missing starts, wrong MIME/password/location, malformed frames and over-limit
+notifications are discarded in full. Incomplete events expire after 30 seconds
+without valid progress. Source disappearance, respawn, hiding, config disabling,
+local UI modes and attachment loss discard undelivered notifications. A completed
+listing waiting for child queue space stays ordered and bounded, with no second
+timeout. No partial notification or clipboard grant is replayed on a later
+attachment. Already delivered protocol input cannot be revoked.
+
+Paste review base: signed rich-write commit `06faadf`. Implementation starts at
+`src/rich_clipboard/paste.rs`, then the attachment router, screen/parser mode,
+renderer and terminal runtime. Unit tests cover every two-part wire split,
+owner capture at the prefix, validation, limits, timeout, policy cancellation,
+queue pressure and coexistence with an explicit read. The new real nested-PTY
+scenario `tests/terminal_loop_rich_clipboard_paste.py` verifies default/detached
+queries, background mode isolation, a fragmented event across a focus change,
+paste-granted content reads, local UI suppression, live reload, reconnect,
+respawn, unnamed sessions and terminal cleanup. The host is simulated; physical
+Kitty paste gestures and OS clipboard contents remain unverified.
+
+Local paste validation (Rust 1.99.0): 1,076 tests passed across 52 targets,
+including all 50 nested-PTY scenarios; 6 pre-existing tests remained ignored.
+The full run used the CI setting `--test-threads=4`. All-target/all-feature
+Clippy with warnings denied, formatting, Python syntax, mdBook build and
+`git diff --check` passed. An initial run with unrestricted test concurrency
+passed the new paste and existing rich read/write scenarios but failed the
+manager visibility assertion because concurrent session rows placed its helper
+outside the viewport; the complete CI-concurrency rerun passed. This branch
+has not been pushed; physical Kitty gestures and OS clipboard remain unverified.

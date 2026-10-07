@@ -5,6 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod paste;
 mod write;
 
 const PREFIX: &[u8] = b"\x1b]5522;";
@@ -33,13 +34,14 @@ enum State {
     },
 }
 
-/// Recognize only top-level, seven-bit, ST-terminated OSC 5522 packets.
+/// Recognize top-level seven-bit OSC 5522; BEL is optional for host input only.
 #[derive(Debug, Default)]
 struct Framer {
     state: State,
     paste: bool,
     prefix_since: Option<Instant>,
     bad_packet: bool,
+    allow_bel: bool,
 }
 impl Framer {
     fn advance(&mut self, byte: u8, pass: &mut Vec<u8>) -> Option<Vec<u8>> {
@@ -136,7 +138,10 @@ impl Framer {
                 escape,
                 mut valid,
             } => {
-                if matches!(byte, 7 | 0x18 | 0x1a) {
+                if byte == 7 && self.allow_bel && valid && !escape {
+                    packet = Some(bytes);
+                    State::Ground
+                } else if matches!(byte, 7 | 0x18 | 0x1a) {
                     self.bad_packet = true;
                     State::Ground
                 } else if escape && byte == b'\\' {
@@ -433,8 +438,19 @@ pub(crate) struct Router {
     sequence: u64,
     namespace: String,
     lease: Option<Lease>,
-    pending: VecDeque<(Owner, Vec<u8>, bool)>,
+    pending: VecDeque<(Owner, Vec<u8>, Delivery)>,
     pending_bytes: usize,
+    paste: Option<paste::Event>,
+    paste_target: Option<Owner>,
+    prefix_target: Option<Owner>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Delivery {
+    Local,
+    Read,
+    Write,
+    Paste,
 }
 impl Default for Router {
     fn default() -> Self {
@@ -448,11 +464,17 @@ impl Default for Router {
         let time = u64::try_from(time).unwrap_or(u64::MAX);
         Self {
             namespace: format!("{:x}-{time:x}-{serial:x}", std::process::id()),
-            framer: Framer::default(),
+            framer: Framer {
+                allow_bel: true,
+                ..Framer::default()
+            },
             sequence: 0,
             lease: None,
             pending: VecDeque::new(),
             pending_bytes: 0,
+            paste: None,
+            paste_target: None,
+            prefix_target: None,
         }
     }
 }
@@ -566,7 +588,7 @@ impl Router {
         let lease = self.lease.take().unwrap();
         lease.write.as_ref().unwrap().abort(&lease.id, outer);
         self.pending
-            .retain(|(target, _, revocable)| *target != owner || !revocable);
+            .retain(|(target, _, kind)| *target != owner || *kind != Delivery::Write);
         self.pending_bytes = self.pending.iter().map(|(_, b, _)| b.len()).sum();
         self.queue(
             owner,
@@ -598,15 +620,26 @@ impl Router {
     }
     pub fn advance(&mut self, bytes: &[u8], pass: &mut Vec<u8>, now: Instant) {
         for &byte in bytes {
+            if byte == 0x1b && matches!(self.framer.state, State::Ground | State::Escape) {
+                self.prefix_target = self.paste_target;
+            }
             if let Some(body) = self.framer.advance(byte, pass) {
                 self.response(&body, now);
+            }
+            if std::mem::take(&mut self.framer.bad_packet) {
+                self.paste = None;
             }
         }
     }
     fn response(&mut self, body: &[u8], now: Instant) {
         let Some(packet) = Packet::parse(body) else {
+            self.paste = None;
             return;
         };
+        if packet.value("id").is_none() {
+            self.paste_response(&packet, now);
+            return;
+        }
         let Some(lease) = self.lease.as_mut() else {
             return;
         };
@@ -672,7 +705,66 @@ impl Router {
         // a previously buffered packet. Stop new pane reads at the same threshold.
         assert!(self.pending_bytes + bytes.len() <= MAX_PENDING);
         self.pending_bytes += bytes.len();
-        self.pending.push_back((owner, bytes, revocable));
+        let kind = if !revocable {
+            Delivery::Local
+        } else if Packet::parse(&bytes[PREFIX.len()..bytes.len() - 2])
+            .is_some_and(|p| p.value("type") == Some("write"))
+        {
+            Delivery::Write
+        } else {
+            Delivery::Read
+        };
+        self.pending.push_back((owner, bytes, kind));
+    }
+
+    pub fn set_paste_target(&mut self, target: Option<Owner>) {
+        self.paste_target = target;
+    }
+
+    fn paste_response(&mut self, packet: &Packet<'_>, now: Instant) {
+        if packet.value("type") != Some("read") {
+            self.paste = None;
+            return;
+        }
+        if packet.value("status") == Some("OK") {
+            self.paste = self
+                .prefix_target
+                .and_then(|owner| paste::Event::start(owner, packet, now));
+            return;
+        }
+        let Some(mut event) = self.paste.take() else {
+            return;
+        };
+        match event.accept(packet, now) {
+            Some(true) => {
+                let (owner, wire) = event.finish();
+                // The frontend read reserve includes this one bounded staged event.
+                assert!(self.pending_bytes + wire.len() <= MAX_PENDING);
+                self.pending_bytes += wire.len();
+                self.pending.push_back((owner, wire, Delivery::Paste));
+            }
+            Some(false) => self.paste = Some(event),
+            None => {}
+        }
+    }
+
+    pub fn tick_paste(&mut self, now: Instant, enabled: bool, mut live: impl FnMut(Owner) -> bool) {
+        if !enabled {
+            self.paste_target = None;
+            self.prefix_target = None;
+        } else if self.prefix_target.is_some_and(|owner| !live(owner)) {
+            self.prefix_target = None;
+        }
+        if self
+            .paste
+            .as_ref()
+            .is_some_and(|event| !enabled || !live(event.owner) || now >= event.deadline)
+        {
+            self.paste = None;
+        }
+        self.pending
+            .retain(|(owner, _, kind)| *kind != Delivery::Paste || (enabled && live(*owner)));
+        self.pending_bytes = self.pending.iter().map(|(_, bytes, _)| bytes.len()).sum();
     }
     pub fn drain(&mut self, mut deliver: impl FnMut(Owner, &[u8]) -> bool) {
         while let Some((owner, bytes, _)) = self.pending.front() {
@@ -682,7 +774,12 @@ impl Router {
             self.pending_bytes -= bytes.len();
             self.pending.pop_front();
         }
-        if self.pending.is_empty() && self.lease.as_ref().is_some_and(|lease| lease.finished) {
+        if self.lease.as_ref().is_some_and(|lease| {
+            lease.finished
+                && !self.pending.iter().any(|(owner, _, kind)| {
+                    *owner == lease.owner && matches!(kind, Delivery::Read | Delivery::Write)
+                })
+        }) {
             self.lease = None;
         }
     }
@@ -696,15 +793,10 @@ impl Router {
         outer: &mut VecDeque<u8>,
     ) {
         self.framer.expire_prefix(now, pass);
-        self.pending.retain(|(_, bytes, revocable)| {
-            !revocable
-                || Packet::parse(&bytes[PREFIX.len()..bytes.len() - 2]).is_some_and(|p| {
-                    if p.value("type") == Some("write") {
-                        write_enabled
-                    } else {
-                        enabled
-                    }
-                })
+        self.pending.retain(|(_, _, kind)| match kind {
+            Delivery::Local => true,
+            Delivery::Write => write_enabled,
+            Delivery::Read | Delivery::Paste => enabled,
         });
         self.pending_bytes = self.pending.iter().map(|(_, bytes, _)| bytes.len()).sum();
         let Some(lease) = self.lease.as_ref() else {
@@ -742,6 +834,7 @@ impl Router {
     /// Hiding and undoing a pane can both happen before the next loop tick.
     /// Invalidate at the ownership transition, not merely on a later liveness scan.
     pub fn forget(&mut self, owner: Owner, outer: &mut VecDeque<u8>) {
+        self.forget_paste(owner);
         if self
             .lease
             .as_ref()
@@ -755,6 +848,25 @@ impl Router {
         self.pending.retain(|(target, _, _)| *target != owner);
         self.pending_bytes = self.pending.iter().map(|(_, bytes, _)| bytes.len()).sum();
     }
+
+    pub fn forget_paste(&mut self, owner: Owner) {
+        if self
+            .paste
+            .as_ref()
+            .is_some_and(|event| event.owner == owner)
+        {
+            self.paste = None;
+        }
+        if self.prefix_target == Some(owner) {
+            self.prefix_target = None;
+        }
+        if self.paste_target == Some(owner) {
+            self.paste_target = None;
+        }
+        self.pending
+            .retain(|(target, _, kind)| *target != owner || *kind != Delivery::Paste);
+        self.pending_bytes = self.pending.iter().map(|(_, bytes, _)| bytes.len()).sum();
+    }
     pub fn cancel(
         &mut self,
         outer: &mut VecDeque<u8>,
@@ -762,6 +874,9 @@ impl Router {
     ) {
         self.pending.clear();
         self.pending_bytes = 0;
+        self.paste = None;
+        self.prefix_target = None;
+        self.paste_target = None;
         if let Some(lease) = self.lease.take() {
             let kind = if lease.write.is_some() {
                 "write"

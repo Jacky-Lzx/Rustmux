@@ -631,7 +631,20 @@ impl TerminalSession {
                     .content_mut()
                     .get_mut(pane_id)
                     .expect("polled pane exists");
-                service_pane(pane, requested, ready, self.cell_pixels, false, false, None)?;
+                service_pane(
+                    pane,
+                    requested,
+                    ready,
+                    self.cell_pixels,
+                    false,
+                    ClipboardPolicy {
+                        read: self
+                            .reload
+                            .as_ref()
+                            .is_some_and(|r| r.current().clipboard_read()),
+                        ..ClipboardPolicy::default()
+                    },
+                )?;
                 // Completion while detached retains activity, never delivery for a later client.
                 let _ = pane.take_command_reminder();
             }
@@ -2002,18 +2015,25 @@ fn window_names(windows: &Windows<PaneSet<Pane>>) -> Vec<String> {
         .collect()
 }
 
+#[derive(Default)]
+struct ClipboardPolicy {
+    attached: bool,
+    read: bool,
+    write: bool,
+}
+
 fn service_pane(
     pane: &mut Pane,
     requested: PollFlags,
     ready: PollFlags,
     cell_pixels: Option<CellPixelSize>,
     answer_graphics: bool,
-    clipboard_write: bool,
-    clipboard_read: Option<bool>,
+    clipboard: ClipboardPolicy,
 ) -> io::Result<()> {
-    pane.configure_clipboard(clipboard_write);
-    pane.configure_rich_clipboard(clipboard_read);
-    pane.configure_rich_clipboard_write(clipboard_read.map(|_| clipboard_write));
+    pane.parts_mut().2.configure_rich_clipboard(clipboard.read);
+    pane.configure_clipboard(clipboard.attached && clipboard.write);
+    pane.configure_rich_clipboard(clipboard.attached.then_some(clipboard.read));
+    pane.configure_rich_clipboard_write(clipboard.attached.then_some(clipboard.write));
     pane.track_command_application();
     if ready.contains(PollFlags::POLLNVAL) {
         return Err(io::Error::new(
@@ -2099,6 +2119,9 @@ fn apply_config(
     for window in windows.iter_mut() {
         for (_, pane) in window.content_mut().iter_mut() {
             pane.configure_notifications(config.notifications());
+            pane.parts_mut()
+                .2
+                .configure_rich_clipboard(config.clipboard_read());
             if !config.clipboard_read() {
                 pane.configure_rich_clipboard(Some(false));
             }
@@ -2113,6 +2136,7 @@ fn apply_config(
         pane.configure_clipboard(false);
         pane.configure_rich_clipboard(None);
         pane.configure_rich_clipboard_write(None);
+        pane.parts_mut().2.configure_rich_clipboard(false);
     }
     if let Some(service) = persistence {
         service.configure(config.persistence(), config.scrollback_lines());
@@ -2364,6 +2388,16 @@ fn forward(
         );
         let old_input_len = input.len();
         input.extend(expired);
+        let paste_enabled = connection == ConnectionState::Attached
+            && runtime.clipboard_read
+            && keys.mode == InputMode::Locked
+            && prompt.is_none()
+            && history.is_none()
+            && help.is_none();
+        rich_clipboard.tick_paste(Instant::now(), paste_enabled, |owner| {
+            rich_paste_live(windows, owner)
+        });
+        rich_clipboard.set_paste_target(rich_paste_target(windows, paste_enabled));
         rich_clipboard.drain(|owner, bytes| deliver_rich_clipboard(windows, owner, bytes));
         // Released prefixes have already passed the clipboard framer, but still
         // belong to the downstream color/graphics probes, not keyboard input.
@@ -2794,6 +2828,7 @@ fn forward(
                         view.set_sgr_mouse(*outer_rows > 1);
                         view.clear_pointer_shapes();
                         view.set_bracketed_paste(false);
+                        view.set_rich_clipboard_paste(false);
                         view.set_focus_reporting(false);
                         view.set_kitty_keyboard_flags(0, 1);
                         view.set_application_cursor_keys(false);
@@ -2811,6 +2846,7 @@ fn forward(
                         // child's requested flags intact and restore them when the
                         // local mode closes.
                         view.set_kitty_keyboard_flags(0, 1);
+                        view.set_rich_clipboard_paste(false);
                     }
                     if prompt.as_ref().is_some_and(|editor| editor.is_rename())
                         && *outer_rows > 1
@@ -3886,6 +3922,16 @@ fn forward(
         {
             let old_input_len = input.len();
             connection = frontend.receive(&mut input)?;
+            let paste_enabled = connection == ConnectionState::Attached
+                && runtime.clipboard_read
+                && keys.mode == InputMode::Locked
+                && prompt.is_none()
+                && history.is_none()
+                && help.is_none();
+            rich_clipboard.tick_paste(Instant::now(), paste_enabled, |owner| {
+                rich_paste_live(windows, owner)
+            });
+            rich_clipboard.set_paste_target(rich_paste_target(windows, paste_enabled));
             // Consume rich-clipboard responses before other probes can retain
             // and later release their bytes into focused keyboard input.
             filter_rich_clipboard_input(&mut rich_clipboard, &mut input, old_input_len);
@@ -3955,6 +4001,7 @@ fn forward(
                 .get_mut(pane_id)
                 .expect("polled pane exists");
             let bell_was_pending = pane.io().bell_pending;
+            let paste_generation = pane.screen().rich_paste_generation();
             service_pane(
                 pane,
                 inner_events,
@@ -3963,9 +4010,16 @@ fn forward(
                 connection == ConnectionState::Attached
                     && *graphics_support == Some(GraphicsSupport::Supported)
                     && cell_pixels.is_some(),
-                connection == ConnectionState::Attached && runtime.clipboard_write,
-                (connection == ConnectionState::Attached).then_some(runtime.clipboard_read),
+                ClipboardPolicy {
+                    attached: connection == ConnectionState::Attached,
+                    read: runtime.clipboard_read,
+                    write: runtime.clipboard_write,
+                },
             )?;
+            // Reset followed by set in one PTY read still revokes old events.
+            if paste_generation != pane.screen().rich_paste_generation() {
+                rich_clipboard.forget_paste(pane.rich_clipboard_owner());
+            }
             while let Some(request) = pane.take_rich_clipboard() {
                 rich_clipboard.request(
                     pane.rich_clipboard_owner(),
@@ -4024,6 +4078,23 @@ fn filter_rich_clipboard_input(
         router.advance(&raw, &mut pass, Instant::now());
         input.extend(pass);
     }
+}
+fn rich_paste_live(windows: &Windows<PaneSet<Pane>>, owner: crate::rich_clipboard::Owner) -> bool {
+    windows.iter().any(|window| {
+        window.content().iter().any(|(_, pane)| {
+            pane.rich_clipboard_owner() == owner
+                && pane.io().accepts_input()
+                && pane.screen().rich_clipboard_paste()
+        })
+    })
+}
+fn rich_paste_target(
+    windows: &Windows<PaneSet<Pane>>,
+    enabled: bool,
+) -> Option<crate::rich_clipboard::Owner> {
+    let pane = windows.active()?.content().active();
+    (enabled && pane.io().accepts_input() && pane.screen().rich_clipboard_paste())
+        .then(|| pane.rich_clipboard_owner())
 }
 fn rich_clipboard_live(
     windows: &Windows<PaneSet<Pane>>,
@@ -4717,8 +4788,7 @@ mod tests {
                 PollFlags::POLLIN,
                 None,
                 false,
-                false,
-                None,
+                ClipboardPolicy::default(),
             )
             .unwrap();
             assert!(Instant::now() < deadline, "prompt marker was not parsed");
@@ -4751,8 +4821,7 @@ mod tests {
                     PollFlags::POLLIN,
                     cell_pixels,
                     false,
-                    false,
-                    None,
+                    ClipboardPolicy::default(),
                 )
                 .unwrap();
                 assert!(Instant::now() < deadline, "Kitty image was not stored");

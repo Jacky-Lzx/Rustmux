@@ -498,6 +498,7 @@ impl Pane {
         self.clipboard.configure(false);
         self.rich_clipboard.configure(None);
         self.rich_clipboard.configure_write(None);
+        self.screen.configure_rich_clipboard(false);
         self.io.semantic.cancel_current();
         if stopped {
             // A killed full-screen job cannot restore these modes itself.

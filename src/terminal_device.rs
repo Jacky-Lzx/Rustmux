@@ -23,6 +23,7 @@ const ENTER: &[u8] = b"\x1b[?1049h\x1b]8;;\x1b\\\x1b]22;\x1b\\";
 // ?1l: restore normal cursor-key encoding (disable application cursor keys).
 // ?67l: make the Backspace key send DEL rather than BS.
 // CSI = 0 u: disable Kitty progressive keyboard enhancements.
+// ?5522l: disable Kitty MIME paste notifications.
 // ?2004l: disable bracketed paste (the markers around pasted input).
 // ?1000l: disable basic mouse button reporting.
 // ?1002l: disable mouse motion reporting while a button is held.
@@ -38,7 +39,7 @@ const ENTER: &[u8] = b"\x1b[?1049h\x1b]8;;\x1b\\\x1b]22;\x1b\\";
 // These are baseline resets, not a snapshot of the previous display modes.
 // Raw mode and other termios attributes are restored separately.
 const LEAVE: &[u8] =
-    b"\x1b[0 q\x1b>\x1b[?1l\x1b[?67l\x1b[=0u\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1004l\x1b[?1006l\x1b]112\x1b\\\x1b]8;;\x1b\\\x1b]22;\x1b\\\x1b[0m\x1b[?25h\x1b[?1049l";
+    b"\x1b[0 q\x1b>\x1b[?1l\x1b[?67l\x1b[=0u\x1b[?2004l\x1b[?5522l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1004l\x1b[?1006l\x1b]112\x1b\\\x1b]8;;\x1b\\\x1b]22;\x1b\\\x1b[0m\x1b[?25h\x1b[?1049l";
 
 /// One nonblocking file description for terminal input and output.
 pub(crate) struct TerminalDevice {

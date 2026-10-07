@@ -92,7 +92,7 @@ operations; [OSC 8 hyperlinks](hyperlinks.md) alone have a separate 2,342-byte
 payload limit. Unsupported OSC is discarded through BEL or ST (ESC followed by
 backslash). An opt-in pane observer separately handles bounded
 [OSC 52 clipboard writes](pane-clipboard.md) and an attachment router handles
-[OSC 5522 rich clipboard transactions](rich-clipboard.md); the display parser and replay
+[OSC 5522 rich clipboard transactions and private mode 5522 paste events](rich-clipboard.md); the display parser and replay
 paths still discard these controls. A separate bounded observer recognizes OSC 7 working-directory
 metadata and OSC 133 command-output boundaries for Ctrl-B `e`.
 DCS retains at most 64 bytes to recognize supported DECRQSS and XTGETTCAP queries; other
