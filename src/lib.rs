@@ -8,6 +8,7 @@ mod closed_pane;
 pub mod config;
 pub mod control;
 pub mod graphics;
+mod rich_clipboard;
 pub use graphics::{
     capability as graphics_capability, composite as graphics_composite, decode as graphics_decode,
     output as graphics_output, placeholder as graphics_placeholder, snapshot as graphics_snapshot,

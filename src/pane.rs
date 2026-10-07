@@ -36,6 +36,7 @@ pub(crate) const MAX_REPLY_DRAIN_BYTES: usize = 8192;
 #[derive(Debug)]
 pub struct Pane {
     control_id: u64,
+    incarnation: u64,
     output: crate::pane_output::Output,
     startup_command: Option<String>,
     spawn_directory: Option<PathBuf>,
@@ -43,6 +44,7 @@ pub struct Pane {
     shell: PtyShell,
     parser: Parser,
     clipboard: crate::clipboard::Observer,
+    rich_clipboard: crate::rich_clipboard::Observer,
     graphics_framer: GraphicsFramer,
     graphics_transfer: DirectTransferAssembler,
     image_store: ImageStore,
@@ -320,6 +322,18 @@ impl Pane {
     pub(crate) fn configure_clipboard(&mut self, enabled: bool) {
         self.clipboard.configure(enabled);
     }
+    pub(crate) fn rich_clipboard_owner(&self) -> crate::rich_clipboard::Owner {
+        crate::rich_clipboard::Owner {
+            pane: self.control_id,
+            incarnation: self.incarnation,
+        }
+    }
+    pub(crate) fn configure_rich_clipboard(&mut self, permission: Option<bool>) {
+        self.rich_clipboard.configure(permission);
+    }
+    pub(crate) fn take_rich_clipboard(&mut self) -> Option<crate::rich_clipboard::Request> {
+        self.rich_clipboard.take()
+    }
     pub(crate) fn take_clipboard(&mut self) -> Option<Vec<u8>> {
         self.clipboard.take()
     }
@@ -401,6 +415,7 @@ impl Pane {
         }
         Ok(Self {
             control_id,
+            incarnation: control_id,
             output: crate::pane_output::Output::default(),
             startup_command: startup.map(str::to_owned),
             spawn_directory: directory
@@ -410,6 +425,7 @@ impl Pane {
             shell,
             parser: Parser::new(),
             clipboard: crate::clipboard::Observer::default(),
+            rich_clipboard: crate::rich_clipboard::Observer::default(),
             graphics_framer: GraphicsFramer::new(),
             graphics_transfer: DirectTransferAssembler::new(),
             image_store: ImageStore::new(),
@@ -446,6 +462,7 @@ impl Pane {
         fcntl(master, FcntlArg::F_SETFL(flags | OFlag::O_NONBLOCK))?;
         Ok(Self {
             control_id,
+            incarnation: control_id,
             output: crate::pane_output::Output::default(),
             startup_command: None,
             spawn_directory: None,
@@ -453,6 +470,7 @@ impl Pane {
             shell,
             parser: Parser::new(),
             clipboard: crate::clipboard::Observer::default(),
+            rich_clipboard: crate::rich_clipboard::Observer::default(),
             graphics_framer: GraphicsFramer::new(),
             graphics_transfer: DirectTransferAssembler::new(),
             image_store: ImageStore::new(),
@@ -475,6 +493,7 @@ impl Pane {
         }
         let stopped = self.shell.stop_foreground()?;
         self.clipboard.configure(false);
+        self.rich_clipboard.configure(None);
         self.io.semantic.cancel_current();
         if stopped {
             // A killed full-screen job cannot restore these modes itself.
@@ -868,6 +887,7 @@ impl Pane {
         self.track_command_application();
         self.output.append(bytes);
         self.clipboard.advance(bytes);
+        self.rich_clipboard.advance(bytes, reply);
         self.io.dirty = true;
         let cell_pixels = match &graphics {
             GraphicsSink::Store { cell_pixels, .. } => *cell_pixels,
@@ -2789,6 +2809,7 @@ mod lifecycle_tests {
         .unwrap();
         pane.set_remain_on_exit(Some(true));
         let original_id = pane.control_id();
+        let original_owner = pane.rich_clipboard_owner();
         let original_pid = pane.shell().id();
         let deadline = Instant::now() + Duration::from_secs(3);
         while !pane.io.eof || pane.io.status.is_none() {
@@ -2839,6 +2860,7 @@ mod lifecycle_tests {
         .unwrap();
         assert_eq!(pane.control_id(), original_id);
         assert_ne!(pane.shell().id(), original_pid);
+        assert_ne!(pane.rich_clipboard_owner(), original_owner);
         assert_eq!(pane.screen.dimensions(), (14, 52));
         assert!(!pane.screen.is_alternate());
         assert!(!pane.screen.bracketed_paste());

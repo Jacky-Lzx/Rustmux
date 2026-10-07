@@ -28,6 +28,11 @@ fn clipboard() {
 }
 
 #[test]
+fn rich_clipboard() {
+    run_scenario("rich_clipboard");
+}
+
+#[test]
 fn capabilities() {
     run_scenario("capabilities");
 }

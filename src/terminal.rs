@@ -631,7 +631,7 @@ impl TerminalSession {
                     .content_mut()
                     .get_mut(pane_id)
                     .expect("polled pane exists");
-                service_pane(pane, requested, ready, self.cell_pixels, false, false)?;
+                service_pane(pane, requested, ready, self.cell_pixels, false, false, None)?;
                 // Completion while detached retains activity, never delivery for a later client.
                 let _ = pane.take_command_reminder();
             }
@@ -1999,8 +1999,10 @@ fn service_pane(
     cell_pixels: Option<CellPixelSize>,
     answer_graphics: bool,
     clipboard_write: bool,
+    clipboard_read: Option<bool>,
 ) -> io::Result<()> {
     pane.configure_clipboard(clipboard_write);
+    pane.configure_rich_clipboard(clipboard_read);
     pane.track_command_application();
     if ready.contains(PollFlags::POLLNVAL) {
         return Err(io::Error::new(
@@ -2054,6 +2056,7 @@ fn service_pane(
 
 struct RuntimeConfig {
     clipboard_write: bool,
+    clipboard_read: bool,
     theme: crate::theme::Theme,
     mouse_hover_cursor: bool,
     shell: OsString,
@@ -2067,6 +2070,7 @@ impl RuntimeConfig {
         self.theme = config.theme();
         self.mouse_hover_cursor = config.mouse_hover_cursor();
         self.clipboard_write = config.clipboard_write();
+        self.clipboard_read = config.clipboard_read();
         self.shell = config.shell().clone();
         self.notifications = config.notifications();
         self.scrollback_lines = config.scrollback_lines();
@@ -2084,6 +2088,9 @@ fn apply_config(
     for window in windows.iter_mut() {
         for (_, pane) in window.content_mut().iter_mut() {
             pane.configure_notifications(config.notifications());
+            if !config.clipboard_read() {
+                pane.configure_rich_clipboard(Some(false));
+            }
             if !config.clipboard_write() {
                 pane.configure_clipboard(false);
             }
@@ -2092,6 +2099,7 @@ fn apply_config(
     if let Some(pane) = closed.as_mut().and_then(|saved| saved.pane.as_mut()) {
         pane.configure_notifications(config.notifications());
         pane.configure_clipboard(false);
+        pane.configure_rich_clipboard(None);
     }
     if let Some(service) = persistence {
         service.configure(config.persistence(), config.scrollback_lines());
@@ -2123,9 +2131,13 @@ fn forward(
     for window in windows.iter_mut() {
         for (_, pane) in window.content_mut().iter_mut() {
             pane.configure_clipboard(false);
+            pane.configure_rich_clipboard(None);
         }
     }
     let mut runtime = RuntimeConfig {
+        clipboard_read: reload
+            .as_ref()
+            .is_some_and(|r| r.current().clipboard_read()),
         clipboard_write: reload
             .as_ref()
             .is_some_and(|r| r.current().clipboard_write()),
@@ -2146,6 +2158,7 @@ fn forward(
     let mut kitty_overlays = KittyOverlays::default();
     let mut notification_ids = crate::notification::Ids::default();
     let mut outer_image_replies = OuterImageReplies::default();
+    let mut rich_clipboard = crate::rich_clipboard::Router::default();
     let mut graphics_ready = false;
     let mut to_terminal = VecDeque::new();
     let mut color_probe = Some(ColorProbe::new());
@@ -2318,8 +2331,20 @@ fn forward(
             drop(shm_probe_object.take());
             input.extend(released);
         }
+        let mut expired = Vec::new();
+        rich_clipboard.tick(
+            Instant::now(),
+            runtime.clipboard_read,
+            |owner| rich_clipboard_live(windows, owner),
+            &mut expired,
+        );
+        input.extend(expired);
+        rich_clipboard.drain(|owner, bytes| deliver_rich_clipboard(windows, owner, bytes));
         let old_input_len = input.len();
-        frontend.drain_input(&mut input);
+        if rich_clipboard.can_receive() {
+            frontend.drain_input(&mut input);
+        }
+        filter_rich_clipboard_input(&mut rich_clipboard, &mut input, old_input_len);
         filter_color_probe_input(
             &mut color_probe,
             &mut input,
@@ -2375,6 +2400,7 @@ fn forward(
             to_terminal.clear();
         }
         if let Some(exit) = frontend_exit(connection, &input) {
+            rich_clipboard.cancel(|owner, bytes| deliver_rich_clipboard(windows, owner, bytes));
             return Ok(exit);
         }
         let received = signals.pending.load(Ordering::Relaxed);
@@ -2402,13 +2428,14 @@ fn forward(
                         // run() restores the terminal, then cleans up visible and hidden shells.
                         return Ok(ForwardExit::Process(0));
                     }
-                    windows
+                    let pane = windows
                         .get_mut(id)
                         .unwrap()
                         .content_mut()
                         .get_mut(pane_id)
-                        .unwrap()
-                        .stop_for_hide()?;
+                        .unwrap();
+                    rich_clipboard.forget(pane.rich_clipboard_owner());
+                    pane.stop_for_hide()?;
                     let (mut pane, after) = if sole_pane {
                         (windows.close(id)?.into_content().into_single(), None)
                     } else {
@@ -2431,6 +2458,7 @@ fn forward(
                         return Ok(ForwardExit::Process(0));
                     }
                     for (_, pane) in windows.get_mut(id).unwrap().content_mut().iter_mut() {
+                        rich_clipboard.forget(pane.rich_clipboard_owner());
                         pane.shell_mut().terminate()?;
                     }
                     drop(windows.close(id)?);
@@ -3655,17 +3683,20 @@ fn forward(
             && to_terminal.is_empty()
         {
             if frontend.open_session_manager()? {
+                rich_clipboard.cancel(|owner, bytes| deliver_rich_clipboard(windows, owner, bytes));
                 return Ok(ForwardExit::Detached);
             }
             session_manager_requested = false;
         }
         if detach_requested && renamed_notice.is_none() && to_terminal.is_empty() {
             if frontend.detach_client()? {
+                rich_clipboard.cancel(|owner, bytes| deliver_rich_clipboard(windows, owner, bytes));
                 return Ok(ForwardExit::Detached);
             }
             detach_requested = false;
         }
         if let Some(exit) = frontend_exit(connection, &input) {
+            rich_clipboard.cancel(|owner, bytes| deliver_rich_clipboard(windows, owner, bytes));
             return Ok(exit);
         }
         // A changed focus needs a frame before returning to a blocking poll.
@@ -3689,6 +3720,7 @@ fn forward(
             && !detach_requested
             && input.len() < LIMIT
             && frontend.can_receive()
+            && rich_clipboard.can_receive()
         {
             outer_events |= PollFlags::POLLIN;
         }
@@ -3740,6 +3772,7 @@ fn forward(
                     // Child startup color queries must observe the inherited
                     // table, not race the outer-terminal discovery replies.
                     if color_probe.is_none()
+                        && rich_clipboard.can_receive()
                         && state.reply_read_limit() != 0
                         && (window.id() != active || to_terminal.is_empty())
                     {
@@ -3798,6 +3831,9 @@ fn forward(
         {
             let old_input_len = input.len();
             connection = frontend.receive(&mut input)?;
+            // Consume rich-clipboard responses before other probes can retain
+            // and later release their bytes into focused keyboard input.
+            filter_rich_clipboard_input(&mut rich_clipboard, &mut input, old_input_len);
             filter_color_probe_input(
                 &mut color_probe,
                 &mut input,
@@ -3845,7 +3881,10 @@ fn forward(
         }
         // One bounded read/write per pane per iteration prevents a busy background
         // process from starving the other panes, keyboard or signal handling.
-        for ((id, pane_id, inner_events), inner) in interests.into_iter().zip(events) {
+        for ((id, pane_id, mut inner_events), inner) in interests.into_iter().zip(events) {
+            if !rich_clipboard.can_receive() {
+                inner_events.remove(PollFlags::POLLIN);
+            }
             let window = windows.get_mut(id).unwrap();
             let pane = window
                 .content_mut()
@@ -3861,7 +3900,17 @@ fn forward(
                     && *graphics_support == Some(GraphicsSupport::Supported)
                     && cell_pixels.is_some(),
                 connection == ConnectionState::Attached && runtime.clipboard_write,
+                (connection == ConnectionState::Attached).then_some(runtime.clipboard_read),
             )?;
+            if let Some(request) = pane.take_rich_clipboard() {
+                rich_clipboard.request(
+                    pane.rich_clipboard_owner(),
+                    request,
+                    Instant::now(),
+                    &mut to_terminal,
+                    LIMIT,
+                );
+            }
             if let Some(copy) = pane.take_clipboard()
                 && connection == ConnectionState::Attached
                 && runtime.clipboard_write
@@ -3897,6 +3946,49 @@ fn forward(
             }
         }
     }
+}
+
+fn filter_rich_clipboard_input(
+    router: &mut crate::rich_clipboard::Router,
+    input: &mut VecDeque<u8>,
+    old_len: usize,
+) {
+    if input.len() > old_len {
+        let raw: Vec<_> = input.drain(old_len..).collect();
+        let mut pass = Vec::new();
+        router.advance(&raw, &mut pass, Instant::now());
+        input.extend(pass);
+    }
+}
+fn rich_clipboard_live(
+    windows: &Windows<PaneSet<Pane>>,
+    owner: crate::rich_clipboard::Owner,
+) -> bool {
+    windows.iter().any(|window| {
+        window
+            .content()
+            .iter()
+            .any(|(_, pane)| pane.rich_clipboard_owner() == owner && pane.io().accepts_input())
+    })
+}
+fn deliver_rich_clipboard(
+    windows: &mut Windows<PaneSet<Pane>>,
+    owner: crate::rich_clipboard::Owner,
+    bytes: &[u8],
+) -> bool {
+    for window in windows.iter_mut() {
+        for (_, pane) in window.content_mut().iter_mut() {
+            if pane.rich_clipboard_owner() == owner && pane.io().accepts_input() {
+                let state = pane.parts_mut().3;
+                if bytes.len() > LIMIT.saturating_sub(state.to_shell.len()) {
+                    return false;
+                }
+                state.to_shell.extend(bytes);
+                return true;
+            }
+        }
+    }
+    true // The old process is gone; discard its reply rather than routing to focus.
 }
 
 fn inherit_pane_colors(
@@ -4561,6 +4653,7 @@ mod tests {
                 None,
                 false,
                 false,
+                None,
             )
             .unwrap();
             assert!(Instant::now() < deadline, "prompt marker was not parsed");
@@ -4594,6 +4687,7 @@ mod tests {
                     cell_pixels,
                     false,
                     false,
+                    None,
                 )
                 .unwrap();
                 assert!(Instant::now() < deadline, "Kitty image was not stored");

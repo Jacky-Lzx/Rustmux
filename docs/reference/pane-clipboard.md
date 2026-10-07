@@ -20,6 +20,9 @@ requests; it does not access the operating-system clipboard directly or confirm
 that the outer terminal accepted them. This works in foreground unnamed sessions
 and attached named sessions, including background panes and windows.
 
+[Kitty rich clipboard reads](rich-clipboard.md) use a separate `clipboard_read`
+option. This page describes OSC 52 writes.
+
 ## Supported requests
 
 Requests accept BEL or ST, including arbitrary byte fragmentation. The selection
@@ -36,8 +39,8 @@ is emitted. Controls, bad selectors, noncanonical codes, extra fields, malformed
 Base64, cancellation and unfinished strings produce no request.
 
 Clipboard reads (`?`) are unsupported and receive no response. Rustmux does not
-forward them to the outer terminal. Kitty OSC 5522 rich clipboard and file
-transfer remain separate future work. Clipboard-like sequences inside other
+forward them to the outer terminal. Kitty OSC 5522 reads use the separate [rich clipboard policy](rich-clipboard.md);
+rich writes and file transfer OSC 5113 remain unsupported. Clipboard-like sequences inside other
 OSC/DCS/APC/SOS/PM strings never trigger a write.
 
 ## Lifetime and delivery

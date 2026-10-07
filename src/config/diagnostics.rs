@@ -23,6 +23,7 @@ pub struct Settings {
     pub remain_on_exit: bool,
     pub mouse_hover_cursor: bool,
     pub clipboard_write: bool,
+    pub clipboard_read: bool,
     pub clear_defaults: bool,
     pub autosave_interval_seconds: u64,
     pub save_scrollback: bool,
@@ -75,6 +76,7 @@ impl From<&Config> for Settings {
             remain_on_exit: config.remain_on_exit,
             mouse_hover_cursor: config.mouse_hover_cursor,
             clipboard_write: config.clipboard_write,
+            clipboard_read: config.clipboard_read,
             clear_defaults: config.shortcuts.clear_defaults,
             autosave_interval_seconds: config.persistence.autosave_interval_seconds,
             save_scrollback: config.persistence.save_scrollback,
@@ -100,6 +102,7 @@ fn ignored_options(source: &str) -> Vec<String> {
                 | "remain_on_exit"
                 | "mouse_hover_cursor"
                 | "clipboard_write"
+                | "clipboard_read"
                 | "clear_defaults"
                 | "autosave_interval_seconds"
                 | "save_scrollback"
@@ -190,6 +193,7 @@ scrollback_lines = {DEFAULT_SCROLLBACK_LINES}
 remain_on_exit = false
 mouse_hover_cursor = false
 clipboard_write = false
+clipboard_read = false
 clear_defaults = false
 autosave_interval_seconds = 0
 save_scrollback = false
@@ -232,6 +236,22 @@ backspace = ["backspace"]
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn clipboard_reads_are_opt_in_and_reported_independently_from_writes() {
+        let config = resolve_config(parse_config("clipboard_read=true").unwrap());
+        assert!(config.clipboard_read());
+        assert!(!config.clipboard_write());
+        assert!(Settings::from(&config).clipboard_read);
+        assert!(ignored_options("clipboard_read=true").is_empty());
+        assert!(!resolve_config(parse_config(&default_config()).unwrap()).clipboard_read());
+        for value in ["1", "'true'", "[]"] {
+            assert!(
+                parse_config(&format!("clipboard_read={value}"))
+                    .unwrap_err()
+                    .contains("clipboard_read must be a boolean")
+            );
+        }
+    }
     #[test]
     fn clipboard_policy_is_opt_in_typed_and_visible_in_diagnostics() {
         assert!(!resolve_config(parse_config("").unwrap()).clipboard_write());
