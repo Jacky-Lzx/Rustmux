@@ -5,7 +5,8 @@
 # Ctrl-V enters MOVE in each mode (Ctrl-M is indistinguishable from Enter).
 # Defaults remain enabled, including Ctrl-B [ and Ctrl-B E/e.
 # HISTORY E/e opens the frozen history / captured command-output editor.
-# During keyboard selection, default e still extends by word.
+# E/e entries change visibility only; during keyboard selection e extends by word.
+# Pane / Resize / Move / Tab / Session ? opens that mode's shortcut Help.
 # HISTORY y copies the selection, match, or viewport and stays in HISTORY.
 # HISTORY Y copies the last command output and returns to LOCKED; H opens Help.
 # [keybinds.history] supports edit-history, edit-last-output, copy-last-output,
@@ -124,6 +125,7 @@ esc = { actions = [{ action = "switch-mode", mode = "locked" }], display = "help
 "?" = { actions = ["show-help"], display = "help" }
 
 [keybinds.pane]
+"?" = { actions = ["show-help"], display = "help" }
 w = { actions = ["toggle-floating-terminal", { action = "switch-mode", mode = "locked" }], display = "help" }
 # Match Zellij's b / [ / ] pane workflow; preserve the running process.
 # [ and ] move to the previous/next existing window (wrapping at the ends).
@@ -153,6 +155,7 @@ enter = { actions = [{ action = "switch-mode", mode = "locked" }], display = "he
 esc = { actions = [{ action = "switch-mode", mode = "locked" }], display = "help" }
 
 [keybinds.resize]
+"?" = { actions = ["show-help"], display = "help" }
 left = { actions = ["resize-pane-left"], display = "help" }
 down = { actions = ["resize-pane-down"], display = "help" }
 up = { actions = ["resize-pane-up"], display = "help" }
@@ -172,6 +175,7 @@ enter = { actions = [{ action = "switch-mode", mode = "locked" }], display = "he
 esc = { actions = [{ action = "switch-mode", mode = "locked" }], display = "help" }
 
 [keybinds.move]
+"?" = { actions = ["show-help"], display = "help" }
 left = { actions = ["move-pane-left"], display = "help" }
 down = { actions = ["move-pane-down"], display = "help" }
 up = { actions = ["move-pane-up"], display = "help" }
@@ -191,6 +195,9 @@ enter = { actions = [{ action = "switch-mode", mode = "locked" }], display = "he
 esc = { actions = [{ action = "switch-mode", mode = "locked" }], display = "help" }
 
 [keybinds.history]
+# Preserve default editor actions and e's selection word motion.
+E = { display = "always" }
+e = { display = "always" }
 "/" = { actions = ["history-search-forward"], display = "always" }
 "?" = { actions = ["history-search-backward"], display = "help" }
 n = { actions = ["history-next-match"], display = "help" }

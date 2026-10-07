@@ -1,9 +1,15 @@
 """Display metadata changes footer/help only; real physical and clicked actions survive."""
+import base64
+import fcntl
 from pathlib import Path
+import re
+import struct
+import subprocess
 import tempfile
+import termios
 import time
 
-from terminal_loop_support import Session, expect_bar, expect_footer
+from terminal_loop_support import BINARY, Session, expect_bar, expect_footer
 
 CONFIG = '''
 clear_defaults=true
@@ -148,6 +154,81 @@ with tempfile.TemporaryDirectory(prefix="rustmux-display-") as directory:
         expect_footer(s, b"HISTORY")
         s.send(b"q")
         expect_footer(s, b"LOCKED")
+        s.send(b"exit 0\n")
+        s.finish(0)
+    finally:
+        s.close()
+
+
+# Load the maintained development example itself: synthetic bindings above cannot
+# catch a working action that was accidentally omitted from the shipped config.
+with tempfile.TemporaryDirectory(prefix="rustmux-dev-config-") as directory:
+    root = Path(directory)
+    config = Path(__file__).resolve().parent.parent / "examples/config-dev.toml"
+    checked = subprocess.run([BINARY, "check-config", "--config", str(config), "--strict"],
+                             capture_output=True, text=True, timeout=8)
+    assert checked.returncode == 0, checked
+    capture = root / "capture"
+    editor = root / "editor.sh"
+    editor.write_text('#!/bin/sh\ncp "$1" "$CAPTURE"\nprintf "DEV_EDITOR_RUNNING\\n"\nread reply\n')
+    editor.chmod(0o700)
+    s = Session(arguments=("--config", str(config)), lifetime=40,
+                extra_env={"VISUAL": "", "EDITOR": str(editor), "CAPTURE": str(capture)})
+    try:
+        s.expect(b"RUSTMUX_READY>")
+        s.send(b"stty -echo; KEEP=dev; printf 'DEV_CONFIG_%s\\n' READY\n")
+        s.expect(b"DEV_CONFIG_READY")
+        for enter, mode, label, normal in [
+            (b"\x10", b"PANE", b"Split right", b"p"),
+            (b"r", b"RESIZE", b"Resize left", b"r"),
+            (b"\x16", b"MOVE", b"Move left", b"m"),
+        ]:
+            s.send(b"\x02" + enter + b"?")
+            wait(s, lambda: b"Shortcut Help" in body(s) and label in body(s))
+            assert b"Help" not in s.physical_rows[-1]  # display=help omits footer.
+            s.send(b"\x1b")
+            wait(s, lambda: b"Shortcut Help" not in body(s))
+            expect_footer(s, mode)
+            s.send(b"?")
+            wait(s, lambda: b"Shortcut Help" in body(s) and label in body(s))
+            s.send(normal)  # The panel dispatches to the mode that opened it.
+            wait(s, lambda: b"Shortcut Help" not in body(s))
+            expect_footer(s, b"NORMAL")
+            s.send(b"\x1b")
+            expect_footer(s, b"LOCKED")
+
+        # Wide footer exposes both display-only editor entries. Their defaults
+        # must still distinguish selection word motion from output editing.
+        fcntl.ioctl(s.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 200, 0, 0))
+        s.send(b"printf '\\033[3J\\033[2J\\033[H\\033]133;C\\007FIRST SECOND\\n\\033]133;D;0\\007'\n")
+        s.expect(b"FIRST SECOND")
+        s.send(b"\x02s")
+        expect_footer(s, b"HISTORY")
+        wait(s, lambda: b"Edit history" in s.physical_rows[-1]
+             and b"Edit output / word" in s.physical_rows[-1])
+        s.output.clear()
+        s.send(b"gvey")
+        wait(s, lambda: b"\x1b]52;c;" in s.output)
+        clips = re.findall(rb"\x1b\]52;c;([^\x07]*)\x07", s.output)
+        assert [base64.b64decode(value) for value in clips] == [b"FIRST"]
+        assert not capture.exists(), "selection e unexpectedly opened an editor"
+        expect_footer(s, b"HISTORY")
+        s.send(b"E")
+        s.expect(b"DEV_EDITOR_RUNNING")
+        assert b"FIRST SECOND" in capture.read_bytes()
+        s.send(b"\r")
+        wait(s, lambda: b"2 history" not in s.physical_rows[0])
+        expect_footer(s, b"LOCKED")
+        capture.unlink()
+        s.frames.clear()
+        s.send(b"\x02se")
+        s.expect(b"DEV_EDITOR_RUNNING")
+        assert capture.read_bytes() == b"FIRST SECOND\n"
+        s.send(b"\r")
+        wait(s, lambda: b"2 output" not in s.physical_rows[0])
+        expect_footer(s, b"LOCKED")
+        s.send(b"printf 'DEV_CONFIG_%s_%s\\n' SURVIVED \"$KEEP\"\n")
+        s.expect(b"DEV_CONFIG_SURVIVED_dev")
         s.send(b"exit 0\n")
         s.finish(0)
     finally:
