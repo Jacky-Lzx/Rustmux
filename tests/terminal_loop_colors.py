@@ -171,7 +171,13 @@ os.write(1, b"\\r\\nCHILD_COLORS_OK\\r\\n")
         assert_color(raw, b"NEW_RED", foreground=PALETTE[1])
         assert_color(raw, b"NEW_DEFAULT", foreground=FOREGROUND, background=BACKGROUND)
         session.send(b"exit 0\n")
-        session.expect(b"RUSTMUX_READY> ")
+        # The split pane's old prompt can still be present in the frame cache.
+        # Wait for its geometry to disappear before sending to the survivor.
+        deadline = time.monotonic() + 5
+        while session.physical_rows[1].count("┌".encode()) != 1:
+            session.read()
+            assert time.monotonic() < deadline, session.physical_rows
+        quiet_shell(session)
         raw = printf(session, "\\033[31mKEPT_RED\\033[0m\\n", b"KEPT_RED")
         assert_color(raw, b"KEPT_RED", foreground=(1, 2, 3))
         session.send(b"\x02[")

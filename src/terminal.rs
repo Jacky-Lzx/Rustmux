@@ -452,16 +452,7 @@ impl TerminalSession {
         }
         // A peer can disappear after a controller requests detach but before
         // the control frame is written. A named server keeps its panes alive.
-        if self.rename.is_some()
-            && result.as_ref().is_err_and(|error| {
-                matches!(
-                    error.kind(),
-                    io::ErrorKind::BrokenPipe
-                        | io::ErrorKind::ConnectionReset
-                        | io::ErrorKind::NotConnected
-                )
-            })
-        {
+        if self.rename.is_some() && result.as_ref().is_err_and(transport_closed) {
             return Ok(ForwardExit::Disconnected);
         }
         result
@@ -2121,6 +2112,7 @@ fn transport_closed(error: &io::Error) -> bool {
         error.kind(),
         io::ErrorKind::BrokenPipe
             | io::ErrorKind::ConnectionReset
+            | io::ErrorKind::ConnectionAborted
             | io::ErrorKind::NotConnected
             | io::ErrorKind::UnexpectedEof
     )
@@ -5134,6 +5126,50 @@ mod tests {
         );
         drop(second_frontend);
         drain.join().unwrap();
+    }
+
+    #[test]
+    fn incomplete_client_frame_disconnects_without_terminating_named_panes() {
+        let name =
+            crate::session::SessionName::new(format!("truncated-{}", std::process::id())).unwrap();
+        let endpoint = SessionEndpoint::bind(&name).unwrap();
+        let mut session = TerminalSession::new(
+            OsStr::new("/bin/sh"),
+            24,
+            80,
+            Some(name.as_str()),
+            crate::config::Notifications::default(),
+            crate::config::DEFAULT_SCROLLBACK_LINES,
+            crate::config::Shortcuts::default(),
+        )
+        .unwrap();
+        session.rename = Some(endpoint.rename_identity());
+        let pid = session
+            .windows
+            .active()
+            .unwrap()
+            .content()
+            .active()
+            .shell()
+            .id();
+        let (mut client, mut frontend) = socket_frontend(24, 80);
+        client.stream_mut().write_all(&[0, 0]).unwrap();
+        client
+            .stream_mut()
+            .shutdown(std::net::Shutdown::Write)
+            .unwrap();
+        assert_eq!(
+            session.attach(&mut frontend, &test_signals()).unwrap(),
+            ForwardExit::Disconnected
+        );
+        let pane = session
+            .windows
+            .active_mut()
+            .unwrap()
+            .content_mut()
+            .active_mut();
+        assert_eq!(pane.shell().id(), pid);
+        assert!(pane.parts_mut().0.try_wait().unwrap().is_none());
     }
 
     fn drain_client_output(mut client: ClientPeer) -> thread::JoinHandle<Vec<ServerMessage>> {

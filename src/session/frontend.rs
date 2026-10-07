@@ -86,7 +86,12 @@ impl ServerFrontend {
         let mut bytes = [0; READ_BYTES];
         let messages = match self.peer.stream_mut().read(&mut bytes) {
             Ok(0) => {
-                self.peer.finish()?;
+                // A client may close while a frame is only partly written.
+                // Attribute this to the lost connection, so a named server
+                // can keep its panes alive instead of treating it as a model error.
+                self.peer
+                    .finish()
+                    .map_err(|error| io::Error::new(io::ErrorKind::UnexpectedEof, error))?;
                 self.state = ConnectionState::Disconnected;
                 return Ok(self.state);
             }
