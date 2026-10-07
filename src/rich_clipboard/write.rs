@@ -3,8 +3,9 @@
 use super::{PREFIX, Packet};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use std::{
-    fs::File,
+    fs::{File, Permissions},
     io::{Read, Seek, SeekFrom, Write},
+    os::unix::fs::PermissionsExt,
 };
 
 const MAX_BYTES: u64 = 64 * 1024 * 1024;
@@ -83,8 +84,13 @@ impl Assembler {
                 std::str::from_utf8(&data).map_err(|_| "EINVAL")?;
             }
         }
+        let file = tempfile::tempfile().map_err(|_| "EIO")?;
+        // Linux's anonymous tempfile path inherits the process umask. Restrict
+        // the empty spool before any clipboard payload can be written to it.
+        file.set_permissions(Permissions::from_mode(0o600))
+            .map_err(|_| "EIO")?;
         Ok(Self {
-            file: tempfile::tempfile().map_err(|_| "EIO")?,
+            file,
             mimes: Vec::new(),
             aliases: Vec::new(),
             decoder: Decoder::default(),
