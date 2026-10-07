@@ -111,6 +111,8 @@ with tempfile.TemporaryDirectory(prefix="rustmux-attach-create-") as temporary:
         client = None
         snapshot.write_bytes(saved)
         run("kill", name)
+        assert not endpoint.with_suffix(".pid").exists()
+        assert not endpoint.with_suffix(".lock").exists()
 
         # A saved-only entry is restored explicitly only with --create. Changed
         # attachment dimensions keep old history off the fresh live screen.

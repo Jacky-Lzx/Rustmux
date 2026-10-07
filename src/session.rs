@@ -163,10 +163,13 @@ impl Drop for SessionEndpoint {
             .map(|metadata| (metadata.dev(), metadata.ino()) == self.identity)
             .unwrap_or(false);
         if owns_path {
-            let _ = fs::remove_file(&path);
             let _ = fs::remove_file(path.with_extension("lock"));
             let _ = fs::remove_file(path.with_extension("pid"));
             let _ = fs::remove_file(path.with_extension("last"));
+            // `kill` waits for the socket to disappear before a caller can
+            // recreate this name. Publish that disappearance last, so an old
+            // server cannot remove the replacement's freshly created leases.
+            let _ = fs::remove_file(&path);
         }
     }
 }

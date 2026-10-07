@@ -101,7 +101,10 @@ with tempfile.TemporaryDirectory(prefix="rustmux-display-") as directory:
         s.send(b"?")
         click_label(s, b"Split right")
         expect_footer(s, b"LOCKED")
+        wait(s, lambda: body(s).count(b"RUSTMUX_READY>") == 2)
         s.send(b"exit 0\n")
+        wait(s, lambda: body(s).count(b"RUSTMUX_READY>") == 1 and
+             b"Shortcut Help" not in body(s))
         # Tab's help action originally switches the input to Locked; retain its origin.
         s.send(b"\x02T?")
         wait(s, lambda: b"Shortcut Help" in body(s) and b"New window" in body(s))

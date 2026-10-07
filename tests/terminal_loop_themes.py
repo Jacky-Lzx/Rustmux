@@ -122,8 +122,11 @@ with tempfile.TemporaryDirectory(prefix="rustmux-themes-") as temporary:
         client.write_text("[theme]\npreset='bad'\n")
         expect_raw(b"Config reload failed", background(49, 50, 51))
         session.send(b"\x1b")  # Clear search.
-        expect_raw(b"Session Manager")
-        session.send(b"\x1b")  # Leave picker.
+        # Wait for navigation to replace the search editor, not a title that
+        # can also arrive in an outstanding error/theme redraw. A second Esc
+        # before the first one's decoding timeout can form one escape sequence.
+        expect_raw(b"<Ctrl-A> Save", b"<k/Up> Up")
+        session.send(b"q")  # Leave picker after search editing has ended.
         session.expect(b"KEEP_preserved")
         detach()
         assert status()["settings"]["theme"]["background"] == "#1e1e2e"
