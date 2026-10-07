@@ -137,7 +137,11 @@ with tempfile.TemporaryDirectory(prefix="rustmux-rename-") as root:
                 fcntl.flock(lock, fcntl.LOCK_UN)
             # Reload keeps editor text; d/r/a remain text, even when bound.
             settings.write_text('save_scrollback = true\n[session_manager]\nrename=["r"]\n')
-            time.sleep(0.65)
+            # Keep consuming terminal output during reload; a full picker repaint
+            # can fill a macOS PTY before its bounded write deadline.
+            reload_until = time.monotonic() + 0.65
+            while time.monotonic() < reload_until:
+                session.read(0.01)
             session.send(b"\x7f" * len(new) + b"drar")
             expect(session, b"Rename session: drar_")
             replace_name(session, "drar", new)

@@ -20,7 +20,7 @@ PALETTE += [(index * 13 % 256, index * 31 % 256, index * 7 % 256) for index in r
 FOREGROUND, BACKGROUND, CURSOR = (205, 214, 244), (30, 30, 46), (18, 52, 86)
 
 
-def reply_to_probe(session, palette=PALETTE, ready_marker=b"RUSTMUX_READY>", reply_delay=0):
+def reply_to_probe(session, palette=PALETTE, ready_marker=b"RUSTMUX_READY>", reply_delay=0, prefix_delay=0):
     deadline = time.monotonic() + 3
     while b"\x1b]12;?\x1b\\" not in session.output:
         session.read()
@@ -39,6 +39,14 @@ def reply_to_probe(session, palette=PALETTE, ready_marker=b"RUSTMUX_READY>", rep
         reply.extend(f"\x1b]{code};rgb:{value}\x07".encode())
     # An unsupported graphics reply still completes the shared FIFO barrier.
     reply.extend(b"\x1b[?1;2c")
+    if prefix_delay:
+        # Let the upstream rich-clipboard framer expire its isolated Escape.
+        # It must still reach color discovery instead of the child's keyboard.
+        session.send(reply[:1])
+        delayed_until = time.monotonic() + prefix_delay
+        while time.monotonic() < delayed_until:
+            session.read(0.01)
+        reply = reply[1:]
     session.send(reply)
     session.expect(ready_marker)
 
@@ -195,7 +203,7 @@ os.write(1, b"\\r\\nCHILD_COLORS_OK\\r\\n")
         changed[1] = (11, 22, 33)
         changed[2] = (44, 55, 66)
         session = Session(arguments=("attach", name))
-        reply_to_probe(session, changed)
+        reply_to_probe(session, changed, prefix_delay=0.12)
         raw = printf(session, "\\033[31mKEPT_OVERRIDE\\033[32mNEW_THEME\\033[0m\\n", b"NEW_THEME")
         assert_color(raw, b"KEPT_OVERRIDE", foreground=(1, 2, 3))
         assert_color(raw, b"NEW_THEME", foreground=changed[2])

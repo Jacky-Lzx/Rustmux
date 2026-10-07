@@ -2362,13 +2362,16 @@ fn forward(
             &mut expired,
             &mut to_terminal,
         );
+        let old_input_len = input.len();
         input.extend(expired);
         rich_clipboard.drain(|owner, bytes| deliver_rich_clipboard(windows, owner, bytes));
-        let old_input_len = input.len();
+        // Released prefixes have already passed the clipboard framer, but still
+        // belong to the downstream color/graphics probes, not keyboard input.
+        let rich_input_len = input.len();
         if rich_clipboard.can_receive() {
             frontend.drain_input(&mut input);
         }
-        filter_rich_clipboard_input(&mut rich_clipboard, &mut input, old_input_len);
+        filter_rich_clipboard_input(&mut rich_clipboard, &mut input, rich_input_len);
         filter_color_probe_input(
             &mut color_probe,
             &mut input,
