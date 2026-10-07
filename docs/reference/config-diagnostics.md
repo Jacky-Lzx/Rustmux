@@ -72,7 +72,9 @@ independent `main` track. Diagnostics identify ignored top-level options,
 notification fields, binding modes, binding metadata other than `actions` and
 `display`, and entire bindings whose action chains are ignored by the real
 parser. This includes incomplete chains that would otherwise silently fall back
-to a default shortcut.
+to a default shortcut. `display` values and types are validated; see
+[Binding visibility](shortcut-help.md#binding-visibility) for supported values
+and overrides that keep existing actions.
 
 Without `--strict`, ignored options produce warnings and the command succeeds.
 With `--strict`, any warning gives exit status 1; the report is still available,

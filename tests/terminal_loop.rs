@@ -286,3 +286,8 @@ fn color_stack() {
 fn history_actions() {
     run_scenario("history_actions");
 }
+
+#[test]
+fn binding_display() {
+    run_scenario("binding_display");
+}

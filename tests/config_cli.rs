@@ -406,3 +406,50 @@ fn theme_diagnostics_validate_and_report_the_resolved_palette() {
         );
     }
 }
+
+#[test]
+fn strict_display_validation_accepts_supported_overrides_and_reports_ignored_actions() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    let config = root.join("display.toml");
+    let arguments = [
+        "check-config",
+        "--config",
+        config.to_str().unwrap(),
+        "--strict",
+        "--toml",
+    ];
+    fs::write(&config, "[keybinds.normal]\nc={display='help'}\n[keybinds.history]\ny={display='hidden'}\nH={actions=['show-help'],display='always'}").unwrap();
+    let output = command(root, &arguments);
+    assert!(output.status.success(), "{output:?}");
+    assert!(report(&output)["warnings"].as_array().unwrap().is_empty());
+    for mode in [
+        "locked", "normal", "pane", "resize", "move", "tab", "session", "history",
+    ] {
+        fs::write(
+            &config,
+            format!("[keybinds.{mode}]\nc={{display='sometimes'}}"),
+        )
+        .unwrap();
+        let output = command(root, &arguments);
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("display must be always, help or hidden")
+        );
+    }
+    fs::write(
+        &config,
+        "[keybinds.normal]\nc={actions=['future-action'],display='hidden'}",
+    )
+    .unwrap();
+    let output = command(root, &arguments);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        report(&output)["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning.as_str().unwrap().contains("ignored binding"))
+    );
+}

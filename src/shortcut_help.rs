@@ -16,6 +16,7 @@ const TWO_COLUMN_WIDTH: usize = 58;
 
 #[derive(Clone, Copy)]
 struct Command {
+    binding: Option<crate::config::BindingHint>,
     group: CommandGroup,
     key: &'static str,
     label: &'static str,
@@ -49,132 +50,154 @@ enum HelpRow {
 
 const COMMANDS: &[Command] = &[
     Command {
+        binding: None,
         group: CommandGroup::Window,
         key: "c",
         label: "New window",
         actions: &[(0, b'c')],
     },
     Command {
+        binding: None,
         group: CommandGroup::Window,
         key: "&",
         label: "Close window",
         actions: &[(0, b'&')],
     },
     Command {
+        binding: None,
         group: CommandGroup::Window,
         key: "n/p",
         label: "Switch window",
         actions: &[(0, b'n'), (2, b'p')],
     },
     Command {
+        binding: None,
         group: CommandGroup::Window,
         key: "Tab",
         label: "Last window",
         actions: &[(0, b'\t')],
     },
     Command {
+        binding: None,
         group: CommandGroup::Window,
         key: "1-0",
         label: "Select window",
         actions: &[(0, b'1'), (2, b'0')],
     },
     Command {
+        binding: None,
         group: CommandGroup::Window,
         key: ",",
         label: "Rename window",
         actions: &[(0, b',')],
     },
     Command {
+        binding: None,
         group: CommandGroup::Window,
         key: "</>",
         label: "Move window",
         actions: &[(0, b'<'), (2, b'>')],
     },
     Command {
+        binding: None,
         group: CommandGroup::Pane,
         key: "%/\"",
         label: "Split right/down",
         actions: &[(0, b'%'), (2, b'"')],
     },
     Command {
+        binding: None,
         group: CommandGroup::Pane,
         key: "h/j/k/l",
         label: "Focus pane",
         actions: &[(0, b'h'), (2, b'j'), (4, b'k'), (6, b'l')],
     },
     Command {
+        binding: None,
         group: CommandGroup::Pane,
         key: "C-h/j/k/l",
         label: "Resize pane",
         actions: &[(2, 8), (4, 10), (6, 11), (8, 12)],
     },
     Command {
+        binding: None,
         group: CommandGroup::Pane,
         key: "o",
         label: "Next pane",
         actions: &[(0, b'o')],
     },
     Command {
+        binding: None,
         group: CommandGroup::Pane,
         key: "R",
         label: "Respawn exited pane",
         actions: &[(0, b'R')],
     },
     Command {
+        binding: None,
         group: CommandGroup::Pane,
         key: "x",
         label: "Close pane",
         actions: &[(0, b'x')],
     },
     Command {
+        binding: None,
         group: CommandGroup::Pane,
         key: "Z",
         label: "Toggle zoom",
         actions: &[(0, b'Z')],
     },
     Command {
+        binding: None,
         group: CommandGroup::Pane,
         key: "z",
         label: "Restore pane",
         actions: &[(0, b'z')],
     },
     Command {
+        binding: None,
         group: CommandGroup::Pane,
         key: "{/}",
         label: "Swap pane",
         actions: &[(0, b'{'), (2, b'}')],
     },
     Command {
+        binding: None,
         group: CommandGroup::Pane,
         key: "!",
         label: "Pane to window",
         actions: &[(0, b'!')],
     },
     Command {
+        binding: None,
         group: CommandGroup::Pane,
         key: "m",
         label: "Move pane",
         actions: &[(0, b'm')],
     },
     Command {
+        binding: None,
         group: CommandGroup::History,
         key: "[",
         label: "Browse history",
         actions: &[(0, b'[')],
     },
     Command {
+        binding: None,
         group: CommandGroup::History,
         key: "E",
         label: "Edit history",
         actions: &[(0, b'E')],
     },
     Command {
+        binding: None,
         group: CommandGroup::History,
         key: "e",
         label: "Edit last output",
         actions: &[(0, b'e')],
     },
     Command {
+        binding: None,
         group: CommandGroup::General,
         key: "C-b",
         label: "Literal Ctrl-B",
@@ -183,6 +206,7 @@ const COMMANDS: &[Command] = &[
 ];
 
 const SESSION_COMMAND: Command = Command {
+    binding: None,
     group: CommandGroup::General,
     key: "C-w",
     label: "Session Manager",
@@ -190,6 +214,7 @@ const SESSION_COMMAND: Command = Command {
 };
 
 const SESSION_MODE_COMMAND: Command = Command {
+    binding: None,
     group: CommandGroup::General,
     key: "C-o",
     label: "Session mode",
@@ -214,11 +239,13 @@ pub(crate) enum HelpEvent {
     Continue,
     Redraw,
     Close,
+    Binding(crate::config::HistoryKey),
     Action(u8),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Target {
+    Binding(crate::config::HistoryKey),
     Action(u8),
     Previous,
     Next,
@@ -235,6 +262,7 @@ struct Hitbox {
 
 pub(crate) struct ShortcutHelp {
     session: bool,
+    mode: crate::config::BindingMode,
     shortcuts: crate::config::Shortcuts,
     page: usize,
     pages: usize,
@@ -251,8 +279,18 @@ impl ShortcutHelp {
         Self::with_shortcuts(session, crate::config::Shortcuts::default())
     }
 
+    #[cfg(test)]
     pub fn with_shortcuts(session: bool, shortcuts: crate::config::Shortcuts) -> Self {
+        Self::for_mode(session, shortcuts, crate::config::BindingMode::Normal)
+    }
+
+    pub fn for_mode(
+        session: bool,
+        shortcuts: crate::config::Shortcuts,
+        mode: crate::config::BindingMode,
+    ) -> Self {
         Self {
+            mode,
             session,
             shortcuts,
             page: 0,
@@ -306,6 +344,15 @@ impl ShortcutHelp {
             if matches!(sequence.as_slice(), b"\x1b[C" | b"\x1b[6~") {
                 return self.change_page(1);
             }
+            if self.dynamic()
+                && let Some(key) = crate::config::HistoryKey::from_sequence(&sequence)
+                && self
+                    .shortcuts
+                    .binding_label(self.mode, key, self.session)
+                    .is_some()
+            {
+                return HelpEvent::Binding(key);
+            }
             return self.mouse_event(&sequence);
         }
         if byte == 27 {
@@ -318,6 +365,18 @@ impl ShortcutHelp {
         }
         if matches!(byte, b'q' | b'?') {
             return HelpEvent::Close;
+        }
+        if self.dynamic() {
+            let key = crate::config::HistoryKey::Byte(byte);
+            // Hidden is presentation only; physical shortcuts stay actionable.
+            if self
+                .shortcuts
+                .binding_label(self.mode, key, self.session)
+                .is_some()
+            {
+                return HelpEvent::Binding(key);
+            }
+            return HelpEvent::Continue;
         }
         if byte == self.shortcuts.locked_entry_key() {
             return HelpEvent::Action(2);
@@ -474,7 +533,32 @@ impl ShortcutHelp {
         screen
     }
 
+    fn dynamic(&self) -> bool {
+        self.mode != crate::config::BindingMode::Normal || self.shortcuts.has_display(self.mode)
+    }
+
     fn commands(&self) -> Vec<Command> {
+        if self.dynamic() {
+            return self
+                .shortcuts
+                .hints(self.mode, self.session, true)
+                .into_iter()
+                .map(|binding| Command {
+                    group: match self.mode {
+                        crate::config::BindingMode::History => CommandGroup::History,
+                        crate::config::BindingMode::Pane
+                        | crate::config::BindingMode::Resize
+                        | crate::config::BindingMode::Move => CommandGroup::Pane,
+                        crate::config::BindingMode::Tab => CommandGroup::Window,
+                        _ => CommandGroup::General,
+                    },
+                    binding: Some(binding),
+                    key: "",
+                    label: binding.label,
+                    actions: &[],
+                })
+                .collect();
+        }
         let mut commands: Vec<_> = COMMANDS
             .iter()
             .copied()
@@ -568,6 +652,7 @@ impl ShortcutHelp {
 
     fn activate(&mut self, target: Target) -> HelpEvent {
         match target {
+            Target::Binding(key) => HelpEvent::Binding(key),
             Target::Action(byte) => HelpEvent::Action(byte),
             Target::Previous => self.change_page(-1),
             Target::Next => self.change_page(1),
@@ -629,6 +714,42 @@ impl ShortcutHelp {
             ..Style::default()
         };
         let key_width = KEY_WIDTH.min(width);
+        if let Some(binding) = command.binding {
+            let key = clipped(&binding.key.label(), key_width);
+            let key_style = Style {
+                foreground: rgb(theme.key),
+                bold: true,
+                ..panel
+            };
+            write_at(
+                screen,
+                row,
+                column,
+                &format!("{key:<key_width$}"),
+                key_style,
+                key_width,
+            );
+            if width > key_width {
+                write_at(
+                    screen,
+                    row,
+                    column + key_width,
+                    binding.label,
+                    Style {
+                        foreground: rgb(theme.secondary),
+                        ..panel
+                    },
+                    width - key_width,
+                );
+            }
+            self.hitboxes.push(Hitbox {
+                row: row + 1,
+                start: column + 1,
+                end: column + width + 1,
+                target: Target::Binding(binding.key),
+            });
+            return;
+        }
         let literal_prefix = command.actions == [(2, 2)];
         let prefix_label = format!(
             "Ctrl-{}",
@@ -791,6 +912,71 @@ mod tests {
             })
             .map(|cell| cell.character)
             .collect()
+    }
+
+    #[test]
+    fn configured_display_help_uses_visible_keys_but_keeps_hidden_actions() {
+        let shortcuts = crate::config::Shortcuts::test_from_config(
+            r#"
+clear_defaults=true
+[keybinds.locked]
+"Ctrl b"={actions=[{action="switch-mode",mode="normal"}]}
+[keybinds.normal]
+N={actions=["new-window",{action="switch-mode",mode="locked"}],display="help"}
+D={actions=["new-pane-down",{action="switch-mode",mode="locked"}],display="hidden"}
+H={actions=[{action="switch-mode",mode="history"}],display="always"}
+"#,
+        );
+        let mut help = ShortcutHelp::with_shortcuts(false, shortcuts);
+        let body = text(&help.overlay(&Screen::new(24, 80).unwrap()));
+        assert!(body.contains("New window"));
+        assert!(body.contains("History"));
+        assert!(!body.contains("Split down"));
+        assert_eq!(
+            help.feed(b'D', Instant::now()),
+            HelpEvent::Binding(crate::config::HistoryKey::Byte(b'D'))
+        );
+        let hitbox = help
+            .hitboxes
+            .iter()
+            .find(|hitbox| hitbox.target == Target::Binding(crate::config::HistoryKey::Byte(b'N')))
+            .unwrap();
+        let (row, column) = (hitbox.row, hitbox.start);
+        assert_eq!(
+            help.mouse_event(format!("\x1b[<0;{column};{row}M").as_bytes()),
+            HelpEvent::Continue
+        );
+        assert_eq!(
+            help.mouse_event(format!("\x1b[<0;{column};{row}m").as_bytes()),
+            HelpEvent::Binding(crate::config::HistoryKey::Byte(b'N'))
+        );
+    }
+
+    #[test]
+    fn modal_help_shows_its_own_bindings_and_arrows() {
+        let shortcuts = crate::config::Shortcuts::test_from_config(
+            r#"
+[keybinds.resize]
+up={actions=["resize-pane-up"],display="help"}
+x={actions=["resize-pane-left"],display="hidden"}
+"#,
+        );
+        let mut help = ShortcutHelp::for_mode(false, shortcuts, crate::config::BindingMode::Resize);
+        let body = text(&help.overlay(&Screen::new(24, 80).unwrap()));
+        assert!(body.contains("Resize up"));
+        assert!(!body.contains("Resize left"));
+        assert!(!body.contains("New window"));
+        for byte in b"\x1b[A".iter().take(2) {
+            assert_eq!(help.feed(*byte, Instant::now()), HelpEvent::Continue);
+        }
+        assert_eq!(
+            help.feed(b'A', Instant::now()),
+            HelpEvent::Binding(crate::config::HistoryKey::Up)
+        );
+        assert_eq!(
+            help.feed(b'x', Instant::now()),
+            HelpEvent::Binding(crate::config::HistoryKey::Byte(b'x'))
+        );
     }
 
     #[test]

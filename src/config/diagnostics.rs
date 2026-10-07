@@ -171,7 +171,15 @@ fn ignored_options(source: &str) -> Vec<String> {
                     mode.clone(),
                     toml::Value::Table(toml::Table::from_iter([(key.clone(), binding.clone())])),
                 )]));
-                if parse_keybinds(Some(&one), baseline).is_ok_and(|result| result == baseline) {
+                let display_only = binding.as_table().is_some_and(|fields| {
+                    fields.contains_key("display") && !fields.contains_key("actions")
+                });
+                if !display_only
+                    && parse_keybinds(Some(&one), baseline).is_ok_and(|mut result| {
+                        result.displays = baseline.displays;
+                        result == baseline
+                    })
+                {
                     warnings.push(format!("ignored binding keybinds.{mode}.{key:?}"));
                 }
                 if let Some(fields) = binding.as_table() {
@@ -351,6 +359,26 @@ mod tests {
         );
         assert!(ignored_options(&default_config()).is_empty());
     }
+    #[test]
+    fn display_metadata_does_not_hide_ignored_binding_values() {
+        assert!(ignored_options("[keybinds.normal]\nc={display='help'}").is_empty());
+        for value in [
+            "'new-window'",
+            "1",
+            "[]",
+            "{actions=['future'],display='hidden'}",
+        ] {
+            let source = format!("[keybinds.normal]\nc={value}");
+            parse_config(&source).unwrap();
+            assert!(
+                ignored_options(&source)
+                    .iter()
+                    .any(|warning| warning.contains("ignored binding")),
+                "{source}"
+            );
+        }
+    }
+
     #[test]
     fn reports_ignored_fields_modes_and_incomplete_action_chains() {
         let source = r#"

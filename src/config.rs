@@ -9,6 +9,8 @@ use std::time::Duration;
 use crate::layout::Direction;
 
 mod diagnostics;
+mod display;
+pub(crate) use display::{BindingDisplay, BindingHint, BindingMode};
 pub(crate) mod manager;
 pub(crate) mod reload;
 pub use diagnostics::{Inspection, Settings, default_config, inspect};
@@ -45,6 +47,35 @@ pub enum HistoryKey {
 }
 
 impl HistoryKey {
+    // Footer target codes are local UI metadata, never written to a child PTY.
+    pub(crate) fn footer_code(self) -> u8 {
+        match self {
+            Self::Byte(byte) => byte,
+            Self::Up => 128,
+            Self::Down => 129,
+            Self::Left => 130,
+            Self::Right => 131,
+            Self::PageUp => 132,
+            Self::PageDown => 133,
+            Self::Home => 134,
+            Self::End => 135,
+        }
+    }
+
+    pub(crate) fn from_footer_code(code: u8) -> Self {
+        match code {
+            128 => Self::Up,
+            129 => Self::Down,
+            130 => Self::Left,
+            131 => Self::Right,
+            132 => Self::PageUp,
+            133 => Self::PageDown,
+            134 => Self::Home,
+            135 => Self::End,
+            byte => Self::Byte(byte),
+        }
+    }
+
     pub(crate) fn sequence(self) -> &'static [u8] {
         match self {
             Self::Byte(_) => &[],
@@ -94,6 +125,7 @@ impl HistoryKey {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HistoryAction {
+    Help,
     Key(HistoryKey),
     SwitchMode(HistoryMode),
     EditHistory,
@@ -121,6 +153,7 @@ impl HistoryBinding {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PaneAction {
+    Help,
     Break,
     MovePreviousWindow,
     MoveNextWindow,
@@ -159,6 +192,7 @@ pub struct PaneArrowBinding {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ResizeAction {
+    Help,
     Resize(Direction),
     Normal,
     Pane,
@@ -178,6 +212,7 @@ pub struct ResizeBinding {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MoveAction {
+    Help,
     Move(Direction),
     Normal,
     Pane,
@@ -247,6 +282,7 @@ pub struct SessionBinding {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Shortcuts {
     clear_defaults: bool,
+    displays: [Option<(BindingMode, HistoryKey, BindingDisplay)>; 256],
     locked_enter: u8,
     locked_configured: bool,
     keys: [u8; 3],
@@ -283,6 +319,7 @@ impl Default for Shortcuts {
     fn default() -> Self {
         Self {
             clear_defaults: false,
+            displays: [None; 256],
             locked_enter: 2,
             locked_configured: false,
             keys: DEFAULT_SHORTCUT_KEYS,
@@ -476,7 +513,11 @@ impl Shortcuts {
         self.pane_bindings[..self.pane_binding_len]
             .iter()
             .flatten()
-            .filter(|binding| binding.action == action)
+            .filter(|binding| {
+                binding.action == action
+                    && self.display(BindingMode::Pane, HistoryKey::Byte(binding.key))
+                        == BindingDisplay::Always
+            })
             .max_by_key(|binding| binding.preferred)
             .map(|binding| binding.key)
     }
@@ -497,7 +538,11 @@ impl Shortcuts {
         self.resize_bindings[..self.resize_binding_len]
             .iter()
             .flatten()
-            .filter(|binding| binding.action == action)
+            .filter(|binding| {
+                binding.action == action
+                    && self.display(BindingMode::Resize, HistoryKey::Byte(binding.key))
+                        == BindingDisplay::Always
+            })
             .max_by_key(|binding| binding.preferred)
             .map(|binding| binding.key)
     }
@@ -518,7 +563,11 @@ impl Shortcuts {
         self.move_bindings[..self.move_binding_len]
             .iter()
             .flatten()
-            .filter(|binding| binding.action == action)
+            .filter(|binding| {
+                binding.action == action
+                    && self.display(BindingMode::Move, HistoryKey::Byte(binding.key))
+                        == BindingDisplay::Always
+            })
             .max_by_key(|binding| binding.preferred)
             .map(|binding| binding.key)
     }
@@ -539,7 +588,11 @@ impl Shortcuts {
         self.tab_bindings[..self.tab_binding_len]
             .iter()
             .flatten()
-            .filter(|binding| binding.action == action)
+            .filter(|binding| {
+                binding.action == action
+                    && self.display(BindingMode::Tab, HistoryKey::Byte(binding.key))
+                        == BindingDisplay::Always
+            })
             .max_by_key(|binding| binding.preferred)
             .map(|binding| binding.key)
     }
@@ -556,7 +609,11 @@ impl Shortcuts {
         self.session_bindings[..self.session_binding_len]
             .iter()
             .flatten()
-            .filter(|binding| binding.action == action)
+            .filter(|binding| {
+                binding.action == action
+                    && self.display(BindingMode::Session, HistoryKey::Byte(binding.key))
+                        == BindingDisplay::Always
+            })
             .max_by_key(|binding| binding.preferred)
             .map(|binding| binding.key)
     }
@@ -1251,6 +1308,7 @@ fn parse_keybinds(
             }
         }
     }
+    display::parse_displays(keybinds, &mut shortcuts)?;
     validate_shortcuts(shortcuts)?;
     parse_pane_bindings(keybinds.get("pane"), &mut shortcuts)?;
     parse_resize_bindings(keybinds.get("resize"), &mut shortcuts)?;
@@ -1258,6 +1316,29 @@ fn parse_keybinds(
     parse_tab_bindings(keybinds.get("tab"), &mut shortcuts)?;
     parse_session_bindings(keybinds.get("session"), &mut shortcuts)?;
     parse_history_bindings(keybinds.get("history"), &mut shortcuts)?;
+    for (name, bindings) in keybinds {
+        for (key, binding) in bindings
+            .as_table()
+            .into_iter()
+            .flat_map(|table| table.iter())
+        {
+            if binding.get("actions").is_none() && binding.get("display").is_some() {
+                let Some(mode) = display::mode(name) else {
+                    continue;
+                };
+                let active = shortcuts.displays.iter().flatten().any(|(m, k, _)| {
+                    *m == mode
+                        && display::parse_display_key(key) == Some(*k)
+                        && shortcuts.binding_label(mode, *k, true).is_some()
+                });
+                if !active {
+                    return Err(format!(
+                        "keybinds.{name}.{key}.display requires an existing supported binding"
+                    ));
+                }
+            }
+        }
+    }
     let locked_enter = shortcuts.locked_entry_key();
     if shortcuts.enters_history_locked(locked_enter) {
         return Err(
@@ -1348,6 +1429,9 @@ fn parse_history_bindings(
     };
     let table = value.as_table().ok_or("keybinds.history must be a table")?;
     for (name, binding) in table {
+        if binding.get("actions").is_none() && binding.get("display").is_some() {
+            continue;
+        }
         let key = match name.as_str() {
             "up" => HistoryKey::Up,
             "down" => HistoryKey::Down,
@@ -1392,6 +1476,10 @@ fn parse_history_bindings(
                     HistoryAction::SwitchMode(mode)
                 } else {
                     let key = match single.as_str() {
+                        Some("show-help") => {
+                            binding.actions[index] = Some(HistoryAction::Help);
+                            continue;
+                        }
                         Some("edit-history") => {
                             binding.actions[index] = Some(HistoryAction::EditHistory);
                             continue;
@@ -1491,6 +1579,7 @@ fn parse_pane_bindings(
         };
         let parsed = match actions.as_slice() {
             [single] => match single.as_str() {
+                Some("show-help") => Some((PaneAction::Help, true)),
                 Some("focus-left") => Some((PaneAction::FocusLeft, true)),
                 Some("focus-down") => Some((PaneAction::FocusDown, true)),
                 Some("focus-up") => Some((PaneAction::FocusUp, true)),
@@ -1577,6 +1666,7 @@ fn parse_resize_bindings(
             continue;
         };
         let action = match single.as_str() {
+            Some("show-help") => Some(ResizeAction::Help),
             Some("resize-pane-left") => Some(ResizeAction::Resize(Direction::Left)),
             Some("resize-pane-down") => Some(ResizeAction::Resize(Direction::Down)),
             Some("resize-pane-up") => Some(ResizeAction::Resize(Direction::Up)),
@@ -1638,6 +1728,7 @@ fn parse_move_bindings(
             continue;
         };
         let action = match single.as_str() {
+            Some("show-help") => Some(MoveAction::Help),
             Some("move-pane-left") => Some(MoveAction::Move(Direction::Left)),
             Some("move-pane-down") => Some(MoveAction::Move(Direction::Down)),
             Some("move-pane-up") => Some(MoveAction::Move(Direction::Up)),

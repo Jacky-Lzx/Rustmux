@@ -496,6 +496,53 @@ fn session_hint_key(hint: ShortcutHint, shortcuts: crate::config::Shortcuts) -> 
         .join("/")
 }
 
+impl FooterMode {
+    pub(crate) fn binding_mode(self) -> crate::config::BindingMode {
+        use crate::config::BindingMode;
+        match self {
+            Self::Locked => BindingMode::Locked,
+            Self::Normal => BindingMode::Normal,
+            Self::Pane => BindingMode::Pane,
+            Self::Resize => BindingMode::Resize,
+            Self::Move => BindingMode::Move,
+            Self::Tab => BindingMode::Tab,
+            Self::Session => BindingMode::Session,
+        }
+    }
+}
+
+fn displayed_hints(
+    columns: usize,
+    mode: FooterMode,
+    session: bool,
+    shortcuts: crate::config::Shortcuts,
+) -> Vec<crate::config::BindingHint> {
+    let mut remaining = columns
+        .saturating_sub(footer_mode_width(columns, mode))
+        .saturating_sub(1);
+    let mut hints = shortcuts.hints(mode.binding_mode(), session, false);
+    // Keep Help reachable on narrow terminals when it is configured for the footer.
+    let help = hints
+        .iter()
+        .position(|hint| hint.label == "Help")
+        .map(|index| hints.remove(index));
+    let help = help.filter(|hint| hint.key.label().width() + hint.label.width() + 6 <= remaining);
+    if let Some(hint) = help {
+        remaining -= hint.key.label().width() + hint.label.width() + 6;
+    }
+    let mut visible = Vec::new();
+    for hint in hints {
+        let width = hint.key.label().width() + hint.label.width() + 6;
+        if width > remaining {
+            continue;
+        }
+        visible.push(hint);
+        remaining -= width;
+    }
+    visible.extend(help);
+    visible
+}
+
 fn hint_key_for_mode(
     hint: ShortcutHint,
     mode: FooterMode,
@@ -709,6 +756,16 @@ pub(crate) fn footer_hitboxes_for_mode(
     bindings: crate::config::Shortcuts,
 ) -> Vec<(usize, usize, u8)> {
     let mut hitboxes = Vec::new();
+    if bindings.has_display(mode.binding_mode()) {
+        let hints = displayed_hints(columns, mode, session, bindings);
+        let mut used = footer_mode_width(columns, mode) + usize::from(!hints.is_empty());
+        for hint in hints {
+            let width = hint.key.label().width() + hint.label.width() + 6;
+            hitboxes.push((used + 1, used + width + 1, hint.key.footer_code()));
+            used += width;
+        }
+        return hitboxes;
+    }
     let shortcuts = footer_shortcuts(columns, mode, session, bindings);
     let mut used = footer_mode_width(columns, mode) + usize::from(!shortcuts.is_empty());
     for hint in shortcuts {
@@ -855,7 +912,14 @@ fn draw_footer(
     screen.position(row, 0);
     screen.erase_line(EraseMode::All);
     let mode_width = footer_mode_width(columns, mode);
-    let shortcuts = footer_shortcuts(columns, mode, session, bindings);
+    let display_hints = bindings
+        .has_display(mode.binding_mode())
+        .then(|| displayed_hints(columns, mode, session, bindings));
+    let shortcuts = if display_hints.is_some() {
+        Vec::new()
+    } else {
+        footer_shortcuts(columns, mode, session, bindings)
+    };
     screen.set_style(Style {
         foreground: rgb(theme.badge_text),
         background: match mode {
@@ -871,12 +935,19 @@ fn draw_footer(
         ..Style::default()
     });
     print(screen, &clipped(mode_label(mode), mode_width));
-    if !shortcuts.is_empty() {
+    if !shortcuts.is_empty()
+        || display_hints
+            .as_ref()
+            .is_some_and(|hints| !hints.is_empty())
+    {
         screen.set_style(bar_background_style(theme));
         print(screen, " ");
     }
     for hint in shortcuts {
         draw_shortcut_segment(theme, screen, hint, mode, bindings);
+    }
+    for hint in display_hints.into_iter().flatten() {
+        draw_key_label_segment(theme, screen, &hint.key.label(), hint.label);
     }
 }
 
@@ -1713,12 +1784,46 @@ c = { actions = ["new-window", { action = "switch-mode", mode = "locked" }] }
     }
 
     #[test]
+    fn footer_and_hitboxes_filter_help_and_hidden_keys_together() {
+        let shortcuts = crate::config::Shortcuts::test_from_config(
+            r#"
+clear_defaults=true
+[keybinds.locked]
+"Ctrl b"={actions=[{action="switch-mode",mode="normal"}]}
+[keybinds.normal]
+N={actions=["new-window",{action="switch-mode",mode="locked"}],display="help"}
+D={actions=["new-pane-down",{action="switch-mode",mode="locked"}],display="hidden"}
+H={actions=[{action="switch-mode",mode="history"}],display="always"}
+"#,
+        );
+        let child = Screen::new(1, 80).unwrap();
+        let view =
+            compose_with_shortcuts(&child, 3, None, &["shell".into()], 0, true, shortcuts).unwrap();
+        let footer: String = view
+            .row(2)
+            .unwrap()
+            .iter()
+            .map(|cell| cell.character)
+            .collect();
+        assert!(footer.contains("H"));
+        assert!(footer.contains("History"));
+        assert!(!footer.contains("New window"));
+        assert!(!footer.contains("Split down"));
+        let hitboxes = footer_hitboxes_with_shortcuts(80, true, false, shortcuts);
+        assert_eq!(hitboxes.len(), 1);
+        assert_eq!(hitboxes[0].2, b'H');
+        let column = footer.find('H').unwrap() + 1;
+        assert!(column >= hitboxes[0].0 && column < hitboxes[0].1);
+        assert!(footer_hitboxes_with_shortcuts(12, true, false, shortcuts).is_empty());
+    }
+
+    #[test]
     fn normal_footer_shows_configured_tab_entry_and_click_enters_mode() {
         let child = Screen::new(1, 80).unwrap();
         let configured = crate::config::Shortcuts::test_from_config(
             r#"
 [keybinds.normal]
-"Ctrl t" = { actions = [{ action = "switch-mode", mode = "tab" }], display = "help" }
+"Ctrl t" = { actions = [{ action = "switch-mode", mode = "tab" }], display = "always" }
 "#,
         );
         for session in [None, Some("work")] {

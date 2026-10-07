@@ -374,7 +374,8 @@ with tempfile.TemporaryDirectory(prefix="rustmux-tab-mode-") as directory:
         while b"TAB" not in s.physical_rows[-1]:
             s.read()
             assert time.monotonic() < deadline, s.physical_rows[-1]
-        assert b"Window" in s.physical_rows[-1], s.physical_rows[-1]
+        assert b"Previous window" in s.physical_rows[-1], s.physical_rows[-1]
+        assert b"Next window" in s.physical_rows[-1], s.physical_rows[-1]
         s.send(b"n")
         deadline = time.monotonic() + 3
         while b"LOCKED" not in s.physical_rows[-1]:

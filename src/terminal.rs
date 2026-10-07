@@ -965,6 +965,22 @@ enum InputMode {
     History,
 }
 
+impl InputMode {
+    fn binding_mode(self) -> crate::config::BindingMode {
+        use crate::config::BindingMode;
+        match self {
+            Self::Locked => BindingMode::Locked,
+            Self::Normal => BindingMode::Normal,
+            Self::Pane => BindingMode::Pane,
+            Self::Resize => BindingMode::Resize,
+            Self::Move => BindingMode::Move,
+            Self::Tab => BindingMode::Tab,
+            Self::Session => BindingMode::Session,
+            Self::History => BindingMode::History,
+        }
+    }
+}
+
 #[derive(Default)]
 struct WindowInput {
     mode: InputMode,
@@ -1254,7 +1270,47 @@ impl WindowInput {
                         .find(|(start, end, _)| column >= *start && column < *end)
                         .copied()
                     {
-                        if matches!(
+                        if self.shortcuts.has_display(footer_mode.binding_mode()) {
+                            self.mode = footer_mode;
+                            let key = crate::config::HistoryKey::from_footer_code(action);
+                            if let crate::config::HistoryKey::Byte(byte) = key {
+                                match footer_mode {
+                                    InputMode::Normal => self.shortcut(byte, output),
+                                    InputMode::Pane => self.pane_shortcut(byte, output),
+                                    InputMode::Resize => self.resize_shortcut(byte, output),
+                                    InputMode::Move => self.move_shortcut(byte, output),
+                                    InputMode::Tab => self.tab_shortcut(byte, output),
+                                    InputMode::Session => self.session_shortcut(byte, output),
+                                    InputMode::Locked
+                                        if self.shortcuts.enters_history_locked(byte) =>
+                                    {
+                                        output.push(WindowKey::History)
+                                    }
+                                    InputMode::Locked
+                                        if byte == self.shortcuts.locked_entry_key() =>
+                                    {
+                                        self.mode = InputMode::Normal
+                                    }
+                                    _ => {}
+                                }
+                            } else if let Some(direction) = match key {
+                                crate::config::HistoryKey::Up => Some(Direction::Up),
+                                crate::config::HistoryKey::Down => Some(Direction::Down),
+                                crate::config::HistoryKey::Left => Some(Direction::Left),
+                                crate::config::HistoryKey::Right => Some(Direction::Right),
+                                _ => None,
+                            } {
+                                match footer_mode {
+                                    InputMode::Pane => self.pane_arrow_shortcut(direction, output),
+                                    InputMode::Resize => {
+                                        self.resize_arrow_shortcut(direction, output)
+                                    }
+                                    InputMode::Move => self.move_arrow_shortcut(direction, output),
+                                    InputMode::Tab => self.tab_arrow_shortcut(direction, output),
+                                    _ => {}
+                                }
+                            }
+                        } else if matches!(
                             footer_mode,
                             InputMode::Pane
                                 | InputMode::Resize
@@ -1521,6 +1577,10 @@ impl WindowInput {
             InputMode::Locked
         };
         match action {
+            PaneAction::Help => {
+                self.mode = InputMode::Pane;
+                output.push(WindowKey::Help);
+            }
             PaneAction::Break => output.push(WindowKey::BreakPane),
             PaneAction::MovePreviousWindow => output.push(WindowKey::MovePanePreviousWindow),
             PaneAction::MoveNextWindow => output.push(WindowKey::MovePaneNextWindow),
@@ -1562,6 +1622,10 @@ impl WindowInput {
     fn resize_action(&mut self, action: crate::config::ResizeAction, output: &mut Vec<WindowKey>) {
         use crate::config::ResizeAction;
         match action {
+            ResizeAction::Help => {
+                self.mode = InputMode::Resize;
+                output.push(WindowKey::Help);
+            }
             ResizeAction::Resize(direction) => output.push(WindowKey::ResizePane(direction)),
             ResizeAction::History => output.push(WindowKey::History),
             ResizeAction::Normal => self.mode = InputMode::Normal,
@@ -1591,6 +1655,10 @@ impl WindowInput {
     fn move_action(&mut self, action: crate::config::MoveAction, output: &mut Vec<WindowKey>) {
         use crate::config::MoveAction;
         match action {
+            MoveAction::Help => {
+                self.mode = InputMode::Move;
+                output.push(WindowKey::Help);
+            }
             MoveAction::Move(direction) => output.push(WindowKey::MovePane(direction)),
             MoveAction::History => output.push(WindowKey::History),
             MoveAction::Normal => self.mode = InputMode::Normal,
@@ -2293,6 +2361,8 @@ fn forward(
     let mut prompt: Option<WindowPrompt> = None;
     let mut history: Option<crate::history_view::HistoryView> = None;
     let mut help: Option<crate::shortcut_help::ShortcutHelp> = None;
+    let mut help_return_mode = InputMode::Locked;
+    let mut help_action_mode = InputMode::Locked;
     let mut close_requested = None;
     let mut connection = ConnectionState::Attached;
     let mut session_manager_requested = false;
@@ -2700,6 +2770,15 @@ fn forward(
             let view = history.as_mut().unwrap();
             let exited = view.expire_escape();
             let editor = view.take_editor();
+            if view.take_help() {
+                help_return_mode = InputMode::History;
+                help_action_mode = InputMode::History;
+                help = Some(crate::shortcut_help::ShortcutHelp::for_mode(
+                    session_name.is_some(),
+                    shortcuts,
+                    crate::config::BindingMode::History,
+                ));
+            }
             if let Some(copy) = view.take_copy() {
                 rich_clipboard.cancel(&mut to_terminal, |owner, bytes| {
                     deliver_rich_clipboard(windows, owner, bytes)
@@ -2719,7 +2798,11 @@ fn forward(
             .is_some_and(|help| help.escape_expired(Instant::now()))
         {
             help = None;
-            keys = WindowInput::default();
+            keys = WindowInput {
+                mode: help_return_mode,
+                shortcuts,
+                ..WindowInput::default()
+            };
             renderer.invalidate();
             force_redraw = true;
         }
@@ -2749,6 +2832,7 @@ fn forward(
                 size.ws_ypixel,
             );
             if history.take().is_some() {
+                help = None;
                 input.clear();
                 keys = WindowInput::default();
             }
@@ -3263,7 +3347,9 @@ fn forward(
         // Decode in input order. Bytes preceding a switch remain queued for the
         // old child; following bytes target the newly selected one.
         while close_requested.is_none() && !input.is_empty() {
-            if let Some(view) = &mut history {
+            if help.is_none()
+                && let Some(view) = &mut history
+            {
                 // Finish any pending frame or OSC before accepting more history
                 // input. Repeated copy keys cannot grow the output queue unbounded.
                 if !to_terminal.is_empty() {
@@ -3272,6 +3358,16 @@ fn forward(
                 let exited = view.feed(input.pop_front().unwrap());
                 let copy = view.take_copy();
                 let editor = view.take_editor();
+                if view.take_help() {
+                    help_return_mode = InputMode::History;
+                    help_action_mode = InputMode::History;
+                    help = Some(crate::shortcut_help::ShortcutHelp::for_mode(
+                        session_name.is_some(),
+                        shortcuts,
+                        crate::config::BindingMode::History,
+                    ));
+                    renderer.invalidate();
+                }
                 if exited {
                     keys = history_exit_input(view, shortcuts);
                     history = None;
@@ -3387,9 +3483,31 @@ fn forward(
                         force_redraw = true;
                         continue;
                     }
+                    crate::shortcut_help::HelpEvent::Binding(key) => {
+                        help = None;
+                        keys = WindowInput {
+                            mode: help_action_mode,
+                            shortcuts,
+                            ..WindowInput::default()
+                        };
+                        let sequence = match key {
+                            crate::config::HistoryKey::Byte(byte) => vec![byte],
+                            _ => key.sequence().to_vec(),
+                        };
+                        for byte in sequence.into_iter().rev() {
+                            input.push_front(byte);
+                        }
+                        renderer.invalidate();
+                        force_redraw = true;
+                        continue;
+                    }
                     crate::shortcut_help::HelpEvent::Close => {
                         help = None;
-                        keys = WindowInput::default();
+                        keys = WindowInput {
+                            mode: help_return_mode,
+                            shortcuts,
+                            ..WindowInput::default()
+                        };
                         renderer.invalidate();
                         force_redraw = true;
                         continue;
@@ -3488,6 +3606,7 @@ fn forward(
                 keys.separator_hitboxes = set.layout().separator_hitboxes();
             }
             actions.clear();
+            let action_mode = keys.mode;
             if let Some(action) = help_action {
                 actions.push(action);
             } else {
@@ -3531,9 +3650,17 @@ fn forward(
                         detach_requested = true;
                     }
                     WindowKey::Help => {
-                        help = Some(crate::shortcut_help::ShortcutHelp::with_shortcuts(
+                        let mode = action_mode.binding_mode();
+                        help_action_mode = action_mode;
+                        help_return_mode = if mode != crate::config::BindingMode::Normal {
+                            action_mode
+                        } else {
+                            InputMode::Locked
+                        };
+                        help = Some(crate::shortcut_help::ShortcutHelp::for_mode(
                             session_name.is_some(),
                             shortcuts,
+                            mode,
                         ));
                         keys = WindowInput::default();
                         renderer.invalidate();
@@ -5863,6 +5990,57 @@ w = { actions = ["switch-session", { action = "switch-mode", mode = "locked" }] 
         }
         assert_eq!(output, [WindowKey::SessionManager]);
         assert_eq!(keys.mode, InputMode::Locked);
+    }
+
+    #[test]
+    fn displayed_footer_dispatches_physical_remapped_keys_and_arrows() {
+        let shortcuts = crate::config::Shortcuts::test_from_config(
+            r#"
+clear_defaults=true
+[keybinds.locked]
+"Ctrl b"={actions=[{action="switch-mode",mode="normal"}]}
+[keybinds.normal]
+N={actions=["new-window",{action="switch-mode",mode="locked"}],display="always"}
+D={actions=["new-pane-down",{action="switch-mode",mode="locked"}],display="hidden"}
+[keybinds.pane]
+up={actions=["focus-up"],display="always"}
+"#,
+        );
+        let mut keys = WindowInput {
+            mode: InputMode::Normal,
+            shortcuts,
+            footer_row: Some(24),
+            footer_hitboxes: crate::chrome::footer_hitboxes_for_mode(
+                80,
+                FooterMode::Normal,
+                false,
+                shortcuts,
+            ),
+            ..WindowInput::default()
+        };
+        let column = keys.footer_hitboxes[0].0;
+        let mut actions = Vec::new();
+        for byte in format!("\x1b[<0;{column};24M").bytes() {
+            keys.feed(byte, &mut actions);
+        }
+        assert_eq!(actions, vec![WindowKey::Create]);
+        assert_eq!(keys.mode, InputMode::Locked);
+        for byte in format!("\x1b[<0;{column};24m").bytes() {
+            keys.feed(byte, &mut actions);
+        }
+        actions.clear();
+        keys.mode = InputMode::Normal;
+        keys.feed(b'D', &mut actions);
+        assert_eq!(actions, vec![WindowKey::Split(SplitAxis::Rows)]);
+        actions.clear();
+        keys.mode = InputMode::Pane;
+        keys.footer_hitboxes =
+            crate::chrome::footer_hitboxes_for_mode(80, FooterMode::Pane, false, shortcuts);
+        let column = keys.footer_hitboxes[0].0;
+        for byte in format!("\x1b[<0;{column};24M").bytes() {
+            keys.feed(byte, &mut actions);
+        }
+        assert_eq!(actions, vec![WindowKey::FocusPane(Direction::Up)]);
     }
 
     #[test]

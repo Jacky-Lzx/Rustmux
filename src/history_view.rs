@@ -132,6 +132,7 @@ pub(crate) fn export_text(source: &Screen) -> String {
 }
 
 pub(crate) struct HistoryView {
+    help_requested: bool,
     shortcuts: Shortcuts,
     session_available: bool,
     mode_pending: Option<HistoryMode>,
@@ -171,6 +172,7 @@ impl HistoryView {
             return None;
         }
         Some(Self {
+            help_requested: false,
             shortcuts: Shortcuts::default(),
             session_available: false,
             mode_pending: None,
@@ -211,6 +213,14 @@ impl HistoryView {
         self.last_output = output.filter(|text| !text.is_empty());
     }
 
+    pub fn take_help(&mut self) -> bool {
+        let requested = std::mem::take(&mut self.help_requested);
+        if requested {
+            self.drag_scroll = None;
+        }
+        requested
+    }
+
     pub fn take_editor(&mut self) -> Option<(&'static str, String)> {
         match self.editor_pending.take()? {
             HistoryAction::EditHistory => Some(("history", export_text(&self.source))),
@@ -229,6 +239,7 @@ impl HistoryView {
         let mut edit = None;
         for action in binding.actions.into_iter().flatten() {
             match action {
+                HistoryAction::Help => self.help_requested = true,
                 HistoryAction::SwitchMode(target) => mode = Some(target),
                 HistoryAction::EditHistory => edit = Some(action),
                 HistoryAction::EditLastOutput | HistoryAction::CopyLastOutput => {
@@ -283,6 +294,22 @@ impl HistoryView {
     }
 
     pub fn footer_hints(&self) -> Vec<(String, String)> {
+        if self.editor.is_none()
+            && self
+                .shortcuts
+                .has_display(crate::config::BindingMode::History)
+        {
+            return self
+                .shortcuts
+                .hints(
+                    crate::config::BindingMode::History,
+                    self.session_available,
+                    false,
+                )
+                .into_iter()
+                .map(|hint| (hint.key.label(), hint.label.into()))
+                .collect();
+        }
         let hints = if self.editor.is_some() {
             SEARCH_FOOTER_HINTS
         } else if self.copy_status.is_some() {
@@ -343,6 +370,7 @@ impl HistoryView {
                 .iter()
                 .flatten()
                 .find_map(|action| match action {
+                    HistoryAction::Help => Some("Help"),
                     HistoryAction::EditHistory => Some("Edit history"),
                     HistoryAction::EditLastOutput => Some("Edit output"),
                     HistoryAction::CopyLastOutput => Some("Copy output"),
@@ -509,7 +537,12 @@ impl HistoryView {
         if let Some(editor) = &self.editor {
             return editor.label(columns);
         }
-        if self.shortcuts.clear_defaults() || self.shortcuts.history_bindings().next().is_some() {
+        if self.shortcuts.clear_defaults()
+            || self.shortcuts.history_bindings().next().is_some()
+            || self
+                .shortcuts
+                .has_display(crate::config::BindingMode::History)
+        {
             let (status, _) = self.footer_status(columns);
             let hints = self
                 .footer_hints()
@@ -1489,6 +1522,37 @@ impl HistoryView {
 mod tests {
     use super::*;
     use crate::parser::Parser;
+
+    #[test]
+    fn history_display_only_and_help_do_not_change_search_or_hidden_copy() {
+        let mut view = HistoryView::new(&Screen::new(4, 40).unwrap()).unwrap();
+        let shortcuts = Shortcuts::test_from_config(
+            r#"
+[keybinds.history]
+H={actions=["show-help"],display="always"}
+y={actions=["copy-history"],display="hidden"}
+"/"={display="help"}
+"#,
+        );
+        view.set_shortcuts(shortcuts, false);
+        let hints = view.footer_hints();
+        assert!(
+            hints
+                .iter()
+                .any(|(key, label)| key == "H" && label == "Help")
+        );
+        assert!(!hints.iter().any(|(key, _)| key == "y" || key == "/"));
+        assert!(!view.feed(b'H'));
+        assert!(view.take_help());
+        assert!(!view.feed(b'/'));
+        assert!(!view.feed(b'H'));
+        assert!(!view.take_help());
+        assert!(view.editor.is_some());
+        assert!(!view.feed(3));
+        assert!(view.editor.is_none());
+        assert!(!view.feed(b'y'));
+        assert!(view.take_copy().is_some());
+    }
 
     #[test]
     fn snapshot_preserves_dynamic_colors() {
