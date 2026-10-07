@@ -2426,7 +2426,6 @@ fn forward(
             drag_source_view(windows, *outer_rows, *cell_pixels),
             |owner| rich_clipboard_live(windows, owner),
         );
-        drag_source.drain(|owner, bytes| deliver_rich_clipboard(windows, owner, bytes));
         drag_source.pump(&mut to_terminal, LIMIT);
         file_transfer.drain(|owner, bytes| deliver_rich_clipboard(windows, owner, bytes));
         file_transfer.pump(Instant::now(), &mut to_terminal, LIMIT);
@@ -3820,6 +3819,13 @@ fn forward(
                     force_redraw = true;
                 }
             }
+        }
+        // Yazi chooses its drag component on mouse press. A frontend read can
+        // contain both that press and the following OSC 72 gesture; deliver
+        // queued keyboard/pointer input before the extracted drag notification.
+        // If input is blocked on the child's queue, retain the notification too.
+        if input.is_empty() {
+            drag_source.drain(|owner, bytes| deliver_rich_clipboard(windows, owner, bytes));
         }
         if to_terminal.is_empty()
             && let Some(name) = renamed_notice.as_deref()

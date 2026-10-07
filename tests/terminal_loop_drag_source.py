@@ -106,14 +106,17 @@ while True:
         policy(True);support();clear()
         command("A",packet("t=o:x=1:i=7",b"1:machine-A"));done("A")
         command("B",packet("t=q:i=9"),packet("t=q:i=9"));done("B")
-        command("B",packet("t=o:x=1:i=7",b"1:machine-B"));done("B");b=outer("o",x=1)
+        command("B",b"\x1b[?1000h\x1b[?1006h"+packet("t=o:x=1:i=7",b"1:machine-B"));done("B");b=outer("o",x=1)
         # A gesture outside the active pane never reaches either child. The next
         # command checks there was no stray input before the valid gesture.
         client.send(packet(f"t=o:i={b}:x=0:y=3:X=0:Y=60"));client.read(0.02)
-        command("B",expected=packet("t=o:x=3:y=2:X=35:Y=47:i=7"))
-        gesture=packet(f"t=o:i={b}:x=44:y=4:X=445:Y=87")
-        client.send(gesture[:-1]);client.read(0.02);assert record("B")["state"]!="done"
-        client.send(b"\\");done("B")
+        command("B",expected=b"\x1b[<0;4;3M"+packet("t=o:x=3:y=2:X=35:Y=47:i=7"))
+        # Kitty's initial physical gesture has no ID: registration does not
+        # set the host's client ID until the child returns its MIME offer.
+        gesture=packet("t=o:x=44:y=4:X=445:Y=87")
+        # One frontend batch must deliver the translated mouse press before
+        # its extracted notification, as required by real Yazi's component.
+        client.send(b"\x1b[<0;45;5M"+gesture);done("B")
         # Pre-send binary data in chunks with metadata only in the first packet.
         payload=bytes(range(256))*1024;source=root/"source.bin";source.write_bytes(payload)
         encoded=base64.b64encode(source.read_bytes());wire=packet("t=o:o=1:i=7",b"application/octet-stream")
@@ -125,7 +128,9 @@ while True:
         captured=b"".join(data for fields,data in packets() if fields.get(b"t")==b"p" or b"t" not in fields)
         received=root/"host.bin";received.write_bytes(base64.b64decode(captured,validate=True));assert received.read_bytes()==source.read_bytes()
         assert all(fields[b"i"]==b.encode() for fields,data in packets())
-        client.send(packet("t=E:i="+b,b"OK"));done("B")
+        reply=packet("t=E:i="+b,b"OK")
+        client.send(reply[:-1]);client.read(0.02);assert record("B")["state"]!="done"
+        client.send(b"\\");done("B")
         # Data requests remain pinned while focus/window/geometry change.
         run("select-pane","-p",left);run("new-window","--name","target")
         target=next(p["id"] for p in tomllib.loads(run("list-panes","--toml"))["panes"] if p["id"] not in (left,right))
@@ -146,7 +151,8 @@ while True:
         assert not any(fields.get(b"t")==b"o" for fields,_ in packets())
         command("A",packet("t=o:x=1:i=7"));done("A");fresh=outer("o",x=1);assert fresh!=a
         command("A",expected=packet("t=o:x=3:y=2:X=35:Y=47:i=7"))
-        client.send(packet(f"t=o:i={a}:x=4:y=4:X=45:Y=87")+packet(f"t=o:i={fresh}:x=4:y=4:X=45:Y=87"));done("A")
+        # A later physical gesture can carry the previous MIME offer's ID.
+        client.send(packet(f"t=o:i={a}:x=4:y=4:X=45:Y=87"));done("A")
         command("A",packet("t=o:o=1:i=7",b"text/plain"));done("A")
         command("A",expected=packet("t=E:i=7",b"ECANCELED"));raw=detach();done("A")
         assert packet("t=E:y=-1:i="+fresh) in raw and packet("t=o:x=2:i="+fresh) in raw
@@ -156,7 +162,7 @@ while True:
         run("respawn-pane","-p",left,"--command",launch("R"));wait(lambda:record("R"));clear()
         command("R",packet("t=o:x=1:i=7"));done("R");replacement=outer("o",x=1);assert replacement!=latest
         command("R",expected=packet("t=o:x=3:y=2:X=35:Y=47:i=7"))
-        client.send(packet(f"t=o:i={latest}:x=4:y=4:X=45:Y=87")+packet(f"t=o:i={replacement}:x=4:y=4:X=45:Y=87"));done("R")
+        client.send(packet(f"t=o:i={latest}:x=4:y=4:X=45:Y=87"));done("R")
         command("R",packet("t=E:y=-1:i=7"));done("R")
         wait(lambda:packet("t=E:y=-1:i="+replacement) in client.output,"explicit cancellation lost")
         assert record("R")["pid"]!=original["A"] and record("B")["pid"]==original["B"]

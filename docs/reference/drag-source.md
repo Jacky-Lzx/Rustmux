@@ -39,12 +39,21 @@ separate panes are isolated, including after a process is respawned. Client IDs
 compare numerically; omitted `i` and explicit `i=0` share the protocol default,
 while replies preserve the registration's original ID spelling or omission.
 
-The host's `t=o` gesture must lie inside the currently advertised, visible pane.
+The host's `t=o` gesture selects the sole currently advertised, visible pane.
+Kitty 0.49.2 assigns its client ID when receiving the MIME offer rather than
+the source registration. Its initial gesture omits `i`, and later gestures can
+retain the previous offer's ID. This field is therefore not used to correlate
+initial gestures. All subsequent status/data replies must echo the fresh outer
+ID assigned to the current offer; missing or retired IDs are discarded.
+The gesture must lie inside the advertised pane.
 Cell coordinates subtract the pane's column and row, including the outer header
 row. Pixel coordinates subtract that origin multiplied by the verified cell
 pixel dimensions. Events on borders, outside the pane, or with invalid pixel
 coordinates are discarded. Starting a gesture pins its originating process;
 focus changes and moving it between windows do not redirect subsequent replies.
+Queued pointer/key input is delivered before extracted drag notifications, so
+a mouse press and gesture arriving in one frontend batch reach Yazi in that
+order. A full child input queue delays the notification with the pointer input.
 
 Only in Locked mode, without History, Help or a prompt, are source gestures
 advertised. Entering another mode cancels a gesture and temporarily unregisters
@@ -60,7 +69,7 @@ image/start controls (`P`), data responses (`e`), errors/cancellation (`E`) and
 remote URI data (`k`). Host status/data requests (`e`, `E`, `k`) return to that
 same process, even while another pane is focused. Starting permission requires
 the host's `t=E;OK`. Completion (`t=e:x=4`) and errors retire the gesture; the next
-gesture receives a fresh outer ID. Unknown or retired replies never become
+gesture receives a fresh outer ID. Unknown or retired status/data replies never become
 keyboard input.
 
 Payloads are opaque. Rustmux does not open paths, follow links, fetch directories,
@@ -109,11 +118,21 @@ queues, expiry and shared clipboard-cancellation behavior. The real nested-PTY
 fixture `tests/terminal_loop_drag_source.py` exercises independent child processes,
 a 256 KiB binary artifact decoded from the simulated host capture, fragmentation,
 focus/window moves, reload, detach, reattachment, respawn and foreground cleanup.
-Physical Kitty-to-Finder drag gestures and actual GUI file promises remain
-unverified. This is protocol/PTY evidence, not GUI acceptance.
+The owner confirmed successful physical Yazi-to-Finder drag-out in a fresh
+Kitty session using the repaired release binary and `drag_source=true`. Existing
+sessions retain their running server binary; rebuilding requires a fresh
+session to exercise the repaired code.
 
-Final local validation with Rust 1.99.0 passed 1,097 tests across 52 targets,
-including all 52 real nested-PTY scenarios, with 6 existing ignores. Strict
+The optional `installed_yazi_drags_real_file_through_rustmux` test in `cargo
+compat` runs the installed Yazi against a temporary file with mouse-press and
+drag-offer events. It checks real URI pre-data, end-of-data, thumbnail and start
+commands for initial gestures with absent, zero and previous-offer IDs. The
+deterministic unit and nested-PTY regressions also cover this host behavior.
+
+Local validation of the compatibility repair with Rust 1.99.0 passed 1,098 tests
+across 52 targets, including all 52 real nested-PTY scenarios, with 7 optional
+ignores. The installed-Yazi drag test was also explicitly run and passed with
+both debug and release binaries. Strict
 all-target/all-feature Clippy, formatting, Python syntax, mdBook and staged diff
 checks passed. The feature commit is local and awaits owner review; it has not
 been merged or pushed.

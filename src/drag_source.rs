@@ -487,16 +487,6 @@ impl Router {
         let Some(packet) = Packet::parse(body) else {
             return;
         };
-        let Some(wire) = packet.value("i").and_then(|v| v.parse::<u32>().ok()) else {
-            return;
-        };
-        if packet.value("t") == Some("q") {
-            if self.probe.is_some_and(|(id, _)| id == wire) && !packet.more() {
-                self.probe = None;
-                self.supported = true;
-            }
-            return;
-        }
         if packet.value("t") == Some("o") {
             if packet.more() {
                 return;
@@ -504,9 +494,15 @@ impl Router {
             if self.gesture.is_some() {
                 return;
             }
-            let Some(ad) = self.advertised.as_ref().filter(|a| a.wire == wire) else {
+            // Kitty assigns its source client ID when it receives the MIME
+            // offer, not the registration. The initial physical gesture can
+            // therefore omit i, or carry the previous offer's ID. Bind it to
+            // the sole currently advertised source; later replies must echo
+            // the ID we put on that source's offer.
+            let Some(ad) = self.advertised.as_ref() else {
                 return;
             };
+            let wire = ad.wire;
             let Some(view) = view.filter(|v| v.owner == ad.registration.owner) else {
                 return;
             };
@@ -547,6 +543,16 @@ impl Router {
                 wire,
                 packet.encode(id.as_deref(), Some((x, y, px, py))),
             );
+            return;
+        }
+        let Some(wire) = packet.value("i").and_then(|v| v.parse::<u32>().ok()) else {
+            return;
+        };
+        if packet.value("t") == Some("q") {
+            if self.probe.is_some_and(|(id, _)| id == wire) && !packet.more() {
+                self.probe = None;
+                self.supported = true;
+            }
             return;
         }
         if packet.more() && self.gesture.as_ref().is_some_and(|g| g.wire == wire) {
@@ -775,6 +781,52 @@ mod tests {
             now,
             Some(view(1)),
         );
+        assert!(r.gesture.is_none());
+    }
+    #[test]
+    fn kitty_gestures_use_the_advertised_source_before_offer_id_assignment() {
+        let now = Instant::now();
+        let mut r = ready(now);
+        let first = register(&mut r, 1, 7, now);
+        // An untagged event cannot target a different pane or a border.
+        r.response(b"t=o:x=43:y=4:X=435:Y=87", now, Some(view(2)));
+        r.response(b"t=o:x=39:y=4:X=395:Y=87", now, Some(view(1)));
+        assert!(r.gesture.is_none());
+        r.response(b"t=o:x=43:y=4:X=435:Y=87", now, Some(view(1)));
+        assert_eq!(r.gesture.as_ref().unwrap().wire, first);
+        assert_eq!(
+            deliveries(&mut r),
+            vec![(
+                owner(1),
+                b"\x1b]72;t=o:x=3:y=2:X=35:Y=47:i=7\x1b\\".to_vec()
+            )]
+        );
+        request(&mut r, 1, b"t=o:o=3:i=7;text/uri-list", now);
+        r.response(b"t=E;OK", now, None);
+        assert!(!r.gesture.as_ref().unwrap().started);
+        r.response(format!("t=E:i={first};OK").as_bytes(), now, None);
+        assert!(r.gesture.as_ref().unwrap().started);
+        r.response(format!("t=e:x=4:y=0:i={first}").as_bytes(), now, None);
+        deliveries(&mut r);
+        let second = register(&mut r, 2, 9, now);
+        // Kitty retains its last MIME offer ID even after unregistering. It
+        // is not the current registration's correlation ID on a new gesture.
+        r.response(
+            format!("t=o:i={first}:x=43:y=4:X=435:Y=87").as_bytes(),
+            now,
+            Some(view(2)),
+        );
+        assert_eq!(r.gesture.as_ref().unwrap().wire, second);
+        assert_eq!(deliveries(&mut r)[0].0, owner(2));
+        request(&mut r, 2, b"t=o:o=3:i=9;text/uri-list", now);
+        r.response(format!("t=E:i={first};OK").as_bytes(), now, None);
+        assert!(!r.gesture.as_ref().unwrap().started);
+        assert!(deliveries(&mut r).is_empty());
+        r.response(format!("t=E:i={second};OK").as_bytes(), now, None);
+        assert!(r.gesture.as_ref().unwrap().started);
+        r.cancel_all();
+        deliveries(&mut r);
+        r.response(b"t=o:x=43:y=4:X=435:Y=87", now, Some(view(2)));
         assert!(r.gesture.is_none());
     }
     #[test]
