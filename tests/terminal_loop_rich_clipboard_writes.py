@@ -130,7 +130,12 @@ while True:
         return identifier, values, aliases
     def policy(write, read=False):
         config.write_text(f"clipboard_read={str(read).lower()}\nclipboard_write={str(write).lower()}\nremain_on_exit=true\n")
-        wait(lambda: tomllib.loads(run("show-config"))["settings"]["clipboard_write"] == write, "policy reload")
+        def applied():
+            settings = tomllib.loads(run("show-config"))["settings"]
+            return settings["clipboard_write"] == write and settings["clipboard_read"] == read
+        # A read-only policy change still invalidates shared partial framing.
+        # Wait for both settings before starting the next write transaction.
+        wait(applied, "read/write policy reload")
     def attach():
         global client
         client = Session(extra_env=env, arguments=("attach", name), lifetime=80)

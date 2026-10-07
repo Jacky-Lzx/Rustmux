@@ -153,7 +153,10 @@ command='exit 9'
         session.send(b"\x1b[200~")  # A stopped process cannot finish this paste.
         expect_title(session, b"exited 7")
         session.send(b"discarded\x02R")
-        session.expect(b"RUSTMUX_READY>")
+        # The retained screen still contains the old prompt. Wait for the live
+        # title before accepting a prompt from the replacement process.
+        expect_title(session, b"1 shell", absent=b"exited 7")
+        session.expect(b"RUSTMUX_READY> ")
         assert not any(b"FOREGROUND_FINAL" in row for row in session.last_rows)
         session.send(b"printf 'RESPAWN_ALIVE\\n'\n")
         session.expect(b"RESPAWN_ALIVE")

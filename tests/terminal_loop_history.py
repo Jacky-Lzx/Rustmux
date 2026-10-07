@@ -841,14 +841,19 @@ with tempfile.TemporaryDirectory(prefix="rustmux-process-cwd-") as directory:
     s = Session()
     try:
         s.expect(b"RUSTMUX_READY>")
-        s.send(("cd " + quoted + " && printf 'PROCESS_CWD_READY\\n'\n").encode())
+        # Split the marker in the command so terminal echo cannot satisfy it.
+        s.send(("cd " + quoted + " && printf 'PROCESS_CWD_%s\\n' READY\n").encode())
         s.expect(b"PROCESS_CWD_READY")
         s.send(b"\x02c")
-        s.expect(b"RUSTMUX_READY>")
-        s.send(("test \"$PWD\" = " + quoted + " && printf 'PROCESS_CWD_OK\\n'\n").encode())
+        expect_bar(s, b"2 shell")
+        s.expect(b"RUSTMUX_READY> ")
+        # macOS may spell the same directory under /var or /private/var.
+        s.send(("test . -ef " + quoted + " && printf 'PROCESS_CWD_%s\\n' OK\n").encode())
         s.expect(b"PROCESS_CWD_OK")
         s.send(b"exit 0\n")
-        s.expect(b"RUSTMUX_READY>")
+        # The other window's cached prompt is not evidence of removal.
+        expect_bar_without(s, b"2 shell")
+        expect_bar(s, b"1 shell")
         s.send(b"exit 0\n")
         s.finish(0)
     finally:
@@ -875,7 +880,8 @@ with tempfile.TemporaryDirectory(prefix="rustmux-osc7-") as directory:
         s.expect(b"BAD_OSC7_DONE")
 
         s.send(b"\x02c")
-        s.expect(b"RUSTMUX_READY>")
+        expect_bar(s, b"2 shell")
+        s.expect(b"RUSTMUX_READY> ")
         s.send(("test \"$PWD\" = " + quoted + " && printf 'WINDOW_OSC7_OK\\n'\n").encode())
         s.expect(b"WINDOW_OSC7_OK")
 
