@@ -933,6 +933,19 @@ impl Pane {
         };
         self.parser
             .set_cell_pixels(cell_pixels.map(|cell| (cell.width(), cell.height())));
+        // Use verified attachment capability and exact cell geometry, not TERM
+        // or the outer terminal's name. Virtual placeholders are rendered here
+        // even when the outer terminal only implements ordinary Kitty images.
+        self.parser.set_kitty_graphics_compatibility(
+            cell_pixels.is_some()
+                && matches!(
+                    graphics,
+                    GraphicsSink::Store {
+                        answer_graphics: true,
+                        ..
+                    }
+                ),
+        );
         if matches!(graphics, GraphicsSink::Drop) {
             self.graphics_transfer.reset();
         }
@@ -2709,6 +2722,79 @@ mod io_tests {
         );
         assert_eq!(replies, b"\x1b[?1;0c");
         assert_eq!(pane.image_store().revision(), revision);
+    }
+
+    #[test]
+    fn terminal_version_compatibility_follows_attachment_and_survives_reset() {
+        let mut pane = Pane::spawn("/bin/sh", 2, 8).unwrap();
+        let cell = CellPixelSize::new(12, 20).unwrap();
+        let query = b"\x1b[>q\x1b[>0q";
+        let compatible = concat!("\x1bP>|rustmux-kitty ", env!("CARGO_PKG_VERSION"), "\x1b\\");
+        let native = concat!("\x1bP>|rustmux(", env!("CARGO_PKG_VERSION"), ")\x1b\\");
+        // Reuse one parser across changing attachments, including no pixels
+        // after a successful probe, and a sized but unsupported attachment.
+        for (pixels, supported) in [
+            (Some(cell), true),
+            (None, true),
+            (Some(cell), false),
+            (None, false),
+            (Some(cell), true),
+        ] {
+            for split in 0..=query.len() {
+                let before = pane.screen().clone();
+                let mut replies = Vec::new();
+                for part in [&query[..split], &query[split..]] {
+                    pane.process_output_for_runtime(
+                        part,
+                        &mut |reply| {
+                            assert!(reply.len() <= crate::parser::MAX_REPLY_BYTES);
+                            replies.extend_from_slice(reply);
+                        },
+                        pixels,
+                        supported,
+                    );
+                }
+                let version = if pixels.is_some() && supported {
+                    compatible
+                } else {
+                    native
+                };
+                assert_eq!(replies, version.repeat(2).as_bytes());
+                assert_eq!(pane.screen(), &before);
+            }
+            let mut replies = Vec::new();
+            pane.process_output_for_runtime(
+                b"\x1bc\x1b[>q\x1b[c\x1b[>c\x1b[=c",
+                &mut |reply| replies.extend_from_slice(reply),
+                pixels,
+                supported,
+            );
+            let version = if pixels.is_some() && supported {
+                compatible
+            } else {
+                native
+            };
+            assert_eq!(
+                replies,
+                [
+                    version.as_bytes(),
+                    b"\x1b[?1;0c\x1b[>0;0;0c\x1bP!|00000000\x1b\\"
+                ]
+                .concat()
+            );
+        }
+        let mut replies = Vec::new();
+        // Display-only processing must not retain a previous runtime identity.
+        pane.process_output(query, &mut |reply| replies.extend_from_slice(reply));
+        assert_eq!(replies, native.repeat(2).as_bytes());
+        replies.clear();
+        pane.process_output_for_runtime(
+            b"\x1b[>1q\x1b[>0;0q\x1b[>0:0q\x1b[>0 q\x1b[>0$q\x1bP>|rustmux-kitty 0.1.0\x1b\\",
+            &mut |reply| replies.extend_from_slice(reply),
+            Some(cell),
+            true,
+        );
+        assert!(replies.is_empty());
     }
 
     #[test]

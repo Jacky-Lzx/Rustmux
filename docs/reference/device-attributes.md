@@ -37,15 +37,29 @@ Rustmux also answers XTerm's terminal-version query:
 | CSI > q | DCS > \| rustmux(0.1.0) ST |
 | CSI > 0 q | DCS > \| rustmux(0.1.0) ST |
 
-The response version comes from the package version at compile time. It identifies
-Rustmux rather than imitating the outer terminal or XTerm. Only an omitted or zero
-parameter is accepted.
+The default response version comes from the package version at compile time.
+Only an omitted or zero parameter is accepted.
 
-The reply is constant and independent of the outer terminal or TERM environment.
-It does not enumerate Rustmux's RGB, mouse or other extensions. Supported mode
-states can be queried through [DECRQM](mode-queries.md), and color support through
-[XTGETTCAP](terminal-capabilities.md). No capabilities are
-inferred from Kitty or another outer terminal and passed through to the child.
+When the current runtime attachment has verified Kitty graphics support and an
+exact physical cell size, these queries instead return
+`DCS > | rustmux-kitty 0.1.0 ST`. This is Rustmux's compatibility alias and package
+version, not the outer terminal's identity or Kitty's version. It enables clients
+with name-based image detection, including Snacks.nvim, to use Rustmux's supported
+Kitty transfers and Unicode placeholders without a Neovim configuration override.
+Rustmux stores and composes those images itself; the outer terminal need not
+support Unicode placeholders.
+
+Pending or failed graphics probes, absent or inexact pixel dimensions, detached
+sessions and display-only parsing retain the default Rustmux identity. Each new
+query uses the current attachment context, including after resize, reconnect and
+terminal reset. Applications that cache detection must refresh it or restart
+when the attachment changes. No environment variable alone enables the alias.
+
+DA1, DA2 and DA3 remain unchanged. The version reply does not enumerate RGB,
+mouse, animation or other optional features, nor claim complete Kitty emulation.
+Supported mode states can be queried through [DECRQM](mode-queries.md), and color
+support through [XTGETTCAP](terminal-capabilities.md); image
+protocol boundaries are documented in [Kitty graphics](kitty-graphics.md).
 
 Only zero or omitted DA1/DA2/DA3 parameters are accepted. Nonzero values, extra
 parameters, colon groups, intermediates and overflow are ignored. An echoed DA1,
@@ -65,3 +79,11 @@ echoes, cancellation and EOF. The nested PTY suite checks all forms and 10,000
 grouped identity requests whose replies exceed the 64 KiB queue. It also checks
 both queries during a synchronized batch. These tests verify the protocol path,
 not universal terminal application compatibility.
+
+The runtime tests also cover compatibility replies at every split boundary,
+attachment capability and pixel-size changes, reset and unchanged DA replies.
+`cargo compat` includes an installed Neovim/Snacks smoke: foreground and named sessions use
+file uploads and virtual placements, an SSH-marked child uses direct PNG data,
+and unsupported or unsized attachments remain undetected. It verifies the outer
+image pixels and requires `nvim` on PATH plus an installed Snacks checkout
+(default `~/.local/share/nvim/lazy/snacks.nvim`, or `RUSTMUX_COMPAT_SNACKS`).

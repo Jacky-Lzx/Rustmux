@@ -10,10 +10,20 @@ const MAX_OSC_PALETTE_PAIRS: usize = (MAX_STRING_CONTROL_BYTES - 1) / 4;
 const MAX_OSC_PALETTE_REPLY_BYTES: usize = MAX_OSC_PALETTE_PAIRS * MAX_OSC_COLOR_REPLY_BYTES;
 const TERMINAL_VERSION_REPLY: &str =
     concat!("\x1bP>|rustmux(", env!("CARGO_PKG_VERSION"), ")\x1b\\");
-const MAX_FIXED_REPLY_BYTES: usize = if MAX_CSI_REPLY_BYTES > TERMINAL_VERSION_REPLY.len() {
+// A compatibility alias for name-based image clients such as Snacks. The
+// version is Rustmux's, not a claimed version of the outer Kitty terminal.
+const KITTY_COMPAT_VERSION_REPLY: &str =
+    concat!("\x1bP>|rustmux-kitty ", env!("CARGO_PKG_VERSION"), "\x1b\\");
+const MAX_VERSION_REPLY_BYTES: usize =
+    if TERMINAL_VERSION_REPLY.len() > KITTY_COMPAT_VERSION_REPLY.len() {
+        TERMINAL_VERSION_REPLY.len()
+    } else {
+        KITTY_COMPAT_VERSION_REPLY.len()
+    };
+const MAX_FIXED_REPLY_BYTES: usize = if MAX_CSI_REPLY_BYTES > MAX_VERSION_REPLY_BYTES {
     MAX_CSI_REPLY_BYTES
 } else {
-    TERMINAL_VERSION_REPLY.len()
+    MAX_VERSION_REPLY_BYTES
 };
 pub const MAX_REPLY_BYTES: usize = if MAX_FIXED_REPLY_BYTES > MAX_OSC_PALETTE_REPLY_BYTES {
     MAX_FIXED_REPLY_BYTES
@@ -159,6 +169,8 @@ pub struct Parser {
     graphics_clears: [bool; 2],
     /// Physical cell size reported by the attached terminal, if exact.
     cell_pixels: Option<(u16, u16)>,
+    /// Current runtime attachment can render the supported Kitty image subset.
+    kitty_graphics_compatibility: bool,
 }
 
 impl Parser {
@@ -168,6 +180,10 @@ impl Parser {
 
     pub(crate) fn set_cell_pixels(&mut self, cell_pixels: Option<(u16, u16)>) {
         self.cell_pixels = cell_pixels;
+    }
+
+    pub(crate) fn set_kitty_graphics_compatibility(&mut self, supported: bool) {
+        self.kitty_graphics_compatibility = supported;
     }
 
     /// Parse for display only, discarding terminal replies.
@@ -342,9 +358,11 @@ impl Parser {
                     screen.reset();
                     let bell_received = self.bell_received;
                     let cell_pixels = self.cell_pixels;
+                    let kitty_graphics_compatibility = self.kitty_graphics_compatibility;
                     *self = Self::new();
                     self.bell_received = bell_received;
                     self.cell_pixels = cell_pixels;
+                    self.kitty_graphics_compatibility = kitty_graphics_compatibility;
                     self.graphics_clears = [true, true];
                     State::Ground
                 }
@@ -416,6 +434,7 @@ impl Parser {
                             reply,
                             &mut self.graphics_clears,
                             self.cell_pixels,
+                            self.kitty_graphics_compatibility,
                         );
                     }
                     State::Ground
@@ -674,6 +693,7 @@ impl Parser {
         reply: &mut impl FnMut(&[u8]),
         graphics_clears: &mut [bool; 2],
         cell_pixels: Option<(u16, u16)>,
+        kitty_graphics_compatibility: bool,
     ) {
         if command == b'u' && (parameters.private || parameters.keyboard_prefix.is_some()) {
             if parameters.private
@@ -715,8 +735,13 @@ impl Parser {
         }
         if command == b'q' && parameters.keyboard_prefix == Some(b'>') {
             if parameters.is_prefixed_zero_query(b'>') {
-                debug_assert!(TERMINAL_VERSION_REPLY.len() <= MAX_REPLY_BYTES);
-                reply(TERMINAL_VERSION_REPLY.as_bytes());
+                let response = if kitty_graphics_compatibility {
+                    KITTY_COMPAT_VERSION_REPLY
+                } else {
+                    TERMINAL_VERSION_REPLY
+                };
+                debug_assert!(response.len() <= MAX_REPLY_BYTES);
+                reply(response.as_bytes());
             }
             return;
         }

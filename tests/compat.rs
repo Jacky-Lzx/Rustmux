@@ -158,3 +158,25 @@ fn large_kitty_overlay_tiles_survive_session_bridge() {
     );
     print!("{}", String::from_utf8_lossy(&output.stdout));
 }
+
+/// Installed Neovim/Snacks detection, file/direct uploads and virtual placements.
+#[test]
+#[ignore = "requires installed Neovim and Snacks.nvim; run with cargo compat"]
+fn installed_snacks_detects_graphics_without_configuration_override() {
+    let output = std::process::Command::new("python3")
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/snacks_compat.py"
+        ))
+        .arg(env!("CARGO_BIN_EXE_rustmux"))
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .output()
+        .expect("Python 3 is required for the optional Snacks PTY smoke test");
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    print!("{}", String::from_utf8_lossy(&output.stdout));
+}

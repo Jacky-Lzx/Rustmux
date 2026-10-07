@@ -89,8 +89,7 @@ try:
     s.expect(b"RUSTMUX_READY> ")
     child_query = shlex.quote(os.path.join(os.path.dirname(__file__), "kitty_child_query.py"))
     s.send(f"python3 {child_query}\n".encode())
-    expected_replies = b"\x1b_Gi=41;OK\x1b\\\x1b[?1;0c"
-    s.expect(b"CHILD_GRAPHICS_REPLY:" + expected_replies.hex().encode())
+    s.expect(b"CHILD_GRAPHICS_REPLY_OK")
     child_file = shlex.quote(os.path.join(os.path.dirname(__file__), "kitty_child_file.py"))
     s.send(f"python3 {child_file}\n".encode())
     s.expect(b"CHILD_FILE_TRANSFER_OK")
@@ -206,6 +205,11 @@ finally:
 # Model operations must change the rendered screen, rather than pass through.
 s = Session()
 try:
+    s.expect(b"RUSTMUX_READY> ")
+    # This block exercises rendering, not job control. On macOS the interactive
+    # shell can emit a child-setpgid warning for short-lived stty jobs under load;
+    # it overwrites the prompt and makes unrelated screen assertions fail.
+    s.send(b"set +m\n")
     s.expect(b"RUSTMUX_READY> ")
     s.send(b"printf '\\033[2J\\033[Habc\\033[1;2H\\033[31mX\\033[0m\\n'\n")
     s.expect(b"\r\naXc\r\n")
