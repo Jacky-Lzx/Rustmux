@@ -7,20 +7,39 @@ edits the active label directly in the bar.
 
 ## Automatic and explicit names
 
-An unnamed window follows the current terminal title (OSC 0 or OSC 2) of its
-focused pane. Switching pane focus updates the tab label, and background windows
-continue updating their labels. An empty or whitespace-only title falls back to
-`shell`.
+An unnamed window displays the foreground program of its focused pane by default:
+`fish` at a Fish prompt, `yazi` while Yazi is running, and `fish` again after it
+exits. Directory changes and program-provided titles do not replace the program
+name. Switching pane focus updates the tab label, and background windows continue
+updating their labels even when the program emits no output.
+
+The top-level `tab_name` configuration selects the source for automatic names:
+
+```toml
+# Default: foreground program names.
+tab_name = "application"
+# Alternative: use the pane's terminal title (OSC 0 or OSC 2).
+# tab_name = "title"
+```
+
+This option supports [configuration reload](config-reload.md). Program detection
+uses the local foreground process group on macOS and Linux, sampled at most four
+times per second for each automatically named window's focused pane. If detection
+is unavailable, the label falls back to the terminal title, then `shell` for an
+empty or whitespace-only title. A drained, exited pane retains its last sampled
+program name. Remote commands inside SSH show the local program `ssh`; title mode
+can expose a title supplied by the remote shell. Pipeline labels use the foreground
+process group's leader.
 
 Renaming a window, creating it with `new-window --name`, or naming it in a project
 layout sets a fixed label. This includes an explicit name of `shell`. Saving an
-empty draft in the interactive rename editor restores automatic title selection;
+empty draft in the interactive rename editor restores automatic naming;
 cancelling the draft keeps the previous naming mode.
 
 Snapshots preserve automatic selection as an empty stored name, rather than
-freezing the current terminal title. Existing snapshots keep their stored names,
-including an old `shell` label; clear that name interactively to opt into automatic
-titles. Splitting a pane into a new window preserves the source window's naming
+freezing the current program name or terminal title. Existing snapshots keep their
+stored names, including an old `shell` label; clear that name interactively to opt into automatic
+naming. Splitting a pane into a new window preserves the source window's naming
 mode, so automatic windows independently follow their own focused panes.
 
 ## Identity and focus
@@ -360,7 +379,8 @@ windows and Green (`#a6e3a1`) for the active window, with Powerline separators
 transitioning to the Base (`#1e1e2e`) bar background. Rename keeps the active
 badge style and uses the footer for its mode and actions; history prompts use the
 active badge colors.
-The badge color identifies the active window. New windows default to the name `shell`.
+The badge color identifies the active window. New windows use automatic names
+unless an explicit name is supplied.
 
 Each label is clipped to the available display columns, excluding control
 characters and without splitting a wide glyph. If labels do not fit, the visible

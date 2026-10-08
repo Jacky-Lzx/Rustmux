@@ -19,6 +19,7 @@ pub struct Inspection {
 pub struct Settings {
     pub theme: std::collections::BTreeMap<String, String>,
     pub shell: String,
+    pub tab_name: TabName,
     pub scrollback_lines: usize,
     pub default_mode: DefaultMode,
     pub compact: bool,
@@ -77,6 +78,7 @@ impl From<&Config> for Settings {
         Self {
             theme: config.theme.report(),
             shell: config.shell.to_string_lossy().into_owned(),
+            tab_name: config.tab_name,
             scrollback_lines: config.scrollback_lines,
             default_mode: config.default_mode,
             compact: config.compact,
@@ -108,6 +110,7 @@ fn ignored_options(source: &str) -> Vec<String> {
         if !matches!(
             key.as_str(),
             "shell"
+                | "tab_name"
                 | "default_mode"
                 | "compact"
                 | "scrollback_lines"
@@ -213,6 +216,8 @@ pub fn default_config() -> String {
 # Shell precedence: RUSTMUX_SHELL, uncommented shell setting, SHELL, /bin/sh.
 # shell = "/bin/sh"
 default_mode = "locked"
+# Automatic tabs follow the foreground program; use "title" for OSC titles.
+tab_name = "application"
 compact = false
 scrollback_lines = {DEFAULT_SCROLLBACK_LINES}
 remain_on_exit = false

@@ -36,6 +36,11 @@ if sys.argv[1] == "--supervisor":
 
 BINARY = sys.argv[1]
 DEFAULT_CONFIG_DIR = tempfile.TemporaryDirectory(prefix="rustmux-test-default-config-")
+# Existing terminal scenarios keep their OSC-title naming expectations explicit.
+# Foreground-program naming is exercised separately with a defaults-only config.
+os.mkdir(os.path.join(DEFAULT_CONFIG_DIR.name, "rustmux"))
+with open(os.path.join(DEFAULT_CONFIG_DIR.name, "rustmux", "config.toml"), "w") as config:
+    config.write('tab_name="title"\n')
 
 class Session:
     def __init__(self, shell="/bin/sh", extra_env=None, arguments=(), pixels=(0, 0), lifetime=12):

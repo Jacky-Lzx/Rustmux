@@ -42,6 +42,8 @@ pub struct Pane {
     spawn_directory: Option<PathBuf>,
     remain_on_exit: Option<bool>,
     shell: PtyShell,
+    foreground_application: Option<String>,
+    application_checked: Option<Instant>,
     parser: Parser,
     clipboard: crate::clipboard::Observer,
     rich_clipboard: crate::rich_clipboard::Observer,
@@ -447,6 +449,8 @@ impl Pane {
                 .or_else(|| std::env::current_dir().ok()),
             remain_on_exit: None,
             shell,
+            foreground_application: None,
+            application_checked: None,
             parser: Parser::new(),
             clipboard: crate::clipboard::Observer::default(),
             rich_clipboard: crate::rich_clipboard::Observer::default(),
@@ -495,6 +499,8 @@ impl Pane {
             spawn_directory: None,
             remain_on_exit: Some(false),
             shell,
+            foreground_application: None,
+            application_checked: None,
             parser: Parser::new(),
             clipboard: crate::clipboard::Observer::default(),
             rich_clipboard: crate::rich_clipboard::Observer::default(),
@@ -652,6 +658,34 @@ impl Pane {
 
     pub(crate) fn last_command_output(&self) -> Option<String> {
         self.io.semantic.last_output()
+    }
+
+    /// Sample even without output or OSC 133, including while the shell is idle.
+    /// Bound process inspection to four times per second per visible tab label.
+    pub(crate) fn refresh_foreground_application(&mut self) {
+        if self.io.eof
+            || self.io.status.is_some()
+            || self
+                .application_checked
+                .is_some_and(|checked| checked.elapsed() < Duration::from_millis(250))
+        {
+            return;
+        }
+        self.application_checked = Some(Instant::now());
+        self.foreground_application = self
+            .shell
+            .foreground_application()
+            .filter(|name| !name.trim().is_empty() && !name.chars().any(char::is_control));
+    }
+
+    pub(crate) fn automatic_tab_name(&self, mode: crate::config::TabName) -> &str {
+        match mode {
+            crate::config::TabName::Application => self
+                .foreground_application
+                .as_deref()
+                .unwrap_or_else(|| self.terminal_title()),
+            crate::config::TabName::Title => self.terminal_title(),
+        }
     }
 
     pub(crate) fn terminal_title(&self) -> &str {

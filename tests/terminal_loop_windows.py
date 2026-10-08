@@ -256,6 +256,7 @@ with tempfile.TemporaryDirectory(prefix="rustmux-server-prefix-") as server_conf
         os.mkdir(os.path.join(directory, "rustmux"))
         with open(os.path.join(directory, "rustmux", "config.toml"), "w", encoding="utf-8") as config:
             config.write(
+            'tab_name="title"\n'
                 "[keybinds.locked]\n"
                 f"'Ctrl {key}' = {{ actions = [{{ action = 'switch-mode', mode = 'normal' }}] }}\n"
             )
@@ -317,6 +318,7 @@ with tempfile.TemporaryDirectory(prefix="rustmux-clear-defaults-") as directory:
     os.mkdir(os.path.join(directory, "rustmux"))
     with open(os.path.join(directory, "rustmux", "config.toml"), "w", encoding="utf-8") as config:
         config.write(
+            'tab_name="title"\n'
             "clear_defaults = true\n"
             "[keybinds.locked]\n"
             "'Ctrl a' = { actions = [{ action = 'switch-mode', mode = 'normal' }] }\n"

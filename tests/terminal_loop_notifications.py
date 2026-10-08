@@ -39,7 +39,7 @@ finally:
 with tempfile.TemporaryDirectory(prefix="rustmux-shortcuts-") as directory:
     os.mkdir(os.path.join(directory, "rustmux"))
     with open(os.path.join(directory, "rustmux", "config.toml"), "w", encoding="utf-8") as config:
-        config.write("[shortcuts]\nnew_window = 'N'\nsplit_right = 'R'\nsplit_down = 'D'\n")
+        config.write('tab_name="title"\n' + "[shortcuts]\nnew_window = 'N'\nsplit_right = 'R'\nsplit_down = 'D'\n")
     s = Session(extra_env={"XDG_CONFIG_HOME": directory})
     try:
         s.expect(b"RUSTMUX_READY> ")
@@ -62,6 +62,7 @@ with tempfile.TemporaryDirectory(prefix="rustmux-mode-keybinds-") as directory:
     os.mkdir(os.path.join(directory, "rustmux"))
     with open(os.path.join(directory, "rustmux", "config.toml"), "w", encoding="utf-8") as config:
         config.write(
+            'tab_name="title"\n'
             "[keybinds.locked]\n"
             "'Ctrl b' = { actions = [{ action = 'switch-mode', mode = 'normal' }] }\n"
             "[keybinds.normal]\n"
@@ -105,6 +106,7 @@ with tempfile.TemporaryDirectory(prefix="rustmux-pane-mode-") as directory:
     os.mkdir(os.path.join(directory, "rustmux"))
     with open(os.path.join(directory, "rustmux", "config.toml"), "w", encoding="utf-8") as config:
         config.write(
+            'tab_name="title"\n'
             "[keybinds.normal]\n"
             "'Ctrl p' = { actions = [{ action = 'switch-mode', mode = 'pane' }] }\n"
             "[keybinds.pane]\n"
@@ -176,6 +178,7 @@ with tempfile.TemporaryDirectory(prefix="rustmux-pane-window-move-") as director
     os.mkdir(os.path.join(directory, "rustmux"))
     with open(os.path.join(directory, "rustmux", "config.toml"), "w", encoding="utf-8") as config:
         config.write(
+            'tab_name="title"\n'
             "[keybinds.normal]\n"
             "'Ctrl p' = { actions = [{ action = 'switch-mode', mode = 'pane' }] }\n"
             "[keybinds.pane]\n"
@@ -241,6 +244,7 @@ with tempfile.TemporaryDirectory(prefix="rustmux-resize-mode-") as directory:
     os.mkdir(os.path.join(directory, "rustmux"))
     with open(os.path.join(directory, "rustmux", "config.toml"), "w", encoding="utf-8") as config:
         config.write(
+            'tab_name="title"\n'
             "[keybinds.normal]\n"
             "r = { actions = [{ action = 'switch-mode', mode = 'resize' }] }\n"
             "[keybinds.resize]\n"
@@ -299,6 +303,7 @@ with tempfile.TemporaryDirectory(prefix="rustmux-mode-transitions-") as director
     os.mkdir(os.path.join(directory, "rustmux"))
     with open(os.path.join(directory, "rustmux", "config.toml"), "w", encoding="utf-8") as config:
         config.write(
+            'tab_name="title"\n'
             "[keybinds.normal]\n"
             "'Ctrl p' = { actions = [{ action = 'switch-mode', mode = 'pane' }] }\n"
             "[keybinds.pane]\n"
@@ -350,6 +355,7 @@ with tempfile.TemporaryDirectory(prefix="rustmux-tab-mode-") as directory:
     os.mkdir(os.path.join(directory, "rustmux"))
     with open(os.path.join(directory, "rustmux", "config.toml"), "w", encoding="utf-8") as config:
         config.write(
+            'tab_name="title"\n'
             "[keybinds.normal]\n"
             "'Ctrl t' = { actions = [{ action = 'switch-mode', mode = 'tab' }] }\n"
             "[keybinds.tab]\n"
@@ -416,6 +422,7 @@ with tempfile.TemporaryDirectory(prefix="rustmux-move-mode-") as directory:
     os.mkdir(os.path.join(directory, "rustmux"))
     with open(os.path.join(directory, "rustmux", "config.toml"), "w", encoding="utf-8") as config:
         config.write(
+            'tab_name="title"\n'
             "[keybinds.normal]\n"
             "'Ctrl m' = { actions = [{ action = 'switch-mode', mode = 'move' }] }\n"
             "[keybinds.move]\n"
@@ -469,6 +476,7 @@ with tempfile.TemporaryDirectory(prefix="rustmux-normal-window-") as directory:
     os.mkdir(os.path.join(directory, "rustmux"))
     with open(os.path.join(directory, "rustmux", "config.toml"), "w", encoding="utf-8") as config:
         config.write(
+            'tab_name="title"\n'
             "[keybinds.normal]\n"
             "x = { actions = ['close-window', { action = 'switch-mode', mode = 'locked' }] }\n"
         )
@@ -497,7 +505,7 @@ with tempfile.TemporaryDirectory(prefix="rustmux-notifications-") as directory:
     os.mkdir(os.path.join(directory, "rustmux"))
     config_path = os.path.join(directory, "rustmux", "config.toml")
     with open(config_path, "w", encoding="utf-8") as config:
-        config.write("[notifications]\ncommand_duration_seconds = 1\n")
+        config.write('tab_name="title"\n' + "[notifications]\ncommand_duration_seconds = 1\n")
     s = Session(extra_env={"XDG_CONFIG_HOME": directory})
     try:
         s.expect(b"RUSTMUX_READY> ")
@@ -516,6 +524,7 @@ with tempfile.TemporaryDirectory(prefix="rustmux-notifications-") as directory:
 
     with open(config_path, "w", encoding="utf-8") as config:
         config.write(
+            'tab_name="title"\n'
             "[notifications]\n"
             "long_command_bell = false\n"
             "command_duration_seconds = 1\n"

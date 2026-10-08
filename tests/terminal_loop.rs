@@ -98,6 +98,11 @@ fn window_rename() {
 }
 
 #[test]
+fn application_tab_names() {
+    run_scenario("application_tab_names");
+}
+
+#[test]
 fn window_titles() {
     run_scenario("window_titles");
 }

@@ -89,6 +89,8 @@ pub(super) fn handle(
     remain_on_exit: bool,
     reload: Option<&crate::config::reload::Reload>,
 ) -> io::Result<String> {
+    let tab_name = reload.map_or_else(crate::config::TabName::default, |r| r.current().tab_name());
+    refresh_window_names(windows, tab_name);
     if let Some(floating) = windows.floating() {
         let popup = floating.content().active().control_id();
         let structural = match &request {
@@ -270,7 +272,7 @@ pub(super) fn handle(
                         } else {
                             index + 1
                         },
-                        window_name: window_name(window).to_owned(),
+                        window_name: window_name(window, tab_name).to_owned(),
                         active: active == Some(window.id())
                             && id == window.content().layout().active(),
                         selected: id == window.content().layout().active(),

@@ -520,6 +520,12 @@ impl TerminalSession {
     ) -> io::Result<DetachedEvent> {
         loop {
             self.reload_detached()?;
+            refresh_window_names(
+                &mut self.windows,
+                self.reload
+                    .as_ref()
+                    .map_or_else(crate::config::TabName::default, |r| r.current().tab_name()),
+            );
             if let Some(service) = self.control.as_mut() {
                 let refresh = service.tick(|request| {
                     if let crate::control::Request::DisconnectSession { server_pid } = request {
@@ -2191,19 +2197,22 @@ fn frontend_exit(state: ConnectionState, input: &VecDeque<u8>) -> Option<Forward
 }
 
 /// An empty stored name selects a live title; explicit names remain metadata.
-fn window_name(window: &crate::window::Window<PaneSet<Pane>>) -> &str {
+fn window_name(
+    window: &crate::window::Window<PaneSet<Pane>>,
+    mode: crate::config::TabName,
+) -> &str {
     if window.name().is_empty() {
-        window.content().active().terminal_title()
+        window.content().active().automatic_tab_name(mode)
     } else {
         window.name()
     }
 }
 
-fn window_names(windows: &Windows<PaneSet<Pane>>) -> Vec<String> {
+fn window_names(windows: &Windows<PaneSet<Pane>>, mode: crate::config::TabName) -> Vec<String> {
     windows
         .iter()
         .map(|window| {
-            let mut name = window_name(window).to_owned();
+            let mut name = window_name(window, mode).to_owned();
             if window
                 .content()
                 .iter()
@@ -2214,6 +2223,19 @@ fn window_names(windows: &Windows<PaneSet<Pane>>) -> Vec<String> {
             name
         })
         .collect()
+}
+
+fn refresh_window_names(windows: &mut Windows<PaneSet<Pane>>, mode: crate::config::TabName) {
+    if mode == crate::config::TabName::Application {
+        for window in windows.all_iter_mut() {
+            if window.name().is_empty() {
+                window
+                    .content_mut()
+                    .active_mut()
+                    .refresh_foreground_application();
+            }
+        }
+    }
 }
 
 #[derive(Default)]
@@ -2296,6 +2318,7 @@ fn service_pane(
 }
 
 struct RuntimeConfig {
+    tab_name: crate::config::TabName,
     compact: bool,
     default_mode: crate::config::DefaultMode,
     clipboard_write: bool,
@@ -2313,6 +2336,7 @@ struct RuntimeConfig {
 }
 impl RuntimeConfig {
     fn update(&mut self, config: &crate::config::Config) {
+        self.tab_name = config.tab_name();
         self.compact = config.compact();
         self.default_mode = config.default_mode();
         self.theme = config.theme();
@@ -2440,6 +2464,9 @@ fn forward(
         }
     }
     let mut runtime = RuntimeConfig {
+        tab_name: reload
+            .as_ref()
+            .map_or_else(crate::config::TabName::default, |r| r.current().tab_name()),
         compact: context.compact,
         default_mode,
         clipboard_read: reload
@@ -2492,7 +2519,8 @@ fn forward(
     let mut next_frame = Instant::now();
     let mut force_redraw = true;
     let mut bar_dirty = false;
-    let mut previous_names = window_names(windows);
+    refresh_window_names(windows, runtime.tab_name);
+    let mut previous_names = window_names(windows, runtime.tab_name);
     let mut prompt: Option<WindowPrompt> = None;
     let mut history: Option<crate::history_view::HistoryView> = None;
     let mut help: Option<crate::shortcut_help::ShortcutHelp> = None;
@@ -2553,6 +2581,7 @@ fn forward(
                 force_redraw = true;
             }
         }
+        refresh_window_names(windows, runtime.tab_name);
         let shell_path = runtime.shell.as_os_str();
         let notifications = runtime.notifications.clone();
         let scrollback_lines = runtime.scrollback_lines;
@@ -3110,7 +3139,8 @@ fn forward(
                 bar_dirty = true;
             }
         }
-        let mut names = window_names(windows);
+        refresh_window_names(windows, runtime.tab_name);
+        let mut names = window_names(windows, runtime.tab_name);
         // Background output and pane focus can change an automatic tab's title
         // without making the displayed pane dirty. Keep that bar update queued.
         if names != previous_names {
@@ -3832,7 +3862,7 @@ fn forward(
             keys.footer_row = footer_enabled_for_layout(*outer_rows, runtime.compact)
                 .then_some(usize::from(*outer_rows));
             if help_action.is_none() && keys.mouse.is_empty() && input.front() == Some(&27) {
-                let names = window_names(windows);
+                let names = window_names(windows, runtime.tab_name);
                 let active_index = windows
                     .iter()
                     .position(|window| Some(window.id()) == windows.tiled_active().map(|w| w.id()))
@@ -4736,7 +4766,7 @@ fn forward(
                     let title = pane.terminal_title().to_owned();
                     let message = crate::notification::encode(
                         &identifier,
-                        window_name(window),
+                        window_name(window, runtime.tab_name),
                         pane_id,
                         &title,
                         reminder.duration,

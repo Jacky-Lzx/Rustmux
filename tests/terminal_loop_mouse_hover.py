@@ -12,10 +12,11 @@ from terminal_loop_support import BINARY, Session, expect_footer
 
 with tempfile.TemporaryDirectory(prefix="rustmux-hover-") as temporary:
     root = Path(temporary)
+    # Keep the label stable while probing pointer behavior with Python children.
     selected = root / "server.toml"
     client = root / "client.toml"
-    selected.write_text("mouse_hover_cursor=false\n")
-    client.write_text("mouse_hover_cursor=true\n")
+    selected.write_text('tab_name="title"\n' + "mouse_hover_cursor=false\n")
+    client.write_text('tab_name="title"\n' + "mouse_hover_cursor=true\n")
     env = dict(os.environ, XDG_CONFIG_HOME=str(root), XDG_STATE_HOME=str(root / "state"),
                RUSTMUX_SHELL="/bin/sh", PS1="RUSTMUX_READY> ", ENV="", BASH_ENV="")
     name = f"hover-{os.getpid()}"
@@ -136,7 +137,7 @@ while True:
         before = record()["input"]
         no_input(before)
         assert b"\x1b]22;pointer\x1b\\" not in session.output  # Server setting wins over client.
-        selected.write_text("mouse_hover_cursor=true\n")
+        selected.write_text('tab_name="title"\n' + "mouse_hover_cursor=true\n")
         setting(True)
         shape("pointer")  # Reload reevaluates the last known position.
         wait(lambda: session.private_modes.get(1003))
@@ -206,27 +207,27 @@ while True:
         motion(tab_column, 1)
         shape("pointer")
         command(right, 5)  # Application changes its pointer underneath a hover override.
-        selected.write_text("mouse_hover_cursor=false\n")
+        selected.write_text('tab_name="title"\n' + "mouse_hover_cursor=false\n")
         setting(False)
         shape("help")
         wait(lambda: session.private_modes.get(1002) and not session.private_modes.get(1003))
-        selected.write_text("mouse_hover_cursor='invalid'\n")
+        selected.write_text('tab_name="title"\n' + "mouse_hover_cursor='invalid'\n")
         wait(lambda: "error" in tomllib.loads(run("show-config")))
         setting(False)
-        selected.write_text("mouse_hover_cursor=true\n")
+        selected.write_text('tab_name="title"\n' + "mouse_hover_cursor=true\n")
         setting(True)
         shape("pointer")
         # A reload error replaces the footer actions; it is not a hover target.
-        selected.write_text("mouse_hover_cursor='invalid'\n")
+        selected.write_text('tab_name="title"\n' + "mouse_hover_cursor='invalid'\n")
         wait(lambda: "error" in tomllib.loads(run("show-config")))
         motion(footer_column, 24)
         shape("help")
         motion(tab_column, 1)
         shape("pointer")
-        selected.write_text("mouse_hover_cursor=true\n")
+        selected.write_text('tab_name="title"\n' + "mouse_hover_cursor=true\n")
         wait(lambda: "error" not in tomllib.loads(run("show-config")))
         detach()
-        selected.write_text("mouse_hover_cursor=false\n")
+        selected.write_text('tab_name="title"\n' + "mouse_hover_cursor=false\n")
         setting(False)
         session = Session(extra_env=env, arguments=("attach", name))
         shape("help")

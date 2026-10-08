@@ -63,7 +63,7 @@ def click_label(s, label):
 
 with tempfile.TemporaryDirectory(prefix="rustmux-display-") as directory:
     config = Path(directory) / "config.toml"
-    config.write_text(CONFIG)
+    config.write_text('tab_name="title"\n' + CONFIG)
     s = Session(arguments=("--config", str(config)), lifetime=40)
     try:
         s.expect(b"RUSTMUX_READY>")
@@ -140,7 +140,7 @@ with tempfile.TemporaryDirectory(prefix="rustmux-display-") as directory:
         s.send(b"printf 'DISPLAY_%s\\n' SURVIVED\n")
         s.expect(b"DISPLAY_SURVIVED")
         # Display-only reload applies with the same startup parser and keeps the binding.
-        config.write_text(CONFIG.replace('H={actions=[{action="switch-mode",mode="history"}],display="always"}', 'H={actions=[{action="switch-mode",mode="history"}],display="hidden"}'))
+        config.write_text('tab_name="title"\n' + CONFIG.replace('H={actions=[{action="switch-mode",mode="history"}],display="always"}', 'H={actions=[{action="switch-mode",mode="history"}],display="hidden"}'))
         deadline = time.monotonic() + 5
         while True:
             s.send(b"\x02")

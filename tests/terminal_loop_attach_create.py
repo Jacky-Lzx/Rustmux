@@ -16,7 +16,8 @@ from terminal_loop_support import BINARY, Session, expect_bar, expect_footer
 with tempfile.TemporaryDirectory(prefix="rustmux-attach-create-") as temporary:
     root = Path(temporary)
     settings = root / "custom.toml"
-    settings.write_text("save_scrollback=true\nscrollback_lines=100\n")
+    # This restoration scenario compares stable OSC labels across fresh processes.
+    settings.write_text('tab_name="title"\n' + "save_scrollback=true\nscrollback_lines=100\n")
     bad_config = root / "bad.toml"
     bad_config.write_text("not valid TOML\n")
     working = root / "saved cwd"

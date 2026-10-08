@@ -26,7 +26,7 @@ with tempfile.TemporaryDirectory(prefix="rustmux-lifecycle-") as temporary:
     root = Path(temporary)
     config = root / "rustmux" / "config.toml"
     config.parent.mkdir()
-    config.write_text("remain_on_exit = true\nsave_scrollback = true\n")
+    config.write_text('tab_name="title"\n' + "remain_on_exit = true\nsave_scrollback = true\n")
     env = dict(os.environ, XDG_CONFIG_HOME=str(root), XDG_STATE_HOME=str(root / "state"),
                RUSTMUX_SHELL="/bin/sh", PS1="RUSTMUX_READY> ", ENV="", BASH_ENV="",
                EDITOR="/usr/bin/true", VISUAL="/usr/bin/true")
@@ -112,7 +112,7 @@ command='exit 9'
         assert explicit["command"] == "printf SIGNAL_OUTPUT; kill -KILL $$"
         # Exit status is runtime-only; snapshot restore starts the recorded commands.
         run("kill", name)
-        config.write_text("remain_on_exit = false\nsave_scrollback = true\n")
+        config.write_text('tab_name="title"\n' + "remain_on_exit = false\nsave_scrollback = true\n")
         run("new", name, "--detached")
         restored = wait(lambda ps: len(ps) == 2 and any(p.get("exit_signal") == 9 for p in ps))
         ordinary = next(p for p in restored if not p["exited"])
@@ -138,7 +138,7 @@ command='exit 9'
         subprocess.run([BINARY, "kill", name], env=env, capture_output=True, timeout=8)
 
     # Foreground mode uses the same config and can respawn without a named socket.
-    config.write_text("remain_on_exit = true\n")
+    config.write_text('tab_name="title"\n' + "remain_on_exit = true\n")
     editor = root / "editor.sh"
     editor.write_text("sleep 0.3\n")
     foreground_env = dict(env, EDITOR=f"/bin/sh {editor}", VISUAL=f"/bin/sh {editor}")

@@ -76,7 +76,7 @@ with tempfile.TemporaryDirectory(prefix="rustmux-tab-titles-") as temporary:
     root = Path(temporary)
     config = root / "config/rustmux/config.toml"
     config.parent.mkdir(parents=True)
-    config.write_text("autosave_interval_seconds=0\nsave_scrollback=false\n")
+    config.write_text('tab_name="title"\n' + "autosave_interval_seconds=0\nsave_scrollback=false\n")
     env = dict(os.environ, XDG_CONFIG_HOME=str(root / "config"),
                XDG_STATE_HOME=str(root / "state"), RUSTMUX_SHELL="/bin/sh",
                PS1="RUSTMUX_READY> ", ENV="", BASH_ENV="")

@@ -17,7 +17,7 @@ with tempfile.TemporaryDirectory(prefix="rustmux-default-mode-") as temporary:
     config = root / "selected.toml"
 
     def write_mode(mode):
-        config.write_text(f'''default_mode="{mode}"
+        config.write_text('tab_name="title"\n' + f'''default_mode="{mode}"
 [keybinds.normal]
 esc={{actions=[{{action="switch-mode",mode="locked"}}]}}
 ''')

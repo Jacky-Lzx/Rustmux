@@ -679,12 +679,35 @@ impl Notifications {
     }
 }
 
+/// Source of an unnamed tab's label. Explicit window names always take priority.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TabName {
+    #[default]
+    Application,
+    Title,
+}
+
+impl TabName {
+    fn parse(value: Option<&toml::Value>) -> Result<Self, String> {
+        match value {
+            None => Ok(Self::default()),
+            Some(value) => match value.as_str() {
+                Some("application") => Ok(Self::Application),
+                Some("title") => Ok(Self::Title),
+                _ => Err("tab_name must be 'application' or 'title'".to_owned()),
+            },
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Config {
     source: Option<reload::Source>,
     manager: manager::Bindings,
     theme: crate::theme::Theme,
     shell: OsString,
+    tab_name: TabName,
     notifications: Notifications,
     scrollback_lines: usize,
     default_mode: DefaultMode,
@@ -749,6 +772,10 @@ impl Config {
         &self.shell
     }
 
+    pub fn tab_name(&self) -> TabName {
+        self.tab_name
+    }
+
     pub fn notifications(&self) -> Notifications {
         self.notifications.clone()
     }
@@ -767,6 +794,7 @@ struct ParsedConfig {
     manager: manager::Bindings,
     theme: crate::theme::Theme,
     shell: Option<String>,
+    tab_name: TabName,
     notifications: Notifications,
     scrollback_lines: Option<usize>,
     default_mode: DefaultMode,
@@ -820,6 +848,7 @@ fn resolve_config(configured: ParsedConfig) -> Config {
             configured.shell.map(OsString::from),
             env::var_os("SHELL"),
         ),
+        tab_name: configured.tab_name,
         notifications: configured.notifications,
         scrollback_lines: configured
             .scrollback_lines
@@ -962,6 +991,7 @@ fn parse_config(source: &str) -> Result<ParsedConfig, String> {
             .transpose()?
             .unwrap_or_default(),
         shell,
+        tab_name: TabName::parse(document.get("tab_name"))?,
         notifications,
         scrollback_lines,
         default_mode: DefaultMode::parse(document.get("default_mode"), shortcuts)?,
@@ -2150,6 +2180,35 @@ clear_defaults = true
     }
 
     #[test]
+    fn tab_name_modes_are_validated_and_resolved() {
+        assert_eq!(
+            resolve_config(parse_config("").unwrap()).tab_name(),
+            TabName::Application
+        );
+        assert_eq!(
+            resolve_config(parse_config("tab_name='title'").unwrap()).tab_name(),
+            TabName::Title
+        );
+        assert_eq!(
+            parse_config("tab_name='application'").unwrap().tab_name,
+            TabName::Application
+        );
+        for source in [
+            "tab_name=1",
+            "tab_name=true",
+            "tab_name=[]",
+            "tab_name='shell'",
+            "tab_name=''",
+            "tab_name='Title'",
+        ] {
+            assert!(
+                parse_config(source).unwrap_err().contains("tab_name"),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
     fn parser_reads_shell_scrollback_and_ignores_future_configuration() {
         assert_eq!(
             parse_config(
@@ -2166,6 +2225,7 @@ preset = "mocha"
                 manager: manager::Bindings::default(),
                 theme: crate::theme::Theme::default(),
                 shell: Some("/opt/homebrew/bin/fish".to_owned()),
+                tab_name: TabName::default(),
                 notifications: Notifications::default(),
                 scrollback_lines: Some(5000),
                 default_mode: DefaultMode::Locked,
