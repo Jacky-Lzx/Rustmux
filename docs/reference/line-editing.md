@@ -39,4 +39,6 @@ byte-by-byte input, exact rows, counts, malformed commands, cursor and wrap,
 Unicode, alternate-screen isolation and one-cell grids. The real CLI PTY test
 checks all four commands with a fixed header and footer.
 
-[Character Editing](character-editing.md) adds ICH/DCH/ECH. Horizontal margins and replies beyond standard DSR remain unsupported. Full Neovim compatibility is not yet claimed.
+[Character Editing](character-editing.md) adds ICH/DCH/ECH. Horizontal margins remain unsupported. Additional replies are documented in
+[Terminal Status Replies](status-replies.md) and
+[Terminal Capability Queries](terminal-capabilities.md). Full Neovim compatibility is not yet claimed.

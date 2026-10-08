@@ -103,6 +103,10 @@ status.
 
 ## Review and verification
 
+> Historical record: the checks, branch names and review status in this section
+> describe the original implementation revision. They are not the current
+> branch or deployment status. See [Branches and Compatibility](documentation-status.md#historical-verification-records).
+
 Read `src/config/reload.rs`, source selection in `src/config.rs`, then the safe
 input boundary and application paths in `src/terminal.rs`. Existing notification
 and snapshot services receive their new options through `src/pane.rs` and
@@ -120,7 +124,7 @@ input, notifications on an existing pane, saving settings, reconnects, source
 anchoring and default-file deletion. Linux CI and installed-client validation
 have not been performed.
 
-This implementation awaits the owner's final review and does not record feature
+This implementation awaited the owner's final review and does not record feature
 acceptance in the shared ledger.
 
 Local cumulative verification on macOS, 2026-10-01:

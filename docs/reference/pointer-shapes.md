@@ -67,6 +67,10 @@ snapshots; restored workspaces start fresh child programs with empty stacks.
 
 ## Review and verification
 
+> Historical record: the checks, branch names and review status in this section
+> describe the original implementation revision. They are not the current
+> branch or deployment status. See [Branches and Compatibility](documentation-status.md#historical-verification-records).
+
 Based on reviewed interface-theme commit `94179dd` and the fixed `main` reference
 `57d598657ad7acf00d6a0ddf734fba8f48d50e4c`. `main` already supports pointer tracking.
 Its set path clears the entire stack; this implementation replaces the top entry,
@@ -96,6 +100,6 @@ Clippy with all targets/features and warnings denied, formatting checks,
 test-only temporary vector with an array for Clippy, all four pointer model
 tests were rerun successfully.
 
-This review branch has not been pushed. Linux CI and actual GUI pointer appearance
+This review branch had not been pushed. Linux CI and actual GUI pointer appearance
 have not been verified; the local tests inspect protocol bytes and runtime state.
-This change awaits owner review and does not update the shared acceptance ledger.
+This change awaited owner review and does not update the shared acceptance ledger.

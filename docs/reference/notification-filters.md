@@ -64,6 +64,10 @@ suppressed; an empty exclusion list continues to allow reminders.
 
 ## Review and verification
 
+> Historical record: the checks, branch names and review status in this section
+> describe the original implementation revision. They are not the current
+> branch or deployment status. See [Branches and Compatibility](documentation-status.md#historical-verification-records).
+
 The base is reviewed directional-focus commit `9ecff78`, merged into
 `main-human`. This increment implements `main`'s `enabled` and
 `exclude_applications` notification settings while retaining the human track's
@@ -86,7 +90,7 @@ jobs, adding/removing filters, invalid-update isolation, the enabled switch,
 ordinary BEL markers, startup jobs that exec over their shell, unchanged child
 PIDs and detached completion.
 
-This branch awaits owner review. Linux CI and installed-client validation have
+This branch awaited owner review. Linux CI and installed-client validation have
 not been performed; the shared acceptance ledger is unchanged.
 
 Local cumulative verification on macOS, 2026-10-01, using Rust 1.99.0:

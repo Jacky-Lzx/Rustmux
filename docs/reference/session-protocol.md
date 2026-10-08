@@ -37,8 +37,10 @@ encoding and decoding.
 
 Protocol version 6 added two 16-bit pixel dimensions to `Hello` and `Resize`.
 The local client forwards `TIOCGWINSZ` values without guessing from row and
-column counts; the server preserves them in its frontend resize event. It does
-not yet distribute cell pixel sizes to panes or enable image rendering. Old
+column counts; the server preserves them in its frontend resize event. The
+runtime derives exact cell pixels for pane geometry and displays supported
+[Kitty graphics](kitty-graphics.md) when the attachment passes capability discovery.
+Unknown or inexact sizes do not enable image display. Old
 clients and servers need to restart to use this incompatible frame layout.
 Version 5 added the legacy-shortcut flag to `Attached`. A server
 with `clear_defaults = true` clears it so the attached client forwards

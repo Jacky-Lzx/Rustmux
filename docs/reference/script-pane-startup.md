@@ -54,6 +54,10 @@ the source pane's command. Creation alone does not force a snapshot disk write.
 
 ## Review and verification
 
+> Historical record: the checks, branch names and review status in this section
+> describe the original implementation revision. They are not the current
+> branch or deployment status. See [Branches and Compatibility](documentation-status.md#historical-verification-records).
+
 This increment follows reviewed pane-resize commit `5ac76bc`, now merged into
 `main-human`. `main` at `57d598657ad7acf00d6a0ddf734fba8f48d50e4c` also lacks these
 creation arguments, though project layouts already support startup commands.
@@ -77,7 +81,7 @@ selection/History isolation, retained job exit and respawn, detached creation,
 saved metadata and command replay at restored sizes. Typed commands are verified
 to stay outside startup metadata. Client exits check restored terminal attributes.
 
-This branch awaits owner review and does not update the shared acceptance ledger.
+This branch awaited owner review and does not update the shared acceptance ledger.
 Linux CI and installed-client validation have not been performed.
 
 Local cumulative verification on macOS, 2026-10-01:

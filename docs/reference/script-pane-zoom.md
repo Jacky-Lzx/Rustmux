@@ -58,6 +58,10 @@ it does not resume the old processes. Handshake and snapshot formats are unchang
 
 ## Review and verification
 
+> Historical record: the checks, branch names and review status in this section
+> describe the original implementation revision. They are not the current
+> branch or deployment status. See [Branches and Compatibility](documentation-status.md#historical-verification-records).
+
 The base is reviewed `close-window` commit `94665e4`, merged into `main-human`.
 Both tracks already support interactive pane zoom. `main` at
 `57d598657ad7acf00d6a0ddf734fba8f48d50e4c` also lacks this script command.
@@ -80,7 +84,7 @@ default toggling, retained exited targets without respawn, detached operations,
 stable live process identities and server PID, and saved selection/zoom restoration
 with fresh startup processes. Client exits verify restored outer terminal attributes.
 
-This branch awaits owner review and does not update the shared acceptance ledger.
+This branch awaited owner review and does not update the shared acceptance ledger.
 Linux CI and installed-client validation have not been performed.
 
 Local cumulative verification on macOS, 2026-10-01, using Rust 1.99.0:

@@ -74,6 +74,10 @@ resolved diagnostic output, not a configuration-file template.
 
 ## Review and verification
 
+> Historical record: the checks, branch names and review status in this section
+> describe the original implementation revision. They are not the current
+> branch or deployment status. See [Branches and Compatibility](documentation-status.md#historical-verification-records).
+
 Review theme parsing and fallback colors in `src/theme.rs`, config/diagnostics
 integration, then the applied runtime palette in `src/terminal.rs`. Rendering
 uses it through `src/chrome.rs`, `src/pane_view.rs`, `src/prompt.rs`,
@@ -88,7 +92,7 @@ and child PIDs/variables, invalid updates rejected atomically, Help deferral,
 History entry, reconnects, independent manager themes, manager reload during
 search and discovered-config deletion.
 
-This change awaits owner review. Installed-terminal visual inspection and Linux
+This change awaited owner review. Installed-terminal visual inspection and Linux
 CI have not been performed for this review branch.
 
 Local cumulative verification on macOS, 2026-10-03:

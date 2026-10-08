@@ -41,7 +41,8 @@ Base64, cancellation and unfinished strings produce no request.
 
 Clipboard reads (`?`) are unsupported and receive no response. Rustmux does not
 forward them to the outer terminal. Kitty OSC 5522 reads use the separate [rich clipboard policy](rich-clipboard.md);
-rich writes use `clipboard_write`, while file transfer OSC 5113 remains unsupported. Clipboard-like sequences inside other
+rich writes use `clipboard_write`. [OSC 5113 file transfer](file-transfer.md) uses
+its own `file_transfer` policy. Clipboard-like sequences inside other
 OSC/DCS/APC/SOS/PM strings never trigger a write.
 
 ## Lifetime and delivery
@@ -75,9 +76,13 @@ The existing child-reply reservation and session wire format are unchanged.
 
 ## Review and verification
 
+> Historical record: the checks, branch names and review status in this section
+> describe the original implementation revision. They are not the current
+> branch or deployment status. See [Branches and Compatibility](documentation-status.md#historical-verification-records).
+
 Base: reviewed OSC 21 commit `32690a3`. Fixed `main` reference:
 `57d598657ad7acf00d6a0ddf734fba8f48d50e4c`. Both tracks already emit OSC 52 for
-built-in copying (`main` uses `src/app.rs::copy_to_clipboard`). Neither forwards
+built-in copying (the fixed reference uses [src/app.rs](https://github.com/Jacky-Lzx/Rustmux/blob/main-AI/src/app.rs)'s `copy_to_clipboard`). Neither forwards
 child OSC 52 at that baseline. This increment fills that terminal-multiplexer gap
 with opt-in, bounded writes rather than unrestricted control forwarding.
 
@@ -101,5 +106,5 @@ mdBook build passed. The first full run encountered a shell `setpgid` error in
 the existing pane-size fixture; its isolated rerun and the subsequent complete
 run passed. That fixture was not modified.
 
-The shared acceptance ledger is unchanged; this branch awaits owner review and
-has not been pushed. GitHub CI and actual GUI clipboard contents remain unverified.
+The shared acceptance ledger is unchanged; this branch awaited owner review and
+had not been pushed. GitHub CI and actual GUI clipboard contents remain unverified.

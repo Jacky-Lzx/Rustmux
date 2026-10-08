@@ -23,8 +23,8 @@ reappear through DECRC or leaving the alternate screen.
 
 The parser discards unfinished control-sequence state and continues parsing
 bytes after RIS normally. Status/cursor queries immediately observe reset state.
-ESC c inside an OSC/DCS payload is ignored as payload; CSI c is a different,
-currently unsupported device-attributes query.
+ESC c inside an OSC/DCS payload is ignored as payload; CSI c is a separate
+[device-attributes query](device-attributes.md) with a conservative reply.
 
 RIS changes the screen model only. It does not restart the shell, change PTY
 size or termios, clear queued keyboard input/replies, or reset the outer terminal.
@@ -40,7 +40,9 @@ A real CLI PTY test resets from an alternate graphics screen and then returns
 to an interactive shell prompt.
 
 [Soft reset (DECSTR)](soft-reset.md) restores modes without erasing text.
-Device-attribute replies and terminal capability queries remain future work. Hardware-terminal power-on behavior is outside this model.
+[Device-attribute replies](device-attributes.md) and bounded
+[terminal capability queries](terminal-capabilities.md) are implemented.
+Hardware-terminal power-on behavior is outside this model.
 
 RIS also disables bracketed paste, Kitty keyboard enhancements, application
 cursor keys, application keypad and backarrow-key mode. The next rendered frame

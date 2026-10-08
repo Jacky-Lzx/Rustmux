@@ -42,6 +42,10 @@ or the Session Manager can restore a saved workspace into a new server.
 
 ## Review and verification
 
+> Historical record: the checks, branch names and review status in this section
+> describe the original implementation revision. They are not the current
+> branch or deployment status. See [Branches and Compatibility](documentation-status.md#historical-verification-records).
+
 This increment follows reviewed terminal-device commit `4aaa820`, now merged
 into `main-human`. `main` at `57d598657ad7acf00d6a0ddf734fba8f48d50e4c` also lacks
 this scripting command, though interactive window renaming already exists in
@@ -66,7 +70,7 @@ A raw application checks absence of spurious focus bytes, application cursor
 mode, unchanged process metadata and actual PTY dimensions. Client exits verify
 restored outer terminal attributes.
 
-This branch awaits owner review and does not update the shared acceptance ledger.
+This branch awaited owner review and does not update the shared acceptance ledger.
 Linux CI and installed-client validation have not been performed.
 
 Local cumulative verification on macOS, 2026-10-01:

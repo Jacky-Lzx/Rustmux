@@ -52,6 +52,10 @@ a command buffered in earlier reads.
 
 ## Review and verification
 
+> Historical record: the checks, branch names and review status in this section
+> describe the original implementation revision. They are not the current
+> branch or deployment status. See [Branches and Compatibility](documentation-status.md#historical-verification-records).
+
 Base: reviewed color-stack commit `70f8d1e`. Fixed `main` reference:
 `57d598657ad7acf00d6a0ddf734fba8f48d50e4c`,
 `src/terminal.rs::TerminalOscTracker::apply_kitty_colors`.
@@ -81,5 +85,5 @@ all 45 real PTY scenarios, with 6 pre-existing ignored tests. The final focused
 PTY run also passed, including an explicitly checked 84,000-byte response burst.
 All-target/all-feature Clippy with warnings denied, formatting, Python syntax,
 `git diff --check` and the mdBook build passed. The shared acceptance ledger is
-unchanged. This branch awaits owner review and has not
+unchanged. This branch awaited owner review and had not
 been pushed; GitHub CI and GUI color appearance remain unverified.

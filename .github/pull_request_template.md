@@ -1,6 +1,6 @@
 ## Scope
 
-Track: `main-human`
+Target branch: `main` (formerly `main-human`)
 Feature IDs:
 Refs: <!-- linked issue; avoid automatic closing references before acceptance -->
 Behavior and acceptance criteria:
@@ -8,7 +8,7 @@ Explicit exclusions:
 
 ## Implementation
 
-Approach and intentional differences from the fixed main reference:
+Approach and intentional differences from the fixed `main-AI` reference:
 Reading order, resource ownership and error paths:
 
 ## Verification

@@ -73,6 +73,10 @@ intact, and the existing overall frame cap is unchanged.
 
 ## Review and verification
 
+> Historical record: the checks, branch names and review status in this section
+> describe the original implementation revision. They are not the current
+> branch or deployment status. See [Branches and Compatibility](documentation-status.md#historical-verification-records).
+
 Based on reviewed hover commit `8d5869b`, with `main` reference fixed at
 `57d598657ad7acf00d6a0ddf734fba8f48d50e4c`. The reference uses a separate
 `HyperlinkTracker` and reconstructs pane-scoped IDs. This increment puts links in
@@ -98,5 +102,5 @@ all-feature Clippy with warnings denied, formatting, `git diff --check` and the
 mdBook build passed.
 
 GUI clicking and URI launching have not been tested. This branch has
-not been pushed or tested in Linux CI and awaits owner review; it does not update
+not been pushed or tested in Linux CI and awaited owner review; it does not update
 the shared acceptance ledger.

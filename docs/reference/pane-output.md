@@ -78,6 +78,10 @@ server identity and generation when resuming cursors.
 
 ## Review and verification
 
+> Historical record: the checks, branch names and review status in this section
+> describe the original implementation revision. They are not the current
+> branch or deployment status. See [Branches and Compatibility](documentation-status.md#historical-verification-records).
+
 Read `src/pane_output.rs` for bounded storage and cursor semantics, then
 `src/pane.rs` for the PTY hook and respawn transition. `src/terminal/control.rs`
 resolves IDs and validates retention; `src/control.rs` implements client polling
@@ -93,6 +97,6 @@ Local cumulative verification on macOS, 2026-10-01:
 - `cargo clippy --all-targets --all-features --locked --offline -- -D warnings`,
   Rust formatting, `git diff --check` and the mdBook build passed.
 
-This implementation awaits the owner's review. Linux CI and installed-client
+This implementation awaited the owner's review. Linux CI and installed-client
 validation were not performed. Logging is opt-in through an explicit running
 client; automatic server-side logging and log rotation remain future work.

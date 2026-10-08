@@ -66,6 +66,10 @@ for correction/retry.
 
 ## Review and verification
 
+> Historical record: the checks, branch names and review status in this section
+> describe the original implementation revision. They are not the current
+> branch or deployment status. See [Branches and Compatibility](documentation-status.md#historical-verification-records).
+
 Read `src/config/manager.rs`, then `src/session/picker.rs` and `picker/worker.rs`.
 `src/session.rs` checks both workspace identities; `src/persistence.rs` performs
 the exclusive filesystem operation. `src/config/diagnostics.rs` exports the new
@@ -79,7 +83,7 @@ verify the rename action and strict diagnostics. The real PTY scenario
 source/target sessions starting during editing, lock contention, retry, editing under config reload, repeated
 confirmation, list updates and restored split panes/history under the new name.
 
-This increment awaits the owner's review and does not record acceptance in the
+This increment awaited the owner's review and does not record acceptance in the
 shared ledger. Linux CI and installed-client validation have not been performed.
 
 Local cumulative verification on macOS, 2026-10-01:

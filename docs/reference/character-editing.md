@@ -41,6 +41,7 @@ combinations across mixed wide and narrow text, style and suffix preservation,
 renderer replay, one-cell grids and alternate isolation. The real CLI PTY test
 checks ICH, DCH and ECH on visible text.
 
-Horizontal margins and queries beyond standard DSR remain
-unsupported. These operations improve full-screen application compatibility but
+Horizontal margins remain unsupported. Additional replies are documented in
+[Terminal Status Replies](status-replies.md) and
+[Terminal Capability Queries](terminal-capabilities.md). These operations improve full-screen application compatibility but
 do not imply complete Neovim support.

@@ -46,5 +46,5 @@ and newly exposed rows use the active background without text decorations.
 The [Unicode layer](unicode.md) adds incremental decoding, wide cells and bounded
 zero-width suffixes using unicode-width. [Alternate Screen](alternate-screen.md) adds an isolated
 second grid and saved main state. [Screen Model Resize](screen-resize.md) defines
-clipping and growth for both grids. The [renderer](rendering.md) emits full frames;
+clipping and growth for both grids. The [renderer](rendering.md) emits full or incremental frames;
 the CLI now queues these frames in its event loop.

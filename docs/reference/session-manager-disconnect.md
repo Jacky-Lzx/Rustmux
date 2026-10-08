@@ -64,6 +64,10 @@ fork path. Config changes do not cancel accepted work.
 
 ## Review and verification
 
+> Historical record: the checks, branch names and review status in this section
+> describe the original implementation revision. They are not the current
+> branch or deployment status. See [Branches and Compatibility](documentation-status.md#historical-verification-records).
+
 Read `src/config/manager.rs` and its exported defaults, then
 `src/session/picker.rs` and `picker/worker.rs`. The control request, workspace lock
 and server checks are in `src/control.rs` and `src/terminal.rs`.
@@ -91,7 +95,7 @@ client, and verifies that the late request and peer disappearance preserve the
 server and panes. Depending on EOF ordering, the request may report no attached client
 or be accepted before the connection disappears.
 
-This branch awaits owner review and does not update the shared acceptance ledger.
+This branch awaited owner review and does not update the shared acceptance ledger.
 Linux CI and installed-client validation have not been performed.
 
 Local cumulative verification on macOS, 2026-10-01:

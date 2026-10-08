@@ -53,6 +53,7 @@ integrity, renderer replay, alternate isolation and resize behavior.
 The real CLI PTY test also checks a fixed header/footer through LF and RI.
 
 [Line Editing](line-editing.md) adds IL/DL and explicit SU/SD scrolling.
-[Character Editing](character-editing.md) adds ICH/DCH/ECH; horizontal margins
-and replies beyond standard DSR remain future work. This step does not claim complete
+[Character Editing](character-editing.md) adds ICH/DCH/ECH. Horizontal margins
+remain unsupported; [Terminal Status Replies](status-replies.md) and
+[Terminal Capability Queries](terminal-capabilities.md) describe additional replies. This step does not claim complete
 Neovim compatibility.

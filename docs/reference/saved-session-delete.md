@@ -59,6 +59,10 @@ concurrent callers from locking different files for the same name.
 
 ## Review and verification
 
+> Historical record: the checks, branch names and review status in this section
+> describe the original implementation revision. They are not the current
+> branch or deployment status. See [Branches and Compatibility](documentation-status.md#historical-verification-records).
+
 The main changes are in `src/session/picker.rs`, its `worker.rs` module,
 `src/session.rs`, `src/session/supervisor.rs` and `src/persistence.rs`.
 Two new unit tests verify deletion scope, unsafe metadata, corrupt snapshots,
@@ -68,7 +72,7 @@ reloaded keys, old-key disabling, lock failure and retry, preservation of anothe
 workspace, disappearance from `ls`, open-manager refresh and continued use after
 deletion. Existing live termination and restoration scenarios remain enabled.
 
-This increment awaits the owner's review. It does not record acceptance in the
+This increment awaited the owner's review. It does not record acceptance in the
 shared ledger. Linux CI and installed-client validation have not been performed.
 
 Local cumulative verification on macOS, 2026-10-01:

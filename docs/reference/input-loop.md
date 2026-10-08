@@ -109,10 +109,21 @@ are required. Local validation is on macOS; Linux results require the CI run.
 
 ## Current compatibility
 
-The CLI now depends on our parser's supported subset. Queries beyond standard/private [DSR and pane size/extent reports](status-replies.md), [terminal identity](device-attributes.md), [DECRQM](mode-queries.md), DECRQSS [cursor-style](cursor-shape.md), [scroll-region](scrolling-regions.md) and [SGR](text-styles.md) queries and the [Kitty keyboard query](kitty-keyboard.md), mouse extensions and full emoji shaping are not implemented. Programs requiring
-those features may display incorrectly or wait for an unsupported terminal reply.
-Full-screen editor compatibility is not yet an acceptance claim. There is no
-split layout or persistent session support.
+The parser and runtime implement the documented subset, including standard/private
+[DSR and pane size/extent reports](status-replies.md),
+[terminal identity](device-attributes.md), [DECRQM](mode-queries.md), DECRQSS
+[cursor-style](cursor-shape.md), [scroll-region](scrolling-regions.md) and
+[SGR](text-styles.md) queries, bounded [XTGETTCAP](terminal-capabilities.md),
+[Kitty keyboard input](kitty-keyboard.md), [mouse reporting](mouse-reporting.md),
+and [Kitty graphics](kitty-graphics.md) with capability and sizing checks.
+[Split panes](interactive-splits.md), [floating panes](floating-terminal.md) and
+[persistent named sessions](session-cli.md) are part of the runtime.
+
+Unsupported queries are not forwarded arbitrarily. Applications requiring them
+can display incorrectly or wait for a reply. [Unicode](unicode.md) includes
+specific emoji sequences rather than full shaping. `cargo compat` provides
+opt-in checks for installed applications; it does not certify every editor,
+terminal or plugin combination.
 
 [Terminal Status Replies](status-replies.md) describes DSR responses and how
 reply capacity participates in PTY read backpressure.
@@ -122,7 +133,7 @@ events and mode synchronization on changes.
 [Kitty Keyboard Protocol](kitty-keyboard.md) describes per-pane enhancement
 flags, encoded prefix shortcuts and outer-terminal synchronization.
 
-[Mouse Reporting](mouse-reporting.md) describes supported single-pane mouse modes.
+[Mouse Reporting](mouse-reporting.md) describes per-pane modes and coordinate routing.
 
 The PTY shape checks retain the last emitted cursor shape across frames, matching
 incremental mode synchronization. The large query fixture is executed from a

@@ -1,22 +1,24 @@
 # Human Review Requirements
 
-**Current contribution scope:** `main-human` only accepts PRs that fix bugs in
+`main` is the former `main-human`; `main-AI` is the former `main`. The branch
+rename preserves the existing contribution scope and review requirements.
+
+**Current contribution scope:** `main` only accepts PRs that fix bugs in
 its existing code and issues reporting those bugs. Feature implementation PRs
 and feature-related issues are not currently accepted on this track; target
-`main` and use `track:main` instead, including for features already available on
-`main` but not yet implemented on `main-human`.
+`main-AI` instead, including for features available there but not on `main`.
 
 This scope restriction does not change the owner's ability to implement features
 through personal direct commits.
 
-The owner may personally commit directly to `main-human` without a PR or a
+The owner may personally commit directly to `main` without a PR or a
 separate PR review record, and is responsible for reviewing those changes before
 committing. This exception does not apply to AI actions using the owner's Git
 identity. AI and other contributors need a PR and the owner's personal review
 of the final commit.
 
-Use `track:main-human` for eligible bug reports and bug-fix PRs targeting
-`main-human`. The target branch determines policy.
+The target branch determines policy. Existing `track:main-human` and `track:main`
+labels use the former names; do not infer a label rename from the branch rename.
 AI may design, implement, test and suggest review findings. AI must not write
 owner confirmation, infer approval from authorship or successful CI, or mark a
 feature accepted without the owner's explicit acceptance record.
@@ -38,8 +40,8 @@ For owner direct commits, link the commit SHA instead of a PR in the acceptance
 record. Direct submission does not automatically accept a feature or close an
 issue; verification and the owner's explicit acceptance remain required.
 
-The shared ledger and progress page live on `main`. Only count functionality
-that is present on `main-human`, verified against its criteria and personally
+The historical ledger and progress page remain on `main-AI`. Only count functionality
+that is present on `main`, verified against its criteria and personally
 accepted.
 
 These are repository policies, not an assertion that GitHub protection rules or

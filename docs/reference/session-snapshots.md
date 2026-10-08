@@ -75,7 +75,9 @@ autosave_interval_seconds = 30
 
 All three saving options default to disabled (`false`, `false`, `0`). Explicit
 manual saving remains available with those defaults and saves only the layout.
-Configuration is loaded when the server starts; these settings do not hot reload.
+Saving settings and the autosave interval can [hot reload](config-reload.md).
+Updates apply to subsequent captures; an already queued snapshot can finish
+using its previous options.
 
 `save_scrollback` includes up to `scrollback_lines` physical rows per pane, drawn
 from retained primary history and meaningful visible primary rows. The existing
@@ -102,7 +104,7 @@ capture output produced after the last completed save if the server is forcibly
 killed or power is lost. Formatting and disk writes use one background worker;
 pending requests are coalesced into the newest captured workspace. Detach and
 shutdown wait for ordered writes. Screen grid copies and directory capture still
-run on the event loop; this first implementation has no unchanged-pane cache.
+run on the event loop; there is no unchanged-pane cache.
 
 Write failures preserve the running panes and are reported to manual callers.
 An attached session shows `Save failed:` in its footer until a subsequent save
@@ -111,8 +113,9 @@ succeeds. Detached failures remain visible on the next attachment.
 ## Storage and bounds
 
 Snapshots live in `$XDG_STATE_HOME/rustmux/main-human/sessions`, or
-`~/.local/state/rustmux/main-human/sessions`. This track uses a separate namespace
-because its schema differs from `main`; neither track imports the other's files.
+`~/.local/state/rustmux/main-human/sessions`. The branch rename retains this
+storage namespace. Its schema differs from `main-AI`; neither implementation
+imports the other's files.
 The directory must be owned by the user with no group/other permissions; newly
 created directories use mode 0700 and files use 0600. Files are replaced through
 a synced temporary file in the same directory. Symlinks, nonregular files,

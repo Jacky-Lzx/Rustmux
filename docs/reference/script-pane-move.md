@@ -61,6 +61,10 @@ remain compatible, and interactive close-undo storage is unaffected.
 
 ## Review and verification
 
+> Historical record: the checks, branch names and review status in this section
+> describe the original implementation revision. They are not the current
+> branch or deployment status. See [Branches and Compatibility](documentation-status.md#historical-verification-records).
+
 The base is reviewed `swap-pane` commit `623821a`, merged into `main-human`.
 Both tracks already support interactive pane movement; `main` at
 `57d598657ad7acf00d6a0ddf734fba8f48d50e4c` also lacks this script command.
@@ -89,7 +93,7 @@ positions restored with fresh startup jobs. Editor coverage also checks a
 temporary pane as the neighbor of a normal pane created by interactive split.
 Client exits verify restored outer terminal attributes.
 
-This branch awaits owner review and does not update the shared acceptance ledger.
+This branch awaited owner review and does not update the shared acceptance ledger.
 Linux CI and installed-client validation have not been performed.
 
 Local cumulative verification on macOS, 2026-10-01, using Rust 1.99.0:

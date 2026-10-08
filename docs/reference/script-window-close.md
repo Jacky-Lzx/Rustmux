@@ -57,6 +57,10 @@ snapshot can recreate them.
 
 ## Review and verification
 
+> Historical record: the checks, branch names and review status in this section
+> describe the original implementation revision. They are not the current
+> branch or deployment status. See [Branches and Compatibility](documentation-status.md#historical-verification-records).
+
 The base is reviewed `close-pane` commit `344ed59`, merged into `main-human`.
 Both tracks have interactive window closure; `main` at
 `57d598657ad7acf00d6a0ddf734fba8f48d50e4c` also lacks this script command.
@@ -81,7 +85,7 @@ last-window behavior, final multi-pane window protection while attached and
 detached, saved survivor selection/zoom and restoration without replaying removed
 jobs. Client exits verify restored outer terminal attributes.
 
-This branch awaits owner review and does not update the shared acceptance ledger.
+This branch awaited owner review and does not update the shared acceptance ledger.
 Linux CI and installed-client validation have not been performed.
 
 Local cumulative verification on macOS, 2026-10-01, using Rust 1.99.0:
@@ -116,8 +120,8 @@ for the parsed marker allowed the same focus-out and closure assertions to pass.
 The normal corrected scenario also passed five consecutive runs. These controlled
 copies are local diagnostics rather than additional repository test targets.
 
-This repair is isolated from the pending notification-filter feature and awaits
-owner review. The repaired revision has not been pushed or run in GitHub CI.
+This repair is isolated from the pending notification-filter feature and awaited
+owner review. The repaired revision had not been pushed or run in GitHub CI.
 
 Local verification of the CI repair, using Rust 1.99.0:
 

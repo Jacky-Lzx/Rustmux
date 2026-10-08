@@ -1,6 +1,7 @@
 # Summary
 
 - [Overview](index.md)
+- [Branches and Compatibility](reference/documentation-status.md)
 - [Build and Run](getting-started/quick-start.md)
 - [Native Development Configuration](reference/dev-config.md)
 - [Configuration Diagnostics](reference/config-diagnostics.md)

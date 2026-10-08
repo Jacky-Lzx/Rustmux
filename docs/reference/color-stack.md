@@ -60,6 +60,10 @@ OSC limit and per-byte reply bound are unchanged.
 
 ## Review and verification
 
+> Historical record: the checks, branch names and review status in this section
+> describe the original implementation revision. They are not the current
+> branch or deployment status. See [Branches and Compatibility](documentation-status.md#historical-verification-records).
+
 Based on reviewed hyperlink commit `6385135`, with `main` reference fixed at
 `57d598657ad7acf00d6a0ddf734fba8f48d50e4c`. The reference's `TerminalOscTracker`
 implements the same OSC push/pop commands and 32-entry retention. This increment
@@ -88,9 +92,9 @@ mdBook build passed.
 This increment covers the existing foreground/background/cursor/ANSI profile.
 Selection-specific colors and XTerm
 XTPUSHCOLORS/XTPOPCOLORS/XTREPORTCOLORS aliases remain outside its scope. The shared
-acceptance ledger is unchanged; the new feature awaits owner review.
+acceptance ledger is unchanged; the new feature awaited owner review.
 
-The branch has not been pushed. Linux CI and actual GUI color appearance have not
+The branch had not been pushed. Linux CI and actual GUI color appearance have not
 been verified.
 
 The subsequent [OSC 21 increment](structured-colors.md) uses this same saved

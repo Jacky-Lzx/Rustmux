@@ -52,6 +52,10 @@ without taking the interactive-client lease.
 
 ## Review and verification
 
+> Historical record: the checks, branch names and review status in this section
+> describe the original implementation revision. They are not the current
+> branch or deployment status. See [Branches and Compatibility](documentation-status.md#historical-verification-records).
+
 This increment follows reviewed window-rename commit `c08c29b`, now merged into
 `main-human`. `main` at `57d598657ad7acf00d6a0ddf734fba8f48d50e4c` also lacks this
 script command. Interactive resizing exists in both tracks. The human track's
@@ -80,7 +84,7 @@ wire requests, failed-request History isolation, successful refresh, zoom,
 65535-cell clamping, detached mutation, saving and restored PTY dimensions.
 Client exits also verify restored outer terminal attributes.
 
-This branch awaits owner review and does not update the shared acceptance ledger.
+This branch awaited owner review and does not update the shared acceptance ledger.
 Linux CI and installed-client validation have not been performed.
 
 Local cumulative verification on macOS, 2026-10-01:

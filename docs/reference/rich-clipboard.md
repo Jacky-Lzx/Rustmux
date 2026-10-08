@@ -89,6 +89,10 @@ its eventual reply cannot enter a replacement request.
 
 ## Scope and review
 
+> Historical record: the checks, branch names and review status in this section
+> describe the original implementation revision. They are not the current
+> branch or deployment status. See [Branches and Compatibility](documentation-status.md#historical-verification-records).
+
 Rich writes use `clipboard_write`, independently of `clipboard_read`, as described
 below. [OSC 52 writes](pane-clipboard.md) use the same write policy. OSC 52 reads,
 nested tmux wrappers remain unsupported. [Kitty file transfer OSC 5113](file-transfer.md)
@@ -222,7 +226,7 @@ including all 49 nested-PTY scenarios; 6 pre-existing tests remained ignored.
 All-target/all-feature Clippy with warnings denied, formatting, Python syntax,
 `git diff --check` and mdBook build passed. After Clippy's equivalent condition
 cleanup, all 12 terminal lifecycle unit tests and both rich clipboard PTY
-scenarios passed again. This review branch has not been pushed; GitHub CI and
+scenarios passed again. This review branch had not been pushed; GitHub CI and
 physical Kitty/OS clipboard behavior remain unverified.
 
 
@@ -295,4 +299,4 @@ Clippy with warnings denied, formatting, Python syntax, mdBook build and
 passed the new paste and existing rich read/write scenarios but failed the
 manager visibility assertion because concurrent session rows placed its helper
 outside the viewport; the complete CI-concurrency rerun passed. This branch
-has not been pushed; physical Kitty gestures and OS clipboard remain unverified.
+had not been pushed; physical Kitty gestures and OS clipboard remain unverified.

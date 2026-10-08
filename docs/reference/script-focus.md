@@ -55,6 +55,10 @@ coordinating independent interactive operations.
 
 ## Review and verification
 
+> Historical record: the checks, branch names and review status in this section
+> describe the original implementation revision. They are not the current
+> branch or deployment status. See [Branches and Compatibility](documentation-status.md#historical-verification-records).
+
 This increment follows reviewed `attach --create` commit `d322483`. `main` at
 `57d598657ad7acf00d6a0ddf734fba8f48d50e4c` also lacks these commands.
 This adds a scripting capability beyond current `main` without importing its
@@ -76,7 +80,7 @@ prefix reset, detached selection/snapshot focus, retained exited panes,
 application cursor modes, actual focus/blur bytes, absence of duplicate focus
 events and terminal restoration.
 
-This branch awaits owner review and does not update the shared acceptance ledger.
+This branch awaited owner review and does not update the shared acceptance ledger.
 Linux CI and installed-client validation have not been performed.
 
 Local cumulative verification on macOS, 2026-10-01:

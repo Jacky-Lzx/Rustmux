@@ -578,8 +578,9 @@ retains references as they enter scrollback, until their known row extent falls
 out of retained history. If height is unknown, only full-screen shifts move its
 anchor; its visibility and expiry cannot yet be determined. An overflowing
 event batch safely drops anchored references but keeps image data. Horizontal
-shifts, resize/reflow relocation, automatic on-screen composition, and
-scrollback rendering remain out of scope. These choices follow the scrolling
+shifts, resize/reflow relocation, and scrollback rendering remain out of scope.
+On-screen composition and redraw are implemented in the runtime paths below.
+These choices follow the scrolling
 rules in the
 [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
 

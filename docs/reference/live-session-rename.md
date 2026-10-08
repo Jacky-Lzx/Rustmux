@@ -50,6 +50,10 @@ accepted by the server. A refreshed list shows the resulting filesystem state.
 
 ## Client protocol and review
 
+> Historical record: the checks, branch names and review status in this section
+> describe the original implementation revision. They are not the current
+> branch or deployment status. See [Branches and Compatibility](documentation-status.md#historical-verification-records).
+
 Protocol version 7 adds a bounded `Renamed` notice. The attached client updates
 its supervisor identity without exiting input/output forwarding. Notices use
 nonblocking writes and preserve output framing under backpressure. A local
@@ -74,7 +78,7 @@ and Cancel, unchanged pane PID and shell variables, later manual/autosaves,
 single-client exclusion, old-name reuse and cleanup isolation. The saved-rename
 scenario still checks a saved editor whose source becomes live while editing.
 
-This branch awaits owner review. It does not update the shared acceptance ledger.
+This branch awaited owner review. It does not update the shared acceptance ledger.
 Linux CI and installed-client validation have not been performed.
 
 Local cumulative verification on macOS, 2026-10-01:

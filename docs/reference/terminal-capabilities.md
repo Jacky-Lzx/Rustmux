@@ -62,6 +62,10 @@ emitted to the outer clipboard or outer terminal as an XTGETTCAP response.
 
 ## Review and verification
 
+> Historical record: the checks, branch names and review status in this section
+> describe the original implementation revision. They are not the current
+> branch or deployment status. See [Branches and Compatibility](documentation-status.md#historical-verification-records).
+
 Base: `main-human` commit `1a3d8a9`. Fixed `main` comparison:
 `57d598657ad7acf00d6a0ddf734fba8f48d50e4c`. No explicit XTGETTCAP handler exists
 in that reference. This increment fills a terminal capability-query gap.
@@ -86,6 +90,6 @@ mdBook build passed. The existing cursor-shape test's old unsupported `+q`
 expectation was updated to the new invalid-capability response; its other DCS
 rejection checks remain covered.
 
-The shared acceptance ledger is unchanged; this feature awaits owner review.
-The review branch has not been pushed. GitHub CI and live Vim/Neovim behavior
+The shared acceptance ledger is unchanged; this feature awaited owner review.
+The review branch had not been pushed. GitHub CI and live Vim/Neovim behavior
 for this new feature remain unverified.

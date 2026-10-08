@@ -136,8 +136,9 @@ The real CLI PTY test checks all replies and large bursts of status, identity an
 text-area-size, screen-size and displayed-extent requests, producing more reply bytes than fit
 in the queue while the child reads concurrently.
 
-Other private DSR values, dynamic colors after the text cursor, named colors
-and other terminal capability queries remain unsupported.
+Other private DSR values, dynamic colors after the text cursor and named colors
+remain unsupported. Bounded [XTGETTCAP](terminal-capabilities.md) queries use a
+separate documented capability subset.
 [Mode queries](mode-queries.md) support the explicitly listed ANSI/private modes.
 
 [Device attributes](device-attributes.md) provide conservative DA1, DA2 and DA3 replies.

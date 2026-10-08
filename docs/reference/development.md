@@ -21,9 +21,9 @@ is run manually with Python and OpenSSH. It is not invoked by `cargo test` or CI
 
 ## Contributions
 
-The contribution policy uses the former branch names: `main-human` is now
-`main`, and the former `main` is now `main-AI`. The workflow update does not change
-contribution scope, review requirements or issue labels.
+`main` is the former `main-human`, and `main-AI` is the former `main`.
+The branch rename preserves contribution scope and review requirements.
+Existing issue labels may still use the former branch names.
 
 The owner may personally commit directly. AI and other contributors require a
 PR and the owner's review. See the branch's
@@ -46,3 +46,6 @@ and publishes only `main`'s documentation. The former `main-human` is now `main`
 `main-AI` retains the older implementation. The build uses this branch's content,
 edit links, search index and default mdBook theme, without another checkout or the
 former dual-track build scripts. Local builds do not publish anything.
+
+See [Branches and Compatibility](documentation-status.md) for storage paths,
+configuration differences and how to interpret historical verification records.

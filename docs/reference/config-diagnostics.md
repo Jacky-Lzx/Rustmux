@@ -20,7 +20,7 @@ rustmux check-config --config ./rustmux-defaults.toml --strict
 ```
 
 `default-config` (alias `dump-config`) prints a reusable TOML template of the
-scalar defaults and Session Manager keys implemented on `main-human`. It does not load user configuration,
+scalar defaults and Session Manager keys. It does not load user configuration,
 even if `--config` names a missing or invalid file. It does not write files itself.
 Pane-mode keybinding defaults remain implicit: the template deliberately avoids pinning a
 separate copy of the binding tables. See [windows](windows.md) and
@@ -134,6 +134,10 @@ settings. See [Interface Themes](interface-themes.md) and
 
 ## Review and verification
 
+> Historical record: the checks, branch names and review status in this section
+> describe the original implementation revision. They are not the current
+> branch or deployment status. See [Branches and Compatibility](documentation-status.md#historical-verification-records).
+
 Read `src/config/diagnostics.rs`, then the shared reader and resolver in
 `src/config.rs`, CLI definitions in `src/cli.rs`, and command dispatch in
 `src/main.rs`. `tests/config_cli.rs` runs the actual binary with pipes and
@@ -144,7 +148,7 @@ overrides, nested invocation, and preservation of files and state directories.
 
 The library tests check template equivalence and binding diagnostics across all
 supported modes, including custom entry keys and default-cleared configurations.
-This implementation awaits the owner's final review; it does not record feature
+This implementation awaited the owner's final review; it does not record feature
 acceptance in the shared ledger. Linux CI and installed-client checks were not
 performed.
 

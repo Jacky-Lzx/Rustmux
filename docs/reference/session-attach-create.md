@@ -51,6 +51,10 @@ is no automatic retry or takeover. Retry after the competing operation finishes.
 
 ## Review and verification
 
+> Historical record: the checks, branch names and review status in this section
+> describe the original implementation revision. They are not the current
+> branch or deployment status. See [Branches and Compatibility](documentation-status.md#historical-verification-records).
+
 This increment follows the reviewed Session Manager disconnect feature. Its
 reference is `main` commit `57d598657ad7acf00d6a0ddf734fba8f48d50e4c`,
 `src/cli.rs` (`AttachArgs`) and `src/session.rs` (`attach_or_create`). Intentional
@@ -73,7 +77,7 @@ history, fresh shell state, strict plain attachment, restored termios, missing
 terminal, nested invocation, invalid config/snapshot, workspace lock contention,
 unsafe pathname preservation and stale-socket recovery.
 
-This branch awaits owner review. It does not update the shared acceptance ledger.
+This branch awaited owner review. It does not update the shared acceptance ledger.
 Linux CI and installed-client validation have not been performed.
 
 Local cumulative verification on macOS, 2026-10-01:

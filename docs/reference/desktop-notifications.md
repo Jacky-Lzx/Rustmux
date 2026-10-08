@@ -59,6 +59,10 @@ time prefix and checked serial; serial exhaustion suppresses further messages.
 
 ## Review and verification
 
+> Historical record: the checks, branch names and review status in this section
+> describe the original implementation revision. They are not the current
+> branch or deployment status. See [Branches and Compatibility](documentation-status.md#historical-verification-records).
+
 The base is the signed merge of reviewed notification filters `05ed354` and
 CI fix `4ffdd29`. Both original commits remain in `main-human` history.
 `main` at `57d5986` already emits OSC 99 completion notifications. This human
@@ -77,7 +81,7 @@ stream and checks title/body identity, Unicode pane titles, desktop-only and
 combined delivery, short commands, in-flight enabling/disabling, exclusions,
 invalid-update isolation, unchanged child PIDs, detached activity and no replay.
 
-The branch awaits owner review. Linux CI and real desktop banner/Notification
+The branch awaited owner review. Linux CI and real desktop banner/Notification
 Center display have not been verified for this revision. The shared acceptance
 ledger is unchanged.
 

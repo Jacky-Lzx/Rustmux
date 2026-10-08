@@ -1,7 +1,7 @@
 # Native development configuration
 
 `examples/config-dev.toml` records the development configuration for
-`main-human`. It uses the implemented mode and action names. To inspect and run
+`main`. It uses the implemented mode and action names. To inspect and run
 it from the repository root:
 
 ```sh

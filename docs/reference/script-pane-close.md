@@ -57,6 +57,10 @@ Script closure does not change a previously stored interactive undo record.
 
 ## Review and verification
 
+> Historical record: the checks, branch names and review status in this section
+> describe the original implementation revision. They are not the current
+> branch or deployment status. See [Branches and Compatibility](documentation-status.md#historical-verification-records).
+
 This increment is based on reviewed CI compatibility fix `3c1c6d3`, now merged
 into `main-human`, and includes the reviewed startup-arguments implementation.
 `main` at `57d598657ad7acf00d6a0ddf734fba8f48d50e4c` also lacks
@@ -84,7 +88,7 @@ and detached, retained pane cleanup, window renumbering, saved survivor geometry
 and restoration without replaying removed startup jobs. Client exits check
 restored outer terminal attributes.
 
-This branch awaits owner review and does not update the shared acceptance ledger.
+This branch awaited owner review and does not update the shared acceptance ledger.
 Linux CI and installed-client validation have not been performed.
 
 Local cumulative verification on macOS, 2026-10-01, using Rust 1.99.0 (the

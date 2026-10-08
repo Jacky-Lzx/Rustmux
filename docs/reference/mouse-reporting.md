@@ -1,6 +1,6 @@
 # Mouse Reporting
 
-The single pane can request these DEC private modes with CSI ? Ps h/l:
+Each pane can request these DEC private modes with CSI ? Ps h/l:
 
 | Ps | Behavior |
 | --- | --- |

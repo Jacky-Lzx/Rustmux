@@ -45,4 +45,6 @@ commands, saved state, alternate switching, resize, one-cell grids and renderer
 replay. The real CLI PTY fixture verifies visible row placement with DECOM,
 VPA and CHA, followed by returning to screen-relative coordinates.
 
-Horizontal margins and queries beyond standard DSR remain future work.
+Horizontal margins remain unsupported. Additional replies are documented in
+[Terminal Status Replies](status-replies.md) and
+[Terminal Capability Queries](terminal-capabilities.md).

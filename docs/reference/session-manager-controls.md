@@ -107,6 +107,10 @@ The pane processes continue running while the manager is open.
 
 ## Review and verification
 
+> Historical record: the checks, branch names and review status in this section
+> describe the original implementation revision. They are not the current
+> branch or deployment status. See [Branches and Compatibility](documentation-status.md#historical-verification-records).
+
 Read `src/config/manager.rs`, then `src/session/picker.rs` and its
 `worker.rs` module. `src/config/reload.rs` provides the shared bounded reader
 and explicit picker shutdown. Source propagation and revalidation are in
@@ -122,7 +126,7 @@ failure isolation, config reload/recovery, editing text, list refresh and
 preserved shell state. Existing creation, termination and restoration PTY
 scenarios provide cumulative coverage of worker shutdown before forking.
 
-This branch awaits the owner's final review and does not record feature
+This branch awaited the owner's final review and does not record feature
 acceptance in the shared ledger. Linux CI and installed-client validation have
 not been performed.
 

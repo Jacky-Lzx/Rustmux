@@ -76,8 +76,7 @@ rejected. The old key stops invoking an action when it is replaced. The footer
 and shortcut-help panel show the configured keys. Mode-based bindings below also
 configure supported actions and the LOCKED entry key.
 
-The first mode-based bindings are also accepted in main's `[keybinds.normal]`
-format. They take precedence over `[shortcuts]` for `new-window`,
+Mode-based bindings use `[keybinds.normal]`. They take precedence over `[shortcuts]` for `new-window`,
 `new-pane-right`, and `new-pane-down` when followed by `switch-mode` to
 `locked`; a standalone `switch-mode` action to `locked` can cancel NORMAL mode.
 For example:
@@ -91,14 +90,14 @@ N = { actions = ["new-window", { action = "switch-mode", mode = "locked" }] }
 "Ctrl g" = { actions = [{ action = "switch-mode", mode = "locked" }] }
 ```
 
-The first PANE-mode bindings from main's configuration also work. Bind a
+PANE mode accepts the documented action bindings. Bind a
 NORMAL-mode key to `switch-mode` `pane`, then use `[keybinds.pane]` for
 `break-pane`, `new-pane-right`, `new-pane-down`, `focus-left/down/up/right`,
 `focus-next-pane`, `toggle-pane-zoom`, `close-pane`, and `switch-mode` back to
 `normal` or `locked`. Focus commands keep PANE mode; structural commands return
 to LOCKED when followed by `switch-mode` `locked`. `display = "always"` picks
 the preferred key shown in the footer when more than one key invokes an action.
-For example, with main's configuration, Ctrl-B then Ctrl-P opens PANE mode;
+For example, a configured Ctrl-P entry lets Ctrl-B then Ctrl-P open PANE mode;
 `h/j/k/l` or unmodified arrow keys change focus without leaving it, while `r`
 splits right and exits. Both CSI and application-cursor (SS3) arrow reports
 work; modified arrows are not treated as unmodified bindings.
@@ -108,7 +107,7 @@ right. The destination becomes active; if the source window empties, it closes.
 An invalid destination split leaves both windows unchanged and rings the bell.
 Esc exits without reaching the shell.
 
-Main-style RESIZE mode is also supported: a `[keybinds.normal]` binding such as
+RESIZE mode is supported: a `[keybinds.normal]` binding such as
 `r = { actions = [{ action = "switch-mode", mode = "resize" }] }` enters it.
 In `[keybinds.resize]`, bind `resize-pane-left/down/up/right` to `h/j/k/l` or
 the matching arrow keys. Repeated presses adjust the active pane's border one
@@ -117,8 +116,8 @@ layout unchanged. A standalone `switch-mode` binding can return to NORMAL,
 PANE, or LOCKED; Esc exits without passing a byte to the shell. The footer
 shows RESIZE and the configured directional shortcuts.
 
-Main-style MOVE mode is supported too: bind `switch-mode` to `move` in
-`[keybinds.normal]` (main's `Ctrl m` works), then bind `move-pane-left/down/up/right`
+MOVE mode is supported: bind `switch-mode` to `move` in
+`[keybinds.normal]` (for example, `Ctrl m`), then bind `move-pane-left/down/up/right`
 under `[keybinds.move]`. `h/j/k/l` and unmodified arrow aliases exchange the
 active pane with its nearest neighbor in that direction without restarting
 either process; focus follows the active pane. Repeated moves stay in MOVE mode.
@@ -126,8 +125,8 @@ No neighbor or zoom leaves the layout unchanged. Configured transitions can
 return to NORMAL, PANE, RESIZE, or LOCKED; Esc exits locally. The footer shows
 the configured move keys and exits.
 
-Main-style TAB mode manages Rustmux windows (called tabs in the main config).
-Bind `switch-mode` to `tab` in `[keybinds.normal]`—main's `Ctrl t` works—and
+TAB mode manages Rustmux windows.
+Bind `switch-mode` to `tab` in `[keybinds.normal]` (for example, on `Ctrl t`), and
 use `[keybinds.tab]` for `next-window`, `previous-window`,
 `move-window-left/right`, `new-window`, `rename-window`, `close-window`, and
 `go-to-window` with a one-based `index` from 1 to 16. Navigation and reordering
@@ -138,25 +137,25 @@ Renaming returns to TAB mode after save or cancel, while the close confirmation
 returns to LOCKED. Unmodified left/right arrows, Tab, and numbered keys are
 accepted when bound. The footer shows available TAB actions; Esc exits locally.
 
-Named sessions also support main-style SESSION mode. Bind `switch-mode session`
-in `[keybinds.normal]` (main's `Ctrl o`), then use `[keybinds.session]` for
+Named sessions support SESSION mode. Bind `switch-mode session`
+in `[keybinds.normal]` (for example, `Ctrl o`), then use `[keybinds.session]` for
 `detach`, `switch-session` followed by `switch-mode locked`, and standalone
-`switch-mode` actions. With main's bindings, Ctrl-B then Ctrl-O enters SESSION;
+`switch-mode` actions. With those bindings, Ctrl-B then Ctrl-O enters SESSION;
 `d` detaches, `w` opens the Session Manager, `o` returns to NORMAL, and Esc
 returns to LOCKED. The footer shows the configured actions and accepts clicks.
 SESSION mode is unavailable in a local unnamed process. Recreate an existing
 named session after updating the binary because its server retains the code
 from when it started.
 
-Other mode tables and unsupported actions from main's larger configuration are
-still ignored. `clear_defaults = true` disables implicit NORMAL shortcuts,
+Other mode tables and unsupported actions are ignored; use `check-config --strict`
+to identify them. `clear_defaults = true` disables implicit NORMAL shortcuts,
 including the named-session client's legacy prefix-`d` and prefix-Ctrl-W
 fallbacks. Only supported actions explicitly bound in `[keybinds.normal]`
 or `[shortcuts]` remain active. An explicit `[keybinds.locked]` entry is
 required so LOCKED mode remains escapable; missing or non-Boolean
 `clear_defaults` values are rejected. Pressing the configured LOCKED entry
 key twice still sends one literal prefix byte. With the option omitted or false,
-the previous defaults remain. Unsupported actions in the larger main config
+the previous defaults remain. Unsupported actions in the larger legacy configuration
 still do not acquire bindings.
 
 A single
@@ -165,17 +164,17 @@ A single
 the default. Pressing the configured key twice sends one literal prefix byte to
 the child. The attached client receives the running server's effective prefix
 at connection time. Changing the entry key requires restarting the named
-session; ordinary supported bindings can reload live. PANE's floating action is
-not yet supported.
+session; ordinary supported bindings can reload live. PANE mode supports `toggle-floating-terminal`; see
+[Floating Terminal](../reference/floating-terminal.md).
 
 Standalone `switch-mode` bindings can now jump directly among the supported
-PANE, RESIZE, MOVE, TAB, and (for named sessions) SESSION modes. Main's
+PANE, RESIZE, MOVE, TAB, and (for named sessions) SESSION modes. Configured
 `Ctrl-M`, `Ctrl-T`, and `Ctrl-O` transitions work
 without returning through NORMAL or sending input to the shell. In byte-only
 terminal input, `Ctrl-M` and Enter are the same byte, so they cannot be separate
 bindings in one mode; Esc remains an unambiguous LOCKED exit.
 
-NORMAL mode also recognizes main-style `close-window`, `next-window`,
+NORMAL mode also recognizes `close-window`, `next-window`,
 `previous-window` (including `tab`), `move-window-left`, and `move-window-right`
 bindings followed by `switch-mode` to `locked`. The same sequence is supported for
 `show-help`, `switch-session`, `focus-left/down/up/right`, and `go-to-window`
@@ -312,8 +311,9 @@ command echo and the following prompt as best-effort boundaries.
 While browsing history, drag the left mouse button across text to copy that
 selection through OSC 52 when the button is released.
 
-Only the documented terminal-control subset is supported. Full-screen editors,
-terminal queries and extended mouse modes are not yet fully supported. Kitty
-keyboard flags and encoded Rustmux shortcuts are supported when the outer
-terminal implements the protocol; see
+Supported queries, mouse modes and Kitty extensions are described in
 [Input and Rendering Loop](../reference/input-loop.md#current-compatibility).
+Graphics require verified outer-terminal support and exact cell pixels. Emoji
+handling implements the [documented subset](../reference/unicode.md), rather than
+full text shaping. Use `cargo compat` for opt-in application checks; support for
+one tested application does not imply complete compatibility.

@@ -57,6 +57,10 @@ Actual appearance requires an outer terminal supporting
 
 ## Review and verification
 
+> Historical record: the checks, branch names and review status in this section
+> describe the original implementation revision. They are not the current
+> branch or deployment status. See [Branches and Compatibility](documentation-status.md#historical-verification-records).
+
 Based on reviewed pointer-state commit `03f63cf`, with `main` reference fixed at
 `57d598657ad7acf00d6a0ddf734fba8f48d50e4c`. The reference already has the default-off
 `mouse_hover_cursor` option and equivalent shape choices. This implementation
@@ -80,6 +84,6 @@ synchronized-output regression reproduced an early intermediate-frame repaint
 before the fix and passed afterward. Clippy with all targets/features and warnings
 denied, formatting checks, `git diff --check` and the mdBook build also passed.
 
-This branch has not been pushed. Linux CI and actual GUI pointer appearance have
-not been verified. The change awaits owner review and does not update the shared
+This branch had not been pushed. Linux CI and actual GUI pointer appearance have
+not been verified. The change awaited owner review and does not update the shared
 acceptance ledger.

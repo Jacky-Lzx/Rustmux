@@ -1,6 +1,6 @@
 # Basic Control Sequence Parser
 
-`rustmux::parser::Parser` incrementally applies UTF-8 text and a small CSI subset to
+`rustmux::parser::Parser` incrementally applies UTF-8 text and the documented control subset to
 `Screen`. Keep one parser per output stream and call `advance` with the same
 screen as chunks arrive. Incomplete sequences are retained between calls.
 The CLI uses this parser for all PTY output before rendering the screen.
@@ -101,8 +101,9 @@ metadata and OSC 133 command-output boundaries for Ctrl-B `e`.
 DCS retains at most 64 bytes to recognize supported DECRQSS and XTGETTCAP queries; other
 DCS, SOS and PM payloads are discarded through ST. Each pane's
 [Kitty graphics framer](kitty-graphics.md) extracts APC G commands before text
-and shell-output parsing; the normal runtime still discards them rather than
-displaying images. Other APC payloads remain unsupported. An unterminated string
+and shell-output parsing. The runtime stores supported commands and displays
+images when outer-terminal capability and cell sizing are verified; the text
+parser itself does not render images. Other APC payloads remain unsupported. An unterminated string
 continues to discard input until its terminator or cancellation. Other unsupported
 controls are ignored.
 UTF-8 decoding and replacement are
