@@ -179,7 +179,7 @@ impl HistoryView {
             editor_pending: None,
             last_output: None,
             source: source.clone(),
-            offset: source.history_len().min(source.dimensions().0),
+            offset: 0,
             escape: Vec::new(),
             escape_since: None,
             escape_started_in_search: false,
@@ -1577,12 +1577,44 @@ y={actions=["copy-history"],display="hidden"}
     }
 
     #[test]
+    fn initial_snapshot_matches_the_visible_screen_with_any_history_length() {
+        for history_rows in [0, 2, 9] {
+            let mut source = Screen::new(4, 12).unwrap();
+            let mut parser = Parser::new();
+            for index in 0..3 + history_rows {
+                parser.advance(&mut source, format!("old{index}\r\n").as_bytes());
+            }
+            parser.advance(
+                &mut source,
+                "\x1b[2J\x1b[H\x1b[31mA中e\u{301}\x1b[0m\r\nsecond\r\n".as_bytes(),
+            );
+            assert_eq!(source.history_len(), history_rows);
+
+            let view = HistoryView::new(&source).unwrap();
+            assert_eq!(view.offset, 0);
+            let rendered = view.render().unwrap();
+            for row in 0..source.dimensions().0 {
+                assert_eq!(
+                    rendered.row(row),
+                    source.row(row),
+                    "history={history_rows}, row={row}"
+                );
+            }
+
+            parser.advance(&mut source, b"later output\r\n");
+            assert_eq!(view.render().unwrap(), rendered);
+        }
+    }
+
+    #[test]
     fn snapshot_navigation_clips_wide_cells_and_does_not_follow_new_output() {
         let mut source = Screen::new(2, 4).unwrap();
         Parser::new().advance(&mut source, "A中B\r\nnext\r\nlast".as_bytes());
         source.resize_display(2, 2).unwrap();
         let mut view = HistoryView::new(&source).unwrap();
+        assert_eq!(view.render().unwrap().row(0), source.row(0));
         source.reset();
+        view.feed(b'g');
         let first = view.render().unwrap();
         assert_eq!(first.row(0).unwrap()[0].character, 'A');
         assert_eq!(first.row(0).unwrap()[1].character, ' ');
@@ -1720,12 +1752,12 @@ y={actions=["copy-history"],display="hidden"}
             b"\x07",
         ]
         .concat();
-        type_bytes(&mut view, b"y");
+        type_bytes(&mut view, b"gy");
         assert_eq!(view.take_copy().unwrap(), expected);
         // The frozen history row retains its old width, but the viewport clips it.
         source.resize_display(2, 1).unwrap();
         let mut narrow = HistoryView::new(&source).unwrap();
-        type_bytes(&mut narrow, b"y");
+        type_bytes(&mut narrow, b"gy");
         assert_eq!(narrow.take_copy().unwrap(), b"\x1b]52;c;Cm4=\x07"); // "\nn"
         type_bytes(&mut view, b"/y\x03\x1b[200~yyy\x1b[201~");
         assert!(view.take_copy().is_none());
@@ -1817,7 +1849,7 @@ y={actions=["copy-history"],display="hidden"}
         let mut source = Screen::new(2, 4).unwrap();
         Parser::new().advance(&mut source, "A中B\r\nnext\r\nlast".as_bytes());
         let mut view = HistoryView::new(&source).unwrap();
-        type_bytes(&mut view, b"vll");
+        type_bytes(&mut view, b"gvll");
         let selection = view.selection.unwrap();
         assert_eq!(selection.anchor, (0, 0));
         assert_eq!(selection.cursor, (0, 3)); // l skips the wide placeholder.
@@ -1903,7 +1935,7 @@ y={actions=["copy-history"],display="hidden"}
         assert_eq!(view.take_copy().unwrap(), osc52("bcdEF").unwrap());
 
         let mut view = HistoryView::new(&source).unwrap();
-        type_bytes(&mut view, b"\x1b[1;2C");
+        type_bytes(&mut view, b"g\x1b[1;2C");
         let selection = view.selection.unwrap();
         assert_eq!(selection.anchor, (0, 0));
         assert_eq!(selection.cursor, (0, 1));
@@ -1963,7 +1995,7 @@ y={actions=["copy-history"],display="hidden"}
         let mut source = Screen::new(2, 6).unwrap();
         Parser::new().advance(&mut source, "A中B  \r\nnext\r\nlast".as_bytes());
         let mut view = HistoryView::new(&source).unwrap();
-        type_bytes(&mut view, b"v\x1b[F");
+        type_bytes(&mut view, b"gv\x1b[F");
         assert_eq!(view.selection.unwrap().cursor, (0, 5));
         type_bytes(&mut view, b"\x1b[H");
         assert_eq!(view.selection.unwrap().cursor, (0, 0));
@@ -2018,6 +2050,7 @@ y={actions=["copy-history"],display="hidden"}
         Parser::new().advance(&mut source, b"row0\r\nrow1\r\nrow2\r\nrow3\r\nrow4");
 
         let mut view = HistoryView::new(&source).unwrap();
+        type_bytes(&mut view, b"kk");
         type_bytes(&mut view, b"\x1b[6;2~");
         let selection = view.selection.unwrap();
         assert_eq!(selection.anchor, (1, 0));
@@ -2094,7 +2127,7 @@ y={actions=["copy-history"],display="hidden"}
         let mut source = Screen::new(2, 4).unwrap();
         Parser::new().advance(&mut source, b"abcd\r\nnext\r\nlast");
         let mut view = HistoryView::new(&source).unwrap();
-        type_bytes(&mut view, b"vly");
+        type_bytes(&mut view, b"gvly");
         assert_eq!(view.take_copy().unwrap(), osc52("ab").unwrap());
         assert!(view.label(80).contains("Copy sent to terminal"));
         assert!(view.selection.is_none());

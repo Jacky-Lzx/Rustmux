@@ -1,9 +1,10 @@
 # Browsing History
 
 Ctrl-B `[` opens a read-only snapshot of the active pane's retained primary
-history and current screen. It initially moves up one pane-height, clamped to
-available history. When no rows have scrolled out yet, it opens at `History 0/0`
-and still freezes the current visible screen. Alternate-screen applications ignore entry.
+history and current screen. It opens at offset zero, preserving the current
+visible screen, including blank rows below the last output. Scroll up to browse
+older rows. When no rows have scrolled out yet, its status is `History 0/0`.
+Alternate-screen applications ignore entry.
 Other panes continue displaying live output. The top window bar remains visible.
 The bottom bar replaces `LOCKED` or `NORMAL` with a rectangular `HISTORY` badge,
 followed by the number of rows above the snapshot's bottom and the snapshot

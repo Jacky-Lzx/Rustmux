@@ -33,6 +33,67 @@ def expect_history_top(session):
         assert time.monotonic() < deadline, (session.physical_rows, bytes(session.output[-1000:]))
 
 
+# Both configured Enter and the default entry preserve the live pane viewport.
+for compact in (False, True):
+    with tempfile.TemporaryDirectory(prefix="rustmux-history-entry-") as directory:
+        config = os.path.join(directory, "config.toml")
+        with open(config, "w") as settings:
+            settings.write(f'''compact={str(compact).lower()}
+[keybinds.normal]
+enter={{actions=[{{action="switch-mode",mode="history"}}]}}
+[keybinds.history]
+"Ctrl u"={{actions=["scroll-page-up"]}}
+"Ctrl d"={{actions=["scroll-page-down"]}}
+''')
+        s = Session(arguments=("--config", config), lifetime=30)
+        expect_mode = expect_bar if compact else expect_footer
+        history_bottom = b"History 0/" if compact else b"HISTORY  0/"
+        try:
+            s.expect(b"RUSTMUX_READY> ")
+            s.send(b"stty -echo; PS1='LEFT_READY> '; printf '\\033[2J\\033[HLEFT_VIEW\\n'\n")
+            s.expect(b"LEFT_READY>")
+            s.send(b"\x02%")
+            s.expect(b"RUSTMUX_READY>")
+            s.send(b"stty -echo; i=0; while [ $i -lt 45 ]; do printf 'ENTRY_%02d\\n' $i; i=$((i+1)); done\n")
+            s.expect(b"ENTRY_44")
+            deadline = time.monotonic() + 3
+            while not any(b"RUSTMUX_READY>" in row for row in s.physical_rows[1:-1]):
+                s.read()
+                assert time.monotonic() < deadline, s.physical_rows
+
+            for entry in (b"\x02\r", b"\x02["):
+                before = list(s.physical_rows[1:-1])
+                assert any(b"LEFT_VIEW" in row for row in before)
+                s.send(entry)
+                expect_mode(s, history_bottom)
+                assert s.physical_rows[1:-1] == before, (compact, before, s.physical_rows)
+                s.send(b"\x15")
+                deadline = time.monotonic() + 3
+                while s.physical_rows[1:-1] == before:
+                    s.read()
+                    assert time.monotonic() < deadline, s.physical_rows
+                s.send(b"\x04")
+                expect_mode(s, history_bottom)
+                assert s.physical_rows[1:-1] == before
+                s.send(b"q")
+                expect_mode(s, b"LOCKED")
+                s.send(b"printf '\\033[2J\\033[HENTRY_TOP\\nENTRY_BOTTOM\\n'\n")
+                s.expect(b"ENTRY_BOTTOM")
+                deadline = time.monotonic() + 3
+                while not any(b"RUSTMUX_READY>" in row for row in s.physical_rows[1:-1]):
+                    s.read()
+                    assert time.monotonic() < deadline, s.physical_rows
+            s.send(b"exit 0\n")
+            deadline = time.monotonic() + 3
+            while any(b"RUSTMUX_READY>" in row for row in s.physical_rows[1:-1]):
+                s.read()
+                assert time.monotonic() < deadline, s.physical_rows
+            s.send(b"exit 0\n")
+            s.finish(0)
+        finally:
+            s.close()
+
+
 # A partially filled primary screen can enter history before it has scrollback.
 s = Session()
 try:
