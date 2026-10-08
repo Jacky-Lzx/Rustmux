@@ -57,3 +57,29 @@ result.frames.clear()
 for byte in incremental:
     feed(result, bytes([byte]))
 result.expect(marker)
+
+
+# The input-query fixture clears a width-two ZWJ glyph at the pane's right edge.
+# The simplified Python cell cache counts the cluster's codepoints separately,
+# leaving a suffix after an otherwise complete repaint. This must not hide a
+# success marker: the child validates reply bytes, not the reconstructed row tail.
+zwj_initial = (b"\x1b[?25l\x1b[0m\x1b[1;1H1 shell\x1b[2;1H"
+               + ("┌" + "─" * 78 + "┐").encode()
+               + b"\x1b[3;1H" + "│".encode() + b" " * 76 + "👩‍💻│".encode()
+               + b"\x1b[23;1H" + ("└" + "─" * 78 + "┘").encode()
+               + b"\x1b[24;1HLOCKED\x1b[6;5H\x1b[?25h")
+reply_frame = (b"\x1b[?25l\x1b[0m\x1b[3;2HREPLIES_OK" + b" " * 68
+               + b"\x1b[4;2H  \x1b[3;12H\x1b[?25h")
+for split in range(len(reply_frame) + 1):
+    result = session()
+    feed(result, zwj_initial)
+    result.output.clear()
+    result.frames.clear()
+    feed(result, reply_frame[:split])
+    feed(result, reply_frame[split:])
+    assert result.last_rows[1].startswith(b"REPLIES_OK"), result.last_rows
+    assert "‍💻".encode() in result.last_rows[1], result.last_rows
+    assert b"REPLIES_OK" not in result.last_rows, result.last_rows
+    with patch.object(result, "read", side_effect=AssertionError("marker was already rendered")):
+        result.expect(b"REPLIES_OK")
+    assert not result.frames and not result.output

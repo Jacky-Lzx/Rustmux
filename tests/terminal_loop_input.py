@@ -121,7 +121,10 @@ try:
         source.write(probe)
         source.flush()
         s.send(("exec python3 " + shlex.quote(source.name) + "\n").encode())
-        s.expect(b"\r\nREPLIES_OK\r\n")
+        # The probe emits this marker only after validating every reply. The
+        # simplified frame cache can retain a ZWJ suffix from the wide-glyph
+        # cases above, so success does not require an otherwise empty row.
+        s.expect(b"REPLIES_OK")
         s.finish(0)
 finally:
     s.close()
