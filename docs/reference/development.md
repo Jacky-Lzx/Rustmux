@@ -44,8 +44,10 @@ Open the preview at `http://localhost:8000/`, or use `mdbook serve` for live sou
 editing. GitHub Pages uses the same build command with its repository base path
 and publishes only `main`'s documentation. The former `main-human` is now `main`;
 `main-AI` retains the older implementation. The build uses this branch's content,
-edit links, search index and default mdBook theme, without another checkout or the
-former dual-track build scripts. Local builds do not publish anything.
+edit links and search index. Its homepage and visual theme come from `main-AI`,
+with presentation assets in `docs/theme/`, loaded by `book.toml`. They do not
+require another checkout or the former dual-track build scripts. Local builds do
+not publish anything.
 
 See [Branches and Compatibility](documentation-status.md) for storage paths,
 configuration differences and how to interpret historical verification records.

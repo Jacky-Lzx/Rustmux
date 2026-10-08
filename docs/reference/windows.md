@@ -14,8 +14,9 @@ edits the active label directly in the bar.
 - `select` focuses an ID. `select_next` and `select_previous` wrap in current display
   order. An empty collection returns `None`; a single window remains selected.
 - Renaming preserves identity, order, contents and focus. Names are opaque
-  metadata: empty and duplicate names are allowed. A future UI must handle
-  control-character escaping and interactive validation before rendering names.
+  metadata at the model level: empty and duplicate names are allowed. The
+  runtime validates names in its interactive editor and script interface before
+  displaying them; see [Script Window Rename](script-window-rename.md).
 - Closing an inactive window preserves the active window's identity. Closing
   the active window selects its successor, or its predecessor if it was last.
   Closing the only window leaves the collection empty; creating again works.
@@ -25,7 +26,8 @@ edits the active label directly in the bar.
 
 ## Ownership boundary
 
-`T` has no Clone requirement. It can later contain a PTY, parser and screen.
+`T` has no Clone requirement. The runtime uses `PaneSet<Pane>` to own PTYs,
+parsers and screens.
 Switching and renaming operate on metadata and never recreate or clone that
 content. `get_mut(id)` lets the event loop process background output without
 changing focus. `active_mut()` accesses the currently selected content.
@@ -36,10 +38,11 @@ window drops its content normally, and dropping the collection drops remaining
 contents. `into_content` transfers the removed content without cloning it.
 No terminal output or other I/O occurs inside this model.
 
-This keeps window identity separate from its owned pane layout. The broader
-`main` implementation also includes floating terminals and persistent sessions. This model is not an H05 feature-acceptance
-claim. The event loop reads inactive windows, routes keyboard input to the active
-window, and synchronizes display and modes when focus changes.
+This keeps window identity separate from its owned pane layout. The current
+runtime includes floating terminals and persistent sessions. These model
+boundaries do not constitute a feature-acceptance claim. The event loop reads
+inactive windows, routes keyboard input to the active window, and synchronizes
+display and modes when focus changes.
 
 ## Verification
 
@@ -149,7 +152,7 @@ remap the server's prefix.
 from NORMAL or another configured mode; `[keybinds.history]` configures its
 commands and exit target. LOCKED also accepts direct Ctrl-letter History entries.
 
-Main-style `[keybinds.normal]` can override the supported operations listed
+Mode-based `[keybinds.normal]` can override the supported operations listed
 in the quick start. `clear_defaults = true` removes implicit NORMAL commands
 and the attached client's legacy prefix-`d`/prefix-Ctrl-W shortcuts; a
 supported explicit LOCKED entry is required. Footer and help show only
@@ -191,7 +194,7 @@ move and exit keys, including clickable hints. Configured transitions can return
 to NORMAL, PANE, or RESIZE; Esc returns to LOCKED without reaching the child.
 
 A configured NORMAL-to-TAB binding enters a lavender `TAB` badge for window
-management. Main-style `[keybinds.tab]` supports previous/next window, moving a
+management. `[keybinds.tab]` supports previous/next window, moving a
 window left/right in the bar, creating, renaming and closing a window, and
 selecting a one-based window index from 1 to 16. Navigation and reordering
 can repeat in TAB mode; new and close actions honor a following `switch-mode
@@ -201,7 +204,7 @@ footer exposes clickable configured keys. Esc returns to LOCKED locally.
 NORMAL's footer also shows the configured TAB entry key as a clickable `Tab`
 hint when it fits; an unconfigured TAB mode adds no hint.
 In named sessions, a configured NORMAL-to-SESSION binding enters a lavender
-`SESSION` badge. Main-style `[keybinds.session]` binds `detach`,
+`SESSION` badge. `[keybinds.session]` binds `detach`,
 `switch-session` followed by `switch-mode locked`, and standalone transitions
 to NORMAL, PANE, RESIZE, MOVE, TAB, or LOCKED. The configured `d`, `w`, `o`,
 and Esc actions appear as clickable footer hints; unsupported actions and keys
@@ -465,8 +468,9 @@ order. Empty and single-window collections are unchanged. The active shell,
 stable ID, name, contents and last-window record are preserved. Numeric shortcuts
 and next/previous selection follow the resulting display order, as does the
 successor/predecessor rule when a window closes. New windows still append at the
-right edge. These changes last only for the current process; there is no saved
-window order across launches.
+right edge. [Named-session snapshots](session-snapshots.md) preserve the
+ordinary window order at save time and restore it when recreating the workspace.
+An unnamed foreground workspace has no saved order across launches.
 
 Reordering schedules a bar redraw through the normal frame cadence. It does not
 invalidate the child display or interrupt its synchronized-output transaction;

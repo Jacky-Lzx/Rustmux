@@ -11,6 +11,8 @@ create-missing = false
 [output.html]
 default-theme = "navy"
 preferred-dark-theme = "navy"
+additional-css = ["docs/theme/rustmux.css"]
+additional-js = ["docs/theme/rustmux.js"]
 git-repository-url = "https://github.com/Jacky-Lzx/Rustmux/tree/main"
 edit-url-template = "https://github.com/Jacky-Lzx/Rustmux/edit/main/{path}"
 site-url = "/"

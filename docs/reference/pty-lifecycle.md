@@ -46,8 +46,9 @@ after handling its failed child.
 
 ## Exit and I/O
 
-`Read` and `Write` expose the master byte stream for future event-loop integration.
-They are blocking; the tests use the borrowed master fd to enable nonblocking reads.
+`Read` and `Write` expose the master byte stream used by the event loop.
+Descriptors start blocking; `Pane::spawn` enables nonblocking runtime I/O, and
+low-level tests use the borrowed master fd to enable nonblocking reads.
 Linux PTY read EIO is normalized to end-of-file to match macOS hangup behavior.
 `try_wait` reaps without blocking and caches the exit status; `wait` may block and
 requires the caller to drain PTY output first. Shell exit can wait for terminal

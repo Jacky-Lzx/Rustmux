@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 220" role="img" aria-labelledby="title description">
+  <!-- 无障碍名称与图形说明 -->
+  <title id="title">Rustmux logo</title>
+  <desc id="description">A terminal window containing an R-shaped pane mark, followed by the Rustmux wordmark.</desc>
+
+  <!-- 可复用的颜色与视觉效果定义 -->
+  <defs>
+    <!-- 从绿色过渡到青色的品牌渐变，用于终端边框和 R 字标 -->
+    <linearGradient id="frame" x1="24" y1="24" x2="196" y2="196" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#BDF0B7"/>
+      <stop offset="0.55" stop-color="#A6E3A1"/>
+      <stop offset="1" stop-color="#89DCEB"/>
+    </linearGradient>
+    <!-- R 字标周围的柔和绿色光晕 -->
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="7" result="blur"/>
+      <feFlood flood-color="#A6E3A1" flood-opacity="0.2"/>
+      <feComposite in2="blur" operator="in"/>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- 左侧终端图标；整体向右下移动，为描边和光晕留出空间 -->
+  <g transform="translate(20 20)">
+    <!-- 带圆角和渐变描边的终端窗口外框 -->
+    <rect x="2" y="2" width="176" height="176" rx="35" fill="#101319" stroke="url(#frame)" stroke-width="4"/>
+    <!-- 终端标题栏与内容区域的分隔线 -->
+    <path d="M4 48H176" stroke="#394252" stroke-width="3"/>
+    <!-- 模拟桌面窗口的关闭、最小化和最大化控制点 -->
+    <circle cx="25" cy="26" r="5" fill="#F38BA8"/>
+    <circle cx="43" cy="26" r="5" fill="#F9E2AF"/>
+    <circle cx="61" cy="26" r="5" fill="#A6E3A1"/>
+
+    <!-- 加高的 R 字标：竖干、圆弧和斜腿由一条连续路径构成 -->
+    <path d="M53 151V66H94C116 66 130 78 130 96C130 114 116 126 94 126H53M94 126L134 151"
+          fill="none" stroke="url(#frame)" stroke-width="13" stroke-linecap="round" stroke-linejoin="round"
+          filter="url(#glow)"/>
+    <!-- pane 布局提示：一条纵向分隔线和一条右侧横向分隔线 -->
+    <path d="M141 70V146" stroke="#394252" stroke-width="3" stroke-linecap="round"/>
+    <path d="M141 111H160" stroke="#394252" stroke-width="3" stroke-linecap="round"/>
+  </g>
+
+  <!-- 右侧文字区域统一使用等宽字体，呼应终端界面 -->
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace">
+    <!-- 主字标：Rust 使用浅色，mux 使用品牌绿色 -->
+    <text x="236" y="137" font-size="82" font-weight="800" letter-spacing="-7"><tspan fill="#EDF3F8">Rust</tspan><tspan fill="#A6E3A1">mux</tspan></text>
+    <!-- 产品类别副标题 -->
+    <text x="242" y="174" fill="#778296" font-size="14" font-weight="700" letter-spacing="5">TERMINAL MULTIPLEXER</text>
+  </g>
+</svg>
