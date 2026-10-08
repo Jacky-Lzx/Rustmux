@@ -66,7 +66,7 @@ with tempfile.TemporaryDirectory(prefix="rustmux-disconnect-") as temporary:
         client.expect(b"RUSTMUX_READY>")
         client.send(b"stty -echo; KEEP=survives; printf 'DETACH_READY\\n'\n")
         client.expect(b"DETACH_READY")
-        panes = tomllib.loads(run(env, "list-panes", "-s", name, "--toml").stdout)["panes"]
+        panes = tomllib.loads(run(env, "pane", "list", "-s", name, "--toml").stdout)["panes"]
         original_pid = (runtime / f"{name}.pid").read_bytes()
         run(env, "save", name)
         snapshot = state / f"{name}.toml"
@@ -107,7 +107,7 @@ with tempfile.TemporaryDirectory(prefix="rustmux-disconnect-") as temporary:
         expect(picker, ("Disconnected " + name).encode())
         assert (runtime / f"{name}.pid").read_bytes() == original_pid
         assert snapshot.read_bytes() == original_snapshot
-        after = tomllib.loads(run(env, "list-panes", "-s", name, "--toml").stdout)["panes"]
+        after = tomllib.loads(run(env, "pane", "list", "-s", name, "--toml").stdout)["panes"]
         assert (after[0]["id"], after[0]["pid"]) == (panes[0]["id"], panes[0]["pid"])
         picker.send(b"\x7f")
         expect(picker, b"[DETACHED]")
@@ -182,7 +182,7 @@ with tempfile.TemporaryDirectory(prefix="rustmux-disconnect-") as temporary:
         client.finish(0)
         client.close()
         client = None
-        run(env, "show-config", "-s", name)
+        run(env, "config", "show", "-s", name)
         assert (runtime / f"{name}.pid").read_bytes() == original_pid
         assert offline.read_bytes() == original_snapshot
         picker.send(b"\x1b")
@@ -213,9 +213,9 @@ with tempfile.TemporaryDirectory(prefix="rustmux-disconnect-") as temporary:
             length = struct.unpack("!I", read_exact(wire, 4))[0]
             reply = tomllib.loads(read_exact(wire, length).decode())
             assert reply["ok"] or "no attached client" in reply["output"], reply
-        run(env, "show-config", "-s", name)
+        run(env, "config", "show", "-s", name)
         assert (runtime / f"{name}.pid").read_bytes() == original_pid
-        after = tomllib.loads(run(env, "list-panes", "-s", name, "--toml").stdout)["panes"]
+        after = tomllib.loads(run(env, "pane", "list", "-s", name, "--toml").stdout)["panes"]
         assert after[0]["pid"] == panes[0]["pid"]
     finally:
         if server_stopped:

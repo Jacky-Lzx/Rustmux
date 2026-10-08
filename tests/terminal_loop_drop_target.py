@@ -44,7 +44,7 @@ while True:
     client=None;counters=dict(A=0,B=0)
     def run(action,*args):
         target=[name] if action in ("new","kill") else ["-s",name]
-        result=subprocess.run([BINARY,action,*target,*map(str,args)],env=env,capture_output=True,text=True,timeout=8)
+        result=subprocess.run([BINARY, *action.split(),*target,*map(str,args)],env=env,capture_output=True,text=True,timeout=8)
         assert result.returncode==0,(action,result.stderr)
         return result.stdout
     def wait(predicate,detail="timeout",timeout=15):
@@ -73,11 +73,11 @@ while True:
     def support():identifier=outer("q");client.send(packet("t=q:i="+identifier))
     def policy(enabled):
         config.write_text(f"drop_target={str(enabled).lower()}\nremain_on_exit=true\n")
-        wait(lambda:tomllib.loads(run("show-config"))["settings"]["drop_target"]==enabled,"reload")
+        wait(lambda:tomllib.loads(run("config show"))["settings"]["drop_target"]==enabled,"reload")
     def attach():
         global client
         client=Session(extra_env=env,arguments=("attach",name),pixels=(800,480),lifetime=80)
-        if tomllib.loads(run("show-config"))["settings"]["drop_target"]:support()
+        if tomllib.loads(run("config show"))["settings"]["drop_target"]:support()
         client.expect(b"PROBE_A");clear()
     def detach():
         global client
@@ -87,8 +87,8 @@ while True:
     def event(kind):return packet(f"t={kind}:x=3:y=2:X=35:Y=47:o=3:m=0:i=7",b"text/plain image/png")
     launch=lambda label:"exec "+shlex.quote(sys.executable)+" -u "+shlex.quote(str(probe))+" "+shlex.quote(str(root))+" "+label
     try:
-        run("new","--detached");left=tomllib.loads(run("list-panes","--toml"))["panes"][0]["id"]
-        run("send-keys","-p",left,"--literal","--enter",launch("A"));right=int(run("split-pane","-p",left,"--command",launch("B")))
+        run("new","--detached");left=tomllib.loads(run("pane list","--toml"))["panes"][0]["id"]
+        run("pane send-keys","-p",left,"--literal","--enter",launch("A"));right=int(run("pane split","-p",left,"--command",launch("B")))
         wait(lambda:all(record(label) for label in counters));original={label:record(label)["pid"] for label in counters}
         command("A",packet("t=r:x=1:i=7"),packet("t=R:i=7:x=1",b"ENOSYS"));done("A")
         attach();command("A",packet("t=r:x=1:i=7"),packet("t=R:i=7:x=1",b"EPERM"));done("A");assert not packets()
@@ -106,7 +106,7 @@ while True:
         command("B",expected=event("M"));client.send(position("M",first,"B"));client.read(.02);assert record("B")["state"]!="done"
         client.send(position("M",identifier,"B"));done("B")
         clear();command("B",packet("t=r:x=1:i=7"));done("B");assert outer("r",x=1)==identifier
-        run("select-pane","-p",left)
+        run("pane select","-p",left)
         command("A",packet("t=r:x=1:i=7"),packet("t=R:i=7:x=1",b"EPERM"));done("A")
         payload=bytes(range(256))*1024;source=root/"source.bin";source.write_bytes(payload);encoded=base64.b64encode(source.read_bytes());host=b"";nested=b""
         for offset in range(0,len(encoded),4096):
@@ -131,8 +131,8 @@ while True:
         command("A",expected=event("M"));client.send(position("M",latest));done("A")
         command("A",expected=packet("t=R:i=7:x=0",b"ECANCELED"));raw=detach();done("A");assert packet(f"t=r:o=0:i={latest}") in raw and packet(f"t=A:i={latest}") in raw
         attach();command("A",packet("t=a:i=7",b"text/plain"));done("A");latest=outer("a",m=0)
-        os.kill(original["A"],15);wait(lambda:next(p for p in tomllib.loads(run("list-panes","--toml"))["panes"] if p["id"]==left)["output_complete"],"old process exit")
-        run("respawn-pane","-p",left,"--command",launch("R"));wait(lambda:record("R"));clear()
+        os.kill(original["A"],15);wait(lambda:next(p for p in tomllib.loads(run("pane list","--toml"))["panes"] if p["id"]==left)["output_complete"],"old process exit")
+        run("pane respawn","-p",left,"--command",launch("R"));wait(lambda:record("R"));clear()
         command("R",packet("t=a:i=7",b"text/plain"));done("R");replacement=outer("a",m=0);assert replacement!=latest
         command("R",expected=event("M"));client.send(position("M",latest));client.read(.02);assert record("R")["state"]!="done"
         client.send(position("M",replacement));done("R")

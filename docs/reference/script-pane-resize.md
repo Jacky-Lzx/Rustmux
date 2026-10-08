@@ -1,12 +1,12 @@
 # Script pane resize
 
 ```sh
-rustmux list-panes -s work --toml
-rustmux resize-pane -s work --direction right
-rustmux resize-pane -s work -p 2 --direction down --cells 3
+rustmux pane list -s work --toml
+rustmux pane resize -s work --direction right
+rustmux pane resize -s work -p 2 --direction down --cells 3
 ```
 
-`resize-pane` moves a pane's nearest ancestor separator of the matching
+`pane resize` moves a pane's nearest ancestor separator of the matching
 orientation. `left`/`right` move a column separator; `up`/`down` move a row
 separator. Directions describe separator movement, as in interactive resizing:
 `right` grows the left subtree and shrinks the right subtree, regardless of

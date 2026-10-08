@@ -43,13 +43,13 @@ while True:
 """)
 
     def run(action, *arguments, success=True):
-        result = subprocess.run([BINARY, action, "-s", name, *map(str, arguments)],
+        result = subprocess.run([BINARY, *action.split(), "-s", name, *map(str, arguments)],
                                 env=env, capture_output=True, text=True, timeout=8)
         assert (result.returncode == 0) == success, (action, arguments, result)
         return result
 
     def panes():
-        return tomllib.loads(run("list-panes", "--toml").stdout)["panes"]
+        return tomllib.loads(run("pane list", "--toml").stdout)["panes"]
 
     def active():
         return next(p["id"] for p in panes() if p["active"])
@@ -67,12 +67,12 @@ while True:
         return json.loads(path.read_text()) if path.exists() else None
 
     def start_probe(pane, label):
-        run("send-keys", "-p", pane, "--literal", "--enter",
+        run("pane send-keys", "-p", pane, "--literal", "--enter",
             "exec python3 -u " + shlex.quote(str(probe)) + " " + shlex.quote(str(root / f"{label}.json")))
         wait_until(lambda: record(label) is not None, f"probe {label} did not start")
         # Publishing the child log does not prove the server has parsed DECSET
         # 1004. Await its following marker before setup can change focus.
-        wait_until(lambda: "RESIZE_PROBE_READY" in run("capture-pane", "-p", pane).stdout,
+        wait_until(lambda: "RESIZE_PROBE_READY" in run("pane capture", "-p", pane).stdout,
                    f"server did not parse probe {label}'s focus-reporting setup")
 
     def sizes(expected):
@@ -88,7 +88,7 @@ while True:
             arguments += ["--cells", str(cells)]
         if pane is not None:
             arguments += ["-p", str(pane)]
-        result = run("resize-pane", *arguments, success=success)
+        result = run("pane resize", *arguments, success=success)
         if success:
             assert result.stdout == ""
         return result
@@ -122,11 +122,11 @@ while True:
         client.expect(b"RUSTMUX_READY>")
         left = active()
         start_probe(left, "left")
-        upper = int(run("split-pane", "-p", left).stdout)
+        upper = int(run("pane split", "-p", left).stdout)
         start_probe(upper, "upper")
-        lower = int(run("split-pane", "-p", upper, "--down").stdout)
+        lower = int(run("pane split", "-p", upper, "--down").stdout)
         start_probe(lower, "lower")
-        logs = int(run("new-window", "--name", "logs").stdout)
+        logs = int(run("window new", "--name", "logs").stdout)
         start_probe(logs, "logs")
         sizes({"left": (20, 38), "upper": (9, 38), "lower": (9, 38), "logs": (20, 78)})
         # Child state and server capture can precede the frontend mode update.
@@ -149,7 +149,7 @@ while True:
             assert record(label)["input"] == baseline[label]["input"], "resize emitted a focus event"
         assert all(record(label)["pid"] == baseline[label]["pid"] for label in baseline)
         assert client.private_modes.get(1), "resize changed application cursor mode"
-        run("select-window", "-w", 1)
+        run("window select", "-w", 1)
         assert active() == lower, "inactive resize changed remembered pane"
         resize("up")  # omitted target and one-cell default
         sizes({"upper": (10, 35), "lower": (8, 35)})
@@ -175,14 +175,14 @@ while True:
 
         client = Session(extra_env=env, arguments=("attach", name))
         client.expect(b"RESIZE_PROBE_READY")
-        run("select-window", "-w", 1)
+        run("window select", "-w", 1)
         client.send(b"\x02Z")
         wait_until(lambda: record("lower")["columns"] == 78, "zoom did not resize active pane")
         assert "zoomed" in resize("left", 1, lower, success=False).stderr
         sizes({"lower": (20, 78)})
         client.send(b"\x02Z")
         sizes({"lower": (8, 34)})
-        run("select-window", "-w", 2)
+        run("window select", "-w", 2)
         resize("right", 65535, lower)
         sizes({"upper": (10, 1), "lower": (8, 1), "left": (20, 75)})
         assert "cannot move" in resize("right", 1, lower, success=False).stderr

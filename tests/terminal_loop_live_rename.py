@@ -38,7 +38,7 @@ def edit(session, old, new):
 
 
 def panes(env, name):
-    return tomllib.loads(command(env, "list-panes", "-s", name, "--toml").stdout)["panes"]
+    return tomllib.loads(command(env, "pane", "list", "-s", name, "--toml").stdout)["panes"]
 
 
 with tempfile.TemporaryDirectory(prefix="rustmux-live-rename-") as root:
@@ -122,8 +122,8 @@ with tempfile.TemporaryDirectory(prefix="rustmux-live-rename-") as root:
         client.expect(b"KEEP:retained")
         busy = command(env, "attach", new, success=False)
         assert "already has an attached client" in busy.stderr, busy
-        command(env, "show-config", "-s", new)
-        command(env, "show-config", "-s", old, success=False)
+        command(env, "config", "show", "-s", new)
+        command(env, "config", "show", "-s", old, success=False)
         command(env, "save", new)
         assert saved(new).exists() and not saved(old).exists()
         picker.send(b"q")
@@ -193,7 +193,7 @@ with tempfile.TemporaryDirectory(prefix="rustmux-live-rename-") as root:
         for extension in ("sock", "pid", "lock", "last", "save", "control"):
             assert not (runtime / f"{detached}.{extension}").exists(), extension
         assert (runtime / f"{old}.pid").read_bytes() == reused_pid
-        command(env, "show-config", "-s", old)
+        command(env, "config", "show", "-s", old)
         assert saved(detached).exists() and saved(keep).read_bytes() == kept
     finally:
         if picker is not None:

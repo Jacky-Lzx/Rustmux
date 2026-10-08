@@ -1,4 +1,4 @@
-//! Command-line definitions for local and persistent sessions.
+//! Command-line definitions for sessions and grouped script controls.
 
 use std::path::PathBuf;
 
@@ -6,8 +6,16 @@ use clap::{Parser, Subcommand};
 
 use crate::session::SessionName;
 
+mod help;
+
 #[derive(Debug, Parser)]
-#[command(name = "rustmux", version, about = "A small terminal multiplexer")]
+#[command(
+    name = "rustmux",
+    version,
+    about = "A small terminal multiplexer",
+    styles = help::styles(),
+    help_template = help::root_template(),
+)]
 pub struct Cli {
     /// Load configuration from PATH instead of the default config file.
     #[arg(short = 'c', long, global = true, value_name = "PATH")]
@@ -20,18 +28,9 @@ pub struct Cli {
 pub enum Command {
     #[command(flatten)]
     Control(crate::control::Command),
-    /// Print a TOML template of built-in settings without loading user configuration.
-    #[command(name = "default-config", visible_alias = "dump-config")]
-    DefaultConfig,
-    /// Validate the selected config and report settings used by newly started sessions.
-    CheckConfig {
-        /// Print a machine-readable inspection report.
-        #[arg(long)]
-        toml: bool,
-        /// Treat ignored fields and bindings as errors.
-        #[arg(long)]
-        strict: bool,
-    },
+    /// Export defaults, validate a config file, or inspect a running session's settings.
+    #[command(subcommand)]
+    Config(ConfigCommand),
     /// Save a running session's layout and optional history to disk.
     #[command(name = "save-session", visible_alias = "save")]
     Save { name: SessionName },
@@ -74,6 +73,27 @@ pub enum Command {
         /// Skip the confirmation prompt.
         #[arg(short, long)]
         yes: bool,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Subcommand)]
+pub enum ConfigCommand {
+    /// Print a TOML template of built-in settings without loading user configuration.
+    #[command(visible_alias = "dump")]
+    Default,
+    /// Validate the selected config and report settings used by newly started sessions.
+    Check {
+        /// Print a machine-readable inspection report.
+        #[arg(long)]
+        toml: bool,
+        /// Treat ignored fields and bindings as errors.
+        #[arg(long)]
+        strict: bool,
+    },
+    /// Show a running server's active settings and configuration reload status as TOML.
+    Show {
+        #[command(flatten)]
+        target: crate::control::Target,
     },
 }
 
@@ -222,6 +242,116 @@ mod tests {
     #[test]
     fn clap_definition_is_internally_consistent() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn control_groups_require_an_operation_and_reject_old_flat_commands() {
+        for command in [
+            "default-config",
+            "dump-config",
+            "check-config",
+            "show-config",
+            "list-panes",
+            "select-pane",
+            "resize-pane",
+            "zoom-pane",
+            "swap-pane",
+            "move-pane",
+            "split-pane",
+            "close-pane",
+            "send-keys",
+            "capture-pane",
+            "read-pane-output",
+            "subscribe-pane",
+            "log-pane",
+            "respawn-pane",
+            "join-pane",
+            "break-pane",
+            "new-window",
+            "select-window",
+            "rename-window",
+            "close-window",
+            "move-window",
+        ] {
+            let error = Cli::try_parse_from(["rustmux", command, "--help"]).unwrap_err();
+            assert_eq!(error.kind(), clap::error::ErrorKind::InvalidSubcommand);
+        }
+        for arguments in [
+            &["rustmux", "config"][..],
+            &["rustmux", "config", "check-config"][..],
+            &["rustmux", "config", "show-config"][..],
+            &["rustmux", "pane"][..],
+            &["rustmux", "window"][..],
+            &["rustmux", "pane", "new"][..],
+            &["rustmux", "window", "split"][..],
+            &["rustmux", "pane", "select-pane"][..],
+            &["rustmux", "window", "new-window"][..],
+        ] {
+            assert!(Cli::try_parse_from(arguments).is_err(), "{arguments:?}");
+        }
+    }
+
+    #[test]
+    fn grouped_controls_accept_global_config_at_every_level() {
+        for (group, operation) in [
+            ("pane", "list"),
+            ("window", "new"),
+            ("config", "default"),
+            ("config", "check"),
+            ("config", "show"),
+        ] {
+            let baseline = Cli::try_parse_from(["rustmux", group, operation]).unwrap();
+            for arguments in [
+                vec!["rustmux", "-c", "dev config.toml", group, operation],
+                vec!["rustmux", group, "-c", "dev config.toml", operation],
+                vec!["rustmux", group, operation, "--config", "dev config.toml"],
+            ] {
+                let cli = Cli::try_parse_from(arguments).unwrap();
+                assert_eq!(cli.config, Some(PathBuf::from("dev config.toml")));
+                assert_eq!(cli.command, baseline.command);
+            }
+        }
+        assert_eq!(
+            Cli::try_parse_from(["rustmux", "pane", "ls", "--toml"])
+                .unwrap()
+                .command,
+            Cli::try_parse_from(["rustmux", "pane", "list", "--toml"])
+                .unwrap()
+                .command,
+        );
+    }
+
+    #[test]
+    fn config_operations_preserve_validation_flags_and_session_targets() {
+        assert_eq!(
+            Cli::try_parse_from(["rustmux", "config", "check", "--toml", "--strict"])
+                .unwrap()
+                .command,
+            Some(Command::Config(ConfigCommand::Check {
+                toml: true,
+                strict: true,
+            }))
+        );
+        assert_eq!(
+            Cli::try_parse_from(["rustmux", "config", "show", "-s", "work"])
+                .unwrap()
+                .command,
+            Some(Command::Config(ConfigCommand::Show {
+                target: crate::control::Target {
+                    session: SessionName::new("work").unwrap(),
+                },
+            }))
+        );
+        for operation in ["default", "dump"] {
+            assert_eq!(
+                Cli::try_parse_from(["rustmux", "config", operation])
+                    .unwrap()
+                    .command,
+                Some(Command::Config(ConfigCommand::Default))
+            );
+        }
+        assert!(Cli::try_parse_from(["rustmux", "config", "show", "-s", "../bad"]).is_err());
+        assert!(Cli::try_parse_from(["rustmux", "config", "default", "--strict"]).is_err());
     }
 
     #[test]

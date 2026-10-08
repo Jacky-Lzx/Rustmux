@@ -51,11 +51,11 @@ server's source. Opening it requires a valid initial configuration. Fixing an
 invalid file while the view remains open clears the error. Explicit-file
 deletion keeps the previous bindings; default-file deletion restores defaults.
 
-`check-config --toml` and `show-config` include a `[session_manager]` table of
+`config check --toml` and `config show` include a `[session_manager]` table of
 effective bindings. The former reads the selected file, while the latter reports
-the named server's applied configuration. `default-config` exports the manager
+the named server's applied configuration. `config default` exports the manager
 defaults too. `rename` supports live and saved workspaces. Unknown manager
-actions remain ignored and are reported by `check-config`; `--strict` rejects
+actions remain ignored and are reported by `config check`; `--strict` rejects
 those warnings.
 
 ## Manual saving

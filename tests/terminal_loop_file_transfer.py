@@ -61,7 +61,7 @@ while True:
     counters = dict(A=0, B=0)
     def run(action, *args):
         target = [name] if action in ("new","kill") else ["-s", name]
-        result = subprocess.run([BINARY,action,*target,*map(str,args)],env=env,capture_output=True,text=True,timeout=8)
+        result = subprocess.run([BINARY, *action.split(),*target,*map(str,args)],env=env,capture_output=True,text=True,timeout=8)
         assert result.returncode == 0, (action,result.stderr)
         return result.stdout
     def wait(predicate, detail="timeout", timeout=12):
@@ -94,7 +94,7 @@ while True:
     def clear(): client.read(0);client.output.clear()
     def policy(enabled):
         config.write_text(f"file_transfer={str(enabled).lower()}\nclipboard_read=true\nremain_on_exit=true\n")
-        wait(lambda: tomllib.loads(run("show-config"))["settings"]["file_transfer"]==enabled,"config reload")
+        wait(lambda: tomllib.loads(run("config show"))["settings"]["file_transfer"]==enabled,"config reload")
     def attach():
         global client
         client=Session(extra_env=env,arguments=("attach",name),lifetime=80)
@@ -106,9 +106,9 @@ while True:
     launch=lambda label: "exec "+shlex.quote(sys.executable)+" -u "+shlex.quote(str(probe))+" "+shlex.quote(str(root))+" "+label
     try:
         run("new","--detached")
-        left=tomllib.loads(run("list-panes","--toml"))["panes"][0]["id"]
-        run("send-keys","-p",left,"--literal","--enter",launch("A"))
-        right=int(run("split-pane","-p",left,"--command",launch("B")))
+        left=tomllib.loads(run("pane list","--toml"))["panes"][0]["id"]
+        run("pane send-keys","-p",left,"--literal","--enter",launch("A"))
+        right=int(run("pane split","-p",left,"--command",launch("B")))
         wait(lambda: all(record(label) for label in counters))
         original={label:record(label)["pid"] for label in counters}
         command("A",packet("send","detached"),status("detached","ENOSYS"));done("A")
@@ -118,13 +118,13 @@ while True:
         # return to their original processes even after focus and layout changes.
         command("A",packet("send","shared",hint="A"),status("shared","OK"));a=outer("send",hint="A")
         command("B",packet("send","shared",hint="B"),status("shared","OK"));b=outer("send",hint="B");assert a!=b
-        run("select-pane","-p",left)
+        run("pane select","-p",left)
         client.send(status("unknown","OK")+status(b,"OK")+status(a,"OK")[:-1]);client.read(0.02)
         assert record("A")["state"]!="done"
         client.send(b"\\");done("A");done("B")
-        run("new-window","--name","target")
-        target=next(p["id"] for p in tomllib.loads(run("list-panes","--toml"))["panes"] if p["id"] not in (left,right))
-        run("join-pane","-p",left,"--to-pane",target)
+        run("window new","--name","target")
+        target=next(p["id"] for p in tomllib.loads(run("pane list","--toml"))["panes"] if p["id"] not in (left,right))
+        run("pane join","-p",left,"--to-pane",target)
         clear();payload=bytes(range(256))*16;data=base64.b64encode(payload).decode()
         path=base64.b64encode("/tmp/中;upload.bin".encode()).decode()
         command("A",packet("file","shared",fid="f1",n=path,sz=4096,prm=420)+packet("end_data","shared",fid="f1",d=data),
@@ -164,14 +164,14 @@ while True:
         client.send(status(a,"OK")+status(r,"OK")+status(fresh,"OK"));done("A")
         clear();command("A",expected=status("shared","CANCELED"));raw=detach();done("A")
         assert packet("cancel",fresh) in raw
-        run("select-window","-w",1);attach();clear()
+        run("window select","-w",1);attach();clear()
         # A retained CLI pane gets a fresh process incarnation on respawn.
         command("B",packet("send","retired"),status("retired","OK"));retired=outer("send")
         os.kill(original["B"],15)
         def exited():
-            p=next(p for p in tomllib.loads(run("list-panes","--toml"))["panes"] if p["id"]==right)
+            p=next(p for p in tomllib.loads(run("pane list","--toml"))["panes"] if p["id"]==right)
             return p["exited"] and p["output_complete"]
-        wait(exited);run("respawn-pane","-p",right,"--command",launch("R"));wait(lambda: record("R"));clear()
+        wait(exited);run("pane respawn","-p",right,"--command",launch("R"));wait(lambda: record("R"));clear()
         command("R",packet("send","retired"),status("retired","EPERM"));replacement=outer("send");assert replacement!=retired
         client.send(status(retired,"OK")+status(fresh,"OK")+status(replacement,"EPERM"));done("R")
         assert record("R")["pid"]!=original["B"] and record("A")["pid"]==original["A"]

@@ -99,13 +99,13 @@ esc={{actions=[{{action="switch-mode",mode="locked"}}]}}
 
     def run(action, *args):
         target = [name] if action in ("new", "kill") else ["-s", name]
-        result = subprocess.run([BINARY, action, *target, *map(str, args)], env=env,
+        result = subprocess.run([BINARY, *action.split(), *target, *map(str, args)], env=env,
                                 capture_output=True, text=True, timeout=8)
         assert result.returncode == 0, result
         return result
 
     def status():
-        return tomllib.loads(run("show-config").stdout)
+        return tomllib.loads(run("config show").stdout)
 
     def wait(predicate):
         deadline = time.monotonic() + 6

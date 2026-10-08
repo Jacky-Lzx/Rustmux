@@ -24,7 +24,7 @@ with tempfile.TemporaryDirectory(prefix="rustmux-themes-") as temporary:
         return result.stdout
 
     def status(target=name):
-        return tomllib.loads(run("show-config", "-s", target))
+        return tomllib.loads(run("config", "show", "-s", target))
 
     def wait(predicate, target=name):
         deadline = time.monotonic() + 5
@@ -67,20 +67,20 @@ with tempfile.TemporaryDirectory(prefix="rustmux-themes-") as temporary:
         write()
         client.write_text("[theme]\npreset='mocha'\n")
         run("new", name, "--detached", "--config", selected)
-        panes = tomllib.loads(run("list-panes", "-s", name, "--toml"))["panes"]
+        panes = tomllib.loads(run("pane", "list", "-s", name, "--toml"))["panes"]
         original = panes[0]
-        run("send-keys", "-s", name, "--literal", "--enter",
+        run("pane", "send-keys", "-s", name, "--literal", "--enter",
             "stty -echo; KEEP=preserved; printf '\\033[31;44mTHEME_CHILD\\033[0m\\n'")
         session = Session(extra_env=env, arguments=("--config", str(client), "attach", name))
         raw = session.expect(b"THEME_CHILD")
         assert background(245, 246, 250) in raw  # Server owns attached interface colors.
         assert foreground(205, 0, 0) in raw and background(0, 0, 238) in raw  # Child ANSI stays independent.
-        capture = run("capture-pane", "-s", name, "--history")
+        capture = run("pane", "capture", "-s", name, "--history")
         write(overrides="background='#010203'\naccent='#040506'\nkey='#070809'\npurple='#0a0b0c'\n")
         changed = wait(lambda c: c["settings"]["theme"]["background"] == "#010203")
         expect_raw(background(1, 2, 3), foreground(4, 5, 6))
-        assert run("capture-pane", "-s", name, "--history") == capture
-        assert tomllib.loads(run("list-panes", "-s", name, "--toml"))["panes"][0]["pid"] == original["pid"]
+        assert run("pane", "capture", "-s", name, "--history") == capture
+        assert tomllib.loads(run("pane", "list", "-s", name, "--toml"))["panes"][0]["pid"] == original["pid"]
         selected.write_text("remain_on_exit=true\n[theme.colors]\naccent='#bad'\n")
         failed = wait(lambda c: "error" in c)
         assert failed["generation"] == changed["generation"]
@@ -106,7 +106,7 @@ with tempfile.TemporaryDirectory(prefix="rustmux-themes-") as temporary:
         session = Session(extra_env=env, arguments=("--config", str(client), "attach", name))
         raw = session.expect(b"THEME_CHILD")
         assert background(30, 30, 46) in raw
-        run("send-keys", "-s", name, "--literal", "--enter", "printf 'KEEP_%s\\n' \"$KEEP\"")
+        run("pane", "send-keys", "-s", name, "--literal", "--enter", "printf 'KEEP_%s\\n' \"$KEEP\"")
         session.expect(b"KEEP_preserved")
         detach()
         # A separate picker owns its client's theme and reloads even during search editing.

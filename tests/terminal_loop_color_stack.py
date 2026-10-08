@@ -67,7 +67,7 @@ while True:
 
     def run(action, *args):
         target = [name] if action in ("new", "kill") else ["-s", name]
-        result = subprocess.run([BINARY, action, *target, *map(str, args)], env=env,
+        result = subprocess.run([BINARY, *action.split(), *target, *map(str, args)], env=env,
                                 capture_output=True, text=True, timeout=8)
         assert result.returncode == 0, (action,args,result)
         return result.stdout
@@ -87,7 +87,7 @@ while True:
     def command(pane, label, action, value=""):
         global counter
         counter += 1
-        run("send-keys", "-p", pane, "--literal", f"{counter}:{action}:{value}\n")
+        run("pane send-keys", "-p", pane, "--literal", f"{counter}:{action}:{value}\n")
         wait(lambda: any(row["token"] == counter for row in records(label)))
         return next(row for row in records(label) if row["token"] == counter)
 
@@ -128,20 +128,20 @@ while True:
 
     try:
         run("new","--detached")
-        left = tomllib.loads(run("list-panes","--toml"))["panes"][0]["id"]
+        left = tomllib.loads(run("pane list","--toml"))["panes"][0]["id"]
         launch = lambda label,seed: f"exec python3 -u {shlex.quote(str(probe))} {label} {shlex.quote(str(root/(label+'.jsonl')))} {seed}"
-        run("send-keys","-p",left,"--literal","--enter",launch("A",11))
+        run("pane send-keys","-p",left,"--literal","--enter",launch("A",11))
         wait(lambda: bool(records("A")))
-        right = int(run("split-pane","-p",left,"--command",launch("B",22)))
+        right = int(run("pane split","-p",left,"--command",launch("B",22)))
         wait(lambda: bool(records("B")))
-        identities = {p["id"]:p["pid"] for p in tomllib.loads(run("list-panes","--toml"))["panes"]}
+        identities = {p["id"]:p["pid"] for p in tomllib.loads(run("pane list","--toml"))["panes"]}
         command(left,"A","push"); command(left,"A","set",33)
         command(left,"A","push"); command(left,"A","set",44)
         command(right,"B","push"); command(right,"B","set",55)
         query(left,"A",profile(44)); query(right,"B",profile(55))  # Replies work detached.
         attach(profile(101)); cursor(55)
         command(left,"A","pop"); query(left,"A",profile(33)); query(right,"B",profile(55))
-        run("select-pane","-p",left); cursor(33)
+        run("pane select","-p",left); cursor(33)
         command(left,"A","alt"); command(left,"A","set",66)
         command(left,"A","pop"); query(left,"A",profile(11)); cursor(11)
         command(left,"A","main")
@@ -156,7 +156,7 @@ while True:
         command(left,"A","clear"); command(left,"A","push"); command(left,"A","set",88)
         detach(); attach(profile(103))
         command(left,"A","pop"); query(left,"A",profile(103))  # Restored unset overrides follow the new outer theme.
-        run("select-pane","-p",right)
+        run("pane select","-p",right)
         command(right,"B","push"); command(right,"B","set",99)
         session.send(b"\x02?")
         wait(lambda: any(b"Shortcut Help" in row for row in session.physical_rows))
@@ -167,7 +167,7 @@ while True:
         command(right,"B","pop"); query(right,"B",profile(22)); cursor(22)
         command(right,"B","push"); command(right,"B","set",100)
         command(right,"B","reset"); command(right,"B","pop"); query(right,"B",profile(100))
-        assert {p["id"]:p["pid"] for p in tomllib.loads(run("list-panes","--toml"))["panes"]} == identities
+        assert {p["id"]:p["pid"] for p in tomllib.loads(run("pane list","--toml"))["panes"]} == identities
         assert all(row["pid"] == records(label)[0]["pid"] for label in ("A","B") for row in records(label))
         detach()
     finally:

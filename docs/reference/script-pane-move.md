@@ -1,12 +1,12 @@
 # Script pane move
 
 ```sh
-rustmux list-panes -s work --toml
-rustmux move-pane -s work -p 0 --direction right
-rustmux move-pane -s work --direction up
+rustmux pane list -s work --toml
+rustmux pane move -s work -p 0 --direction right
+rustmux pane move -s work --direction up
 ```
 
-`move-pane` exchanges a pane's layout position with its nearest neighbor in the
+`pane move` exchanges a pane's layout position with its nearest neighbor in the
 requested direction within the same window. It accepts `-s SESSION` (default
 `default`), optional `-p ID` (source, default the active pane), and required
 `--direction left|right|up|down`. Enumerate runtime IDs before use; they remain
@@ -21,7 +21,7 @@ largest overlap, nearest perpendicular center and finally layout traversal
 order. A full-height left pane therefore moves right into the upper right slot,
 even when the lower slot has an extra row. There is no edge wrapping. Because
 slot sizes can differ, moving in one direction and back does not always undo
-the move; use `swap-pane` when an explicit pair is needed.
+the move; use `pane swap` when an explicit pair is needed.
 
 The command preserves the global active window and each window's remembered
 selected pane. It never selects the source or neighbor. An inactive source can
@@ -50,7 +50,7 @@ history/output editor panes (as either source or neighbor), and directions with
 no neighbor fail before mutation. Single-pane windows have no neighbors.
 Failures preserve layout, focus and overlays. Turn off zoom in the target
 window before moving. Cross-window movement remains available through
-`join-pane`/`break-pane`.
+`pane join`/`pane break`.
 
 Attached and detached servers accept this command without taking the interactive
 client lease. The next manual or configured automatic snapshot records the new

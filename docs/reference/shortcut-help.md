@@ -60,7 +60,7 @@ curated footer hints and the Normal help layout are preserved. In a mode with
 display overrides, explicit entries appear before implicit defaults; width still
 limits the footer. `help-menu` and `never` are compatibility aliases for `help`
 and `hidden`. Invalid values or types fail configuration loading and
-`check-config --strict`. Supported display metadata does not suppress warnings
+`config check --strict`. Supported display metadata does not suppress warnings
 about unsupported actions.
 
 For example, this hides a default shortcut from the footer, preserves it in Help,

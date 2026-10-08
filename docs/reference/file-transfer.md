@@ -7,7 +7,7 @@ file_transfer = true
 ```
 
 The default is `false`, independently of `clipboard_read` and `clipboard_write`.
-`default-config`, `check-config` and `show-config` expose the same Boolean
+`config default`, `config check` and `config show` expose the same Boolean
 setting. It can be changed through live reload without restarting pane processes.
 Disabled starts receive `EPERM`; detached starts receive `ENOSYS`. Requests are
 never retained for a future attachment. Quiet level 2 suppresses local replies.

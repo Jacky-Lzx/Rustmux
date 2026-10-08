@@ -10,9 +10,9 @@ cargo build --locked
 Check or export configuration before opening a terminal:
 
 ```sh
-./target/debug/rustmux check-config
-./target/debug/rustmux --config ./project-config.toml check-config --strict
-./target/debug/rustmux default-config > ./rustmux-defaults.toml
+./target/debug/rustmux config check
+./target/debug/rustmux --config ./project-config.toml config check --strict
+./target/debug/rustmux config default > ./rustmux-defaults.toml
 ```
 
 [Configuration diagnostics](../reference/config-diagnostics.md) explain effective
@@ -62,7 +62,7 @@ to future panes; existing child processes and history capacities are preserved.
 Bindings, notifications, pane retention and saving settings can update live.
 The LOCKED entry key and `clear_defaults` require a restart. See
 [Configuration Hot Reload](../reference/config-reload.md) for safe application
-boundaries, errors and `rustmux show-config -s NAME`.
+boundaries, errors and `rustmux config show -s NAME`.
 
 Enable `remain_on_exit = true` to inspect exited panes and restart them with
 Ctrl-B then Shift-R. See [Retained Panes and Respawn](../reference/pane-lifecycle.md)
@@ -147,7 +147,7 @@ SESSION mode is unavailable in a local unnamed process. Recreate an existing
 named session after updating the binary because its server retains the code
 from when it started.
 
-Other mode tables and unsupported actions are ignored; use `check-config --strict`
+Other mode tables and unsupported actions are ignored; use `config check --strict`
 to identify them. `clear_defaults = true` disables implicit NORMAL shortcuts,
 including the named-session client's legacy prefix-`d` and prefix-Ctrl-W
 fallbacks. Only supported actions explicitly bound in `[keybinds.normal]`

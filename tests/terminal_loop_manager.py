@@ -63,11 +63,11 @@ down=["{down}"]
 
     try:
         write()
-        checked=tomllib.loads(run("check-config","--config",selected,"--strict","--toml").stdout)
+        checked=tomllib.loads(run("config", "check","--config",selected,"--strict","--toml").stdout)
         assert checked["session_manager"]["save"]==["Ctrl s"]
         run("new",name,"--detached","--config",selected)
-        panes=tomllib.loads(run("list-panes","-s",name,"--toml").stdout)["panes"]
-        run("send-keys","-s",name,"-p",panes[0]["id"],"--literal","--enter","stty -echo; VALUE=survives; printf 'MANAGER_TEXT\\n'")
+        panes=tomllib.loads(run("pane", "list","-s",name,"--toml").stdout)["panes"]
+        run("pane", "send-keys","-s",name,"-p",panes[0]["id"],"--literal","--enter","stty -echo; VALUE=survives; printf 'MANAGER_TEXT\\n'")
         # While the server is paused, the picker remains usable and cannot
         # report success before the save endpoint acknowledges the write.
         open_manager()
@@ -149,9 +149,9 @@ down=["{down}"]
             snapshot.rmdir()
             backup.rename(snapshot)
         # Reconnection still has the same shell environment.
-        run("send-keys","-s",name,"-p",panes[0]["id"],"--literal","--enter", "printf 'VALUE_%s\\n' \"$VALUE\"")
+        run("pane", "send-keys","-s",name,"-p",panes[0]["id"],"--literal","--enter", "printf 'VALUE_%s\\n' \"$VALUE\"")
         deadline=time.monotonic()+5
-        while "VALUE_survives" not in run("capture-pane","-s",name,"-p",panes[0]["id"]).stdout:
+        while "VALUE_survives" not in run("pane", "capture","-s",name,"-p",panes[0]["id"]).stdout:
             assert time.monotonic()<deadline
             time.sleep(0.02)
     finally:

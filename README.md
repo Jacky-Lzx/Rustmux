@@ -80,8 +80,8 @@ Yazi is open, then `fish` after it exits. Explicit names remain fixed. Set
 
 See [Installation and Quick Start](docs/getting-started/quick-start.md) for shell
 selection and configuration setup. Use `--config PATH` to select a configuration,
-`rustmux default-config` to inspect built-in settings, and
-`rustmux check-config --strict` to detect unsupported options. Keybindings and
+`rustmux config default` to inspect built-in settings, and
+`rustmux config check --strict` to detect unsupported options. Keybindings and
 configuration spellings differ between `main` and `main-AI`.
 
 ## See it in action

@@ -1,5 +1,11 @@
 # Configuration diagnostics and default export
 
+Configuration commands use `rustmux config`. Run `rustmux config --help` to
+list the operations: `default` (alias `dump`) exports built-in settings,
+`check` validates the selected configuration file, and `show -s SESSION`
+reports the active settings of a running server. The previous top-level
+configuration commands have been removed.
+
 `[settings].clipboard_write` reports the Boolean policy for
 [child OSC 52 writes](pane-clipboard.md) and [rich writes](rich-clipboard.md),
 defaulting to `false`. `[settings].clipboard_read` independently reports
@@ -12,14 +18,14 @@ also disabled by default.
 Inspect configuration before starting a terminal or named-session server:
 
 ```sh
-rustmux check-config
-rustmux --config ./project-config.toml check-config --strict
-rustmux check-config --config ./project-config.toml --toml
-rustmux default-config > ./rustmux-defaults.toml
-rustmux check-config --config ./rustmux-defaults.toml --strict
+rustmux config check
+rustmux --config ./project-config.toml config check --strict
+rustmux config check --config ./project-config.toml --toml
+rustmux config default > ./rustmux-defaults.toml
+rustmux config check --config ./rustmux-defaults.toml --strict
 ```
 
-`default-config` (alias `dump-config`) prints a reusable TOML template of the
+`config default` (alias `config dump`) prints a reusable TOML template of the
 scalar defaults and Session Manager keys. It does not load user configuration,
 even if `--config` names a missing or invalid file. It does not write files itself.
 Pane-mode keybinding defaults remain implicit: the template deliberately avoids pinning a
@@ -32,7 +38,7 @@ environment values. Default saving settings remain disabled, while manual
 `save-session` stays available. Loading the exported template preserves all
 built-in effective settings, including the binding defaults.
 
-`check-config` uses the same file reader, supported-option validation, binding
+`config check` uses the same file reader, supported-option validation, binding
 parser and shell resolution as session startup. By default it selects
 `$XDG_CONFIG_HOME/rustmux/config.toml` or `~/.config/rustmux/config.toml`. A missing
 discovered file is valid and selects built-in defaults. An explicit `--config`
@@ -45,7 +51,7 @@ write configuration, or update a running session. The reported settings apply
 to a newly started local session or server using this process's environment.
 Existing named servers watch their startup-selected file; attaching with a
 different configuration does not replace that source. Use
-[`show-config`](config-reload.md#inspecting-a-running-server) to inspect a running
+[`config show`](config-reload.md#inspecting-a-running-server) to inspect a running
 server's applied settings and reload errors.
 
 Ordinary output lists the selected path, effective scalar settings and shell
@@ -96,7 +102,7 @@ are not supported as defaults. With `clear_defaults = true`, the selected mode
 must have at least one supported binding, even if it is hidden from Help.
 The existing requirement for a Locked-to-Normal entry binding still applies.
 
-Both `check-config` and `show-config` report the normalized value in
+Both `config check` and `config show` report the normalized value in
 `[settings].default_mode`. Attaching with another `--config` file uses the
 server's applied policy. Hot reload updates the policy at the existing safe
 Locked boundary, preserving the current mode until a subsequent runtime reset

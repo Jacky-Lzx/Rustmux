@@ -34,16 +34,16 @@ os.write(1,b'\\x1b]133;D;0\\x1b\\\\'+(label+'_DONE').encode())
 """)
 
     def run(action, *args, success=True):
-        result = subprocess.run([BINARY, action, "-s", name, *map(str,args)], env=env,
+        result = subprocess.run([BINARY, *action.split(), "-s", name, *map(str,args)], env=env,
                                 capture_output=True, text=True, timeout=8)
         assert (result.returncode == 0) == success, (action,args,result)
         return result
 
     def status():
-        return tomllib.loads(run("show-config").stdout)
+        return tomllib.loads(run("config show").stdout)
 
     def panes():
-        return tomllib.loads(run("list-panes", "--toml").stdout)["panes"]
+        return tomllib.loads(run("pane list", "--toml").stdout)["panes"]
 
     def wait(predicate, detail):
         end = time.monotonic()+5
@@ -62,8 +62,8 @@ os.write(1,b'\\x1b]133;D;0\\x1b\\\\'+(label+'_DONE').encode())
 
     def launch(pane, label, bell=False):
         command = "python3 -u "+shlex.quote(str(probe))+" "+shlex.quote(str(root))+" "+label+" "+("yes" if bell else "no")
-        run("send-keys", "-p", pane, "--literal", "--enter", command)
-        wait(lambda: label+"_START" in run("capture-pane", "-p", pane).stdout and (root/(label+'.pid')).exists(),
+        run("pane send-keys", "-p", pane, "--literal", "--enter", command)
+        wait(lambda: label+"_START" in run("pane capture", "-p", pane).stdout and (root/(label+'.pid')).exists(),
              "probe did not begin a parsed semantic command")
         return time.monotonic()
 
@@ -74,7 +74,7 @@ os.write(1,b'\\x1b]133;D;0\\x1b\\\\'+(label+'_DONE').encode())
             client.output.clear()
             client.frames.clear()
         (root/(label+'.go')).touch()
-        wait(lambda: label+"_DONE" in run("capture-pane", "-p", pane).stdout, "probe did not complete")
+        wait(lambda: label+"_DONE" in run("pane capture", "-p", pane).stdout, "probe did not complete")
         if client:
             client.read(0.1)
             assert (b"\x07" in client.output) == reminder, (label,bytes(client.output))
@@ -82,8 +82,8 @@ os.write(1,b'\\x1b]133;D;0\\x1b\\\\'+(label+'_DONE').encode())
                 wait(lambda: (b"[!]" in client.physical_rows[0]) == marker, (label,client.physical_rows[0]))
 
     def clear_marker(pane, watcher):
-        run("select-pane", "-p", pane)
-        run("select-pane", "-p", watcher)
+        run("pane select", "-p", pane)
+        run("pane select", "-p", watcher)
         wait(lambda: b"[!]" not in client.physical_rows[0], "previous reminder was not cleared")
 
     def detach():
@@ -98,7 +98,7 @@ os.write(1,b'\\x1b]133;D;0\\x1b\\\\'+(label+'_DONE').encode())
         client=Session(extra_env=env,arguments=("new",name))
         client.expect(b"RUSTMUX_READY>")
         first=next(p["id"] for p in panes() if p["active"])
-        watcher=int(run("new-window", "--name", "watcher").stdout)
+        watcher=int(run("window new", "--name", "watcher").stdout)
         client.expect(b"RUSTMUX_READY>")
         original={p["id"]:p["pid"] for p in panes()}
         assert status()["settings"]["notification_excluded_applications"] == ["yazi","nvim","lazygit"]
@@ -111,8 +111,8 @@ os.write(1,b'\\x1b]133;D;0\\x1b\\\\'+(label+'_DONE').encode())
         started=launch(first,"excluded")
         complete(first,"excluded",started,False,False)
         # A new pane inherits the currently applied filtering policy too.
-        second=int(run("split-pane","-p",first).stdout)
-        run("select-pane","-p",watcher)
+        second=int(run("pane split","-p",first).stdout)
+        run("pane select","-p",watcher)
         started=launch(second,"newpane")
         complete(second,"newpane",started,False,False)
         # Removing a filter during a command uses the new policy at completion.
@@ -149,14 +149,14 @@ os.write(1,b'\\x1b]133;D;0\\x1b\\\\'+(label+'_DONE').encode())
         client=Session(extra_env=env,arguments=("attach",name))
         client.expect(b"RUSTMUX_READY>")
         command="exec python3 -u "+shlex.quote(str(probe))+" "+shlex.quote(str(root))+" startup no"
-        startup=int(run("new-window","--command",command).stdout)
-        wait(lambda: "startup_START" in run("capture-pane","-p",startup).stdout
+        startup=int(run("window new","--command",command).stdout)
+        wait(lambda: "startup_START" in run("pane capture","-p",startup).stdout
              and (root/"startup.pid").exists(), "startup exec probe did not begin")
         started=time.monotonic()
         assert next(p["pid"] for p in panes() if p["id"]==startup)==int((root/"startup.pid").read_text())
-        run("select-pane","-p",watcher)
+        run("pane select","-p",watcher)
         complete(startup,"startup",started,False,False)
-        run("close-pane","-p",startup)
+        run("pane close","-p",startup)
         detach()
 
         started=launch(first,"detached")
@@ -164,8 +164,8 @@ os.write(1,b'\\x1b]133;D;0\\x1b\\\\'+(label+'_DONE').encode())
         client=Session(extra_env=env,arguments=("attach",name))
         client.expect(b"RUSTMUX_READY>")
         wait(lambda: b"[!]" not in client.physical_rows[0], "detached excluded job left an activity marker")
-        run("select-pane","-p",first)
-        wait(lambda: "detached_DONE" in run("capture-pane","-p",first).stdout,"detached job output was lost")
+        run("pane select","-p",first)
+        wait(lambda: "detached_DONE" in run("pane capture","-p",first).stdout,"detached job output was lost")
         assert len(panes())==3 and original[first]==next(p["pid"] for p in panes() if p["id"]==first)
         detach()
     finally:

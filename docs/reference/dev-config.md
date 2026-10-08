@@ -5,7 +5,7 @@
 it from the repository root:
 
 ```sh
-rustmux check-config --config examples/config-dev.toml --strict
+rustmux config check --config examples/config-dev.toml --strict
 rustmux new dev-check --config examples/config-dev.toml
 ```
 

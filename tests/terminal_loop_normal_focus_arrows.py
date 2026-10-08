@@ -51,13 +51,13 @@ while True:
 
     def run(action, *args):
         target = [name] if action in ("new", "kill") else ["-s", name]
-        result = subprocess.run([BINARY, action, *target, *map(str,args)], env=env,
+        result = subprocess.run([BINARY, *action.split(), *target, *map(str,args)], env=env,
                                 capture_output=True, text=True, timeout=8)
         assert result.returncode == 0, (action,args,result)
         return result.stdout
 
     def panes():
-        return tomllib.loads(run("list-panes","--toml"))["panes"]
+        return tomllib.loads(run("pane list","--toml"))["panes"]
 
     def active():
         return next(p["id"] for p in panes() if p["active"])
@@ -93,10 +93,10 @@ while True:
         client=Session(extra_env=env,arguments=("attach",name),lifetime=90)
         client.expect(b"RUSTMUX_READY>")
         a=panes()[0]["id"]
-        run("send-keys","-p",a,"--literal","--enter",command('a'))
-        b=int(run("split-pane","-p",a,"--command",command('b')))
-        c=int(run("split-pane","-p",a,"--down","--command",command('c')))
-        d=int(run("split-pane","-p",b,"--down","--command",command('d')))
+        run("pane send-keys","-p",a,"--literal","--enter",command('a'))
+        b=int(run("pane split","-p",a,"--command",command('b')))
+        c=int(run("pane split","-p",a,"--down","--command",command('c')))
+        d=int(run("pane split","-p",b,"--down","--command",command('d')))
         wait(lambda: all((root/(label+'.json')).exists() for label in 'abcd'))
         wait(lambda: all((label+'_READY').encode() in body() for label in 'abcd'))
         original={p['id']:p['pid'] for p in panes()}
@@ -127,10 +127,10 @@ while True:
         wait(lambda: b"Shortcut Help" not in body())
         client.send(b"\x1b")
         expect_footer(client,b"LOCKED")
-        generation=tomllib.loads(run("show-config"))["generation"]
+        generation=tomllib.loads(run("config show"))["generation"]
         config.write_text(CONFIG.replace('right={actions=["focus-right"]',
             'right={actions=["focus-left",{action="switch-mode",mode="locked"}]'))
-        wait(lambda: tomllib.loads(run("show-config"))["generation"]>generation)
+        wait(lambda: tomllib.loads(run("config show"))["generation"]>generation)
         focus(b"\x02\x1b[C",c,b"LOCKED")
         # A child handshake proves all earlier local UI input stayed out of its PTY.
         client.send(b"CHILD_MARK")

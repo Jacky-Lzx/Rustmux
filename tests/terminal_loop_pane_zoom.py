@@ -44,13 +44,13 @@ while True:
 """)
 
     def run(action, *arguments, success=True):
-        result = subprocess.run([BINARY, action, "-s", name, *map(str, arguments)],
+        result = subprocess.run([BINARY, *action.split(), "-s", name, *map(str, arguments)],
                                 env=env, capture_output=True, text=True, timeout=8)
         assert (result.returncode == 0) == success, (action, arguments, result)
         return result
 
     def panes():
-        return tomllib.loads(run("list-panes", "--toml").stdout)["panes"]
+        return tomllib.loads(run("pane list", "--toml").stdout)["panes"]
 
     def active():
         return next(p["id"] for p in panes() if p["active"])
@@ -85,7 +85,7 @@ while True:
         arguments = ["-p", str(pane)] if pane is not None else []
         if state is not None:
             arguments.append("--on" if state else "--off")
-        assert run("zoom-pane", *arguments).stdout == ""
+        assert run("pane zoom", *arguments).stdout == ""
 
     def wire(body):
         with socket.socket(socket.AF_UNIX) as peer:
@@ -119,9 +119,9 @@ while True:
         client.expect(b"FIRST_ZOOM_READY")
         first = active()
         wait_until(lambda: record("first") is not None, "first probe did not start")
-        right = start("split-pane", "right", "-p", first, application="no")
-        bottom = start("split-pane", "bottom", "-p", right, "--down")
-        solo = start("new-window", "solo", "--name", "solo", application="no")
+        right = start("pane split", "right", "-p", first, application="no")
+        bottom = start("pane split", "bottom", "-p", right, "--down")
+        solo = start("window new", "solo", "--name", "solo", application="no")
         client.expect(b"SOLO_ZOOM_READY")
         size("first", 20, 38)
         size("right", 9, 38)
@@ -173,14 +173,14 @@ while True:
         wait_until(lambda: record("right")["input"].endswith(b"x".hex()), "input reached wrong pane")
         assert record("first")["input"] == before_input + b"\x1b[O".hex()
         assert {p["id"]: p["pid"] for p in panes()} == ids
-        assert run("close-pane", "-p", solo).stdout == ""
+        assert run("pane close", "-p", solo).stdout == ""
         client.send(b"\x02[")
         expect_footer(client, b"HISTORY")
         before = panes()
         before_input = record("right")["input"]
         for invalid in (solo, 999999):
-            assert "unknown runtime pane ID" in run("zoom-pane", "-p", invalid, "--on", success=False).stderr
-        run("zoom-pane", "--on", "--off", success=False)
+            assert "unknown runtime pane ID" in run("pane zoom", "-p", invalid, "--on", success=False).stderr
+        run("pane zoom", "--on", "--off", success=False)
         for body in (b"action='zoom-pane'\npane='invalid'\n",
                      b"action='zoom-pane'\nzoom=1\n",
                      f"action='zoom-pane'\npane={first}\nzoom=true\nextra=true\n".encode()):
@@ -207,8 +207,8 @@ while True:
         detach()
 
         # Detached controls preserve process identities and record exact view state.
-        other = start("new-window", "other", "--name", "other")
-        other_bottom = start("split-pane", "other-bottom", "-p", other, "--down")
+        other = start("window new", "other", "--name", "other")
+        other_bottom = start("pane split", "other-bottom", "-p", other, "--down")
         zoom(bottom, True)
         size("bottom", 20, 78)
         zoom(other_bottom, False)  # --off also selects a cross-window target
@@ -217,17 +217,17 @@ while True:
         zoom(bottom, True)
         assert active() == bottom
         survivors = {p["id"]: p["pid"] for p in panes()}
-        ended = int(run("new-window", "--name", "ended", "--command", "printf RETAINED_ZOOM; exit 7").stdout)
+        ended = int(run("window new", "--name", "ended", "--command", "printf RETAINED_ZOOM; exit 7").stdout)
         wait_until(lambda: any(p["id"] == ended and p["output_complete"] for p in panes()),
                    "retained pane did not exit")
         ended_pid = next(p["pid"] for p in panes() if p["id"] == ended)
-        start("split-pane", "ended-live", "-p", ended)
+        start("pane split", "ended-live", "-p", ended)
         for state in (True, True, False):
             zoom(ended, state)
             entry = next(p for p in panes() if p["id"] == ended)
             assert active() == ended and entry["pid"] == ended_pid and entry["exit_code"] == 7
             assert entry["exited"] and entry["output_complete"], "zoom respawned retained child"
-        run("close-window")
+        run("window close")
         zoom(bottom, True)
         assert {p["id"]: p["pid"] for p in panes()} == survivors
         subprocess.run([BINARY, "save", name], env=env, capture_output=True, check=True, timeout=8)

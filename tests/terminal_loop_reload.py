@@ -35,16 +35,16 @@ new_window="{key}"
 
     def run(action, *args, success=True):
         target = [name] if action in ("new", "kill", "save-session") else ["-s", name]
-        result = subprocess.run([BINARY, action, *target, *map(str, args)], env=env,
+        result = subprocess.run([BINARY, *action.split(), *target, *map(str, args)], env=env,
                                 cwd=root, capture_output=True, text=True, timeout=8)
         assert (result.returncode == 0) == success, (action, args, result)
         return result
 
     def status():
-        return tomllib.loads(run("show-config").stdout)
+        return tomllib.loads(run("config show").stdout)
 
     def panes():
-        return tomllib.loads(run("list-panes", "--toml").stdout)["panes"]
+        return tomllib.loads(run("pane list", "--toml").stdout)["panes"]
 
     def wait(predicate):
         deadline = time.monotonic() + 5
@@ -58,12 +58,12 @@ new_window="{key}"
             time.sleep(0.01)
 
     def send(pane, text):
-        run("send-keys", "-p", pane, "--literal", "--enter", text)
+        run("pane send-keys", "-p", pane, "--literal", "--enter", text)
 
     def capture(pane):
         if session:
             session.read(seconds=0.01)
-        return run("capture-pane", "-p", pane, "--history").stdout
+        return run("pane capture", "-p", pane, "--history").stdout
 
     def wait_capture(pane, text):
         deadline = time.monotonic() + 5
@@ -90,7 +90,7 @@ new_window="{key}"
         assert changed["generation"] > 0 and "error" not in changed
         assert panes()[0]["pid"] == original["pid"]
         assert "OLD_0" in capture(first)  # Existing history capacity is preserved.
-        second = int(run("new-window").stdout)
+        second = int(run("window new").stdout)
         wait_capture(second, "RELOADED_SHELL")
         send(second, "stty -echo; i=0; while [ $i -lt 100 ]; do printf 'NEW_%s\\n' $i; i=$((i+1)); done")
         wait_capture(second, "NEW_99")
@@ -168,11 +168,11 @@ new_window="{key}"
         assert all(not p.get("history") for w in saved["windows"] for p in w["panes"])
         # Respawn uses the updated shell, and disabling retention also removes
         # already drained panes whose policy comes from the session default.
-        retained = int(run("new-window").stdout)
+        retained = int(run("window new").stdout)
         retained_pid = next(p["pid"] for p in panes() if p["id"] == retained)
         send(retained, "exit 7")
         wait(lambda _: any(p["id"] == retained and p.get("exit_code") == 7 and p["output_complete"] for p in panes()))
-        run("respawn-pane", "-p", retained)
+        run("pane respawn", "-p", retained)
         wait_capture(retained, "RELOADED_SHELL")
         assert next(p["pid"] for p in panes() if p["id"] == retained) != retained_pid
         send(retained, "exit 8")
@@ -183,7 +183,7 @@ new_window="{key}"
         wait(lambda c: c["settings"]["remain_on_exit"])
         # Reconnect adopts settings applied while detached; notification changes
         # update the existing pane rather than just future pane construction.
-        active = int(run("new-window").stdout)
+        active = int(run("window new").stdout)
         session = Session(extra_env=env, arguments=("attach", name))
         session.expect(b"RUSTMUX_READY>")
         send(active, "stty -echo; printf 'NOTIFY_%s\\n' READY")

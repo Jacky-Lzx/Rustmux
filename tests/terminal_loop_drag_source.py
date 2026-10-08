@@ -48,7 +48,7 @@ while True:
     counters = dict(A=0, B=0)
     def run(action, *args):
         target = [name] if action in ("new","kill") else ["-s", name]
-        result = subprocess.run([BINARY,action,*target,*map(str,args)],env=env,capture_output=True,text=True,timeout=8)
+        result = subprocess.run([BINARY, *action.split(),*target,*map(str,args)],env=env,capture_output=True,text=True,timeout=8)
         assert result.returncode == 0, (action,result.stderr)
         return result.stdout
     def wait(predicate, detail="timeout", timeout=12):
@@ -86,20 +86,20 @@ while True:
         identifier=outer("q");client.send(packet("t=q:i="+identifier));return identifier
     def policy(enabled):
         config.write_text(f"drag_source={str(enabled).lower()}\nremain_on_exit=true\n")
-        wait(lambda:tomllib.loads(run("show-config"))["settings"]["drag_source"]==enabled,"reload")
+        wait(lambda:tomllib.loads(run("config show"))["settings"]["drag_source"]==enabled,"reload")
     def attach():
         global client
         client=Session(extra_env=env,arguments=("attach",name),pixels=(800,480),lifetime=80)
-        if tomllib.loads(run("show-config"))["settings"]["drag_source"]:support()
+        if tomllib.loads(run("config show"))["settings"]["drag_source"]:support()
         client.expect(b"PROBE_A");clear()
     def detach():
         global client
         client.send(b"\x02d");client.finish(0);raw=bytes(client.output);client.close();client=None;return raw
     launch=lambda label:"exec "+shlex.quote(sys.executable)+" -u "+shlex.quote(str(probe))+" "+shlex.quote(str(root))+" "+label
     try:
-        run("new","--detached");left=tomllib.loads(run("list-panes","--toml"))["panes"][0]["id"]
-        run("send-keys","-p",left,"--literal","--enter",launch("A"))
-        right=int(run("split-pane","-p",left,"--command",launch("B")))
+        run("new","--detached");left=tomllib.loads(run("pane list","--toml"))["panes"][0]["id"]
+        run("pane send-keys","-p",left,"--literal","--enter",launch("A"))
+        right=int(run("pane split","-p",left,"--command",launch("B")))
         wait(lambda:all(record(label) for label in counters));original={label:record(label)["pid"] for label in counters}
         command("A",packet("t=o:o=1:i=7",b"text/plain"),packet("t=E:i=7",b"ENOSYS"));done("A")
         attach();command("A",packet("t=o:o=1:i=7",b"text/plain"),packet("t=E:i=7",b"EPERM"));done("A");assert not packets()
@@ -132,15 +132,15 @@ while True:
         client.send(reply[:-1]);client.read(0.02);assert record("B")["state"]!="done"
         client.send(b"\\");done("B")
         # Data requests remain pinned while focus/window/geometry change.
-        run("select-pane","-p",left);run("new-window","--name","target")
-        target=next(p["id"] for p in tomllib.loads(run("list-panes","--toml"))["panes"] if p["id"] not in (left,right))
-        run("join-pane","-p",right,"--to-pane",target)
+        run("pane select","-p",left);run("window new","--name","target")
+        target=next(p["id"] for p in tomllib.loads(run("pane list","--toml"))["panes"] if p["id"] not in (left,right))
+        run("pane join","-p",right,"--to-pane",target)
         command("B",expected=packet("t=e:x=5:y=0:i=7"));client.send(packet("t=e:x=5:y=0:i="+b));done("B")
         clear();command("B",packet("t=e:y=0:i=7:m=1",b"AA")+packet("m=0",b"=="));done("B")
         wait(lambda:len(packets())>=2,"data reply");assert b"".join(data for _,data in packets())==b"AA=="
         command("B",expected=packet("t=e:x=4:y=0:i=7"));client.send(packet("t=e:x=4:y=0:i="+b));done("B")
         # Returning to the first window restores A's registration with a fresh ID.
-        clear();run("select-window","-w",1);run("select-pane","-p",left);a=outer("o",x=1);assert a!=b
+        clear();run("window select","-w",1);run("pane select","-p",left);a=outer("o",x=1);assert a!=b
         command("A",expected=packet("t=o:x=3:y=2:X=35:Y=47:i=7"))
         client.send(packet("t=e:x=5:y=0:i="+b)+packet(f"t=o:i={a}:x=4:y=4:X=45:Y=87"));done("A")
         command("A",packet("t=o:o=1:i=7",b"text/plain"));done("A");clear()
@@ -158,8 +158,8 @@ while True:
         assert packet("t=E:y=-1:i="+fresh) in raw and packet("t=o:x=2:i="+fresh) in raw
         attach();command("A",packet("t=o:x=1:i=7"));done("A");latest=outer("o",x=1);assert latest!=fresh
         os.kill(original["A"],15)
-        wait(lambda:next(p for p in tomllib.loads(run("list-panes","--toml"))["panes"] if p["id"]==left)["output_complete"],"exit")
-        run("respawn-pane","-p",left,"--command",launch("R"));wait(lambda:record("R"));clear()
+        wait(lambda:next(p for p in tomllib.loads(run("pane list","--toml"))["panes"] if p["id"]==left)["output_complete"],"exit")
+        run("pane respawn","-p",left,"--command",launch("R"));wait(lambda:record("R"));clear()
         command("R",packet("t=o:x=1:i=7"));done("R");replacement=outer("o",x=1);assert replacement!=latest
         command("R",expected=packet("t=o:x=3:y=2:X=35:Y=47:i=7"))
         client.send(packet(f"t=o:i={latest}:x=4:y=4:X=45:Y=87"));done("R")

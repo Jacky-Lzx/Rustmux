@@ -31,8 +31,8 @@ fn exported_defaults_round_trip_and_ignore_active_broken_config() {
     let root = temporary.path();
     fs::create_dir(root.join("rustmux")).unwrap();
     fs::write(root.join("rustmux/config.toml"), "shell=[invalid").unwrap();
-    let first = command(root, &["default-config"]);
-    let alias = command(root, &["--config", "missing.toml", "dump-config"]);
+    let first = command(root, &["config", "default"]);
+    let alias = command(root, &["--config", "missing.toml", "config", "dump"]);
     assert!(first.status.success());
     assert_eq!(alias.stdout, first.stdout);
     assert!(alias.status.success());
@@ -41,7 +41,8 @@ fn exported_defaults_round_trip_and_ignore_active_broken_config() {
     let checked = command(
         root,
         &[
-            "check-config",
+            "config",
+            "check",
             "--config",
             template.to_str().unwrap(),
             "--toml",
@@ -97,7 +98,8 @@ right={actions=["focus-right",{action="switch-mode",mode="locked"}]}
     let output = command(
         root,
         &[
-            "check-config",
+            "config",
+            "check",
             "--config",
             config.to_str().unwrap(),
             "--toml",
@@ -119,7 +121,8 @@ right={actions=["focus-right",{action="switch-mode",mode="locked"}]}
         let output = command(
             root,
             &[
-                "check-config",
+                "config",
+                "check",
                 "--config",
                 config.to_str().unwrap(),
                 "--toml",
@@ -145,7 +148,8 @@ fn compact_is_boolean_and_reported_without_ignored_option_warnings() {
         let output = command(
             root,
             &[
-                "check-config",
+                "config",
+                "check",
                 "--config",
                 config.to_str().unwrap(),
                 "--toml",
@@ -161,7 +165,7 @@ fn compact_is_boolean_and_reported_without_ignored_option_warnings() {
         fs::write(&config, format!("compact={value}")).unwrap();
         let output = command(
             root,
-            &["check-config", "--config", config.to_str().unwrap()],
+            &["config", "check", "--config", config.to_str().unwrap()],
         );
         assert!(!output.status.success());
         assert!(String::from_utf8_lossy(&output.stderr).contains("compact"));
@@ -184,7 +188,8 @@ fn default_mode_is_reported_and_invalid_modes_fail_strict_checks() {
         let output = command(
             root,
             &[
-                "check-config",
+                "config",
+                "check",
                 "--config",
                 config.to_str().unwrap(),
                 "--toml",
@@ -201,7 +206,8 @@ fn default_mode_is_reported_and_invalid_modes_fail_strict_checks() {
         let output = command(
             root,
             &[
-                "check-config",
+                "config",
+                "check",
                 "--config",
                 config.to_str().unwrap(),
                 "--toml",
@@ -218,7 +224,7 @@ fn default_mode_is_reported_and_invalid_modes_fail_strict_checks() {
 fn discovered_missing_file_uses_defaults_but_explicit_missing_fails() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path();
-    let defaults = command(root, &["check-config", "--toml"]);
+    let defaults = command(root, &["config", "check", "--toml"]);
     assert!(defaults.status.success());
     let defaults = report(&defaults);
     assert_eq!(defaults["file_loaded"].as_bool(), Some(false));
@@ -231,7 +237,8 @@ fn discovered_missing_file_uses_defaults_but_explicit_missing_fails() {
         &[
             "--config",
             missing.to_str().unwrap(),
-            "check-config",
+            "config",
+            "check",
             "--toml",
         ],
     );
@@ -273,7 +280,8 @@ command_duration_seconds=9
     )
     .unwrap();
     let arguments = [
-        "check-config",
+        "config",
+        "check",
         "--config",
         config.to_str().unwrap(),
         "--toml",
@@ -339,13 +347,17 @@ X={actions=["toggle-floating-terminal"]}
 "#,
     )
     .unwrap();
-    let permissive = command(root, &["--config", path.to_str().unwrap(), "check-config"]);
+    let permissive = command(
+        root,
+        &["--config", path.to_str().unwrap(), "config", "check"],
+    );
     assert!(permissive.status.success());
     assert!(String::from_utf8_lossy(&permissive.stderr).contains("ignored binding"));
     let strict = command(
         root,
         &[
-            "check-config",
+            "config",
+            "check",
             "--config",
             path.to_str().unwrap(),
             "--strict",
@@ -379,7 +391,10 @@ fn rejects_invalid_supported_settings_and_conflicting_bindings() {
         "[broken",
     ] {
         fs::write(&path, source).unwrap();
-        let result = command(root, &["check-config", "--config", path.to_str().unwrap()]);
+        let result = command(
+            root,
+            &["config", "check", "--config", path.to_str().unwrap()],
+        );
         assert_eq!(result.status.code(), Some(1), "{source}: {result:?}");
         assert!(result.stdout.is_empty());
         assert!(
@@ -396,7 +411,7 @@ fn discovered_file_and_explicit_override_select_the_same_startup_paths() {
     fs::create_dir(root.join("rustmux")).unwrap();
     let discovered = root.join("rustmux/config.toml");
     fs::write(&discovered, "remain_on_exit=true").unwrap();
-    let default = command(root, &["check-config", "--toml"]);
+    let default = command(root, &["config", "check", "--toml"]);
     let default = report(&default);
     assert_eq!(default["path"].as_str(), discovered.to_str());
     assert_eq!(default["explicit"].as_bool(), Some(false));
@@ -405,7 +420,8 @@ fn discovered_file_and_explicit_override_select_the_same_startup_paths() {
     let result = command(
         root,
         &[
-            "check-config",
+            "config",
+            "check",
             "--config",
             selected.to_str().unwrap(),
             "--toml",
@@ -440,7 +456,8 @@ unimplemented=[]
     let output = command(
         temporary.path(),
         &[
-            "check-config",
+            "config",
+            "check",
             "--config",
             path.to_str().unwrap(),
             "--toml",
@@ -480,7 +497,8 @@ unimplemented=[]
     let implemented = command(
         temporary.path(),
         &[
-            "check-config",
+            "config",
+            "check",
             "--config",
             path.to_str().unwrap(),
             "--toml",
@@ -491,7 +509,13 @@ unimplemented=[]
     fs::write(&path, "[session_manager]\nup=['j']").unwrap();
     let failed = command(
         temporary.path(),
-        &["check-config", "--config", path.to_str().unwrap(), "--toml"],
+        &[
+            "config",
+            "check",
+            "--config",
+            path.to_str().unwrap(),
+            "--toml",
+        ],
     );
     assert!(!failed.status.success());
     assert!(failed.stdout.is_empty());
@@ -516,7 +540,8 @@ fn theme_diagnostics_validate_and_report_the_resolved_palette() {
     let output = command(
         root,
         &[
-            "check-config",
+            "config",
+            "check",
             "--config",
             path.to_str().unwrap(),
             "--strict",
@@ -539,7 +564,10 @@ fn theme_diagnostics_validate_and_report_the_resolved_palette() {
         "[theme.colors]\nacent='#112233'",
     ] {
         fs::write(&path, source).unwrap();
-        let output = command(root, &["check-config", "--config", path.to_str().unwrap()]);
+        let output = command(
+            root,
+            &["config", "check", "--config", path.to_str().unwrap()],
+        );
         assert!(!output.status.success(), "accepted: {source}");
         assert!(
             String::from_utf8_lossy(&output.stderr).contains("theme"),
@@ -555,7 +583,8 @@ fn strict_display_validation_accepts_supported_overrides_and_reports_ignored_act
     let root = temporary.path();
     let config = root.join("display.toml");
     let arguments = [
-        "check-config",
+        "config",
+        "check",
         "--config",
         config.to_str().unwrap(),
         "--strict",

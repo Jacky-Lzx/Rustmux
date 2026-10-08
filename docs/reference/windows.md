@@ -31,7 +31,7 @@ program name. Remote commands inside SSH show the local program `ssh`; title mod
 can expose a title supplied by the remote shell. Pipeline labels use the foreground
 process group's leader.
 
-Renaming a window, creating it with `new-window --name`, or naming it in a project
+Renaming a window, creating it with `window new --name`, or naming it in a project
 layout sets a fixed label. This includes an explicit name of `shell`. Saving an
 empty draft in the interactive rename editor restores automatic naming;
 cancelling the draft keeps the previous naming mode.

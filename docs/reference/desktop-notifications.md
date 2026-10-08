@@ -40,7 +40,7 @@ progress updates or click routing.
 
 Successful configuration reloads apply to existing and future panes, including
 a command already running. Its latest policy is captured at completion; invalid
-updates retain the entire last valid configuration. `show-config -s NAME` and
+updates retain the entire last valid configuration. `config show -s NAME` and
 configuration diagnostics expose `[settings].desktop_notifications`. The default
 configuration template includes `desktop = false`.
 

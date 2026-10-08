@@ -90,7 +90,7 @@ with tempfile.TemporaryDirectory(prefix="rustmux-tab-titles-") as temporary:
         return result.stdout
 
     def panes():
-        return tomllib.loads(command("list-panes", "-s", name, "--toml"))["panes"]
+        return tomllib.loads(command("pane", "list", "-s", name, "--toml"))["panes"]
 
     def detach():
         global client
@@ -104,9 +104,9 @@ with tempfile.TemporaryDirectory(prefix="rustmux-tab-titles-") as temporary:
         client.expect(b"RUSTMUX_READY>")
         set_title(client, "initial automatic")
         expect_bar(client, b"1 initial automatic")
-        command("rename-window", "-s", name, "shell")
+        command("window", "rename", "-s", name, "shell")
         expect_bar(client, b"1 shell")
-        command("new-window", "-s", name)
+        command("window", "new", "-s", name)
         client.expect(b"RUSTMUX_READY>")
         set_title(client, "script automatic")
         expect_bar(client, b"2 script automatic")
@@ -128,7 +128,7 @@ with tempfile.TemporaryDirectory(prefix="rustmux-tab-titles-") as temporary:
         assert [p["window_name"] for p in panes()] == ["shell", "restored automatic"]
 
         # Explicit script creation also pins the name even if it is 'shell'.
-        command("new-window", "-s", name, "--name", "shell")
+        command("window", "new", "-s", name, "--name", "shell")
         client.expect(b"RUSTMUX_READY>")
         set_title(client, "explicit script title")
         client.send(b"printf 'SCRIPT_TITLE_DONE\\n'\n")

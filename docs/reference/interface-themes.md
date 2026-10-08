@@ -68,7 +68,7 @@ file also restores defaults, subject to the existing restart-only binding rules.
 Deleting an explicit `--config` file retains the last good configuration and
 reports the missing file.
 
-`default-config` includes `[theme]` with `preset = "mocha"`. `check-config --strict --toml` and `show-config -s NAME` report all 16 effective lowercase hex values in
+`config default` includes `[theme]` with `preset = "mocha"`. `config check --strict --toml` and `config show -s NAME` report all 16 effective lowercase hex values in
 `[settings.theme]`, including inherited values and overrides. This report is
 resolved diagnostic output, not a configuration-file template.
 

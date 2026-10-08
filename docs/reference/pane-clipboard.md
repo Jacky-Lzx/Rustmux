@@ -48,7 +48,7 @@ OSC/DCS/APC/SOS/PM strings never trigger a write.
 ## Lifetime and delivery
 
 The policy supports the existing configuration hot reload. Invalid config retains
-the last valid policy. `check-config`, `show-config` and the default template expose
+the last valid policy. `config check`, `config show` and the default template expose
 `clipboard_write`; a named server's policy comes from its own config rather than
 the attaching client's configuration.
 

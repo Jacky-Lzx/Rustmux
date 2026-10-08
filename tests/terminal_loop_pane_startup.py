@@ -39,13 +39,13 @@ print('STARTUP_'+sys.argv[2],flush=True)
 """)
 
     def run(action, *arguments, success=True):
-        result = subprocess.run([BINARY, action, "-s", name, *map(str, arguments)],
+        result = subprocess.run([BINARY, *action.split(), "-s", name, *map(str, arguments)],
                                 env=env, capture_output=True, text=True, timeout=8)
         assert (result.returncode == 0) == success, (action, arguments, result)
         return result
 
     def panes():
-        return tomllib.loads(run("list-panes", "--toml").stdout)["panes"]
+        return tomllib.loads(run("pane list", "--toml").stdout)["panes"]
 
     def active():
         return next(p["id"] for p in panes() if p["active"])
@@ -104,23 +104,23 @@ print('STARTUP_'+sys.argv[2],flush=True)
         client.send(("cd " + shlex.quote(str(source)) + "; stty -echo; KEEP=source; printf 'SOURCE_READY\\n'\n").encode())
         client.expect(b"SOURCE_READY")
         window_command = command("window")
-        window = int(run("new-window", "--name", "task", "--command", window_command).stdout)
+        window = int(run("window new", "--name", "task", "--command", window_command).stdout)
         initial = check_record("window", source, (20, 78))
         assert initial["pid"] == next(p["pid"] for p in panes() if p["id"] == window)
         split_command = command("split")
-        split = int(run("split-pane", "-p", first["id"], "--down", "--cwd", work,
+        split = int(run("pane split", "-p", first["id"], "--down", "--cwd", work,
                         "--command", split_command).stdout)
         check_record("split", work, (9, 78))
         assert active() == split, "inactive split did not select its new pane"
         assert next(p["pid"] for p in panes() if p["id"] == first["id"]) == first["pid"]
-        run("send-keys", "-p", first["id"], "--literal", "--enter", "printf 'PRESERVED:%s\\n' $KEEP")
-        wait_until(lambda: "PRESERVED:source" in run("capture-pane", "-p", first["id"]).stdout,
+        run("pane send-keys", "-p", first["id"], "--literal", "--enter", "printf 'PRESERVED:%s\\n' $KEEP")
+        wait_until(lambda: "PRESERVED:source" in run("pane capture", "-p", first["id"]).stdout,
                    "source process state was lost")
-        ordinary = int(run("new-window", "--cwd", work).stdout)
-        run("send-keys", "-p", ordinary, "--literal", "--enter", command("ordinary"))
+        ordinary = int(run("window new", "--cwd", work).stdout)
+        run("pane send-keys", "-p", ordinary, "--literal", "--enter", command("ordinary"))
         check_record("ordinary", work, (20, 78))
         inherited_command = command("inherited")
-        inherited = int(run("split-pane", "-p", window, "--command", inherited_command).stdout)
+        inherited = int(run("pane split", "-p", window, "--command", inherited_command).stdout)
         check_record("inherited", source, (20, 38))
         assert active() == inherited
         assert not (root / "cwd-executed").exists() and not (work / "cwd-executed").exists()
@@ -129,12 +129,12 @@ print('STARTUP_'+sys.argv[2],flush=True)
         client = Session(extra_env=env, arguments=("attach", name))
         client.expect(b"RUSTMUX_READY>")
         finite_command = command("finite", finite=True)
-        finite = int(run("new-window", "--name", "finite", "--cwd", work, "--command", finite_command).stdout)
+        finite = int(run("window new", "--name", "finite", "--cwd", work, "--command", finite_command).stdout)
         check_record("finite", work, (20, 78))
         wait_until(lambda: any(p["id"] == finite and p["output_complete"] for p in panes()), "job did not exit")
         stopped = next(p for p in panes() if p["id"] == finite)
         assert stopped["exit_code"] == 7 and stopped["exited"]
-        assert int(run("respawn-pane", "-p", finite).stdout) == finite
+        assert int(run("pane respawn", "-p", finite).stdout) == finite
         check_record("finite", work, (20, 78), count=2)
         wait_until(lambda: any(p["id"] == finite and p["output_complete"] for p in panes()), "respawn did not exit")
         assert next(p["pid"] for p in panes() if p["id"] == finite) != stopped["pid"]
@@ -142,14 +142,14 @@ print('STARTUP_'+sys.argv[2],flush=True)
         expect_footer(client, b"HISTORY")
         before = panes()
         would_run = "touch " + shlex.quote(str(root / "invalid-command-ran"))
-        for action, target in (("new-window", []), ("split-pane", ["-p", str(window)])):
+        for action, target in (("window new", []), ("pane split", ["-p", str(window)])):
             for invalid in ([], ["--cwd", "relative"], ["--cwd", str(root / "missing")], ["--cwd", str(probe)]):
                 args = ["--command", ""] if not invalid else ["--command", would_run, *invalid]
                 run(action, *target, *args, success=False)
             run(action, *target, "--command", " \n\t", success=False)
             run(action, *target, "--command", "x" * 4097, success=False)
-        run("split-pane", "-p", 99999, "--command", would_run, success=False)
-        run("new-window", "--name", "", "--command", would_run, success=False)
+        run("pane split", "-p", 99999, "--command", would_run, success=False)
+        run("window new", "--name", "", "--command", would_run, success=False)
         for action in ("new-window", "split-pane"):
             fields = f"pane={window}\ndown=false\n" if action == "split-pane" else ""
             body = (f"action='{action}'\n" + fields + 'command="bad\\u0000command"\n').encode()
@@ -161,24 +161,24 @@ print('STARTUP_'+sys.argv[2],flush=True)
         offline_shell = root / "offline-shell.sh"
         shell.rename(offline_shell)
         try:
-            run("new-window", "--cwd", work, "--command", would_run, success=False)
-            run("split-pane", "-p", window, "--cwd", work, "--command", would_run, success=False)
+            run("window new", "--cwd", work, "--command", would_run, success=False)
+            run("pane split", "-p", window, "--cwd", work, "--command", would_run, success=False)
             assert panes() == before
         finally:
             offline_shell.rename(shell)
         client.send(b"/startup-check")
         expect_footer(client, b"Search /startup-check")
         # Impossible split geometry is rejected before its factory runs.
-        run("resize-pane", "-p", first["id"], "--direction", "up", "--cells", 65535)
+        run("pane resize", "-p", first["id"], "--direction", "up", "--cells", 65535)
         before = panes()
-        run("split-pane", "-p", first["id"], "--down", "--command", would_run, success=False)
+        run("pane split", "-p", first["id"], "--down", "--command", would_run, success=False)
         assert panes() == before and not (root / "invalid-command-ran").exists()
-        run("resize-pane", "-p", first["id"], "--direction", "down", "--cells", 8)
+        run("pane resize", "-p", first["id"], "--direction", "down", "--cells", 8)
         expect_footer(client, b"LOCKED")
         detach()
 
         detached_command = command("detached")
-        detached = int(run("new-window", "--name", "detached", "--cwd", work,
+        detached = int(run("window new", "--name", "detached", "--cwd", work,
                            "--command", detached_command).stdout)
         check_record("detached", work, (20, 78))
         assert active() == detached

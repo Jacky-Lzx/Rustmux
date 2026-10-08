@@ -17,13 +17,13 @@ with tempfile.TemporaryDirectory(prefix="rustmux-control-") as root:
     endpoint = Path(f"/tmp/rustmux-{os.geteuid()}/{name}.control")
 
     def command(action, *args, success=True):
-        result = subprocess.run([BINARY, action, "-s", name, *map(str, args)], env=env,
+        result = subprocess.run([BINARY, *action.split(), "-s", name, *map(str, args)], env=env,
                                 capture_output=True, text=True, timeout=8)
         assert (result.returncode == 0) == success, (action, args, result)
         return result.stdout
 
     def panes():
-        return tomllib.loads(command("list-panes", "--toml"))["panes"]
+        return tomllib.loads(command("pane list", "--toml"))["panes"]
 
     def wait_text(pane, text):
         deadline = time.monotonic() + 6
@@ -31,7 +31,7 @@ with tempfile.TemporaryDirectory(prefix="rustmux-control-") as root:
             # Keep consuming the attached frontend's frames; its ordinary
             # backpressure otherwise correctly pauses active-pane output reads.
             session.read(seconds=0.01)
-            captured = command("capture-pane", "-p", pane, "--history")
+            captured = command("pane capture", "-p", pane, "--history")
             if text in captured:
                 break
             assert time.monotonic() < deadline, (text, captured, panes())
@@ -78,25 +78,25 @@ with tempfile.TemporaryDirectory(prefix="rustmux-control-") as root:
                 response.extend(chunk)
             rejected = tomllib.loads(response[4:].decode())
             assert not rejected["ok"] and "4096" in rejected["output"], rejected
-        moved = int(command("new-window", "--name", "logs"))
-        split = int(command("split-pane", "-p", moved, "--down"))
+        moved = int(command("window new", "--name", "logs"))
+        split = int(command("pane split", "-p", moved, "--down"))
         assert len({p["id"] for p in panes()}) == 3
-        command("send-keys", "-p", first["id"], "--literal", "--enter", "printf 'CONTROL_%s\\n' \"$KEEP\"")
+        command("pane send-keys", "-p", first["id"], "--literal", "--enter", "printf 'CONTROL_%s\\n' \"$KEEP\"")
         wait_text(first["id"], "CONTROL_preserved")
         assert next(p for p in panes() if p["active"])["id"] == split
         before = panes()
-        command("split-pane", "-p", 999999, success=False)
-        command("send-keys", "-p", first["id"], "--literal", "x" * 4097, success=False)
+        command("pane split", "-p", 999999, success=False)
+        command("pane send-keys", "-p", first["id"], "--literal", "x" * 4097, success=False)
         assert panes() == before
-        assert int(command("join-pane", "-p", first["id"], "--to-pane", moved)) == first["id"]
+        assert int(command("pane join", "-p", first["id"], "--to-pane", moved)) == first["id"]
         assert next(p for p in panes() if p["id"] == first["id"])["pid"] == first["pid"]
-        assert int(command("break-pane", "-p", first["id"], "--name", "kept")) == first["id"]
+        assert int(command("pane break", "-p", first["id"], "--name", "kept")) == first["id"]
         assert next(p for p in panes() if p["id"] == first["id"])["pid"] == first["pid"]
-        command("send-keys", "-p", first["id"], "--literal", "--enter", "printf 'MOVED_%s\\n' \"$KEEP\"")
+        command("pane send-keys", "-p", first["id"], "--literal", "--enter", "printf 'MOVED_%s\\n' \"$KEEP\"")
         wait_text(first["id"], "MOVED_preserved")
         session.send(b"\x02d")
         session.finish(0)
-        command("send-keys", "-p", first["id"], "--literal", "--enter", "printf 'DETACHED_%s\\n' CONTROL")
+        command("pane send-keys", "-p", first["id"], "--literal", "--enter", "printf 'DETACHED_%s\\n' CONTROL")
         wait_text(first["id"], "DETACHED_CONTROL")
     finally:
         if stalled:

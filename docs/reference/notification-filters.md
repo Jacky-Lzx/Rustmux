@@ -39,10 +39,10 @@ latest applied switch, threshold and exclusions when it completes. Adding an
 exclusion while a quiet job runs therefore suppresses its reminder; removing an
 exclusion permits the reminder. Applying settings does not restart child jobs.
 
-`rustmux show-config -s work` exposes the applied values in
+`rustmux config show -s work` exposes the applied values in
 `[settings].notifications_enabled`, `long_command_bell`,
 `command_duration_seconds` and `notification_excluded_applications`.
-`check-config` and `default-config` expose the same settings through their
+`config check` and `config default` expose the same settings through their
 existing diagnostic/template interfaces.
 
 Rustmux samples the PTY foreground process-group leader on command output and

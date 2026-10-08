@@ -28,16 +28,16 @@ with tempfile.TemporaryDirectory(prefix="rustmux-compact-") as temporary:
 
     def run(action, *args, success=True):
         target = [name] if action in ("new", "kill", "save") else ["-s", name]
-        result = subprocess.run([BINARY, action, *target, *map(str, args)], env=env,
+        result = subprocess.run([BINARY, *action.split(), *target, *map(str, args)], env=env,
                                 capture_output=True, text=True, timeout=8)
         assert (result.returncode == 0) == success, (action, args, result)
         return result.stdout
 
     def panes():
-        return tomllib.loads(run("list-panes", "--toml"))["panes"]
+        return tomllib.loads(run("pane list", "--toml"))["panes"]
 
     def status():
-        return tomllib.loads(run("show-config"))
+        return tomllib.loads(run("config show"))
 
     def wait(predicate):
         deadline = time.monotonic() + 6
@@ -107,7 +107,7 @@ os.write(1,b"\\r\\nMOUSE_DONE\\r\\n")
         session.send(b"renamed\r")
         expect_bar(session, b"1 renamed")
         expect_bar(session, b"LOCKED")
-        before = run("capture-pane", "--history")
+        before = run("pane capture", "--history")
         session.send(b"\x02[")
         expect_bar(session, b"History")
         session.send(b"/BOTTOM")
@@ -115,13 +115,13 @@ os.write(1,b"\\r\\nMOUSE_DONE\\r\\n")
         assert session.last_frame.endswith(b"\x1b[?25h")
         session.send(b"\x03q")
         expect_bar(session, b"LOCKED")
-        assert run("capture-pane", "--history") == before
+        assert run("pane capture", "--history") == before
         session.send(b"\x02?")
         session.expect(b"Shortcut Help")
         session.send(b"q")
         expect_bar(session, b"LOCKED")
         # Mode badge cells have no tab hitbox or child action.
-        run("new-window", "--name", "other")
+        run("window new", "--name", "other")
         expect_bar(session, b"2 other")
         session.expect(b"RUSTMUX_READY>")
         size("NEW_WINDOW", "21 78")
@@ -150,20 +150,20 @@ os.write(1,b"\\r\\nMOUSE_DONE\\r\\n")
         write(True)
         wait(lambda: status()["settings"]["compact"])
         # Control creation while detached also uses compact dimensions.
-        run("new-window", "--name", "detached")
+        run("window new", "--name", "detached")
         attach()
         expect_bar(session, b"3 detached")
         size("DETACHED", "21 78")
-        run("select-window", "-w", 1)
+        run("window select", "-w", 1)
         expect_bar(session, b"1 renamed")
         # Earlier simple windows must stay unchanged if a later inactive tree
         # cannot fit: preflight all windows before committing any geometry.
         resize(7)
-        run("select-window", "-w", 3)
+        run("window select", "-w", 3)
         expect_bar(session, b"3 detached")
-        run("split-pane", "--down")
+        run("pane split", "--down")
         wait(lambda: len([p for p in panes() if p["window"] == 3]) == 2)
-        run("select-window", "-w", 1)
+        run("window select", "-w", 1)
         expect_bar(session, b"1 renamed")
         accepted = status()
         write(False, "remain_on_exit=true\n")
@@ -190,7 +190,7 @@ os.write(1,b"\\r\\nMOUSE_DONE\\r\\n")
         assert panes()[0]["pid"] != original["pid"]
         assert snapshot.read_bytes() == saved
         resize(28, 100)
-        run("select-window", "-w", 2)
+        run("window select", "-w", 2)
         expect_bar(session, b"2 other")
         size("RESIZED", "25 98")
         detach()

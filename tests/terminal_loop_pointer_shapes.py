@@ -53,7 +53,7 @@ while True:
 
     def run(action, *args):
         target = [name] if action in ("new", "kill") else ["-s", name]
-        result = subprocess.run([BINARY, action, *target, *map(str, args)], env=env,
+        result = subprocess.run([BINARY, *action.split(), *target, *map(str, args)], env=env,
                                 capture_output=True, text=True, timeout=8)
         assert result.returncode == 0, (action, args, result)
         return result.stdout
@@ -76,7 +76,7 @@ while True:
         global counter
         counter += 1
         token = counter
-        run("send-keys", "-p", pane, "--literal", f"{token}:{operation}:{value}\n")
+        run("pane send-keys", "-p", pane, "--literal", f"{token}:{operation}:{value}\n")
         wait(lambda: any(item["token"] == token for item in records(path)))
         return next(item for item in records(path) if item["token"] == token)
 
@@ -102,23 +102,23 @@ while True:
 
     try:
         run("new", "--detached")
-        panes = tomllib.loads(run("list-panes", "--toml"))["panes"]
+        panes = tomllib.loads(run("pane list", "--toml"))["panes"]
         left = panes[0]["id"]
         a = root / "a.jsonl"
         b = root / "b.jsonl"
         launch_a = f"exec python3 {shlex.quote(str(probe))} {shlex.quote(str(a))} pointer"
-        run("send-keys", "-p", left, "--literal", "--enter", launch_a)
+        run("pane send-keys", "-p", left, "--literal", "--enter", launch_a)
         wait(lambda: bool(records(a)))
         launch_b = f"exec python3 {shlex.quote(str(probe))} {shlex.quote(str(b))} wait"
-        right = int(run("split-pane", "-p", left, "--command", launch_b))
+        right = int(run("pane split", "-p", left, "--command", launch_b))
         wait(lambda: bool(records(b)))
-        identities = {p["id"]: p["pid"] for p in tomllib.loads(run("list-panes", "--toml"))["panes"]}
+        identities = {p["id"]: p["pid"] for p in tomllib.loads(run("pane list", "--toml"))["panes"]}
         query(left, a, "pointer")  # Both queries also work without a displayed client.
         query(right, b, "wait")
         session = Session(extra_env=env, arguments=("attach", name))
         expect_shape("wait")
         session.expect(b"POINTER_READY")
-        run("select-pane", "-p", left)
+        run("pane select", "-p", left)
         expect_shape("pointer")
         command(right, b, "osc", "crosshair")
         query(right, b, "crosshair")
@@ -126,7 +126,7 @@ while True:
         while time.monotonic() < deadline: session.read(0.01)
         assert b"\x1b]22;crosshair\x1b\\" not in session.output
         assert b"\x1b]22;?" not in session.output
-        run("select-pane", "-p", right)
+        run("pane select", "-p", right)
         expect_shape("crosshair")
         command(right, b, "osc", ">wait,pointer")
         query(right, b, "pointer")
@@ -171,9 +171,9 @@ while True:
         command(right, b, "reset")
         expect_shape("")
         query(right, b, "0")
-        run("select-pane", "-p", left)
+        run("pane select", "-p", left)
         expect_shape("pointer")
-        assert {p["id"]: p["pid"] for p in tomllib.loads(run("list-panes", "--toml"))["panes"]} == identities
+        assert {p["id"]: p["pid"] for p in tomllib.loads(run("pane list", "--toml"))["panes"]} == identities
         assert {item["pid"] for item in records(a)} == {records(a)[0]["pid"]}
         assert {item["pid"] for item in records(b)} == {records(b)[0]["pid"]}
         detach()

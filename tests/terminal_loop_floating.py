@@ -34,7 +34,7 @@ w={actions=["toggle-floating-terminal",{action="switch-mode",mode="locked"}],dis
 
     def run(action, *args, success=True):
         target = [name] if action in ['kill', 'save-session'] else ['-s', name]
-        result = subprocess.run([BINARY, action, *target, *map(str, args)], env=env,
+        result = subprocess.run([BINARY, *action.split(), *target, *map(str, args)], env=env,
                                 capture_output=True, text=True, timeout=8)
         assert (result.returncode == 0) == success, (action, args, result)
         if not success:
@@ -43,7 +43,7 @@ w={actions=["toggle-floating-terminal",{action="switch-mode",mode="locked"}],dis
         return result.stdout
 
     def panes():
-        return tomllib.loads(run('list-panes', '--toml'))['panes']
+        return tomllib.loads(run('pane list', '--toml'))['panes']
 
     def wait(predicate):
         deadline = time.monotonic() + 8
@@ -60,7 +60,7 @@ w={actions=["toggle-floating-terminal",{action="switch-mode",mode="locked"}],dis
         return next((p for p in panes() if p['floating']), None)
 
     def output(pane):
-        chunk = tomllib.loads(run('read-pane-output', '-p', pane, '--after', 0))
+        chunk = tomllib.loads(run('pane read-output', '-p', pane, '--after', 0))
         return base64.b64decode(chunk['bytes_base64'])
 
     def toggle():
@@ -113,13 +113,13 @@ os.write(1,b"\\r\\nMOUSE_DONE\\r\\n")
         client.send(b'\x02%')
         expect_footer(client,b'LOCKED')
         assert len(panes())==2 and popup()['pid']==first['pid']
-        run('split-pane',success=False)
-        run('break-pane','-p',first['id'],success=False)
-        run('join-pane','-p',first['id'],'--to-pane',base['id'],success=False)
-        run('join-pane','-p',base['id'],'--to-pane',first['id'],success=False)
+        run('pane split',success=False)
+        run('pane break','-p',first['id'],success=False)
+        run('pane join','-p',first['id'],'--to-pane',base['id'],success=False)
+        run('pane join','-p',base['id'],'--to-pane',first['id'],success=False)
         assert popup()['active'] and len(panes())==2
         toggle();wait(lambda:not popup()['active'])
-        run('send-keys','-p',first['id'],'--literal','--enter',"printf 'HIDDEN_%s\\n' LIVE")
+        run('pane send-keys','-p',first['id'],'--literal','--enter',"printf 'HIDDEN_%s\\n' LIVE")
         wait(lambda: b'HIDDEN_LIVE' in output(first['id']))
         assert b'HIDDEN_LIVE' not in body()
         client.send(b'\x02\x10w')  # Configured Pane action reuses the same shell.
@@ -129,7 +129,7 @@ os.write(1,b"\\r\\nMOUSE_DONE\\r\\n")
         client.expect(b'KEEP_popup')
         assert popup()['pid']==first['pid']
         # Background tiled output appears outside the overlay.
-        run('send-keys','-p',base['id'],'--literal','--enter',"printf '\\033[HBACK_%s\\n' LIVE")
+        run('pane send-keys','-p',base['id'],'--literal','--enter',"printf '\\033[HBACK_%s\\n' LIVE")
         wait(lambda:b'BACK_LIVE' in body())
         fcntl.ioctl(client.slave,termios.TIOCSWINSZ,struct.pack('HHHH',30,100,0,0))
         client.send(b"printf 'RESIZED_%s\\n' \"$(stty size)\"\n")
@@ -147,16 +147,16 @@ os.write(1,b"\\r\\nMOUSE_DONE\\r\\n")
         assert next(p for p in panes() if not p['floating'])['pid']==base['pid']
         # Reload resizes the hidden popup without replacing it or the base shell.
         config.write_text('compact=true\n'+config.read_text())
-        wait(lambda:tomllib.loads(run('show-config'))['settings']['compact'])
+        wait(lambda:tomllib.loads(run('config show'))['settings']['compact'])
         toggle();wait(lambda:popup()['active'])
         client.send(b"printf 'COMPACT_%s\\n' \"$(stty size)\"\n")
         client.expect(b'COMPACT_14 58')
         assert popup()['pid']==first['pid']
         config.write_text(config.read_text().replace('compact=true\n','compact=false\n',1))
-        wait(lambda:not tomllib.loads(run('show-config'))['settings']['compact'])
+        wait(lambda:not tomllib.loads(run('config show'))['settings']['compact'])
         toggle();wait(lambda:not popup()['active'])
         # Popup stays outside ordinary numbering; switching windows hides it.
-        run('new-window','--name','second')
+        run('window new','--name','second')
         assert len([p for p in panes() if not p['floating']])==2
         toggle();wait(lambda:popup()['active'])
         client.send(b'\x02p');wait(lambda:next(p for p in panes() if p['window']==1)['active'])
@@ -176,10 +176,10 @@ os.write(1,b"\\r\\nMOUSE_DONE\\r\\n")
         client.send(b'q')
         expect_footer(client,b'LOCKED')
         # Closing the popup does not exit the only usable ordinary session.
-        run('close-pane','-p',popup()['id'])
+        run('pane close','-p',popup()['id'])
         wait(lambda:popup() is None)
         # Keep only one ordinary window: exiting its overlay must not exit the server.
-        run('close-window','-w',2)
+        run('window close','-w',2)
         toggle();wait(lambda:popup() is not None)
         client.send(b'exit 0\n');wait(lambda:popup() is None)
         assert len([p for p in panes() if not p['floating']])==1

@@ -8,7 +8,7 @@ with another `--config` path does not replace the server's source.
 ```sh
 rustmux new --detached work --config ./work.toml
 # Edit ./work.toml, then inspect the server's applied settings:
-rustmux show-config -s work
+rustmux config show -s work
 ```
 
 | Setting | Effect of a successful reload |
@@ -54,9 +54,9 @@ panes created through script control also use the updated settings.
 
 Invalid TOML, unsupported values for implemented settings, unreadable files and
 restart-only changes retain the last successfully applied configuration. Errors
-appear in the attached footer and in `show-config`. Fixing the file clears the
+appear in the attached footer and in `config show`. Fixing the file clears the
 error. Compatible ignored options retain the ordinary startup parser's behavior;
-use `check-config --strict` to find these options before saving.
+use `config check --strict` to find these options before saving.
 
 Deleting a discovered default file selects built-in defaults, provided that this
 does not change the restart-only entry policy. Deleting an explicit `--config`
@@ -74,8 +74,8 @@ validation, then recover on the next check.
 
 ## Inspecting a running server
 
-`show-config -s NAME` returns TOML and is available through pipes, inside a pane,
-or while the server is detached. Unlike `check-config`, it reports what the
+`config show -s NAME` returns TOML and is available through pipes, inside a pane,
+or while the server is detached. Unlike `config check`, it reports what the
 server has actually applied rather than reading the current file for a future
 startup.
 

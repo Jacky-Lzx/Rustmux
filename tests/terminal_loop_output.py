@@ -22,20 +22,20 @@ with tempfile.TemporaryDirectory(prefix="rustmux-output-") as temporary:
 
     def run(action, *args, success=True):
         target = [name] if action in ("new", "kill") else ["-s", name]
-        result = subprocess.run([BINARY, action, *target, *map(str, args)],
+        result = subprocess.run([BINARY, *action.split(), *target, *map(str, args)],
                                 env=env, capture_output=True, timeout=8)
         assert (result.returncode == 0) == success, (action, args, result)
         return result
 
     def panes():
-        return tomllib.loads(run("list-panes", "--toml").stdout.decode())["panes"]
+        return tomllib.loads(run("pane list", "--toml").stdout.decode())["panes"]
 
     def read(pane, after=None):
         args = ("--after", after) if after is not None else ()
-        return tomllib.loads(run("read-pane-output", "-p", pane, *args).stdout.decode())
+        return tomllib.loads(run("pane read-output", "-p", pane, *args).stdout.decode())
 
     def send(pane, command):
-        run("send-keys", "-p", pane, "--literal", "--enter", command)
+        run("pane send-keys", "-p", pane, "--literal", "--enter", command)
 
     def wait(predicate):
         deadline = time.monotonic() + 5
@@ -46,7 +46,7 @@ with tempfile.TemporaryDirectory(prefix="rustmux-output-") as temporary:
             time.sleep(0.01)
 
     def client(action, *args, stdout=subprocess.PIPE):
-        process = subprocess.Popen([BINARY, action, "-s", name, *map(str, args)],
+        process = subprocess.Popen([BINARY, *action.split(), "-s", name, *map(str, args)],
                                    env=env, stdout=stdout, stderr=subprocess.PIPE)
         clients.append(process)
         return process
@@ -58,22 +58,22 @@ with tempfile.TemporaryDirectory(prefix="rustmux-output-") as temporary:
         wait(lambda: b"READY_RAW\r\n" in base64.b64decode(read(first, 0)["bytes_base64"]))
         cursor = read(first)["next"]
         log = root / "pane.raw"
-        logger = client("log-pane", "-p", first, "--after", cursor, "--output", log)
-        subscriber = client("subscribe-pane", "--after", cursor)  # Omitted ID pins focus.
+        logger = client("pane log", "-p", first, "--after", cursor, "--output", log)
+        subscriber = client("pane subscribe", "--after", cursor)  # Omitted ID pins focus.
         wait(log.exists)
         time.sleep(0.15)
-        second = int(run("new-window", "--name", "other").stdout)
+        second = int(run("window new", "--name", "other").stdout)
         send(second, "printf 'OTHER_PANE\\n'")
-        run("break-pane", "-p", first, "--name", "moved")
+        run("pane break", "-p", first, "--name", "moved")
         send(first, "printf '\\033[31mRAW_BYTES\\377\\033[0m\\n'; printf '\\344'; sleep 0.1; printf '\\270\\255\\n'")
         raw = b"\x1b[31mRAW_BYTES\xff\x1b[0m\r\n\xe4\xb8\xad\r\n"
         wait(lambda: raw in log.read_bytes())
         assert log.stat().st_mode & 0o777 == 0o600
         assert read(first, cursor)["pane"] == first
-        run("log-pane", "-p", first, "--output", log, success=False)
+        run("pane log", "-p", first, "--output", log, success=False)
         symlink = root / "symlink"
         symlink.symlink_to(log)
-        run("log-pane", "-p", first, "--output", symlink, success=False)
+        run("pane log", "-p", first, "--output", symlink, success=False)
         send(first, "exec /usr/bin/printf FINAL_RAW")
         logger_output, logger_error = logger.communicate(timeout=5)
         output, error = subscriber.communicate(timeout=5)
@@ -83,16 +83,16 @@ with tempfile.TemporaryDirectory(prefix="rustmux-output-") as temporary:
         completed = read(first, cursor)
         assert completed["complete"] and completed["dropped"] == 0
         assert base64.b64decode(completed["bytes_base64"]) == raw
-        run("read-pane-output", "-p", first, "--after", completed["next"] + 1, success=False)
+        run("pane read-output", "-p", first, "--after", completed["next"] + 1, success=False)
         # Respawn clears old bytes but advances generation without reusing cursors.
-        run("respawn-pane", "-p", first, "--command", "printf RESTARTED; exit 0")
+        run("pane respawn", "-p", first, "--command", "printf RESTARTED; exit 0")
         wait(lambda: read(first)["complete"])
         restarted = read(first, completed["next"])
         assert restarted["generation"] == completed["generation"] + 1
         assert base64.b64decode(restarted["bytes_base64"]) == b"RESTARTED"
         # A stopped reader cannot block the server. On resuming, loss is explicit.
         cursor = read(second)["next"]
-        slow = client("subscribe-pane", "-p", second, "--after", cursor)
+        slow = client("pane subscribe", "-p", second, "--after", cursor)
         time.sleep(0.15)
         slow.send_signal(signal.SIGSTOP)
         send(second, "stty -echo; head -c 150000 /dev/zero; printf BIG_DONE")
@@ -105,9 +105,9 @@ with tempfile.TemporaryDirectory(prefix="rustmux-output-") as temporary:
         session = Session(extra_env=env, arguments=("attach", name))
         session.read(seconds=0.2)
         # First is dead, select the other via a new window and capture on that pane.
-        live = int(run("new-window").stdout)
+        live = int(run("window new").stdout)
         ui_log = root / "ui.raw"
-        ui_logger = client("log-pane", "-p", live, "--output", ui_log)
+        ui_logger = client("pane log", "-p", live, "--output", ui_log)
         wait(ui_log.exists)
         send(live, "printf 'UI_STILL_ALIVE\\n'")
         session.expect(b"UI_STILL_ALIVE")
@@ -123,7 +123,7 @@ with tempfile.TemporaryDirectory(prefix="rustmux-output-") as temporary:
         assert b"UI_STILL_ALIVE\r\n" in ui_log.read_bytes()
         assert ui_log.read_bytes().endswith(b"LOG_END")
         # Retention is a checked prerequisite, including per-pane false overrides.
-        interrupted = client("subscribe-pane", "-p", second)
+        interrupted = client("pane subscribe", "-p", second)
         time.sleep(0.15)
         run("kill")
         _, error = interrupted.communicate(timeout=5)
@@ -132,16 +132,16 @@ with tempfile.TemporaryDirectory(prefix="rustmux-output-") as temporary:
         run("new", "--detached")
         ordinary = panes()[0]["id"]
         read(ordinary)
-        run("subscribe-pane", "-p", ordinary, success=False)
+        run("pane subscribe", "-p", ordinary, success=False)
         rejected = root / "rejected.raw"
-        run("log-pane", "-p", ordinary, "--output", rejected, success=False)
+        run("pane log", "-p", ordinary, "--output", rejected, success=False)
         assert not rejected.exists()
         run("kill")
         config.write_text("remain_on_exit = true\n")
         layout = root / "no-retain.toml"
         layout.write_text("[[windows]]\nname='ordinary'\n[[windows.panes]]\nremain_on_exit=false\n")
         run("new", "--detached", "--layout", layout)
-        run("subscribe-pane", "-p", panes()[0]["id"], success=False)
+        run("pane subscribe", "-p", panes()[0]["id"], success=False)
     finally:
         if session:
             session.close()

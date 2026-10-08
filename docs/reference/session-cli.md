@@ -30,6 +30,14 @@ For example, `rustmux a work --create` and `rustmux k work` use the same
 arguments and behavior as `attach` and `kill`. The `a` and `k` aliases match
 `main-AI`.
 
+Help uses separate **Command groups**, **Commands**, and **Options** sections.
+`pane`, `window`, and `config` appear as groups with a `<COMMAND>` placeholder;
+use `rustmux pane --help`, `rustmux window --help`, or `rustmux config --help`
+to list their operations. Terminal output uses magenta for groups, cyan for
+commands and options, yellow for argument placeholders, and green for headings.
+Help redirected to a pipe or file stays plain text. Set `NO_COLOR=1` to disable
+colors in a terminal as well.
+
 `save-session` saves the running workspace; `new` restores its snapshot after the
 server stops. History and autosave are optional. See [Session Snapshots](session-snapshots.md)
 for configuration, storage and the distinction between reattachment and starting
@@ -44,6 +52,8 @@ See [Attach or Create](session-attach-create.md) for behavior and failure handli
 
 Additional [script control commands](script-control.md) query panes, send input,
 capture text, create windows and splits, and move panes while preserving processes.
+Pane operations use `rustmux pane <COMMAND>` and window operations use
+`rustmux window <COMMAND>`; their `--help` output lists the available operations.
 The [Session Manager](session-manager-controls.md) now supports configurable
 keys, live list refresh and acknowledged manual saving with Ctrl-A.
 `new --layout PATH` starts a validated [project layout](project-layouts.md),

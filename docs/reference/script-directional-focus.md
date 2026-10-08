@@ -1,17 +1,17 @@
 # Script directional focus
 
 ```sh
-rustmux select-pane -s work --direction right
-rustmux select-pane -s work -p 0 --direction down
-rustmux select-pane -s work -p 0
+rustmux pane select -s work --direction right
+rustmux pane select -s work -p 0 --direction down
+rustmux pane select -s work -p 0
 ```
 
-`select-pane --direction left|right|up|down` focuses the nearest geometric neighbor
+`pane select --direction left|right|up|down` focuses the nearest geometric neighbor
 of an origin pane in the same window. The origin defaults to the active pane;
 optional `-p ID`/`--pane ID` supplies an explicit origin, which may be unselected
 or in an inactive window. Success selects the neighbor and activates its window.
 The origin is never briefly selected. Without `--direction`, the existing
-`select-pane -p ID` behavior still selects that exact ID. Supplying neither an
+`pane select -p ID` behavior still selects that exact ID. Supplying neither an
 ID nor a direction is an error. The default session is `default`, and `-s SESSION`
 chooses another running server.
 
@@ -23,7 +23,7 @@ finally traversal order. A full-height left pane therefore chooses the upper
 right pane even if the lower pane is larger. No edge wrapping occurs, and moving
 back is not always an inverse in uneven layouts. This changes focus; pane
 positions, separator positions and split ratios remain unchanged. To exchange
-positions, use `move-pane` or `swap-pane`.
+positions, use `pane move` or `pane swap`.
 
 Zoom remains enabled. Neighbor lookup uses the underlying tiled rectangles even
 for a hidden explicit origin. Selecting a new target transfers the enlarged

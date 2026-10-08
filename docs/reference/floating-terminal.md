@@ -33,7 +33,7 @@ the floating shell directly; its normal exit also returns to the underlying
 pane, and a later toggle starts a fresh shell. `remain_on_exit` applies to it
 like other panes. Closing the final ordinary window still ends the session.
 
-`list-panes --toml` includes the floating pane with `floating = true` and
+`pane list --toml` includes the floating pane with `floating = true` and
 `window = 0`. Ordinary panes have `floating = false` and retain one-based window
 numbers. Read output, send keys, select, respawn and close can target its runtime
 ID, including while it is hidden. Window-number operations address ordinary

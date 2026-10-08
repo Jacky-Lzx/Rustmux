@@ -1,12 +1,12 @@
 # Script pane startup
 
 ```sh
-rustmux new-window -s work --name checks --cwd /absolute/project --command 'cargo test'
-rustmux split-pane -s work -p 2 --down --cwd /absolute/project --command 'make watch'
-rustmux new-window -s work --cwd /absolute/project
+rustmux window new -s work --name checks --cwd /absolute/project --command 'cargo test'
+rustmux pane split -s work -p 2 --down --cwd /absolute/project --command 'make watch'
+rustmux window new -s work --cwd /absolute/project
 ```
 
-`new-window` and `split-pane` accept optional `--command` and `--cwd` arguments.
+`window new` and `pane split` accept optional `--command` and `--cwd` arguments.
 The new pane gains focus and its runtime ID is printed on success, following
 the existing creation behavior. Splitting a pane in an inactive window selects
 that window and the new pane. Omitted `-p ID` targets the active pane. Each
@@ -40,16 +40,16 @@ startup command completed successfully. For example, an unknown executable
 inside a valid shell command can produce an exited pane even though creation
 returned zero. The ordinary `remain_on_exit` server setting determines whether
 completed jobs close automatically or remain available for capture/inspection.
-It defaults to false. With retention enabled, `respawn-pane -p ID` reruns the
+It defaults to false. With retention enabled, `pane respawn -p ID` reruns the
 recorded command at the pane's current dimensions using its tracked directory.
-Use `list-panes --toml` to observe exit status and output completion, and poll
+Use `pane list --toml` to observe exit status and output completion, and poll
 output markers rather than treating creation as an application-ready barrier.
 
 These commands and directories enter the next manual or configured automatic
 snapshot through the existing saving rules. Restoration starts fresh processes
 and reruns recorded startup commands; the control client and an external
 project layout file are not needed. Ordinary commands later typed or sent with
-`send-keys` do not become startup commands. Omitting `--command` does not inherit
+`pane send-keys` do not become startup commands. Omitting `--command` does not inherit
 the source pane's command. Creation alone does not force a snapshot disk write.
 
 ## Review and verification

@@ -25,13 +25,13 @@ pane row.
 
 ## Configuration and reload
 
-`default-config` exports `compact = false`. `check-config --toml` and a running
-server's `show-config` report `[settings].compact`; values other than TOML
+`config default` exports `compact = false`. `config check --toml` and a running
+server's `config show` report `[settings].compact`; values other than TOML
 booleans are rejected. For example:
 
 ```sh
-rustmux check-config --config ./work.toml --toml --strict
-rustmux show-config -s work
+rustmux config check --config ./work.toml --toml --strict
+rustmux config show -s work
 ```
 
 An attached named session uses the server's layout setting. Configuration reload
@@ -42,7 +42,7 @@ New windows created through the control socket use the current layout setting.
 Before applying a layout change, Rustmux checks every window, including inactive
 and zoomed panes. If a smaller canvas cannot retain content in each pane, the
 entire configuration update is rejected: applied settings, generation, layout,
-and processes are preserved. The error is available in `show-config` and appears
+and processes are preserved. The error is available in `config show` and appears
 on the active display. Enlarge the terminal or simplify the layout, then edit the
 configuration again to retry. Successful updates resize existing PTYs without
 respawning shells.

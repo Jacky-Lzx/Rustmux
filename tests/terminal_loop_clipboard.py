@@ -66,7 +66,7 @@ while True:
 ''')
     def run(action,*args):
         target=[name] if action in ("new","kill") else ["-s",name]
-        result=subprocess.run([BINARY,action,*target,*map(str,args)],env=env,capture_output=True,text=True,timeout=8)
+        result=subprocess.run([BINARY, *action.split(),*target,*map(str,args)],env=env,capture_output=True,text=True,timeout=8)
         assert result.returncode == 0,(action,result.returncode,result.stderr)
         return result.stdout
     def records(label):
@@ -84,7 +84,7 @@ while True:
             else:
                 time.sleep(0.005)
             assert time.monotonic() < deadline,(detail, client.physical_rows if client else None, bytes(client.output[-1500:]) if client else None)
-    def status(): return tomllib.loads(run("show-config"))
+    def status(): return tomllib.loads(run("config show"))
     def write(enabled):
         config.write_text(f"clipboard_write={str(enabled).lower()}\n")
         wait(lambda: status()["settings"]["clipboard_write"] == enabled and not status().get("error"),"config reload")
@@ -96,7 +96,7 @@ while True:
     def command(pane,label,data=b"",operation="send",value=None,timeout=6):
         global counter
         counter+=1
-        run("send-keys","-p",pane,"--literal",f"{counter}:{operation}:{value if value is not None else data.hex()}\n")
+        run("pane send-keys","-p",pane,"--literal",f"{counter}:{operation}:{value if value is not None else data.hex()}\n")
         wait(lambda: any(row["token"]==counter for row in records(label)),"probe completion",timeout)
         if client:
             # The DSR barrier confirms parsing. Drain the asynchronously queued outer write.
@@ -115,10 +115,10 @@ while True:
         client.send(b"\x02d"); client.finish(0); client.close(); client=None
     try:
         run("new","--detached")
-        left=tomllib.loads(run("list-panes","--toml"))["panes"][0]["id"]
+        left=tomllib.loads(run("pane list","--toml"))["panes"][0]["id"]
         launch=lambda label: f"exec python3 -u {shlex.quote(str(probe))} {label} {shlex.quote(str(root/(label+'.jsonl')))}"
-        run("send-keys","-p",left,"--literal","--enter",launch("A")); wait(lambda: records("A"))
-        right=int(run("split-pane","-p",left,"--command",launch("B"))); wait(lambda: records("B"))
+        run("pane send-keys","-p",left,"--literal","--enter",launch("A")); wait(lambda: records("A"))
+        right=int(run("pane split","-p",left,"--command",launch("B"))); wait(lambda: records("B"))
         original={label:records(label)[0]["pid"] for label in ("A","B")}
         attach(); clear()
         command(left,"A",clipboard(b"c",b"default blocked")); assert not packets()
@@ -132,7 +132,7 @@ while True:
         clear(); command(left,"A",operation="max",value=32769); assert not packets()
         clear(); command(left,"A",b"\x1b]52;c;YW",operation="partial")
         # Confirm the partial output was consumed before changing policy.
-        wait(lambda: base64.b64decode(tomllib.loads(run("read-pane-output","-p",left,"--after","0"))["bytes_base64"]).endswith(b"\x1b]52;c;YW"))
+        wait(lambda: base64.b64decode(tomllib.loads(run("pane read-output","-p",left,"--after","0"))["bytes_base64"]).endswith(b"\x1b]52;c;YW"))
         write(False); write(True)
         command(left,"A",b"Jj\x07"); assert not packets()
         config.write_text("clipboard_write='invalid'\n")
@@ -140,28 +140,28 @@ while True:
         clear(); command(left,"A",clipboard(b"c",b"last valid policy")); assert packets()==[(b"c",b"last valid policy")]
         write(True); clear()
         command(left,"A",b"\x1b]52;c;YW",operation="partial")
-        wait(lambda: base64.b64decode(tomllib.loads(run("read-pane-output","-p",left,"--after","0"))["bytes_base64"]).endswith(b"\x1b]52;c;YW"))
+        wait(lambda: base64.b64decode(tomllib.loads(run("pane read-output","-p",left,"--after","0"))["bytes_base64"]).endswith(b"\x1b]52;c;YW"))
         detach(); command(left,"A",b"Jj\x07")
         command(right,"B",clipboard(b"c",b"detached")); attach(); assert not packets()
         clear(); command(left,"A",clipboard(b"c",b"reconnected")); assert packets()==[(b"c",b"reconnected")]
         # Incomplete requests cannot span attachment boundaries, even if no
         # remaining bytes are observed while detached.
         clear(); command(right,"B",b"\x1b]52;c;YW",operation="partial")
-        wait(lambda: base64.b64decode(tomllib.loads(run("read-pane-output","-p",right,"--after","0"))["bytes_base64"]).endswith(b"\x1b]52;c;YW"))
+        wait(lambda: base64.b64decode(tomllib.loads(run("pane read-output","-p",right,"--after","0"))["bytes_base64"]).endswith(b"\x1b]52;c;YW"))
         detach(); attach(); clear(); command(right,"B",b"Jj\x07"); assert not packets()
         # A hidden live pane drains requests without a backlog for undo.
-        run("select-pane","-p",left)
+        run("pane select","-p",left)
         clear(); command(left,"A",clipboard(b"c",b"hidden"),operation="later")
         hidden_token=counter
         client.send(b"\x02x"); client.expect(b"Close pane? Type yes:")
         client.send(b"yes\r")
-        wait(lambda: all(p["id"]!=left for p in tomllib.loads(run("list-panes","--toml"))["panes"]))
+        wait(lambda: all(p["id"]!=left for p in tomllib.loads(run("pane list","--toml"))["panes"]))
         (root/f"gate_{hidden_token}").touch(); wait(lambda: (root/f"emitted_{hidden_token}").exists())
         deadline=time.monotonic()+0.3
         while time.monotonic()<deadline: client.read(0.01)
         assert not packets()
         client.send(b"\x02z")
-        wait(lambda: any(p["id"]==left for p in tomllib.loads(run("list-panes","--toml"))["panes"]))
+        wait(lambda: any(p["id"]==left for p in tomllib.loads(run("pane list","--toml"))["panes"]))
         restored=client.expect(b"HIDDEN_COPY_DONE"); assert b"\x1b]52;" not in restored and not packets()
         clear(); command(left,"A",clipboard(b"c",b"after undo")); assert packets()==[(b"c",b"after undo")]
         # Resize and buffer switches retain ordinary pane behavior.

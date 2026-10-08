@@ -44,13 +44,13 @@ while True:
 """)
 
     def run(action, *arguments, success=True):
-        result = subprocess.run([BINARY, action, "-s", name, *map(str, arguments)],
+        result = subprocess.run([BINARY, *action.split(), "-s", name, *map(str, arguments)],
                                 env=env, capture_output=True, text=True, timeout=8)
         assert (result.returncode == 0) == success, (action, arguments, result)
         return result
 
     def panes():
-        return tomllib.loads(run("list-panes", "--toml").stdout)["panes"]
+        return tomllib.loads(run("pane list", "--toml").stdout)["panes"]
 
     def active():
         return next(p["id"] for p in panes() if p["active"])
@@ -85,7 +85,7 @@ while True:
 
     def swap(destination, source=None):
         arguments = ["-p", str(source)] if source is not None else []
-        assert run("swap-pane", *arguments, "--to-pane", destination).stdout == ""
+        assert run("pane swap", *arguments, "--to-pane", destination).stdout == ""
 
     def identities():
         return {p["id"]: p["pid"] for p in panes()}
@@ -122,9 +122,9 @@ while True:
         client.expect(b"FIRST_SWAP_READY")
         first = active()
         wait_until(lambda: record("first") is not None, "first probe did not start")
-        top = start("split-pane", "top", "-p", first, application="no")
-        bottom = start("split-pane", "bottom", "-p", top, "--down")
-        other = start("new-window", "other", "--name", "other", application="no")
+        top = start("pane split", "top", "-p", first, application="no")
+        bottom = start("pane split", "bottom", "-p", top, "--down")
+        other = start("window new", "other", "--name", "other", application="no")
         size("first", 20, 38)
         size("top", 9, 38)
         size("bottom", 9, 38)
@@ -145,8 +145,8 @@ while True:
         assert next(p for p in panes() if p["id"] == bottom)["selected"]
         assert all(record(label)["input"] == old for label, old in before_inputs.items()), "inactive swap emitted focus"
         for pane, label in ((first, "first"), (top, "top"), (bottom, "bottom")):
-            assert label.upper() + "_SWAP_READY" in run("capture-pane", "-p", pane).stdout
-        run("select-pane", "-p", bottom)
+            assert label.upper() + "_SWAP_READY" in run("pane capture", "-p", pane).stdout
+        run("pane select", "-p", bottom)
         client.expect(b"BOTTOM_SWAP_READY")
         wait_until(lambda: record("bottom")["input"].endswith(b"\x1b[I".hex()),
                    "selected pane did not receive focus-in")
@@ -166,8 +166,8 @@ while True:
         before = panes()
         before_records = {label: record(label) for label in ("first", "top", "bottom")}
         for arguments in (("-p", "99999", "--to-pane", first), ("--to-pane", "99999")):
-            assert "unknown runtime pane ID" in run("swap-pane", *arguments, success=False).stderr
-        assert "same window" in run("swap-pane", "--to-pane", other, success=False).stderr
+            assert "unknown runtime pane ID" in run("pane swap", *arguments, success=False).stderr
+        assert "same window" in run("pane swap", "--to-pane", other, success=False).stderr
         for body in (b"action='swap-pane'\n",
                      b"action='swap-pane'\nto_pane='invalid'\n",
                      f"action='swap-pane'\npane={first}\nto_pane={bottom}\nextra=true\n".encode()):
@@ -178,17 +178,17 @@ while True:
         swap(bottom)  # accepted no-op preserves geometry but dismisses History
         expect_footer(client, b"LOCKED")
         assert all(record(label) == old for label, old in before_records.items())
-        run("zoom-pane", "--on")
+        run("pane zoom", "--on")
         size("bottom", 20, 78)
         client.send(b"\x02[")
         expect_footer(client, b"HISTORY")
         before = panes()
         for destination in (first, bottom):
-            assert "zoomed pane layout" in run("swap-pane", "--to-pane", destination, success=False).stderr
+            assert "zoomed pane layout" in run("pane swap", "--to-pane", destination, success=False).stderr
         assert panes() == before and (record("bottom")["rows"], record("bottom")["columns"]) == (20, 78)
         client.send(b"/zoom-swap-check")
         expect_footer(client, b"Search /zoom-swap-check")
-        run("zoom-pane", "--off")
+        run("pane zoom", "--off")
         expect_footer(client, b"LOCKED")
         size("bottom", 9, 38)
         client.send(b"\x02")
@@ -198,22 +198,22 @@ while True:
         assert (runtime / f"{name}.pid").read_bytes() == server_pid
         detach()
 
-        run("close-pane", "-p", other)
+        run("pane close", "-p", other)
         before = panes()
         for arguments in (("-p", other, "--to-pane", first), ("--to-pane", other)):
-            assert "unknown runtime pane ID" in run("swap-pane", *arguments, success=False).stderr
+            assert "unknown runtime pane ID" in run("pane swap", *arguments, success=False).stderr
         assert panes() == before
         swap(top, first)  # detached inactive pair; active bottom stays selected
         size("top", 20, 38)
         size("first", 9, 38)
         assert active() == bottom
         main_ids = identities()
-        ended = int(run("new-window", "--name", "retained", "--command", "printf RETAINED_SWAP; exit 7").stdout)
+        ended = int(run("window new", "--name", "retained", "--command", "printf RETAINED_SWAP; exit 7").stdout)
         wait_until(lambda: any(p["id"] == ended and p["output_complete"] for p in panes()),
                    "retained job did not exit")
         ended_pid = identities()[ended]
-        live = start("split-pane", "live", "-p", ended)
-        lower = start("split-pane", "lower", "-p", live, "--down")
+        live = start("pane split", "live", "-p", ended)
+        lower = start("pane split", "lower", "-p", live, "--down")
         ids = identities()
         swap(lower, ended)
         size("lower", 20, 38)
@@ -221,9 +221,9 @@ while True:
         entry = next(p for p in panes() if p["id"] == ended)
         assert active() == lower and entry["pid"] == ended_pid and entry["exit_code"] == 7
         assert entry["exited"] and entry["output_complete"]
-        assert "RETAINED_SWAP" in run("capture-pane", "-p", ended).stdout
+        assert "RETAINED_SWAP" in run("pane capture", "-p", ended).stdout
         assert identities() == ids and all(identities()[pane] == pid for pane, pid in main_ids.items())
-        run("select-pane", "-p", bottom)
+        run("pane select", "-p", bottom)
         subprocess.run([BINARY, "save", name], env=env, capture_output=True, check=True, timeout=8)
         snapshot = root / f"state/rustmux/main-human/sessions/{name}.toml"
         saved = tomllib.loads(snapshot.read_text())

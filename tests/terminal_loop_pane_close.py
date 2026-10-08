@@ -43,13 +43,13 @@ while True:
 """)
 
     def run(action, *arguments, success=True):
-        result = subprocess.run([BINARY, action, "-s", name, *map(str, arguments)],
+        result = subprocess.run([BINARY, *action.split(), "-s", name, *map(str, arguments)],
                                 env=env, capture_output=True, text=True, timeout=8)
         assert (result.returncode == 0) == success, (action, arguments, result)
         return result
 
     def panes():
-        return tomllib.loads(run("list-panes", "--toml").stdout)["panes"]
+        return tomllib.loads(run("pane list", "--toml").stdout)["panes"]
 
     def active():
         return next(p["id"] for p in panes() if p["active"])
@@ -90,7 +90,7 @@ while True:
         target = active() if pane is None else pane
         pid = next(p["pid"] for p in panes() if p["id"] == target)
         arguments = ["-p", str(pane)] if pane is not None else []
-        assert run("close-pane", *arguments).stdout == ""
+        assert run("pane close", *arguments).stdout == ""
         assert all(p["id"] != target for p in panes())
         wait_until(lambda: gone(pid), f"closed child {pid} was not reaped")
 
@@ -122,11 +122,11 @@ while True:
         client = Session(extra_env=env, arguments=("new", name))
         client.expect(b"RUSTMUX_READY>")
         first = panes()[0]
-        run("send-keys", "-p", first["id"], "--literal", "--enter", command("first"))
+        run("pane send-keys", "-p", first["id"], "--literal", "--enter", command("first"))
         wait_until(lambda: record("first") is not None, "first probe did not start")
-        upper = start("split-pane", "upper", "-p", first["id"])
-        lower = start("split-pane", "lower", "-p", upper, "--down")
-        logs = start("new-window", "logs", "--name", "logs")
+        upper = start("pane split", "upper", "-p", first["id"])
+        lower = start("pane split", "lower", "-p", upper, "--down")
+        logs = start("window new", "logs", "--name", "logs")
         size("lower", 9, 38)
         wait_until(lambda: bytes.fromhex(record("lower")["input"]).endswith(b"\x1b[O"),
                    "setup focus-out did not arrive")
@@ -152,7 +152,7 @@ while True:
         expect_footer(client, b"HISTORY")
         before = panes()
         for invalid in (upper, logs, 99999):
-            assert "unknown runtime pane ID" in run("close-pane", "-p", invalid, success=False).stderr
+            assert "unknown runtime pane ID" in run("pane close", "-p", invalid, success=False).stderr
         assert not wire(b"action='close-pane'\npane='invalid'\n")["ok"]
         assert not wire(f"action='close-pane'\npane={lower}\nextra=true\n".encode())["ok"]
         assert panes() == before
@@ -172,9 +172,9 @@ while True:
 
         client = Session(extra_env=env, arguments=("attach", name))
         client.expect(b"CLOSE_PROBE_READY")
-        middle = start("split-pane", "middle", "-p", lower)
-        bottom = start("split-pane", "bottom", "-p", middle, "--down")
-        run("select-pane", "-p", middle)
+        middle = start("pane split", "middle", "-p", lower)
+        bottom = start("pane split", "bottom", "-p", middle, "--down")
+        run("pane select", "-p", middle)
         close()  # active traversal successor
         assert active() == bottom
         size("bottom", 20, 38)
@@ -184,20 +184,20 @@ while True:
         client.send(b"\x02[")
         expect_footer(client, b"HISTORY")
         before = panes()
-        assert "final session pane" in run("close-pane", success=False).stderr
+        assert "final session pane" in run("pane close", success=False).stderr
         rejected = wire(b"action='close-pane'\n")
         assert not rejected["ok"] and "final session pane" in rejected["output"]
         assert panes() == before and not gone(before[0]["pid"])
         client.send(b"/final-check")
         expect_footer(client, b"Search /final-check")
-        run("select-pane", "-p", lower)
+        run("pane select", "-p", lower)
         expect_footer(client, b"LOCKED")
         detach()
 
-        exited = int(run("new-window", "--name", "exited", "--command", "printf CLOSED_EXITED; exit 7").stdout)
+        exited = int(run("window new", "--name", "exited", "--command", "printf CLOSED_EXITED; exit 7").stdout)
         wait_until(lambda: any(p["id"] == exited and p["output_complete"] for p in panes()), "job did not exit")
         assert next(p for p in panes() if p["id"] == exited)["exit_code"] == 7
-        keep = start("new-window", "keep", "--name", "keep")
+        keep = start("window new", "keep", "--name", "keep")
         baseline = record("keep")
         close(exited)  # detached retained pane removes its inactive window
         assert active() == keep and record("keep") == baseline
@@ -205,7 +205,7 @@ while True:
         close()  # detached active-window fallback
         assert active() == lower
         before = panes()
-        run("close-pane", "-p", lower, success=False)
+        run("pane close", "-p", lower, success=False)
         assert panes() == before
         subprocess.run([BINARY, "save", name], env=env, capture_output=True, check=True, timeout=8)
         snapshot = root / f"state/rustmux/main-human/sessions/{name}.toml"

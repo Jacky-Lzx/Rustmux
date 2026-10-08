@@ -30,11 +30,11 @@ while not (root/(label+'.go')).exists(): time.sleep(0.01)
 os.write(1,b'\\x1b]133;D;0\\x1b\\\\'+(label+'_DONE').encode())
 """)
     def run(action,*args):
-        p=subprocess.run([BINARY,action,"-s",name,*map(str,args)],env=env,capture_output=True,text=True,timeout=8)
+        p=subprocess.run([BINARY, *action.split(),"-s",name,*map(str,args)],env=env,capture_output=True,text=True,timeout=8)
         assert p.returncode==0,(action,args,p)
         return p.stdout
-    def panes(): return tomllib.loads(run("list-panes","--toml"))["panes"]
-    def status(): return tomllib.loads(run("show-config"))
+    def panes(): return tomllib.loads(run("pane list","--toml"))["panes"]
+    def status(): return tomllib.loads(run("config show"))
     def wait(predicate,detail):
         deadline=time.monotonic()+5
         while not predicate():
@@ -53,8 +53,8 @@ os.write(1,b'\\x1b]133;D;0\\x1b\\\\'+(label+'_DONE').encode())
                  and not status().get("error"),"configuration did not apply")
     def launch(label):
         command="python3 -u "+shlex.quote(str(probe))+" "+shlex.quote(str(root))+" "+label
-        run("send-keys","-p",first,"--literal","--enter",command)
-        wait(lambda: label+"_START" in run("capture-pane","-p",first),"probe start not parsed")
+        run("pane send-keys","-p",first,"--literal","--enter",command)
+        wait(lambda: label+"_START" in run("pane capture","-p",first),"probe start not parsed")
         return time.monotonic()
     def messages():
         return re.findall(rb"\x1b\]99;([^;]*);([^\x1b]*)\x1b\\",bytes(client.output))
@@ -64,7 +64,7 @@ os.write(1,b'\\x1b]133;D;0\\x1b\\\\'+(label+'_DONE').encode())
             client.read(0.05)
             client.output.clear()
         (root/(label+".go")).touch()
-        wait(lambda: label+"_DONE" in run("capture-pane","-p",first),"probe did not finish")
+        wait(lambda: label+"_DONE" in run("pane capture","-p",first),"probe did not finish")
         if client:
             client.read(0.1)
             assert (b"\x07" in client.output)==bell,(label,bytes(client.output))
@@ -92,8 +92,8 @@ os.write(1,b'\\x1b]133;D;0\\x1b\\\\'+(label+'_DONE').encode())
         client.expect(b"RUSTMUX_READY>")
         (root/"started").touch()
         first=next(p["id"] for p in panes() if p["active"])
-        run("rename-window","work")
-        watcher=int(run("new-window","--name","watcher"))
+        run("window rename","work")
+        watcher=int(run("window new","--name","watcher"))
         client.expect(b"RUSTMUX_READY>")
         original={p["id"]:p["pid"] for p in panes()}
         started=launch("desktop_only")
@@ -124,8 +124,8 @@ os.write(1,b'\\x1b]133;D;0\\x1b\\\\'+(label+'_DONE').encode())
         config.write_text("[notifications]\ndesktop=1\n")
         wait(lambda: status().get("error") is not None,"invalid desktop option not rejected")
         assert status()["settings"]==before
-        run("select-pane","-p",first)
-        run("select-pane","-p",watcher)
+        run("pane select","-p",first)
+        run("pane select","-p",watcher)
         wait(lambda: b"[!]" not in client.physical_rows[0],"old activity was not cleared")
         detach()
 

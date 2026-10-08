@@ -40,7 +40,7 @@ with tempfile.TemporaryDirectory(prefix="rustmux-attach-create-") as temporary:
         return result
 
     def panes():
-        return tomllib.loads(run("list-panes", "-s", name, "--toml").stdout)["panes"]
+        return tomllib.loads(run("pane", "list", "-s", name, "--toml").stdout)["panes"]
 
     def reject(*args, text):
         failed = Session(extra_env=env, arguments=args)

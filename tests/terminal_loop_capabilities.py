@@ -64,7 +64,7 @@ while os.read(0,4096): pass
     client=None
     def run(action,*args):
         target=[name] if action in ("new","kill") else ["-s",name]
-        result=subprocess.run([BINARY,action,*target,*map(str,args)],env=env,capture_output=True,text=True,timeout=8)
+        result=subprocess.run([BINARY, *action.split(),*target,*map(str,args)],env=env,capture_output=True,text=True,timeout=8)
         assert result.returncode==0,(action,result.stderr)
         return result.stdout
     def record(label):
@@ -89,27 +89,27 @@ while os.read(0,4096): pass
             foreground.finish(0)
         finally: foreground.close()
         run("new","--detached")
-        left=tomllib.loads(run("list-panes","--toml"))["panes"][0]["id"]
-        run("send-keys","-p",left,"--literal","--enter",launch("A"))
-        right=int(run("split-pane","-p",left,"--command",launch("B")))
-        run("new-window","--name","other","--command",launch("C"))
+        left=tomllib.loads(run("pane list","--toml"))["panes"][0]["id"]
+        run("pane send-keys","-p",left,"--literal","--enter",launch("A"))
+        right=int(run("pane split","-p",left,"--command",launch("B")))
+        run("window new","--name","other","--command",launch("C"))
         wait(lambda: all(record(label) for label in ("A","B","C")))
         original={label:record(label)["pid"] for label in ("A","B","C")}
         # Detached background queries are answered locally with no client.
         (root/"gate_A").touch(); wait(lambda: record("A")["done"])
-        run("select-window","-w",1)
+        run("window select","-w",1)
         client=Session(extra_env=env,arguments=("attach",name),lifetime=20)
         raw=client.expect(b"CAP_OK_A")
         assert b"\x1bP+q" not in raw and b"\x1bP1+r" not in raw
         # Keep A active while B queries: replies must go to their source pane.
-        run("select-pane","-p",left)
+        run("pane select","-p",left)
         (root/"gate_B").touch(); wait(lambda: record("B")["done"])
         raw=client.expect(b"CAP_OK_B")
         assert b"\x1bP+q" not in raw and b"\x1bP1+r" not in raw
         # Another window can query without taking focus.
         (root/"gate_C").touch(); wait(lambda: record("C")["done"])
-        assert next(p["window"] for p in tomllib.loads(run("list-panes","--toml"))["panes"] if p["active"])==1
-        run("select-window","-w",2)
+        assert next(p["window"] for p in tomllib.loads(run("pane list","--toml"))["panes"] if p["active"])==1
+        run("window select","-w",2)
         raw=client.expect(b"CAP_OK_C")
         assert b"\x1bP+q" not in raw and b"\x1bP1+r" not in raw
         assert all(record(label)["pid"]==original[label] for label in ("A","B","C"))

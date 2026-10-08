@@ -51,7 +51,7 @@ while True:
 ''')
     def run(action,*args):
         target = [name] if action in ("new","kill") else ["-s",name]
-        result = subprocess.run([BINARY,action,*target,*map(str,args)],env=env,
+        result = subprocess.run([BINARY, *action.split(),*target,*map(str,args)],env=env,
                                 capture_output=True,text=True,timeout=8)
         assert result.returncode == 0, (action,result.returncode,result.stderr)
         return result.stdout
@@ -68,7 +68,7 @@ while True:
     def command(pane,label,data,repeat=1):
         global counter
         counter += 1
-        run("send-keys","-p",pane,"--literal",f"{counter}:{data.hex()}*{repeat}\n")
+        run("pane send-keys","-p",pane,"--literal",f"{counter}:{data.hex()}*{repeat}\n")
         wait(lambda: any(row["token"] == counter for row in records(label)))
         return next(row["reply"] for row in records(label) if row["token"] == counter)
     def osc(values): return f"\x1b]21;{values}\x1b\\".encode()
@@ -87,10 +87,10 @@ while True:
         session.send(b"\x02d"); session.finish(0); session.close(); session = None
     try:
         run("new","--detached")
-        left = tomllib.loads(run("list-panes","--toml"))["panes"][0]["id"]
+        left = tomllib.loads(run("pane list","--toml"))["panes"][0]["id"]
         launch = lambda label: f"exec python3 -u {shlex.quote(str(probe))} PROBE_{label} {shlex.quote(str(root/(label+'.jsonl')))}"
-        run("send-keys","-p",left,"--literal","--enter",launch("A")); wait(lambda: records("A"))
-        right = int(run("split-pane","-p",left,"--command",launch("B"))); wait(lambda: records("B"))
+        run("pane send-keys","-p",left,"--literal","--enter",launch("A")); wait(lambda: records("A"))
+        right = int(run("pane split","-p",left,"--command",launch("B"))); wait(lambda: records("B"))
         for pane,label,color in [(left,"A","123456"),(right,"B","abcdef")]:
             assert command(pane,label,osc(f"foreground=#{color};foreground=?")) == f"\x1b]21;foreground=rgb:{color[:2]}/{color[2:4]}/{color[4:]}\x1b\\"
         attach(33)

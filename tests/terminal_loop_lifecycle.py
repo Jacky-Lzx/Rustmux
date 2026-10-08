@@ -51,7 +51,7 @@ command='exit 9'
         return result
 
     def panes():
-        return tomllib.loads(run("list-panes", "-s", name, "--toml").stdout)["panes"]
+        return tomllib.loads(run("pane", "list", "-s", name, "--toml").stdout)["panes"]
 
     def wait(predicate):
         deadline = time.monotonic() + 5
@@ -65,7 +65,7 @@ command='exit 9'
             time.sleep(0.01)
 
     def control(action, pane, *args, success=True):
-        return run(action, "-s", name, "-p", pane, *args, success=success)
+        return run(*action.split(), "-s", name, "-p", pane, *args, success=success)
 
     try:
         run("new", name, "--detached", "--layout", layout)
@@ -74,34 +74,34 @@ command='exit 9'
         pane = retained["id"]
         assert retained["exit_code"] == 7 and "exit_signal" not in retained
         assert retained["directory"] == str(root.resolve())
-        captured = control("capture-pane", pane, "--history").stdout
+        captured = control("pane capture", pane, "--history").stdout
         assert "LINE_0" in captured and "FINAL_OUTPUT" in captured, captured
         before = panes()
-        control("respawn-pane", sibling["id"], success=False)
-        control("respawn-pane", pane, "--cwd", root / "missing", success=False)
-        control("respawn-pane", pane, "--command", "", success=False)
-        control("send-keys", pane, "--literal", "ignored", success=False)
+        control("pane respawn", sibling["id"], success=False)
+        control("pane respawn", pane, "--cwd", root / "missing", success=False)
+        control("pane respawn", pane, "--command", "", success=False)
+        control("pane send-keys", pane, "--literal", "ignored", success=False)
         assert panes() == before
-        assert control("capture-pane", pane, "--history").stdout == captured
+        assert control("pane capture", pane, "--history").stdout == captured
         # Original project command replays, with the same pane ID and new process.
-        assert int(control("respawn-pane", pane).stdout) == pane
+        assert int(control("pane respawn", pane).stdout) == pane
         entries = wait(lambda ps: ps[0]["exited"] and ps[0]["output_complete"])
         assert len((root / "runs").read_text().splitlines()) == 2
         assert entries[0]["pid"] != retained["pid"]
         assert entries[1] == sibling
         assert entries[0]["active"] == retained["active"]
         # An explicit command becomes the next startup command. Signal exits are distinct.
-        control("respawn-pane", pane, "--command", "printf SIGNAL_OUTPUT; kill -KILL $$")
+        control("pane respawn", pane, "--command", "printf SIGNAL_OUTPUT; kill -KILL $$")
         entries = wait(lambda ps: ps[0]["exited"] and ps[0]["output_complete"])
         assert entries[0]["exit_signal"] == 9 and "exit_code" not in entries[0]
-        assert "SIGNAL_OUTPUT" in control("capture-pane", pane).stdout
-        assert "FINAL_OUTPUT" not in control("capture-pane", pane, "--history").stdout
+        assert "SIGNAL_OUTPUT" in control("pane capture", pane).stdout
+        assert "FINAL_OUTPUT" not in control("pane capture", pane, "--history").stdout
         # Moving an exited pane retains its identity and status.
-        assert int(control("break-pane", pane, "--name", "retained").stdout) == pane
+        assert int(control("pane break", pane, "--name", "retained").stdout) == pane
         moved = next(p for p in panes() if p["id"] == pane)
         assert moved["exit_signal"] == 9 and moved["active"]
         # All processes may exit without destroying a server containing retained panes.
-        control("send-keys", sibling["id"], "--literal", "--enter", "exit 0")
+        control("pane send-keys", sibling["id"], "--literal", "--enter", "exit 0")
         wait(lambda ps: all(p["exited"] and p["output_complete"] for p in ps))
         assert name in run("ls").stdout
         run("save-session", name)
@@ -116,7 +116,7 @@ command='exit 9'
         run("new", name, "--detached")
         restored = wait(lambda ps: len(ps) == 2 and any(p.get("exit_signal") == 9 for p in ps))
         ordinary = next(p for p in restored if not p["exited"])
-        control("send-keys", ordinary["id"], "--literal", "--enter", "exit 0")
+        control("pane send-keys", ordinary["id"], "--literal", "--enter", "exit 0")
         restored = wait(lambda ps: len(ps) == 1 and ps[0]["output_complete"])
         # An attached client can browse history and close the final retained pane.
         session = Session(extra_env=env, arguments=("attach", name))
@@ -131,7 +131,7 @@ command='exit 9'
         session = None
         assert name in run("ls").stdout  # The saved workspace remains discoverable.
         assert not Path(f"/tmp/rustmux-{os.geteuid()}/{name}.sock").exists()
-        run("list-panes", "-s", name, success=False)
+        run("pane", "list", "-s", name, success=False)
     finally:
         if session:
             session.close()

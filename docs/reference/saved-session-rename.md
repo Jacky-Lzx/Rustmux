@@ -28,8 +28,8 @@ rename = ["Ctrl r"]
 ```
 
 The `rename` action now participates in replacement, disabling (`rename = []`),
-conflict validation, hot reload, `default-config`, `check-config` and server
-`show-config` reports. Printable bindings remain text while searching or editing
+conflict validation, hot reload, `config default`, `config check` and server
+`config show` reports. Printable bindings remain text while searching or editing
 a name. For example, `rename = ["r"]` acts in the table; Ctrl-R then becomes
 inactive. A control binding can enter rename from search. Hints follow available
 width; saved rows show Rename first in the table's navigation header.

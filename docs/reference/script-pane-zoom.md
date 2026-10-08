@@ -1,13 +1,13 @@
 # Script pane zoom
 
 ```sh
-rustmux list-panes -s work --toml
-rustmux zoom-pane -s work -p 2 --on
-rustmux zoom-pane -s work -p 2 --off
-rustmux zoom-pane -s work
+rustmux pane list -s work --toml
+rustmux pane zoom -s work -p 2 --on
+rustmux pane zoom -s work -p 2 --off
+rustmux pane zoom -s work
 ```
 
-`zoom-pane` selects a visible runtime pane and activates its window, then sets
+`pane zoom` selects a visible runtime pane and activates its window, then sets
 or toggles that window's zoom. It accepts `-s SESSION` (default `default`) and
 optional `-p ID` (default the active pane). Enumerate IDs before using them;
 they remain stable within a running server but are not persistent identifiers

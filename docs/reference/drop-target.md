@@ -6,8 +6,8 @@ drop_target = true
 drag_source = true
 ```
 
-`drop_target` is a Boolean, defaults to `false`, and appears in `check-config`,
-`show-config` and `default-config`. Live reload applies it to existing sessions.
+`drop_target` is a Boolean, defaults to `false`, and appears in `config check`,
+`config show` and `config default`. Live reload applies it to existing sessions.
 The host must implement the [Kitty OSC 72 drag-and-drop protocol](https://sw.kovidgoyal.net/kitty/dnd-protocol/).
 With an accepting child such as Yazi, files dragged from Finder can be copied
 into the directory shown by the child. Yazi displays separate Copy and Move

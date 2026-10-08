@@ -165,7 +165,7 @@ with tempfile.TemporaryDirectory(prefix="rustmux-display-") as directory:
 with tempfile.TemporaryDirectory(prefix="rustmux-dev-config-") as directory:
     root = Path(directory)
     config = Path(__file__).resolve().parent.parent / "examples/config-dev.toml"
-    checked = subprocess.run([BINARY, "check-config", "--config", str(config), "--strict"],
+    checked = subprocess.run([BINARY, "config", "check", "--config", str(config), "--strict"],
                              capture_output=True, text=True, timeout=8)
     assert checked.returncode == 0, checked
     capture = root / "capture"

@@ -53,7 +53,7 @@ while True:
 
     def run(action, *args):
         target = [name] if action in ("new", "kill") else ["-s", name]
-        result = subprocess.run([BINARY, action, *target, *map(str, args)], env=env,
+        result = subprocess.run([BINARY, *action.split(), *target, *map(str, args)], env=env,
                                 capture_output=True, text=True, timeout=8)
         assert result.returncode == 0, (action, args, result)
         return result.stdout
@@ -74,7 +74,7 @@ while True:
 
     def command(pane, label, byte):
         previous = len(record(label)["actions"])
-        run("send-keys", "-p", pane, "--literal", chr(byte))
+        run("pane send-keys", "-p", pane, "--literal", chr(byte))
         wait(lambda: len(record(label)["actions"]) > previous)
 
     def links():
@@ -104,13 +104,13 @@ while True:
 
     try:
         run("new", "--detached")
-        left = tomllib.loads(run("list-panes", "--toml"))["panes"][0]["id"]
+        left = tomllib.loads(run("pane list", "--toml"))["panes"][0]["id"]
         launch = lambda label: f"exec python3 -u {shlex.quote(str(probe))} {label} {shlex.quote(str(root / (label+'.json')))}"
-        run("send-keys", "-p", left, "--literal", "--enter", launch("A"))
+        run("pane send-keys", "-p", left, "--literal", "--enter", launch("A"))
         wait(lambda: record("A") is not None)
-        right = int(run("split-pane", "-p", left, "--command", launch("B")))
+        right = int(run("pane split", "-p", left, "--command", launch("B")))
         wait(lambda: record("B") is not None)
-        identities = {p["id"]:p["pid"] for p in tomllib.loads(run("list-panes", "--toml"))["panes"]}
+        identities = {p["id"]:p["pid"] for p in tomllib.loads(run("pane list", "--toml"))["panes"]}
         session = Session(extra_env=env, arguments=("attach", name))
         visible(b"A_LINK")
         visible(b"B_LINK")
@@ -118,7 +118,7 @@ while True:
         a_id = next(identity for identity, text in first if text == b"A_LINK")
         b_id = next(identity for identity, text in first if text == b"B_LINK")
         assert a_id != b_id  # Identical child URI + ID remains scoped to each pane.
-        assert "https://" not in run("capture-pane", "-p", right)
+        assert "https://" not in run("pane capture", "-p", right)
         session.send(b"\x02?")
         visible(b"Shortcut Help")
         links()  # UI captions cannot inherit the child's unclosed link.
@@ -130,9 +130,9 @@ while True:
         command(right, "B", 2)
         visible(b"B_MAIN_PLAIN")
         visible(b"B_LINK")
-        run("select-pane", "-p", left)
+        run("pane select", "-p", left)
         command(left, "A", 3)
-        wait(lambda: run("capture-pane", "-p", left, "--history").count("A_LINK") >= 50)
+        wait(lambda: run("pane capture", "-p", left, "--history").count("A_LINK") >= 50)
         session.send(b"\x02[")
         expect_footer(session, b"HISTORY")
         links()
@@ -148,7 +148,7 @@ while True:
         wait(lambda: len(session.physical_rows) == 26)
         visible(b"A_LINK")
         visible(b"B_LINK")
-        assert {p["id"]:p["pid"] for p in tomllib.loads(run("list-panes", "--toml"))["panes"]} == identities
+        assert {p["id"]:p["pid"] for p in tomllib.loads(run("pane list", "--toml"))["panes"]} == identities
         detach()
     finally:
         if session: session.close()

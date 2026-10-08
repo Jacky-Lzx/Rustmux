@@ -9,8 +9,8 @@ clipboard_read = true
 
 The default is `false`, independently of `clipboard_write`. This applies to
 foreground unnamed sessions and attached named sessions, including background
-panes and inactive windows. `default-config`, `check-config` and the running
-server's `show-config -s NAME` report the option. Live reload updates the policy.
+panes and inactive windows. `config default`, `config check` and the running
+server's `config show -s NAME` report the option. Live reload updates the policy.
 The outer terminal must implement the [Kitty clipboard protocol](https://sw.kovidgoyal.net/kitty/clipboard/)
 and remains responsible for permissions. Rustmux relays the request; it neither
 reads the OS clipboard itself nor bypasses the terminal's permission prompt.

@@ -26,7 +26,7 @@ right = { actions = ["focus-left", { action = "switch-mode", mode = "locked" }] 
 
 Supported chains consist of one `focus-left`, `focus-down`, `focus-up` or
 `focus-right` action, optionally followed by `switch-mode` to `locked`.
-Unsupported chains remain ignored and are reported by `check-config --strict`;
+Unsupported chains remain ignored and are reported by `config check --strict`;
 Rustmux does not execute a supported fragment of such a chain.
 
 `display = "always"` (also the default when omitted) exposes the binding in the

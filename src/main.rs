@@ -4,6 +4,7 @@ use std::{
 };
 
 use clap::Parser;
+use rustmux::cli::ConfigCommand;
 
 fn main() -> ExitCode {
     match execute(rustmux::cli::Cli::parse()) {
@@ -22,11 +23,11 @@ fn execute(cli: rustmux::cli::Cli) -> Result<u8, String> {
         return Err("nested Rustmux sessions are not supported".to_owned());
     }
     match command {
-        Some(rustmux::cli::Command::DefaultConfig) => {
+        Some(rustmux::cli::Command::Config(ConfigCommand::Default)) => {
             print!("{}", rustmux::config::default_config());
             Ok(0)
         }
-        Some(rustmux::cli::Command::CheckConfig { toml, strict }) => {
+        Some(rustmux::cli::Command::Config(ConfigCommand::Check { toml, strict })) => {
             let report = rustmux::config::inspect(config_path)?;
             if toml {
                 print!(
@@ -69,6 +70,13 @@ fn execute(cli: rustmux::cli::Cli) -> Result<u8, String> {
                 }
             }
             Ok(u8::from(strict && !report.warnings.is_empty()))
+        }
+        Some(rustmux::cli::Command::Config(ConfigCommand::Show { target })) => {
+            print!(
+                "{}",
+                rustmux::control::show_config(&target.session).map_err(|error| error.to_string())?
+            );
+            Ok(0)
         }
         Some(rustmux::cli::Command::Control(command)) => {
             print!("{}", command.run().map_err(|error| error.to_string())?);
@@ -289,6 +297,16 @@ mod tests {
             Some(Command::KillAll { yes: true }),
         ] {
             assert!(!starts_interactive_session(&command));
+        }
+        for arguments in [
+            vec!["rustmux", "pane", "list"],
+            vec!["rustmux", "window", "new"],
+            vec!["rustmux", "config", "default"],
+            vec!["rustmux", "config", "check"],
+            vec!["rustmux", "config", "show"],
+        ] {
+            let cli = rustmux::cli::Cli::try_parse_from(arguments).unwrap();
+            assert!(!starts_interactive_session(&cli.command));
         }
     }
 }

@@ -25,13 +25,13 @@ with tempfile.TemporaryDirectory(prefix="rustmux-window-rename-") as temporary:
     client = None
 
     def run(action, *arguments, success=True, target=None):
-        result = subprocess.run([BINARY, action, "-s", target or name, *map(str, arguments)],
+        result = subprocess.run([BINARY, *action.split(), "-s", target or name, *map(str, arguments)],
                                 env=env, capture_output=True, text=True, timeout=8)
         assert (result.returncode == 0) == success, (action, arguments, result)
         return result
 
     def panes(target=None):
-        return tomllib.loads(run("list-panes", "--toml", target=target).stdout)["panes"]
+        return tomllib.loads(run("pane list", "--toml", target=target).stdout)["panes"]
 
     def active(target=None):
         return next(p["id"] for p in panes(target) if p["active"])
@@ -56,7 +56,7 @@ with tempfile.TemporaryDirectory(prefix="rustmux-window-rename-") as temporary:
 
     def rename(label, window=None, success=True):
         arguments = ["-w", str(window)] if window is not None else []
-        return run("rename-window", *arguments, "--", label, success=success)
+        return run("window rename", *arguments, "--", label, success=success)
 
     def wire(body):
         with socket.socket(socket.AF_UNIX) as peer:
@@ -81,11 +81,11 @@ with tempfile.TemporaryDirectory(prefix="rustmux-window-rename-") as temporary:
         first = active()
         client.send(b"stty -echo; KEEP=first; printf 'FIRST_READY\\n'\n")
         client.expect(b"FIRST_READY")
-        right = int(run("split-pane", "-p", first).stdout)
+        right = int(run("pane split", "-p", first).stdout)
         client.expect(b"RUSTMUX_READY>")
         client.send(b"stty -echo; KEEP=right; printf 'RIGHT_READY\\n'\n")
         client.expect(b"RIGHT_READY")
-        logs = int(run("new-window", "--name", "logs").stdout)
+        logs = int(run("window new", "--name", "logs").stdout)
         client.expect(b"RUSTMUX_READY>")
         client.send(b"stty -echo; KEEP=logs; printf 'LOGS_READY\\n'\n")
         client.expect(b"LOGS_READY")
@@ -99,7 +99,7 @@ with tempfile.TemporaryDirectory(prefix="rustmux-window-rename-") as temporary:
         assert [p["window_name"] for p in panes()] == ["编辑器", "编辑器", "构建"]
         client.send(b"printf 'ROUTED:%s\\n' $KEEP\n")
         client.expect(b"ROUTED:logs")
-        assert "ROUTED:logs" not in run("capture-pane", "-p", first).stdout
+        assert "ROUTED:logs" not in run("pane capture", "-p", first).stdout
 
         # Duplicate names are metadata, never target identities.
         rename("构建", 1)
@@ -201,7 +201,7 @@ with open(sys.argv[1],'wb',buffering=0) as log:
         wait_until(events.exists, "probe log not created")
         baseline = events.read_bytes()
         process = panes(probe_name)
-        result = run("rename-window", "probe-new", target=probe_name)
+        result = run("window rename", "probe-new", target=probe_name)
         assert result.stdout == ""
         expect_bar(client, b"probe-new")
         client.send(b"x")

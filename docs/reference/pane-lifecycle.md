@@ -33,11 +33,11 @@ discarded; Rustmux shortcuts remain available. Final output drains before the
 PTY closes and the direct child is reaped. A named server stays available in
 `ls` and the session manager even when every visible pane has exited. Closing its
 final pane interactively ends the server; an existing saved workspace stays listed.
-For script cleanup, `close-pane -s SESSION -p ID` removes a running or retained
+For script cleanup, `pane close -s SESSION -p ID` removes a running or retained
 pane without confirmation or undo storage. It preserves the session's final
 pane with an error; end the whole session using `kill SESSION` instead. See
 [Script Pane Close](script-pane-close.md).
-`close-window -s SESSION -w NUMBER` cleans up every pane in the specified window,
+`window close -s SESSION -w NUMBER` cleans up every pane in the specified window,
 including retained panes, while protecting the session's final window. See
 [Script Window Close](script-window-close.md).
 The existing EOF cleanup still finalizes incomplete terminal sequences and
@@ -62,9 +62,9 @@ R = { actions = ["respawn-pane", { action = "switch-mode", mode = "locked" }] }
 The named script interface can target a background pane:
 
 ```sh
-rustmux list-panes -s work --toml
-rustmux respawn-pane -s work -p 0
-rustmux respawn-pane -s work -p 0 --command 'cargo test' --cwd /absolute/project
+rustmux pane list -s work --toml
+rustmux pane respawn -s work -p 0
+rustmux pane respawn -s work -p 0 --command 'cargo test' --cwd /absolute/project
 ```
 
 Restart retains its pane ID, layout, selection and exit-policy override, and
@@ -85,7 +85,7 @@ Replacement preparation failures preserve the exited pane's output, status and
 layout; no running process is implicitly killed. Interactive rejection rings the
 bell, while the script command returns a nonzero status and error text.
 
-`list-panes --toml` additionally reports `exited`, `output_complete`, and either
+`pane list --toml` additionally reports `exited`, `output_complete`, and either
 `exit_code` or `exit_signal` when available. `exited` describes the direct child;
 `output_complete` describes its output drain. Wait for both before respawning.
 The `pid` field remains the previous child's ID until a successful restart and

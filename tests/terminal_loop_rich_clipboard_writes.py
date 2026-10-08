@@ -68,7 +68,7 @@ while True:
     counters = dict(A=0, B=0)
     def run(action, *args):
         target = [name] if action in ("new", "kill") else ["-s", name]
-        result = subprocess.run([BINARY, action, *target, *map(str, args)], env=env,
+        result = subprocess.run([BINARY, *action.split(), *target, *map(str, args)], env=env,
                                 capture_output=True, text=True, timeout=8)
         assert result.returncode == 0, (action, result.stderr)
         return result.stdout
@@ -131,7 +131,7 @@ while True:
     def policy(write, read=False):
         config.write_text(f"clipboard_read={str(read).lower()}\nclipboard_write={str(write).lower()}\nremain_on_exit=true\n")
         def applied():
-            settings = tomllib.loads(run("show-config"))["settings"]
+            settings = tomllib.loads(run("config show"))["settings"]
             return settings["clipboard_write"] == write and settings["clipboard_read"] == read
         # A read-only policy change still invalidates shared partial framing.
         # Wait for both settings before starting the next write transaction.
@@ -152,9 +152,9 @@ while True:
     launch = lambda label: "exec " + shlex.quote(sys.executable) + " -u " + shlex.quote(str(probe)) + " " + shlex.quote(str(root)) + " " + label
     try:
         run("new", "--detached")
-        left = tomllib.loads(run("list-panes", "--toml"))["panes"][0]["id"]
-        run("send-keys", "-p", left, "--literal", "--enter", launch("A"))
-        right = int(run("split-pane", "-p", left, "--command", launch("B")))
+        left = tomllib.loads(run("pane list", "--toml"))["panes"][0]["id"]
+        run("pane send-keys", "-p", left, "--literal", "--enter", launch("A"))
+        right = int(run("pane split", "-p", left, "--command", launch("B")))
         wait(lambda: all(record(label) for label in counters))
         command("A", [begin("detached") + data("text/plain", b"YQ==") + END], reply("detached", "ENOSYS"))
         done("A")
@@ -175,9 +175,9 @@ while True:
         query = packet("type=read:id=read", b"Lg==")
         command("B", [query], packet("type=read:status=EBUSY:id=read"))
         done("B")
-        run("new-window", "--name", "moved")
-        other = next(p["id"] for p in tomllib.loads(run("list-panes", "--toml"))["panes"] if p["id"] not in (left, right))
-        run("join-pane", "-p", left, "--to-pane", other)
+        run("window new", "--name", "moved")
+        other = next(p["id"] for p in tomllib.loads(run("pane list", "--toml"))["panes"] if p["id"] not in (left, right))
+        run("pane join", "-p", left, "--to-pane", other)
         release("A")
         identifier, values, aliases = complete()
         assert values == {"text/plain": payload, "text/html": b"<b></b>"}
@@ -232,7 +232,7 @@ while True:
         done("A")
         assert b";!" + ST in detached_output, "detach did not flush abort"
         assert packet("type=wdata:id=" + retired) not in detached_output
-        run("select-window", "-w", 1)
+        run("window select", "-w", 1)
         attach()
         client.send(reply(retired, "DONE"))
         clear()
@@ -259,7 +259,7 @@ while True:
         detach()
         release("B")
         done("B")
-        run("select-window", "-w", 1)
+        run("window select", "-w", 1)
         attach()
         command("B", [begin("fresh") + END], reply("fresh", "ENOSYS"))
         fresh, _, _ = complete()

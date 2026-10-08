@@ -5,7 +5,7 @@ drag_source = true
 ```
 
 This Boolean defaults to `false`, independently of clipboard and file-transfer
-permissions. Configuration diagnostics, `default-config` and live reload expose
+permissions. Configuration diagnostics, `config default` and live reload expose
 it. The outer terminal must implement the [Kitty OSC 72 drag-and-drop protocol](https://sw.kovidgoyal.net/kitty/dnd-protocol/).
 
 This relay implements dragging data from the focused pane into an external

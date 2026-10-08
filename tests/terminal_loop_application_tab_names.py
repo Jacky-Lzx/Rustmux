@@ -32,7 +32,7 @@ with tempfile.TemporaryDirectory(prefix="rustmux-application-tabs-") as temporar
         return result.stdout
 
     def panes():
-        return tomllib.loads(command("list-panes", "-s", name, "--toml"))["panes"]
+        return tomllib.loads(command("pane", "list", "-s", name, "--toml"))["panes"]
 
     def expect_names(names):
         deadline = time.monotonic() + 5
@@ -89,11 +89,11 @@ with tempfile.TemporaryDirectory(prefix="rustmux-application-tabs-") as temporar
         expect_bar(client, b"2 directory title")
         config.write_text('tab_name="application"\n')
         expect_bar(client, f"2 {shell_name}".encode())
-        status = tomllib.loads(command("show-config", "-s", name))
+        status = tomllib.loads(command("config", "show", "-s", name))
         assert status["settings"]["tab_name"] == "application", status
         config.write_text('tab_name="invalid"\n')
         deadline = time.monotonic() + 5
-        while not tomllib.loads(command("show-config", "-s", name)).get("error"):
+        while not tomllib.loads(command("config", "show", "-s", name)).get("error"):
             client.read(0.05)
             assert time.monotonic() < deadline
         expect_bar(client, f"2 {shell_name}".encode())

@@ -1,19 +1,19 @@
 # Script window move
 
 ```sh
-rustmux list-panes -s work --toml
-rustmux move-window -s work -w 2 --direction left
-rustmux move-window -s work --direction right
+rustmux pane list -s work --toml
+rustmux window move -s work -w 2 --direction left
+rustmux window move -s work --direction right
 ```
 
-`move-window` moves a visible window one position in the bar without selecting
+`window move` moves a visible window one position in the bar without selecting
 it. It accepts `-s SESSION` (default `default`), optional `-w NUMBER` (default the
 active window), and required `--direction left|right`. Moving left at the first
 position sends the target to the end; moving right at the last position sends it
 to the start. Other windows retain their relative order. A single-window session
 accepts both directions as successful no-ops.
 
-Numbers are one-based positions in current display order, matching `list-panes`
+Numbers are one-based positions in current display order, matching `pane list`
 and the window bar. Each request interprets its target using that current order;
 re-enumerate after moving before using another stored number. Names are opaque
 metadata and can be duplicated. Runtime pane IDs remain stable within the

@@ -9,245 +9,18 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use crate::session::SessionName;
-use clap::{Args, Subcommand};
 use serde::{Deserialize, Serialize};
+
+mod cli;
+pub use cli::{
+    Command, PaneCommand, PaneTarget, ResizeDirection, Target, WindowCommand, WindowMoveDirection,
+};
 
 const MAX_REQUEST: usize = 64 * 1024;
 pub(crate) const MAX_RESPONSE: usize = 16 * 1024 * 1024;
 pub(crate) const MAX_INPUT: usize = 4096;
 const MAX_CLIENTS: usize = 4;
 const TIMEOUT: Duration = Duration::from_secs(2);
-
-#[derive(Clone, Debug, Eq, PartialEq, Args)]
-pub struct Target {
-    #[arg(short = 's', long, default_value = "default")]
-    pub session: SessionName,
-}
-#[derive(Clone, Debug, Eq, PartialEq, Args)]
-pub struct PaneTarget {
-    #[command(flatten)]
-    pub target: Target,
-    #[arg(short = 'p', long)]
-    pub pane: Option<u64>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum, Deserialize, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum ResizeDirection {
-    Left,
-    Right,
-    Up,
-    Down,
-}
-
-impl From<ResizeDirection> for crate::layout::Direction {
-    fn from(direction: ResizeDirection) -> Self {
-        match direction {
-            ResizeDirection::Left => Self::Left,
-            ResizeDirection::Right => Self::Right,
-            ResizeDirection::Up => Self::Up,
-            ResizeDirection::Down => Self::Down,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum, Deserialize, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum WindowMoveDirection {
-    Left,
-    Right,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Subcommand)]
-pub enum Command {
-    /// Show the server's active settings and configuration reload status as TOML.
-    ShowConfig {
-        #[command(flatten)]
-        target: Target,
-    },
-    /// List runtime pane IDs, windows, focus and working directories.
-    ListPanes {
-        #[command(flatten)]
-        target: Target,
-        #[arg(long)]
-        toml: bool,
-    },
-    /// Focus a runtime pane, or its directional neighbor, including its window.
-    SelectPane {
-        #[command(flatten)]
-        target: Target,
-        /// Target pane, or origin for --direction; otherwise use the active pane.
-        #[arg(short = 'p', long, required_unless_present = "direction")]
-        pane: Option<u64>,
-        #[arg(long, value_enum)]
-        direction: Option<ResizeDirection>,
-    },
-    /// Focus a one-based window number, preserving that window's selected pane.
-    SelectWindow {
-        #[command(flatten)]
-        target: Target,
-        #[arg(short = 'w', long, value_parser = clap::value_parser!(u16).range(1..))]
-        window: u16,
-    },
-    /// Rename a window without changing focus; defaults to the active window.
-    RenameWindow {
-        #[command(flatten)]
-        target: Target,
-        #[arg(short = 'w', long, value_parser = clap::value_parser!(u16).range(1..))]
-        window: Option<u16>,
-        name: String,
-    },
-    /// Close a window and all its panes; the final session window cannot be closed.
-    CloseWindow {
-        #[command(flatten)]
-        target: Target,
-        #[arg(short = 'w', long, value_parser = clap::value_parser!(u16).range(1..))]
-        window: Option<u16>,
-    },
-    /// Move a window one position in the bar, wrapping at edges and preserving focus.
-    MoveWindow {
-        #[command(flatten)]
-        target: Target,
-        #[arg(short = 'w', long, value_parser = clap::value_parser!(u16).range(1..))]
-        window: Option<u16>,
-        #[arg(long, value_enum)]
-        direction: WindowMoveDirection,
-    },
-    /// Move a pane's nearest separator, preserving focus; defaults to the active pane.
-    ResizePane {
-        #[command(flatten)]
-        target: PaneTarget,
-        /// Separator movement, rather than growth of the target pane.
-        #[arg(long, value_enum)]
-        direction: ResizeDirection,
-        #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u16).range(1..))]
-        cells: u16,
-    },
-    /// Focus a pane and toggle its full-window view, or set it with --on/--off.
-    ZoomPane {
-        #[command(flatten)]
-        target: PaneTarget,
-        #[arg(long, conflicts_with = "off")]
-        on: bool,
-        #[arg(long, conflicts_with = "on")]
-        off: bool,
-    },
-    /// Exchange two pane positions in one window without changing focus.
-    SwapPane {
-        #[command(flatten)]
-        target: PaneTarget,
-        #[arg(long)]
-        to_pane: u64,
-    },
-    /// Exchange a pane with its nearest directional neighbor without changing focus.
-    MovePane {
-        #[command(flatten)]
-        target: PaneTarget,
-        #[arg(long, value_enum)]
-        direction: ResizeDirection,
-    },
-    /// Create a window, focus it, and print the new pane ID.
-    NewWindow {
-        #[command(flatten)]
-        target: Target,
-        #[arg(short = 'n', long)]
-        name: Option<String>,
-        /// Run COMMAND through the configured server shell instead of opening an interactive shell.
-        #[arg(long)]
-        command: Option<String>,
-        /// Start in an absolute existing directory; otherwise inherit the active pane's directory.
-        #[arg(long)]
-        cwd: Option<PathBuf>,
-    },
-    /// Split a pane to the right, or below with --down.
-    SplitPane {
-        #[command(flatten)]
-        target: PaneTarget,
-        #[arg(long)]
-        down: bool,
-        /// Run COMMAND through the configured server shell instead of opening an interactive shell.
-        #[arg(long)]
-        command: Option<String>,
-        /// Start in an absolute existing directory; otherwise inherit the target pane's directory.
-        #[arg(long)]
-        cwd: Option<PathBuf>,
-    },
-    /// Close a pane and stop its process; the final session pane cannot be closed.
-    ClosePane {
-        #[command(flatten)]
-        target: PaneTarget,
-    },
-    /// Send named keys or --literal text; optionally append Enter.
-    SendKeys {
-        #[command(flatten)]
-        target: PaneTarget,
-        #[arg(short = 'l', long)]
-        literal: bool,
-        #[arg(long)]
-        enter: bool,
-        #[arg(required=true, num_args=1..)]
-        keys: Vec<String>,
-    },
-    /// Capture plain text from the visible pane, or retained text with --history.
-    CapturePane {
-        #[command(flatten)]
-        target: PaneTarget,
-        #[arg(long)]
-        history: bool,
-    },
-    /// Read a bounded raw PTY tail as TOML with base64 bytes and a byte cursor.
-    ReadPaneOutput {
-        #[command(flatten)]
-        target: PaneTarget,
-        /// Omit to obtain the current cursor without replaying output.
-        #[arg(long)]
-        after: Option<u64>,
-    },
-    /// Stream future raw PTY bytes to stdout; requires remain_on_exit = true.
-    SubscribePane {
-        #[command(flatten)]
-        target: PaneTarget,
-        /// Resume from a byte cursor rather than starting at the current tail.
-        #[arg(long)]
-        after: Option<u64>,
-    },
-    /// Log raw PTY bytes into a new file until EOF; requires remain_on_exit = true.
-    LogPane {
-        #[command(flatten)]
-        target: PaneTarget,
-        #[arg(long)]
-        output: PathBuf,
-        #[arg(long)]
-        after: Option<u64>,
-    },
-    /// Restart an exited pane in place, preserving its runtime ID.
-    RespawnPane {
-        #[command(flatten)]
-        target: PaneTarget,
-        /// Override the recorded startup command (run through the configured shell).
-        #[arg(long)]
-        command: Option<String>,
-        /// Override the startup directory; must be an absolute existing directory.
-        #[arg(long)]
-        cwd: Option<PathBuf>,
-    },
-    /// Move a pane beside a pane in another window, preserving its runtime ID.
-    JoinPane {
-        #[command(flatten)]
-        target: PaneTarget,
-        #[arg(long)]
-        to_pane: u64,
-        #[arg(long)]
-        down: bool,
-    },
-    /// Move a pane into a new window, preserving its process and runtime ID.
-    BreakPane {
-        #[command(flatten)]
-        target: PaneTarget,
-        #[arg(short = 'n', long)]
-        name: Option<String>,
-    },
-}
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "action", rename_all = "kebab-case", deny_unknown_fields)]
@@ -355,14 +128,27 @@ struct Response {
 
 impl Command {
     pub fn run(self) -> io::Result<String> {
+        match self {
+            Self::Pane(command) => command.run(),
+            Self::Window(command) => command.run(),
+        }
+    }
+}
+
+/// Inspect a running session's applied configuration and reload status.
+pub fn show_config(session: &SessionName) -> io::Result<String> {
+    request_session(session, &Request::ShowConfig)
+}
+
+impl PaneCommand {
+    fn run(self) -> io::Result<String> {
         let (target, request) = match self {
-            Self::ShowConfig { target } => (target, Request::ShowConfig),
-            Self::SubscribePane { target, after } => {
+            Self::Subscribe { target, after } => {
                 let chunk = output_chunk(&target, after)?;
                 follow_output(&target, chunk, &mut io::stdout().lock())?;
                 return Ok(String::new());
             }
-            Self::LogPane {
+            Self::Log {
                 target,
                 output,
                 after,
@@ -378,7 +164,7 @@ impl Command {
                 follow_output(&target, chunk, &mut file)?;
                 return Ok(String::new());
             }
-            Self::ReadPaneOutput { target, after } => (
+            Self::ReadOutput { target, after } => (
                 target.target,
                 Request::ReadPaneOutput {
                     pane: target.pane,
@@ -386,8 +172,8 @@ impl Command {
                     require_retained: false,
                 },
             ),
-            Self::ListPanes { target, toml } => (target, Request::ListPanes { toml }),
-            Self::SelectPane {
+            Self::List { target, toml } => (target, Request::ListPanes { toml }),
+            Self::Select {
                 target,
                 pane,
                 direction,
@@ -397,23 +183,11 @@ impl Command {
                     Some(direction) => Request::SelectPaneDirection { pane, direction },
                     None => Request::SelectPane {
                         pane: pane
-                            .ok_or_else(|| invalid("select-pane requires --pane or --direction"))?,
+                            .ok_or_else(|| invalid("pane select requires --pane or --direction"))?,
                     },
                 },
             ),
-            Self::SelectWindow { target, window } => (target, Request::SelectWindow { window }),
-            Self::RenameWindow {
-                target,
-                window,
-                name,
-            } => (target, Request::RenameWindow { window, name }),
-            Self::CloseWindow { target, window } => (target, Request::CloseWindow { window }),
-            Self::MoveWindow {
-                target,
-                window,
-                direction,
-            } => (target, Request::MoveWindow { window, direction }),
-            Self::ResizePane {
+            Self::Resize {
                 target,
                 direction,
                 cells,
@@ -425,13 +199,7 @@ impl Command {
                     cells,
                 },
             ),
-            Self::NewWindow {
-                target,
-                name,
-                command,
-                cwd,
-            } => (target, Request::NewWindow { name, command, cwd }),
-            Self::ZoomPane { target, on, off } => (
+            Self::Zoom { target, on, off } => (
                 target.target,
                 Request::ZoomPane {
                     pane: target.pane,
@@ -444,7 +212,7 @@ impl Command {
                     },
                 },
             ),
-            Self::SplitPane {
+            Self::Split {
                 target,
                 down,
                 command,
@@ -458,29 +226,29 @@ impl Command {
                     cwd,
                 },
             ),
-            Self::ClosePane { target } => (target.target, Request::ClosePane { pane: target.pane }),
-            Self::SwapPane { target, to_pane } => (
+            Self::Close { target } => (target.target, Request::ClosePane { pane: target.pane }),
+            Self::Swap { target, to_pane } => (
                 target.target,
                 Request::SwapPane {
                     pane: target.pane,
                     to_pane,
                 },
             ),
-            Self::MovePane { target, direction } => (
+            Self::Move { target, direction } => (
                 target.target,
                 Request::MovePane {
                     pane: target.pane,
                     direction,
                 },
             ),
-            Self::CapturePane { target, history } => (
+            Self::Capture { target, history } => (
                 target.target,
                 Request::CapturePane {
                     pane: target.pane,
                     history,
                 },
             ),
-            Self::RespawnPane {
+            Self::Respawn {
                 target,
                 command,
                 cwd,
@@ -492,7 +260,7 @@ impl Command {
                     cwd,
                 },
             ),
-            Self::JoinPane {
+            Self::Join {
                 target,
                 to_pane,
                 down,
@@ -504,7 +272,7 @@ impl Command {
                     down,
                 },
             ),
-            Self::BreakPane { target, name } => (
+            Self::Break { target, name } => (
                 target.target,
                 Request::BreakPane {
                     pane: target.pane,
@@ -526,6 +294,32 @@ impl Command {
                     },
                 )
             }
+        };
+        request_session(&target.session, &request)
+    }
+}
+
+impl WindowCommand {
+    fn run(self) -> io::Result<String> {
+        let (target, request) = match self {
+            Self::Select { target, window } => (target, Request::SelectWindow { window }),
+            Self::Rename {
+                target,
+                window,
+                name,
+            } => (target, Request::RenameWindow { window, name }),
+            Self::Close { target, window } => (target, Request::CloseWindow { window }),
+            Self::Move {
+                target,
+                window,
+                direction,
+            } => (target, Request::MoveWindow { window, direction }),
+            Self::New {
+                target,
+                name,
+                command,
+                cwd,
+            } => (target, Request::NewWindow { name, command, cwd }),
         };
         request_session(&target.session, &request)
     }
@@ -930,16 +724,16 @@ mod tests {
             ("down", ResizeDirection::Down),
         ] {
             for pane in [None, Some(0)] {
-                let mut arguments = vec!["rustmux", "select-pane", "--direction", name];
+                let mut arguments = vec!["rustmux", "pane", "select", "--direction", name];
                 if pane.is_some() {
                     arguments.extend(["-s", "work", "-p", "0"]);
                 }
                 let cli = crate::cli::Cli::try_parse_from(arguments).unwrap();
-                let Some(crate::cli::Command::Control(Command::SelectPane {
+                let Some(crate::cli::Command::Control(Command::Pane(PaneCommand::Select {
                     target,
                     pane: parsed_pane,
                     direction: parsed,
-                })) = cli.command
+                }))) = cli.command
                 else {
                     panic!("expected select-pane");
                 };
@@ -951,11 +745,12 @@ mod tests {
             }
         }
         for arguments in [
-            vec!["rustmux", "select-pane", "--direction"],
-            vec!["rustmux", "select-pane", "--direction", "next"],
+            vec!["rustmux", "pane", "select", "--direction"],
+            vec!["rustmux", "pane", "select", "--direction", "next"],
             vec![
                 "rustmux",
-                "select-pane",
+                "pane",
+                "select",
                 "-p",
                 "invalid",
                 "--direction",
@@ -975,15 +770,15 @@ mod tests {
             ("down", ResizeDirection::Down),
         ] {
             for pane in [None, Some(0)] {
-                let mut arguments = vec!["rustmux", "move-pane", "--direction", name];
+                let mut arguments = vec!["rustmux", "pane", "move", "--direction", name];
                 if pane.is_some() {
                     arguments.extend(["-s", "work", "-p", "0"]);
                 }
                 let cli = crate::cli::Cli::try_parse_from(arguments).unwrap();
-                let Some(crate::cli::Command::Control(Command::MovePane {
+                let Some(crate::cli::Command::Control(Command::Pane(PaneCommand::Move {
                     target,
                     direction: parsed,
-                })) = cli.command
+                }))) = cli.command
                 else {
                     panic!("expected move-pane");
                 };
@@ -995,11 +790,12 @@ mod tests {
             }
         }
         for arguments in [
-            vec!["rustmux", "move-pane"],
-            vec!["rustmux", "move-pane", "--direction", "next"],
+            vec!["rustmux", "pane", "move"],
+            vec!["rustmux", "pane", "move", "--direction", "next"],
             vec![
                 "rustmux",
-                "move-pane",
+                "pane",
+                "move",
                 "-p",
                 "invalid",
                 "--direction",
@@ -1013,11 +809,12 @@ mod tests {
     #[test]
     fn swap_pane_accepts_active_or_explicit_source_and_requires_destination() {
         for (arguments, pane, to_pane) in [
-            (vec!["rustmux", "swap-pane", "--to-pane", "0"], None, 0),
+            (vec!["rustmux", "pane", "swap", "--to-pane", "0"], None, 0),
             (
                 vec![
                     "rustmux",
-                    "swap-pane",
+                    "pane",
+                    "swap",
                     "-s",
                     "work",
                     "-p",
@@ -1030,10 +827,10 @@ mod tests {
             ),
         ] {
             let cli = crate::cli::Cli::try_parse_from(arguments).unwrap();
-            let Some(crate::cli::Command::Control(Command::SwapPane {
+            let Some(crate::cli::Command::Control(Command::Pane(PaneCommand::Swap {
                 target,
                 to_pane: parsed,
-            })) = cli.command
+            }))) = cli.command
             else {
                 panic!("expected swap-pane");
             };
@@ -1044,9 +841,9 @@ mod tests {
             );
         }
         for arguments in [
-            vec!["rustmux", "swap-pane"],
-            vec!["rustmux", "swap-pane", "--to-pane", "invalid"],
-            vec!["rustmux", "swap-pane", "-p", "invalid", "--to-pane", "0"],
+            vec!["rustmux", "pane", "swap"],
+            vec!["rustmux", "pane", "swap", "--to-pane", "invalid"],
+            vec!["rustmux", "pane", "swap", "-p", "invalid", "--to-pane", "0"],
         ] {
             assert!(crate::cli::Cli::try_parse_from(arguments).is_err());
         }
@@ -1056,14 +853,15 @@ mod tests {
     fn move_window_accepts_default_or_positive_target_and_horizontal_direction() {
         for (arguments, window, direction) in [
             (
-                vec!["rustmux", "move-window", "--direction", "left"],
+                vec!["rustmux", "window", "move", "--direction", "left"],
                 None,
                 WindowMoveDirection::Left,
             ),
             (
                 vec![
                     "rustmux",
-                    "move-window",
+                    "window",
+                    "move",
                     "-s",
                     "work",
                     "-w",
@@ -1076,11 +874,11 @@ mod tests {
             ),
         ] {
             let cli = crate::cli::Cli::try_parse_from(arguments).unwrap();
-            let Some(crate::cli::Command::Control(Command::MoveWindow {
+            let Some(crate::cli::Command::Control(Command::Window(WindowCommand::Move {
                 target,
                 window: parsed,
                 direction: parsed_direction,
-            })) = cli.command
+            }))) = cli.command
             else {
                 panic!("expected move-window");
             };
@@ -1091,9 +889,17 @@ mod tests {
             );
         }
         for arguments in [
-            vec!["rustmux", "move-window"],
-            vec!["rustmux", "move-window", "--direction", "up"],
-            vec!["rustmux", "move-window", "-w", "0", "--direction", "right"],
+            vec!["rustmux", "window", "move"],
+            vec!["rustmux", "window", "move", "--direction", "up"],
+            vec![
+                "rustmux",
+                "window",
+                "move",
+                "-w",
+                "0",
+                "--direction",
+                "right",
+            ],
         ] {
             assert!(crate::cli::Cli::try_parse_from(arguments).is_err());
         }
@@ -1102,21 +908,21 @@ mod tests {
     #[test]
     fn zoom_pane_accepts_default_toggle_or_exclusive_explicit_state() {
         for (arguments, pane, on, off) in [
-            (vec!["rustmux", "zoom-pane"], None, false, false),
+            (vec!["rustmux", "pane", "zoom"], None, false, false),
             (
-                vec!["rustmux", "zoom-pane", "-s", "work", "-p", "0", "--on"],
+                vec!["rustmux", "pane", "zoom", "-s", "work", "-p", "0", "--on"],
                 Some(0),
                 true,
                 false,
             ),
-            (vec!["rustmux", "zoom-pane", "--off"], None, false, true),
+            (vec!["rustmux", "pane", "zoom", "--off"], None, false, true),
         ] {
             let cli = crate::cli::Cli::try_parse_from(arguments).unwrap();
-            let Some(crate::cli::Command::Control(Command::ZoomPane {
+            let Some(crate::cli::Command::Control(Command::Pane(PaneCommand::Zoom {
                 target,
                 on: parsed_on,
                 off: parsed_off,
-            })) = cli.command
+            }))) = cli.command
             else {
                 panic!("expected zoom-pane");
             };
@@ -1127,27 +933,27 @@ mod tests {
             );
         }
         assert!(
-            crate::cli::Cli::try_parse_from(["rustmux", "zoom-pane", "--on", "--off"]).is_err()
+            crate::cli::Cli::try_parse_from(["rustmux", "pane", "zoom", "--on", "--off"]).is_err()
         );
         assert!(
-            crate::cli::Cli::try_parse_from(["rustmux", "zoom-pane", "-p", "invalid"]).is_err()
+            crate::cli::Cli::try_parse_from(["rustmux", "pane", "zoom", "-p", "invalid"]).is_err()
         );
     }
 
     #[test]
     fn close_window_accepts_active_default_or_positive_window_number() {
         for (arguments, window) in [
-            (vec!["rustmux", "close-window"], None),
+            (vec!["rustmux", "window", "close"], None),
             (
-                vec!["rustmux", "close-window", "-s", "work", "-w", "2"],
+                vec!["rustmux", "window", "close", "-s", "work", "-w", "2"],
                 Some(2),
             ),
         ] {
             let cli = crate::cli::Cli::try_parse_from(arguments).unwrap();
-            let Some(crate::cli::Command::Control(Command::CloseWindow {
+            let Some(crate::cli::Command::Control(Command::Window(WindowCommand::Close {
                 target,
                 window: parsed,
-            })) = cli.command
+            }))) = cli.command
             else {
                 panic!("expected close-window");
             };
@@ -1159,7 +965,7 @@ mod tests {
         }
         for invalid in ["0", "-1", "65536", "invalid"] {
             assert!(
-                crate::cli::Cli::try_parse_from(["rustmux", "close-window", "-w", invalid])
+                crate::cli::Cli::try_parse_from(["rustmux", "window", "close", "-w", invalid])
                     .is_err()
             );
         }
@@ -1168,14 +974,15 @@ mod tests {
     #[test]
     fn close_pane_accepts_active_default_or_explicit_runtime_id() {
         for (arguments, pane) in [
-            (vec!["rustmux", "close-pane"], None),
+            (vec!["rustmux", "pane", "close"], None),
             (
-                vec!["rustmux", "close-pane", "-s", "work", "-p", "42"],
+                vec!["rustmux", "pane", "close", "-s", "work", "-p", "42"],
                 Some(42),
             ),
         ] {
             let cli = crate::cli::Cli::try_parse_from(arguments).unwrap();
-            let Some(crate::cli::Command::Control(Command::ClosePane { target })) = cli.command
+            let Some(crate::cli::Command::Control(Command::Pane(PaneCommand::Close { target }))) =
+                cli.command
             else {
                 panic!("expected close-pane");
             };
@@ -1186,15 +993,16 @@ mod tests {
             );
         }
         assert!(
-            crate::cli::Cli::try_parse_from(["rustmux", "close-pane", "-p", "invalid"]).is_err()
+            crate::cli::Cli::try_parse_from(["rustmux", "pane", "close", "-p", "invalid"]).is_err()
         );
     }
 
     #[test]
     fn creation_arguments_preserve_startup_command_and_directory() {
-        for action in ["new-window", "split-pane"] {
+        for (group, action) in [("window", "new"), ("pane", "split")] {
             let cli = crate::cli::Cli::try_parse_from([
                 "rustmux",
+                group,
                 action,
                 "--cwd",
                 "/tmp/project with spaces",
@@ -1206,25 +1014,25 @@ mod tests {
                 panic!("expected control command")
             };
             let (startup, cwd) = match command {
-                Command::NewWindow { command, cwd, .. }
-                | Command::SplitPane { command, cwd, .. } => (command, cwd),
+                Command::Window(WindowCommand::New { command, cwd, .. })
+                | Command::Pane(PaneCommand::Split { command, cwd, .. }) => (command, cwd),
                 _ => panic!("expected pane creation"),
             };
             assert_eq!(startup.as_deref(), Some("printf 'hello world'; exit 7"));
             assert_eq!(cwd, Some(PathBuf::from("/tmp/project with spaces")));
-            let cli = crate::cli::Cli::try_parse_from(["rustmux", action]).unwrap();
+            let cli = crate::cli::Cli::try_parse_from(["rustmux", group, action]).unwrap();
             assert!(matches!(
                 cli.command,
                 Some(crate::cli::Command::Control(
-                    Command::NewWindow {
+                    Command::Window(WindowCommand::New {
                         command: None,
                         cwd: None,
                         ..
-                    } | Command::SplitPane {
+                    }) | Command::Pane(PaneCommand::Split {
                         command: None,
                         cwd: None,
                         ..
-                    }
+                    })
                 ))
             ));
         }
@@ -1252,27 +1060,30 @@ mod tests {
     #[test]
     fn resize_arguments_require_direction_and_positive_bounded_cells() {
         let cli =
-            crate::cli::Cli::try_parse_from(["rustmux", "resize-pane", "--direction", "right"])
+            crate::cli::Cli::try_parse_from(["rustmux", "pane", "resize", "--direction", "right"])
                 .unwrap();
         assert_eq!(
             cli.command,
-            Some(crate::cli::Command::Control(Command::ResizePane {
-                target: PaneTarget {
-                    target: Target {
-                        session: SessionName::new("default").unwrap()
+            Some(crate::cli::Command::Control(Command::Pane(
+                PaneCommand::Resize {
+                    target: PaneTarget {
+                        target: Target {
+                            session: SessionName::new("default").unwrap()
+                        },
+                        pane: None,
                     },
-                    pane: None,
-                },
-                direction: ResizeDirection::Right,
-                cells: 1,
-            }))
+                    direction: ResizeDirection::Right,
+                    cells: 1,
+                }
+            )))
         );
         for arguments in [
-            &["rustmux", "resize-pane"][..],
-            &["rustmux", "resize-pane", "--direction", "diagonal"][..],
+            &["rustmux", "pane", "resize"][..],
+            &["rustmux", "pane", "resize", "--direction", "diagonal"][..],
             &[
                 "rustmux",
-                "resize-pane",
+                "pane",
+                "resize",
                 "--direction",
                 "left",
                 "--cells",
@@ -1280,7 +1091,8 @@ mod tests {
             ][..],
             &[
                 "rustmux",
-                "resize-pane",
+                "pane",
+                "resize",
                 "--direction",
                 "up",
                 "--cells",
@@ -1288,7 +1100,8 @@ mod tests {
             ][..],
             &[
                 "rustmux",
-                "resize-pane",
+                "pane",
+                "resize",
                 "--direction",
                 "down",
                 "--cells",
@@ -1302,29 +1115,31 @@ mod tests {
     #[test]
     fn rename_window_uses_current_or_one_based_explicit_target() {
         for (arguments, window) in [
-            (vec!["rustmux", "rename-window", "工作区"], None),
+            (vec!["rustmux", "window", "rename", "工作区"], None),
             (
-                vec!["rustmux", "rename-window", "-w", "2", "工作区"],
+                vec!["rustmux", "window", "rename", "-w", "2", "工作区"],
                 Some(2),
             ),
         ] {
             let cli = crate::cli::Cli::try_parse_from(arguments).unwrap();
             assert_eq!(
                 cli.command,
-                Some(crate::cli::Command::Control(Command::RenameWindow {
-                    target: Target {
-                        session: SessionName::new("default").unwrap()
-                    },
-                    window,
-                    name: "工作区".into(),
-                }))
+                Some(crate::cli::Command::Control(Command::Window(
+                    WindowCommand::Rename {
+                        target: Target {
+                            session: SessionName::new("default").unwrap()
+                        },
+                        window,
+                        name: "工作区".into(),
+                    }
+                )))
             );
         }
         for arguments in [
-            &["rustmux", "rename-window"][..],
-            &["rustmux", "rename-window", "-w", "0", "name"][..],
-            &["rustmux", "rename-window", "-w", "65536", "name"][..],
-            &["rustmux", "rename-window", "-w", "-1", "name"][..],
+            &["rustmux", "window", "rename"][..],
+            &["rustmux", "window", "rename", "-w", "0", "name"][..],
+            &["rustmux", "window", "rename", "-w", "65536", "name"][..],
+            &["rustmux", "window", "rename", "-w", "-1", "name"][..],
         ] {
             assert!(crate::cli::Cli::try_parse_from(arguments).is_err());
         }
@@ -1333,35 +1148,39 @@ mod tests {
     #[test]
     fn focus_commands_require_explicit_pane_ids_and_one_based_window_numbers() {
         let cli =
-            crate::cli::Cli::try_parse_from(["rustmux", "select-pane", "-s", "work", "-p", "0"])
+            crate::cli::Cli::try_parse_from(["rustmux", "pane", "select", "-s", "work", "-p", "0"])
                 .unwrap();
         assert_eq!(
             cli.command,
-            Some(crate::cli::Command::Control(Command::SelectPane {
-                target: Target {
-                    session: SessionName::new("work").unwrap(),
-                },
-                pane: Some(0),
-                direction: None,
-            }))
+            Some(crate::cli::Command::Control(Command::Pane(
+                PaneCommand::Select {
+                    target: Target {
+                        session: SessionName::new("work").unwrap(),
+                    },
+                    pane: Some(0),
+                    direction: None,
+                }
+            )))
         );
-        let cli =
-            crate::cli::Cli::try_parse_from(["rustmux", "select-window", "--window", "2"]).unwrap();
+        let cli = crate::cli::Cli::try_parse_from(["rustmux", "window", "select", "--window", "2"])
+            .unwrap();
         assert_eq!(
             cli.command,
-            Some(crate::cli::Command::Control(Command::SelectWindow {
-                target: Target {
-                    session: SessionName::new("default").unwrap(),
-                },
-                window: 2,
-            }))
+            Some(crate::cli::Command::Control(Command::Window(
+                WindowCommand::Select {
+                    target: Target {
+                        session: SessionName::new("default").unwrap(),
+                    },
+                    window: 2,
+                }
+            )))
         );
         for arguments in [
-            &["rustmux", "select-pane"][..],
-            &["rustmux", "select-pane", "-p", "-1"][..],
-            &["rustmux", "select-window"][..],
-            &["rustmux", "select-window", "-w", "0"][..],
-            &["rustmux", "select-window", "-w", "-1"][..],
+            &["rustmux", "pane", "select"][..],
+            &["rustmux", "pane", "select", "-p", "-1"][..],
+            &["rustmux", "window", "select"][..],
+            &["rustmux", "window", "select", "-w", "0"][..],
+            &["rustmux", "window", "select", "-w", "-1"][..],
         ] {
             assert!(crate::cli::Cli::try_parse_from(arguments).is_err());
         }

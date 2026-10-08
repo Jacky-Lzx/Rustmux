@@ -14,7 +14,7 @@ See [Named Session Commands](session-cli.md).
 
 The native browser mode is `history`, with `[keybinds.history]` and
 `switch-mode history`. Legacy `scroll` mode/action spellings are not aliases.
-Use `check-config --strict` to detect ignored settings, and consult
+Use `config check --strict` to detect ignored settings, and consult
 [Configuration Diagnostics](config-diagnostics.md) and
 [Native Development Configuration](dev-config.md).
 

@@ -43,13 +43,13 @@ while True:
 """)
 
     def run(action, *arguments, success=True):
-        result = subprocess.run([BINARY, action, "-s", name, *map(str, arguments)],
+        result = subprocess.run([BINARY, *action.split(), "-s", name, *map(str, arguments)],
                                 env=env, capture_output=True, text=True, timeout=8)
         assert (result.returncode == 0) == success, (action, arguments, result)
         return result
 
     def panes():
-        return tomllib.loads(run("list-panes", "--toml").stdout)["panes"]
+        return tomllib.loads(run("pane list", "--toml").stdout)["panes"]
 
     def active():
         return next(p["id"] for p in panes() if p["active"])
@@ -76,7 +76,7 @@ while True:
         # The child can publish its state before the server parses DECSET 1004.
         # Capturing the following marker proves that reporting is enabled before
         # another control request changes focus, including in detached sessions.
-        wait_until(lambda: "WINDOW_CLOSE_READY" in run("capture-pane", "-p", pane).stdout,
+        wait_until(lambda: "WINDOW_CLOSE_READY" in run("pane capture", "-p", pane).stdout,
                    f"server did not parse probe {label}'s focus-reporting setup")
         return pane
 
@@ -97,7 +97,7 @@ while True:
         removed = [p for p in before if p["window"] == number]
         assert removed
         arguments = ["-w", str(window)] if window is not None else []
-        assert run("close-window", *arguments).stdout == ""
+        assert run("window close", *arguments).stdout == ""
         assert all(p["id"] not in {old["id"] for old in removed} for p in panes())
         for pane in removed:
             wait_until(lambda: gone(pane["pid"]), f"closed child {pane['pid']} was not reaped")
@@ -129,7 +129,7 @@ while True:
     def final_guard():
         before = panes()
         for arguments in ((), ("-w", "1")):
-            assert "final session window" in run("close-window", *arguments, success=False).stderr
+            assert "final session window" in run("window close", *arguments, success=False).stderr
         rejected = wire(b"action='close-window'\n")
         assert not rejected["ok"] and "final session window" in rejected["output"]
         assert panes() == before
@@ -143,17 +143,17 @@ while True:
         client.expect(b"WINDOW_CLOSE_READY")
         first = active()
         wait_until(lambda: record("first") is not None, "first probe did not start")
-        right = start("split-pane", "right", "-p", first)
+        right = start("pane split", "right", "-p", first)
         client.send(b"\x02Z")
         size("right", 20, 78)
-        removed_a = start("new-window", "removed-a", "--name", "removed")
-        start("split-pane", "removed-b", "-p", removed_a, "--down")
-        exited = int(run("split-pane", "--command", "printf WINDOW_EXITED; exit 7").stdout)
+        removed_a = start("window new", "removed-a", "--name", "removed")
+        start("pane split", "removed-b", "-p", removed_a, "--down")
+        exited = int(run("pane split", "--command", "printf WINDOW_EXITED; exit 7").stdout)
         wait_until(lambda: any(p["id"] == exited and p["output_complete"] for p in panes()),
                    "retained job did not exit")
         assert next(p for p in panes() if p["id"] == exited)["exit_code"] == 7
-        keep = start("new-window", "keep", "--name", "keep")
-        keep_bottom = start("split-pane", "keep-bottom", "-p", keep, "--down")
+        keep = start("window new", "keep", "--name", "keep")
+        keep_bottom = start("pane split", "keep-bottom", "-p", keep, "--down")
         # Window numbers follow the reordered bar, rather than creation order.
         client.send(b"\x02<")
         wait_until(lambda: next(p["window"] for p in panes() if p["id"] == keep) == 2,
@@ -165,9 +165,9 @@ while True:
         client.send(b"\x02[")
         expect_footer(client, b"HISTORY")
         before = panes()
-        assert "unknown window number" in run("close-window", "-w", "65535", success=False).stderr
+        assert "unknown window number" in run("window close", "-w", "65535", success=False).stderr
         for invalid in ("0", "-1", "65536", "invalid"):
-            run("close-window", "-w", invalid, success=False)
+            run("window close", "-w", invalid, success=False)
         for body in (b"action='close-window'\nwindow=0\n",
                      b"action='close-window'\nwindow='invalid'\n",
                      b"action='close-window'\nwindow=3\nextra=true\n"):
@@ -197,11 +197,11 @@ while True:
 
         client = Session(extra_env=env, arguments=("attach", name))
         client.expect(b"WINDOW_CLOSE_READY")
-        middle = start("new-window", "middle", "--name", "middle")
-        start("split-pane", "middle-right", "-p", middle)
-        last = start("new-window", "last", "--name", "last")
-        last_bottom = start("split-pane", "last-bottom", "-p", last, "--down")
-        run("select-window", "-w", "2")
+        middle = start("window new", "middle", "--name", "middle")
+        start("pane split", "middle-right", "-p", middle)
+        last = start("window new", "last", "--name", "last")
+        last_bottom = start("pane split", "last-bottom", "-p", last, "--down")
+        run("window select", "-w", "2")
         wait_until(lambda: record("last-bottom")["input"].endswith(b"\x1b[O".hex()),
                    "last-window focus-out did not arrive")
         before_input = record("last-bottom")["input"]
@@ -221,16 +221,16 @@ while True:
         final_guard()  # final window is protected even though it has two panes
         client.send(b"/final-window-check")
         expect_footer(client, b"Search /final-window-check")
-        run("select-pane", "-p", right)
+        run("pane select", "-p", right)
         expect_footer(client, b"LOCKED")
         detach()
 
         final_guard()
-        detached = start("new-window", "detached", "--name", "detached")
-        exited = int(run("split-pane", "-p", detached, "--down", "--command", "exit 9").stdout)
+        detached = start("window new", "detached", "--name", "detached")
+        exited = int(run("pane split", "-p", detached, "--down", "--command", "exit 9").stdout)
         wait_until(lambda: any(p["id"] == exited and p["output_complete"] for p in panes()),
                    "detached retained job did not exit")
-        keeper = start("new-window", "keeper", "--name", "keeper")
+        keeper = start("window new", "keeper", "--name", "keeper")
         baseline = record("keeper")
         close(2)
         assert active() == keeper and record("keeper") == baseline

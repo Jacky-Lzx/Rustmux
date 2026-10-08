@@ -1,18 +1,18 @@
 # Pane output logging and subscriptions
 
-`read-pane-output`, `subscribe-pane` and `log-pane` expose the bytes read from a
+`pane read-output`, `pane subscribe` and `pane log` expose the bytes read from a
 pane's PTY, before terminal parsing. This includes escape sequences, binary
-payloads, shell echo and prompts. For plain screen text, use `capture-pane`.
+payloads, shell echo and prompts. For plain screen text, use `pane capture`.
 No terminal replies or input queue bytes are added to this stream.
 
 ```sh
 # In config.toml, enable retention for panes whose final output must be logged:
 # remain_on_exit = true
 
-rustmux read-pane-output -s work -p 1
-rustmux read-pane-output -s work -p 1 --after 0
-rustmux subscribe-pane -s work -p 1 > pane.raw
-rustmux log-pane -s work -p 1 --output ./pane.raw
+rustmux pane read-output -s work -p 1
+rustmux pane read-output -s work -p 1 --after 0
+rustmux pane subscribe -s work -p 1 > pane.raw
+rustmux pane log -s work -p 1 --output ./pane.raw
 ```
 
 The continuous commands require `remain_on_exit = true`, either globally or in
@@ -26,7 +26,7 @@ future output only. `--after CURSOR` resumes at that byte offset; `--after 0`
 requests the available raw tail from the start. Raw output is runtime state and
 is not restored from saved sessions or terminal history.
 
-`read-pane-output` returns TOML with these fields:
+`pane read-output` returns TOML with these fields:
 
 | Field | Meaning |
 | --- | --- |
@@ -60,7 +60,7 @@ continues handling PTYs and input; readers detect any resulting buffer loss.
 These are client-side subscriptions, not a server push channel or a persistent
 server-side logger.
 
-`log-pane` exclusively creates a new file with permissions restricted to 0600.
+`pane log` exclusively creates a new file with permissions restricted to 0600.
 It rejects existing files, symlinks and existing special files rather than
 appending or truncating. It flushes each output batch, reports write errors and
 leaves partial logs available after failure. It does not rotate logs or promise

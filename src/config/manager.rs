@@ -118,7 +118,7 @@ impl Bindings {
         if let Some(value) = value {
             let table = value.as_table().ok_or("session_manager must be a table")?;
             // Unimplemented manager actions keep startup compatibility and are
-            // reported by check-config, like other ignored main-track options.
+            // reported by config check, like other ignored main-track options.
             let mut overrides = Vec::new();
             for (action, name) in Action::ALL {
                 if let Some(value) = table.get(name) {

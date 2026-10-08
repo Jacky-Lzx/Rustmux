@@ -44,13 +44,13 @@ while True:
 """)
 
     def run(action, *arguments, success=True):
-        result = subprocess.run([BINARY, action, "-s", name, *map(str, arguments)],
+        result = subprocess.run([BINARY, *action.split(), "-s", name, *map(str, arguments)],
                                 env=env, capture_output=True, text=True, timeout=8)
         assert (result.returncode == 0) == success, (action, arguments, result)
         return result
 
     def panes():
-        return tomllib.loads(run("list-panes", "--toml").stdout)["panes"]
+        return tomllib.loads(run("pane list", "--toml").stdout)["panes"]
 
     def active():
         return next(p["id"] for p in panes() if p["active"])
@@ -85,7 +85,7 @@ while True:
 
     def focus(direction, origin=None, success=True):
         arguments = ["-p", str(origin)] if origin is not None else []
-        result = run("select-pane", *arguments, "--direction", direction, success=success)
+        result = run("pane select", *arguments, "--direction", direction, success=success)
         if success:
             assert result.stdout == ""
         return result
@@ -142,9 +142,9 @@ while True:
         client.expect(b"FIRST_FOCUS_READY")
         first = active()
         wait_until(lambda: record("first") is not None, "first probe did not start")
-        top = start("split-pane", "top", "-p", first, application="no")
-        bottom = start("split-pane", "bottom", "-p", top, "--down")
-        other = start("new-window", "other", "--name", "other", application="no")
+        top = start("pane split", "top", "-p", first, application="no")
+        bottom = start("pane split", "bottom", "-p", top, "--down")
+        other = start("window new", "other", "--name", "other", application="no")
         labels.update({first: "first", top: "top", bottom: "bottom", other: "other"})
         size("first", 20, 38)
         size("top", 9, 38)
@@ -199,7 +199,7 @@ while True:
         expect_footer(client, b"Search /edge-focus-check")
         step("left", "first")
         expect_footer(client, b"LOCKED")
-        run("zoom-pane", "--on")
+        run("pane zoom", "--on")
         size("first", 20, 78)
         step("right", "top")
         size("top", 20, 78)
@@ -227,22 +227,22 @@ while True:
         detach()
 
         # Detached changes preserve the client lease and apply sizes before reattachment.
-        run("select-pane", "-p", other)
+        run("pane select", "-p", other)
         focus("right", first)
         assert active() == top
         size("top", 20, 78)
         size("bottom", 9, 38)
-        ended = int(run("new-window", "--name", "retained", "--command", "printf RETAINED_FOCUS; exit 7").stdout)
+        ended = int(run("window new", "--name", "retained", "--command", "printf RETAINED_FOCUS; exit 7").stdout)
         wait_until(lambda: any(p["id"] == ended and p["output_complete"] for p in panes()),
                    "retained job did not exit")
         ended_pid = identities()[ended]
-        live = start("split-pane", "live", "-p", ended, application="no")
+        live = start("pane split", "live", "-p", ended, application="no")
         focus("left")
         entry = next(p for p in panes() if p["id"] == ended)
         assert active() == ended and entry["pid"] == ended_pid and entry["exit_code"] == 7
         assert entry["exited"] and entry["output_complete"]
-        assert "RETAINED_FOCUS" in run("capture-pane", "-p", ended).stdout
-        run("close-pane", "-p", live)
+        assert "RETAINED_FOCUS" in run("pane capture", "-p", ended).stdout
+        run("pane close", "-p", live)
         before = panes()
         assert "unknown runtime pane ID" in focus("left", live, success=False).stderr
         assert panes() == before

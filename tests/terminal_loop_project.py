@@ -24,7 +24,7 @@ with tempfile.TemporaryDirectory(prefix="rustmux-project-") as root:
         return result
 
     def panes():
-        return tomllib.loads(run("list-panes", "-s", name, "--toml").stdout)["panes"]
+        return tomllib.loads(run("pane", "list", "-s", name, "--toml").stdout)["panes"]
 
     def wait_runs(count):
         deadline = time.monotonic() + 6

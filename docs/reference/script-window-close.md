@@ -1,15 +1,15 @@
 # Script window close
 
 ```sh
-rustmux list-panes -s work --toml
-rustmux close-window -s work -w 2
-rustmux close-window -s work
+rustmux pane list -s work --toml
+rustmux window close -s work -w 2
+rustmux window close -s work
 ```
 
-`close-window` removes a visible window and all its panes, including running
+`window close` removes a visible window and all its panes, including running
 jobs and panes retained after process exit. It accepts `-s SESSION` (default
 `default`) and an optional `-w NUMBER` (default the active window). Numbers are
-one-based positions in the current window bar and `list-panes` output. Removal
+one-based positions in the current window bar and `pane list` output. Removal
 and reordering change them: enumerate again before using a stored position.
 Duplicate window names do not affect targeting.
 
@@ -42,7 +42,7 @@ not a barrier for surviving applications' rendering or SIGWINCH handling.
 The session's final window is protected, even if it contains multiple panes.
 Closing it returns nonzero with
 `cannot close the final session window; use kill SESSION`, preserving all panes,
-focus and overlays. Use `kill SESSION` to end the server, or `close-pane` to
+focus and overlays. Use `kill SESSION` to end the server, or `pane close` to
 remove selected panes while leaving the final pane. Unknown window numbers and
 malformed requests also fail before ownership removal. CLI numbers must be
 between 1 and 65535; a number outside the current collection fails on the server.
@@ -107,7 +107,7 @@ JSON state, but the server could still be waiting to parse its earlier DECSET
 1004 output. Selecting another window at that point correctly queues no
 focus-out for an application that has not yet enabled reporting.
 
-The fixture now polls `capture-pane` for `WINDOW_CLOSE_READY`, which the probe
+The fixture now polls `pane capture` for `WINDOW_CLOSE_READY`, which the probe
 emits after enabling focus reporting. A capture reads the server's parsed screen,
 so it establishes the required readiness boundary for both attached and detached
 servers. Child-state and PID checks remain in place; focus-event assertions and

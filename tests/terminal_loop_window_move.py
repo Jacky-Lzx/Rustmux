@@ -44,13 +44,13 @@ while True:
 """)
 
     def run(action, *arguments, success=True):
-        result = subprocess.run([BINARY, action, "-s", name, *map(str, arguments)],
+        result = subprocess.run([BINARY, *action.split(), "-s", name, *map(str, arguments)],
                                 env=env, capture_output=True, text=True, timeout=8)
         assert (result.returncode == 0) == success, (action, arguments, result)
         return result
 
     def panes():
-        return tomllib.loads(run("list-panes", "--toml").stdout)["panes"]
+        return tomllib.loads(run("pane list", "--toml").stdout)["panes"]
 
     def active():
         return next(p["id"] for p in panes() if p["active"])
@@ -87,7 +87,7 @@ while True:
 
     def move(direction, window=None):
         arguments = ["-w", str(window)] if window is not None else []
-        assert run("move-window", *arguments, "--direction", direction).stdout == ""
+        assert run("window move", *arguments, "--direction", direction).stdout == ""
 
     def order(expected):
         current = panes()
@@ -139,19 +139,19 @@ while True:
             move(direction, 1)
             order([first])
             assert record("first") == baseline
-        first_right = start("split-pane", "first-right", "-p", first)
-        run("zoom-pane", "--on")
+        first_right = start("pane split", "first-right", "-p", first)
+        run("pane zoom", "--on")
         size("first-right", 20, 78)
-        second = start("new-window", "second", "--name", "second", application="no")
-        second_bottom = start("split-pane", "second-bottom", "-p", second, "--down", application="no")
-        run("zoom-pane", "--on")
+        second = start("window new", "second", "--name", "second", application="no")
+        second_bottom = start("pane split", "second-bottom", "-p", second, "--down", application="no")
+        run("pane zoom", "--on")
         size("second-bottom", 20, 78)
         # Duplicate labels are metadata; numeric targeting follows display order.
-        third = int(run("new-window", "--name", "first", "--command", "printf RETAINED_MOVE; exit 7").stdout)
+        third = int(run("window new", "--name", "first", "--command", "printf RETAINED_MOVE; exit 7").stdout)
         wait_until(lambda: any(p["id"] == third and p["output_complete"] for p in panes()),
                    "retained job did not exit")
-        third_live = start("split-pane", "third", "-p", third)
-        run("select-pane", "-p", second_bottom)
+        third_live = start("pane split", "third", "-p", third)
+        run("pane select", "-p", second_bottom)
         client.expect(b"SECOND-BOTTOM_MOVE_READY")
         wait_until(lambda: record("second-bottom")["input"].endswith(b"\x1b[I".hex())
                    and record("third")["input"].endswith(b"\x1b[O".hex()),
@@ -179,9 +179,9 @@ while True:
         client.send(b"\x02[")
         expect_footer(client, b"HISTORY")
         before = panes()
-        assert "unknown window number" in run("move-window", "-w", "65535", "--direction", "left", success=False).stderr
+        assert "unknown window number" in run("window move", "-w", "65535", "--direction", "left", success=False).stderr
         for arguments in (("--direction", "up"), (), ("-w", "0", "--direction", "right")):
-            run("move-window", *arguments, success=False)
+            run("window move", *arguments, success=False)
         for body in (b"action='move-window'\nwindow=0\ndirection='left'\n",
                      b"action='move-window'\nwindow='invalid'\ndirection='left'\n",
                      b"action='move-window'\nwindow=1\ndirection='up'\n",

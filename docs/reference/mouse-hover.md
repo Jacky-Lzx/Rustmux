@@ -6,9 +6,9 @@ Enable pointer feedback for Rustmux's window controls in the selected config:
 mouse_hover_cursor = true
 ```
 
-This option defaults to `false`. It is included in `default-config`, accepted by
-`check-config --strict`, and reported as `[settings].mouse_hover_cursor` by
-`check-config --toml` and `show-config`. A named server owns this setting; an
+This option defaults to `false`. It is included in `config default`, accepted by
+`config check --strict`, and reported as `[settings].mouse_hover_cursor` by
+`config check --toml` and `config show`. A named server owns this setting; an
 attaching client's config does not replace it. It follows the existing atomic
 [hot-reload policy](config-reload.md), including detached updates, invalid-file
 retention and safe input boundaries.

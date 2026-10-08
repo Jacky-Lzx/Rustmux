@@ -72,7 +72,7 @@ while True:
 
     def run(action, *args):
         target = [name] if action in ("new", "kill") else ["-s", name]
-        result = subprocess.run([BINARY, action, *target, *map(str, args)], env=env,
+        result = subprocess.run([BINARY, *action.split(), *target, *map(str, args)], env=env,
                                 capture_output=True, text=True, timeout=8)
         assert result.returncode == 0, (action, args, result)
         return result.stdout
@@ -89,7 +89,7 @@ while True:
             time.sleep(0.01)
 
     def setting(enabled):
-        wait(lambda: tomllib.loads(run("show-config"))["settings"]["mouse_hover_cursor"] == enabled)
+        wait(lambda: tomllib.loads(run("config show"))["settings"]["mouse_hover_cursor"] == enabled)
 
     def shape(expected):
         def matches():
@@ -103,7 +103,7 @@ while True:
 
     def command(pane, byte, label="b"):
         old = record(label)["input"]
-        run("send-keys", "-p", pane, "--literal", chr(byte))
+        run("pane send-keys", "-p", pane, "--literal", chr(byte))
         wait(lambda: record(label)["input"] == old + bytes([byte]).hex())
 
     def no_input(before, label="b"):
@@ -121,13 +121,13 @@ while True:
 
     try:
         run("new", "--detached", "--config", selected)
-        left = tomllib.loads(run("list-panes", "--toml"))["panes"][0]["id"]
+        left = tomllib.loads(run("pane list", "--toml"))["panes"][0]["id"]
         launch = lambda label, shape: f"exec python3 -u {shlex.quote(str(probe))} {shlex.quote(str(root / (label+'.json')))} {shape}"
-        run("send-keys", "-p", left, "--literal", "--enter", launch("a", "crosshair"))
+        run("pane send-keys", "-p", left, "--literal", "--enter", launch("a", "crosshair"))
         wait(lambda: record("a") is not None)
-        right = int(run("split-pane", "-p", left, "--command", launch("b", "wait")))
+        right = int(run("pane split", "-p", left, "--command", launch("b", "wait")))
         wait(lambda: record() is not None)
-        identities = {p["id"]:p["pid"] for p in tomllib.loads(run("list-panes", "--toml"))["panes"]}
+        identities = {p["id"]:p["pid"] for p in tomllib.loads(run("pane list", "--toml"))["panes"]}
         session = Session(extra_env=env, arguments=("--config", str(client), "attach", name))
         shape("wait")
         wait(lambda: bool(session.physical_rows) and b"shell" in session.physical_rows[0])
@@ -146,7 +146,7 @@ while True:
         wait(lambda: record()["query"] == "\x1b]22;wait\x1b\\")
         # Hovering never overwrites the application-owned state queried above.
         command(right, 7)
-        wait(lambda: "SYNC_HIDDEN" in run("capture-pane", "-p", right))
+        wait(lambda: "SYNC_HIDDEN" in run("pane capture", "-p", right))
         motion(50, 5)
         no_input(record()["input"])
         assert b"SYNC_HIDDEN" not in session.output, "hover exposed an unfinished synchronized frame"
@@ -212,28 +212,28 @@ while True:
         shape("help")
         wait(lambda: session.private_modes.get(1002) and not session.private_modes.get(1003))
         selected.write_text('tab_name="title"\n' + "mouse_hover_cursor='invalid'\n")
-        wait(lambda: "error" in tomllib.loads(run("show-config")))
+        wait(lambda: "error" in tomllib.loads(run("config show")))
         setting(False)
         selected.write_text('tab_name="title"\n' + "mouse_hover_cursor=true\n")
         setting(True)
         shape("pointer")
         # A reload error replaces the footer actions; it is not a hover target.
         selected.write_text('tab_name="title"\n' + "mouse_hover_cursor='invalid'\n")
-        wait(lambda: "error" in tomllib.loads(run("show-config")))
+        wait(lambda: "error" in tomllib.loads(run("config show")))
         motion(footer_column, 24)
         shape("help")
         motion(tab_column, 1)
         shape("pointer")
         selected.write_text('tab_name="title"\n' + "mouse_hover_cursor=true\n")
-        wait(lambda: "error" not in tomllib.loads(run("show-config")))
+        wait(lambda: "error" not in tomllib.loads(run("config show")))
         detach()
         selected.write_text('tab_name="title"\n' + "mouse_hover_cursor=false\n")
         setting(False)
         session = Session(extra_env=env, arguments=("attach", name))
         shape("help")
-        run("select-pane", "-p", left)
+        run("pane select", "-p", left)
         shape("crosshair")
-        assert {p["id"]:p["pid"] for p in tomllib.loads(run("list-panes", "--toml"))["panes"]} == identities
+        assert {p["id"]:p["pid"] for p in tomllib.loads(run("pane list", "--toml"))["panes"]} == identities
         detach()
     finally:
         if session: session.close()

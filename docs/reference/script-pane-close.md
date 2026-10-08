@@ -1,12 +1,12 @@
 # Script pane close
 
 ```sh
-rustmux list-panes -s work --toml
-rustmux close-pane -s work -p 2
-rustmux close-pane -s work
+rustmux pane list -s work --toml
+rustmux pane close -s work -p 2
+rustmux pane close -s work
 ```
 
-`close-pane` removes a visible runtime pane, including one in an inactive window
+`pane close` removes a visible runtime pane, including one in an inactive window
 or one retained after process exit. It accepts `-s SESSION` (default `default`)
 and optional `-p ID` (default the active pane). Enumerate IDs before using them;
 they remain stable within the running server but are not persistent across

@@ -1,12 +1,12 @@
 # Script pane swap
 
 ```sh
-rustmux list-panes -s work --toml
-rustmux swap-pane -s work -p 0 --to-pane 2
-rustmux swap-pane -s work --to-pane 0
+rustmux pane list -s work --toml
+rustmux pane swap -s work -p 0 --to-pane 2
+rustmux pane swap -s work --to-pane 0
 ```
 
-`swap-pane` exchanges the layout positions of two visible runtime panes in the
+`pane swap` exchanges the layout positions of two visible runtime panes in the
 same window. It accepts `-s SESSION` (default `default`), optional `-p ID`
 (source, default the active pane), and required `--to-pane ID` (destination).
 Enumerate runtime IDs before using them. They remain stable within the server
@@ -39,8 +39,8 @@ Size synchronization I/O failures follow the normal runtime cleanup path.
 Unknown/stale IDs, malformed requests, panes in different windows, temporary
 history/output editor panes and zoomed target layouts are rejected before layout
 mutation, leaving focus, geometry and overlays unchanged. Zoom rejection also
-applies to same-target requests. Use `zoom-pane --off` on the target window before
-swapping. Cross-window movement remains available through `join-pane`/`break-pane`;
+applies to same-target requests. Use `pane zoom --off` on the target window before
+swapping. Cross-window movement remains available through `pane join`/`pane break`;
 this command only exchanges slots within one window.
 
 Attached and detached servers accept swaps without acquiring the interactive

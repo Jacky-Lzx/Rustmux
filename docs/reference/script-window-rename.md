@@ -1,13 +1,13 @@
 # Script window rename
 
 ```sh
-rustmux rename-window -s work 'editor'
-rustmux rename-window -s work -w 2 'build logs'
-rustmux list-panes -s work --toml
+rustmux window rename -s work 'editor'
+rustmux window rename -s work -w 2 'build logs'
+rustmux pane list -s work --toml
 ```
 
-`rename-window` changes the active window's name by default. `-w NUMBER` (or
-`--window NUMBER`) targets a one-based display position, matching `list-panes`
+`window rename` changes the active window's name by default. `-w NUMBER` (or
+`--window NUMBER`) targets a one-based display position, matching `pane list`
 and the window bar. Positions change after removal or reordering; enumerate
 current windows before using a stored number. The command takes a required
 positional name, accepts `-s SESSION` and defaults to session `default`.
@@ -16,7 +16,7 @@ Use `--` before a name beginning with `-`.
 Names contain 1–128 UTF-8 bytes without control characters. Spaces and Unicode
 are allowed, and the limit counts bytes rather than characters. Duplicate names
 are allowed: names are metadata, while numbers select a position. The bar clips
-labels to the physical terminal width; `list-panes --toml` exposes the full name
+labels to the physical terminal width; `pane list --toml` exposes the full name
 for every pane in the window. The plain listing continues to show each pane's
 terminal title rather than its window name.
 
@@ -62,7 +62,7 @@ An older running server rejects the new control action until it is restarted.
 Read CLI/request construction and refresh classification in `src/control.rs`,
 then shared number/name validation and mutation in `src/terminal/control.rs`.
 The existing `Windows::rename` changes only metadata. Number lookup is shared
-with `select-window`; optional string validation is shared with new/broken
+with `window select`; optional string validation is shared with new/broken
 windows. Existing transport size limits, deadlines and response bounds apply.
 
 `tests/terminal_loop_window_rename.py` uses named servers, real attached terminals

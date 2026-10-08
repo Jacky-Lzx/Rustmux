@@ -65,7 +65,7 @@ while True:
     counters = dict(A=0, B=0)
     def run(action, *args):
         target = [name] if action in ("new", "kill") else ["-s", name]
-        result = subprocess.run([BINARY, action, *target, *map(str,args)], env=env, capture_output=True, text=True, timeout=8)
+        result = subprocess.run([BINARY, *action.split(), *target, *map(str,args)], env=env, capture_output=True, text=True, timeout=8)
         assert result.returncode == 0, (action, result.stderr)
         return result.stdout
     def wait(predicate, detail="paste timeout", timeout=10):
@@ -90,7 +90,7 @@ while True:
         wait(lambda: client.private_modes.get(5522)==enabled, ("outer 5522",enabled))
     def policy(enabled):
         config.write_text("clipboard_read="+str(enabled).lower()+"\nremain_on_exit=true\n")
-        wait(lambda: tomllib.loads(run("show-config"))["settings"]["clipboard_read"]==enabled, "policy reload")
+        wait(lambda: tomllib.loads(run("config show"))["settings"]["clipboard_read"]==enabled, "policy reload")
     launch=lambda label: "exec "+shlex.quote(sys.executable)+" -u "+shlex.quote(str(probe))+" "+shlex.quote(str(root))+" "+label
     def attach(label):
         global client
@@ -103,18 +103,18 @@ while True:
         client.close();client=None
     try:
         run("new","--detached")
-        left=tomllib.loads(run("list-panes","--toml"))["panes"][0]["id"]
-        run("send-keys","-p",left,"--literal","--enter",launch("A"))
+        left=tomllib.loads(run("pane list","--toml"))["panes"][0]["id"]
+        run("pane send-keys","-p",left,"--literal","--enter",launch("A"))
         wait(lambda: record("A"))
         command("A",ON+QUERY,b"\x1b[?5522;4$y");done("A")
         policy(True)
         command("A",QUERY+ON+QUERY,b"\x1b[?5522;2$y\x1b[?5522;1$y");done("A")
-        right=int(run("split-pane","-p",left,"--command",launch("B")))
+        right=int(run("pane split","-p",left,"--command",launch("B")))
         wait(lambda: record("B"));attach("B");mode(False)
         command("B",ON+QUERY,b"\x1b[?5522;1$y");done("B");mode(True)
         # Prefix ownership survives a focus switch before OK is fully framed.
         command("B",b"",EVENT);client.send(OK[:20]);client.read(0.03)
-        run("select-pane","-p",left);mode(True)
+        run("pane select","-p",left);mode(True)
         client.send(OK[20:]+DATA)
         client.read(0.03);assert record("B")["state"]=="emitted"
         client.send(DONE);done("B")
@@ -154,8 +154,8 @@ while True:
         command("A",b"",b"x");client.send(DATA+DONE+b"x");done("A")
         # Respawn has a fresh incarnation and an initially disabled mode.
         pid=record("A")["pid"];os.kill(pid,15)
-        wait(lambda: next(p for p in tomllib.loads(run("list-panes","--toml"))["panes"] if p["id"]==left)["output_complete"])
-        counters["R"]=0;run("respawn-pane","-p",left,"--command",launch("R"));wait(lambda:record("R"));mode(False)
+        wait(lambda: next(p for p in tomllib.loads(run("pane list","--toml"))["panes"] if p["id"]==left)["output_complete"])
+        counters["R"]=0;run("pane respawn","-p",left,"--command",launch("R"));wait(lambda:record("R"));mode(False)
         command("R",QUERY,b"\x1b[?5522;2$y");done("R")
         command("R",b"",b"x");client.send(EVENT+b"x");done("R");detach()
         # Foreground unnamed sessions share mode synchronization and event routing.

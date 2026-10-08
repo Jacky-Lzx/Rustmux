@@ -18,7 +18,7 @@ disconnect = ["Ctrl x"]
 ```
 
 The action supports replacement, disabling with `[]`, conflict validation,
-hot reload, `default-config`, `check-config` and server `show-config` reports.
+hot reload, `config default`, `config check` and server `config show` reports.
 If another manager action uses Ctrl-X, disable or remap `disconnect` to avoid
 a binding conflict. Hints follow the selected row and effective key. The table prioritizes the
 Disconnect hint for an eligible row; filtered search also accepts control
