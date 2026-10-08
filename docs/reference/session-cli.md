@@ -16,6 +16,20 @@ rustmux kill-all --yes
 rustmux save-session work
 ```
 
+The following short commands are also available and appear in `rustmux --help`:
+
+| Command | Short form |
+| --- | --- |
+| `attach` | `a` |
+| `list` | `ls` |
+| `kill` | `k` |
+| `kill-all` | `ka` |
+| `save-session` | `save` |
+
+For example, `rustmux a work --create` and `rustmux k work` use the same
+arguments and behavior as `attach` and `kill`. The `a` and `k` aliases match
+`main-AI`.
+
 `save-session` saves the running workspace; `new` restores its snapshot after the
 server stops. History and autosave are optional. See [Session Snapshots](session-snapshots.md)
 for configuration, storage and the distinction between reattachment and starting

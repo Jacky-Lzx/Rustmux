@@ -47,6 +47,7 @@ pub enum Command {
         layout: Option<PathBuf>,
     },
     /// Attach to a named session, or choose running and saved sessions.
+    #[command(visible_alias = "a")]
     Attach {
         /// Session name; omit to choose running or saved sessions.
         name: Option<SessionName>,
@@ -62,6 +63,7 @@ pub enum Command {
         long: bool,
     },
     /// Terminate a named session.
+    #[command(visible_alias = "k")]
     Kill {
         /// Existing session name.
         name: SessionName,
@@ -157,14 +159,41 @@ mod tests {
             &["rustmux", "unknown"][..],
             &["rustmux", "new"][..],
             &["rustmux", "attach", "one", "two"][..],
+            &["rustmux", "a", "one", "two"][..],
             &["rustmux", "list", "extra"][..],
             &["rustmux", "kill"][..],
             &["rustmux", "kill", "one", "two"][..],
+            &["rustmux", "k"][..],
+            &["rustmux", "k", "../escape"][..],
+            &["rustmux", "k", "one", "two"][..],
             &["rustmux", "kill-all", "extra"][..],
             &["rustmux", "new", "../escape"][..],
         ] {
             assert!(Cli::try_parse_from(arguments).is_err(), "{arguments:?}");
         }
+    }
+
+    #[test]
+    fn short_session_commands_match_long_forms_and_keep_global_config() {
+        for (short, long, arguments) in [
+            ("a", "attach", vec![]),
+            ("a", "attach", vec!["work"]),
+            ("a", "attach", vec!["work", "--create"]),
+            ("ls", "list", vec!["-l"]),
+            ("k", "kill", vec!["work"]),
+            ("ka", "kill-all", vec!["-y"]),
+        ] {
+            let mut short_arguments = vec!["rustmux", short];
+            short_arguments.extend_from_slice(&arguments);
+            short_arguments.extend_from_slice(&["-c", "dev config.toml"]);
+            let mut long_arguments = vec!["rustmux", "--config", "dev config.toml", long];
+            long_arguments.extend_from_slice(&arguments);
+            let short_cli = Cli::try_parse_from(short_arguments).unwrap();
+            let long_cli = Cli::try_parse_from(long_arguments).unwrap();
+            assert_eq!(short_cli.command, long_cli.command);
+            assert_eq!(short_cli.config, long_cli.config);
+        }
+        assert!(Cli::try_parse_from(["rustmux", "a", "--create"]).is_err());
     }
 
     #[test]
