@@ -5,6 +5,24 @@ A top window bar shows names and focus. Basic [interactive splitting](interactiv
 and [named persistent sessions](session-cli.md) are available. Window renaming
 edits the active label directly in the bar.
 
+## Automatic and explicit names
+
+An unnamed window follows the current terminal title (OSC 0 or OSC 2) of its
+focused pane. Switching pane focus updates the tab label, and background windows
+continue updating their labels. An empty or whitespace-only title falls back to
+`shell`.
+
+Renaming a window, creating it with `new-window --name`, or naming it in a project
+layout sets a fixed label. This includes an explicit name of `shell`. Saving an
+empty draft in the interactive rename editor restores automatic title selection;
+cancelling the draft keeps the previous naming mode.
+
+Snapshots preserve automatic selection as an empty stored name, rather than
+freezing the current terminal title. Existing snapshots keep their stored names,
+including an old `shell` label; clear that name interactively to opt into automatic
+titles. Splitting a pane into a new window preserves the source window's naming
+mode, so automatic windows independently follow their own focused panes.
+
 ## Identity and focus
 
 - Creation appends a window and makes it active.

@@ -386,7 +386,7 @@ impl TerminalSession {
             None => {
                 let mut windows = Windows::default();
                 windows.create(
-                    "shell".into(),
+                    String::new(),
                     spawn_window(
                         shell_path,
                         None,
@@ -2190,11 +2190,20 @@ fn frontend_exit(state: ConnectionState, input: &VecDeque<u8>) -> Option<Forward
     }
 }
 
+/// An empty stored name selects a live title; explicit names remain metadata.
+fn window_name(window: &crate::window::Window<PaneSet<Pane>>) -> &str {
+    if window.name().is_empty() {
+        window.content().active().terminal_title()
+    } else {
+        window.name()
+    }
+}
+
 fn window_names(windows: &Windows<PaneSet<Pane>>) -> Vec<String> {
     windows
         .iter()
         .map(|window| {
-            let mut name = window.name().to_owned();
+            let mut name = window_name(window).to_owned();
             if window
                 .content()
                 .iter()
@@ -2483,6 +2492,7 @@ fn forward(
     let mut next_frame = Instant::now();
     let mut force_redraw = true;
     let mut bar_dirty = false;
+    let mut previous_names = window_names(windows);
     let mut prompt: Option<WindowPrompt> = None;
     let mut history: Option<crate::history_view::HistoryView> = None;
     let mut help: Option<crate::shortcut_help::ShortcutHelp> = None;
@@ -3101,6 +3111,12 @@ fn forward(
             }
         }
         let mut names = window_names(windows);
+        // Background output and pane focus can change an automatic tab's title
+        // without making the displayed pane dirty. Keep that bar update queued.
+        if names != previous_names {
+            previous_names.clone_from(&names);
+            bar_dirty = true;
+        }
         if let Some(editor) = prompt.as_ref().filter(|editor| editor.is_rename()) {
             names[active_index].clone_from(&editor.text);
         }
@@ -4320,7 +4336,7 @@ fn forward(
                             scrollback_lines,
                         ) {
                             Ok(pane) => {
-                                windows.create("shell".into(), pane)?;
+                                windows.create(String::new(), pane)?;
                             }
                             Err(_) => {
                                 if to_terminal.is_empty() {
@@ -4720,7 +4736,7 @@ fn forward(
                     let title = pane.terminal_title().to_owned();
                     let message = crate::notification::encode(
                         &identifier,
-                        window.name(),
+                        window_name(window),
                         pane_id,
                         &title,
                         reminder.duration,

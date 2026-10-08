@@ -20,6 +20,11 @@ labels to the physical terminal width; `list-panes --toml` exposes the full name
 for every pane in the window. The plain listing continues to show each pane's
 terminal title rather than its window name.
 
+An explicit rename pins the tab label, including a name of `shell`. Unnamed
+windows instead follow their focused pane's terminal title. To return to automatic
+titles, save an empty draft in the interactive rename editor; see
+[Automatic and Explicit Names](windows.md#automatic-and-explicit-names).
+
 Success prints nothing and returns zero. Invalid names, zero/unknown window
 numbers and malformed requests return a nonzero status before mutating names
 or focus. The server validates the same constraints when CLI validation is

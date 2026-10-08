@@ -270,7 +270,7 @@ pub(super) fn handle(
                         } else {
                             index + 1
                         },
-                        window_name: window.name().to_owned(),
+                        window_name: window_name(window).to_owned(),
                         active: active == Some(window.id())
                             && id == window.content().layout().active(),
                         selected: id == window.content().layout().active(),
@@ -415,7 +415,7 @@ pub(super) fn handle(
                 )?,
             )?;
             let id = set.active().control_id();
-            windows.create(window_name.unwrap_or_else(|| "shell".into()), set)?;
+            windows.create(window_name.unwrap_or_default(), set)?;
             Ok(format!("{id}\n"))
         }
         Request::SplitPane {

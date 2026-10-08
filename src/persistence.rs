@@ -40,6 +40,7 @@ pub(crate) struct Snapshot {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SavedWindow {
+    // Empty names preserve automatic title selection, never a captured OSC title.
     name: String,
     layout: SavedLayout,
     panes: Vec<SavedPane>,

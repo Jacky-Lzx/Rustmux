@@ -98,6 +98,11 @@ fn window_rename() {
 }
 
 #[test]
+fn window_titles() {
+    run_scenario("window_titles");
+}
+
+#[test]
 fn pane_resize() {
     run_scenario("pane_resize");
 }
