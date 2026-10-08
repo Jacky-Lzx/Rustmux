@@ -210,6 +210,34 @@ mod tests {
     }
 
     #[test]
+    fn saved_zwj_emoji_restore_as_complete_cells_at_a_narrower_width() {
+        for emoji in ["👩‍💻", "👨‍👩‍👧‍👦", "🧑🏻‍🤝‍🧑🏿", "🏳️‍🌈"]
+        {
+            let mut source = Screen::new(2, 12).unwrap();
+            Parser::new().advance(&mut source, format!("\x1b[31m{emoji}AB").as_bytes());
+            for colors in [false, true] {
+                let saved = source.saved_history(colors, 100);
+                let mut restored = Screen::new(3, 3).unwrap();
+                restored.restore_history(&saved, colors).unwrap();
+                let cell = &restored.history_row(0).unwrap()[0];
+                let text: String = std::iter::once(cell.character)
+                    .chain(cell.combining.iter().copied())
+                    .collect();
+                assert_eq!(text, emoji);
+                assert_eq!(cell.width, 2);
+                assert_eq!(
+                    cell.style.foreground,
+                    if colors {
+                        Color::Indexed(1)
+                    } else {
+                        Color::Default
+                    }
+                );
+            }
+        }
+    }
+
+    #[test]
     fn roundtrip_reflows_unicode_styles_and_explicit_spaces_into_history_only() {
         let mut screen = Screen::new(3, 8).unwrap();
         Parser::new().advance(

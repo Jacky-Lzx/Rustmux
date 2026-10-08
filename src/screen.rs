@@ -1387,7 +1387,7 @@ impl Screen {
             return;
         }
         character = self.character_sets.translate(character);
-        let Some(mut width) = character.width() else {
+        let Some(width) = character.width() else {
             return;
         };
         if self.append_emoji_suffix(character) {
@@ -1397,8 +1397,14 @@ impl Screen {
             let Some(index) = self.preceding_cell_index() else {
                 return;
             };
-            if self.cells[index].combining.len() < MAX_COMBINING_SCALARS {
+            // Reserve a suffix slot for the component after a joiner. Otherwise
+            // the outer terminal could join text that our bounded cell cannot.
+            let limit = MAX_COMBINING_SCALARS - usize::from(character == '\u{200d}');
+            if self.cells[index].combining.len() < limit {
                 self.cells[index].combining.push(character);
+                if character == '\u{fe0e}' && self.split_text_selected_emoji(index) {
+                    return;
+                }
                 if matches!(character, '\u{fe0e}' | '\u{fe0f}') {
                     self.resize_selected_cell(index);
                 } else {
@@ -1408,10 +1414,23 @@ impl Screen {
             }
             return;
         }
-        // The model supports one- and two-column scalars. A one-column screen
-        // cannot hold a wide glyph; use a visible replacement instead.
+        self.print_cell(Cell {
+            character,
+            width: width as u8,
+            style: self.style,
+            hyperlink: self.hyperlinks.active.clone(),
+            ..Cell::default()
+        });
+    }
+
+    /// Write a scalar or already measured emoji component as one cell span.
+    fn print_cell(&mut self, mut cell: Cell) {
+        let mut width = usize::from(cell.width);
+        // A one-column screen cannot hold a wide glyph.
         if width > 2 || width > self.columns {
-            character = '\u{fffd}';
+            cell.character = '\u{fffd}';
+            cell.combining.clear();
+            cell.width = 1;
             width = 1;
         }
         if self.auto_wrap && (self.wrap_pending || self.column + width > self.columns) {
@@ -1436,21 +1455,15 @@ impl Screen {
         }
         let index = self.row * self.columns + self.column;
         self.clear_range(index..index + width);
-        self.cells[index] = Cell {
-            character,
-            width: width as u8,
-            style: self.style,
-            hyperlink: self.hyperlinks.active.clone(),
-            ..Cell::default()
-        };
         if width == 2 {
             self.cells[index + 1] = Cell {
                 width: 0,
-                style: self.style,
-                hyperlink: self.hyperlinks.active.clone(),
+                style: cell.style,
+                hyperlink: cell.hyperlink.clone(),
                 ..Cell::default()
             };
         }
+        self.cells[index] = cell;
         self.used[self.row] = self.used[self.row].max(self.column + width);
         if self.column + width == self.columns {
             self.column = self.columns - 1;
@@ -1479,14 +1492,12 @@ impl Screen {
     fn append_emoji_suffix(&mut self, character: char) -> bool {
         let modifier = matches!(character, '\u{1f3fb}'..='\u{1f3ff}');
         let indicator = matches!(character, '\u{1f1e6}'..='\u{1f1ff}');
-        if !modifier && !indicator {
-            return false;
-        }
         let Some(index) = self.preceding_cell_index() else {
             return false;
         };
         let cell = &self.cells[index];
-        if cell.combining.len() == MAX_COMBINING_SCALARS {
+        let joined = cell.combining.last() == Some(&'\u{200d}');
+        if !modifier && !indicator && !joined {
             return false;
         }
         if indicator {
@@ -1496,14 +1507,18 @@ impl Screen {
                 return false;
             }
         } else {
-            // Let unicode-width's modifier-base tables validate the sequence;
-            // reject repeated modifiers and leave ZWJ shaping to a later step.
-            if cell
-                .combining
-                .iter()
-                .any(|c| matches!(c, '\u{1f3fb}'..='\u{1f3ff}' | '\u{200d}'))
-            {
-                return false;
+            if modifier {
+                // Each joined component can have its own modifier. Reject a
+                // repeated modifier only in the component currently ending.
+                if cell
+                    .combining
+                    .iter()
+                    .rev()
+                    .take_while(|&&c| c != '\u{200d}')
+                    .any(|c| matches!(c, '\u{1f3fb}'..='\u{1f3ff}'))
+                {
+                    return false;
+                }
             }
             let sequence: String = std::iter::once(cell.character)
                 .chain(cell.combining.iter().copied())
@@ -1514,8 +1529,57 @@ impl Screen {
                 return false;
             }
         }
-        self.cells[index].combining.push(character);
-        self.resize_selected_cell(index);
+        if cell.combining.len() < MAX_COMBINING_SCALARS {
+            self.cells[index].combining.push(character);
+            self.resize_selected_cell(index);
+        }
+        true
+    }
+
+    /// VS15 can break a previously joined emoji into separate presentation
+    /// components. Never leave a three/four-column string inside a two-column
+    /// cell; repaint the final component using the original leader's metadata.
+    fn split_text_selected_emoji(&mut self, index: usize) -> bool {
+        let cell = &self.cells[index];
+        let sequence: String = std::iter::once(cell.character)
+            .chain(cell.combining.iter().copied())
+            .collect();
+        if sequence.width() <= 2 {
+            return false;
+        }
+        let Some(joiner) = cell.combining.iter().rposition(|&c| c == '\u{200d}') else {
+            return false;
+        };
+        if joiner + 1 == cell.combining.len() {
+            return false;
+        }
+        let suffix = cell.combining[joiner + 1..].to_vec();
+        let suffix_text: String = suffix.iter().collect();
+        let width = suffix_text.width();
+        if !matches!(width, 1 | 2) {
+            return false;
+        }
+        // A text selector that needs additional columns follows the same
+        // no-wrap policy as selector growth: ignore it if it cannot fit.
+        if !self.auto_wrap && (self.wrap_pending || self.column + width > self.columns) {
+            self.cells[index].combining.pop();
+            return true;
+        }
+        let style = cell.style;
+        let component = Cell {
+            character: suffix[0],
+            combining: suffix[1..].to_vec(),
+            width: width as u8,
+            style,
+            hyperlink: cell.hyperlink.clone(),
+        };
+        self.cells[index].combining.truncate(joiner + 1);
+        let previous_style = self.style;
+        self.style = style;
+        // Insert only the component's final span. Replaying a wide base and
+        // then shrinking on VS15 would discard an extra column in insert mode.
+        self.print_cell(component);
+        self.style = previous_style;
         true
     }
 

@@ -63,6 +63,131 @@ fn parse(rows: usize, columns: usize, input: &[u8]) -> Screen {
 }
 
 #[test]
+fn zwj_emoji_components_share_one_cell_across_every_read_boundary() {
+    for emoji in ["👩‍💻", "👨‍👩‍👧‍👦", "👩🏽‍💻", "🧑🏻‍🤝‍🧑🏿", "🏳️‍🌈", "❤️‍🔥"]
+    {
+        let screen = parse(2, 16, format!("{emoji}X").as_bytes());
+        let cells = screen.row(0).unwrap();
+        let mut scalars = emoji.chars();
+        assert_eq!(cells[0].character, scalars.next().unwrap(), "{emoji}");
+        assert_eq!(cells[0].combining, scalars.collect::<Vec<_>>(), "{emoji}");
+        assert_eq!(cells[0].width, 2);
+        assert_eq!(cells[2].character, 'X');
+        assert_eq!(screen.cursor(), (0, 3));
+    }
+}
+
+#[test]
+fn zwj_components_keep_the_leaders_style_and_hyperlink() {
+    let input = "\x1b[31m\x1b]8;;https://example.test/first\x1b\\👩\u{200d}\x1b[32m\x1b]8;;https://example.test/second\x1b\\💻X".as_bytes();
+    // Each Screen allocates different external hyperlink IDs, so compare the
+    // retained metadata rather than requiring identity across independent grids.
+    for split in 0..=input.len() {
+        let mut screen = Screen::new(2, 16).unwrap();
+        let mut parser = Parser::new();
+        parser.advance(&mut screen, &input[..split]);
+        parser.advance(&mut screen, &input[split..]);
+        invariant(&screen);
+        let cells = screen.row(0).unwrap();
+        assert_eq!(cells[0].combining, ['\u{200d}', '💻']);
+        assert_eq!(cells[0].style.foreground, Color::Indexed(1));
+        assert_eq!(cells[2].style.foreground, Color::Indexed(2));
+        assert_ne!(cells[0].hyperlink, cells[2].hyperlink);
+        assert_eq!(cells[1].hyperlink, cells[0].hyperlink);
+        assert_eq!(
+            cells[0].hyperlink.as_ref().unwrap().uri(),
+            "https://example.test/first"
+        );
+        assert_eq!(
+            cells[2].hyperlink.as_ref().unwrap().uri(),
+            "https://example.test/second"
+        );
+    }
+}
+
+#[test]
+fn zwj_suffixes_do_not_trigger_wrap_or_insert_additional_columns() {
+    let screen = parse(2, 4, "ab👩‍💻X".as_bytes());
+    assert_eq!(text(&screen, 0), "ab👩‍💻");
+    assert_eq!(text(&screen, 1), "X   ");
+    assert_eq!(screen.cursor(), (1, 1));
+    let screen = parse(2, 4, "\x1b[?7lab👩‍💻".as_bytes());
+    assert_eq!(text(&screen, 0), "ab👩‍💻");
+    assert_eq!(screen.cursor(), (0, 3));
+    let screen = parse(2, 8, "abcdef\r\x1b[4h👩‍💻".as_bytes());
+    assert_eq!(text(&screen, 0), "👩‍💻abcdef");
+    let screen = parse(2, 1, "👩‍💻".as_bytes());
+    assert_eq!(screen.row(0).unwrap()[0].character, '�');
+    assert_eq!(screen.row(1).unwrap()[0].character, '�');
+    assert_eq!(text(&screen, 0), "�\u{200d}");
+}
+
+#[test]
+fn invalid_zwj_components_and_late_text_presentation_do_not_hide_columns() {
+    for input in ["A‍💻", "👩‍A", "👩‍\u{fe0e}💻", "👩‍\u{200d}💻"] {
+        let screen = parse(2, 16, input.as_bytes());
+        assert!(
+            screen
+                .row(0)
+                .unwrap()
+                .iter()
+                .filter(|c| c.width != 0)
+                .any(|c| c.character == 'A' || c.character == '💻')
+        );
+        assert!(screen.cursor().1 >= 3, "{input}");
+    }
+    // Text-default components requiring a following VS16 are a documented
+    // boundary of this increment; keep their separately occupied columns.
+    let screen = parse(2, 16, "👩‍❤️".as_bytes());
+    assert_eq!(screen.cursor(), (0, 4));
+    assert_eq!(screen.row(0).unwrap()[2].character, '❤');
+    let screen = parse(2, 16, "\x1b[31m👩‍💻\x1b[32m\u{fe0e}X".as_bytes());
+    assert_eq!(screen.cursor(), (0, 4));
+    assert_eq!(screen.row(0).unwrap()[0].combining, ['\u{200d}']);
+    assert_eq!(screen.row(0).unwrap()[2].character, '💻');
+    assert_eq!(screen.row(0).unwrap()[2].combining, ['\u{fe0e}']);
+    assert_eq!(
+        screen.row(0).unwrap()[2].style.foreground,
+        Color::Indexed(1)
+    );
+    assert_eq!(
+        screen.row(0).unwrap()[3].style.foreground,
+        Color::Indexed(2)
+    );
+    let screen = parse(2, 4, "ab👩‍💻\u{fe0e}X".as_bytes());
+    assert_eq!(text(&screen, 0), "ab👩\u{200d}");
+    assert_eq!(text(&screen, 1), "💻\u{fe0e}X  ");
+    let screen = parse(2, 4, "\x1b[?7lab👩‍💻\u{fe0e}".as_bytes());
+    assert_eq!(text(&screen, 0), "ab👩‍💻");
+    let screen = parse(2, 8, "abcdef\r\x1b[4h👩‍💻\u{fe0e}".as_bytes());
+    assert_eq!(text(&screen, 0), "👩‍💻\u{fe0e}abcde");
+}
+
+#[test]
+fn zwj_overwrite_reflow_and_storage_limit_preserve_cell_invariants() {
+    for column in [1, 2] {
+        let screen = parse(2, 8, format!("👩‍💻\x1b[1;{column}HX").as_bytes());
+        assert!(screen.row(0).unwrap()[0].combining.is_empty());
+        assert!(screen.row(0).unwrap()[1].combining.is_empty());
+    }
+    let mut screen = parse(2, 12, "👩‍💻👨‍👩‍👧‍👦AB".as_bytes());
+    screen.resize(4, 3).unwrap();
+    invariant(&screen);
+    assert_eq!(screen.row(0).unwrap()[0].combining, ['\u{200d}', '💻']);
+    assert_eq!(
+        screen.row(1).unwrap()[0].combining,
+        ['\u{200d}', '👩', '\u{200d}', '👧', '\u{200d}', '👦']
+    );
+    let sequence = format!("👩{}X", "\u{200d}💻".repeat(20));
+    let screen = parse(4, 20, sequence.as_bytes());
+    assert_eq!(screen.row(0).unwrap()[0].combining.len(), 16);
+    assert_ne!(
+        screen.row(0).unwrap()[0].combining.last(),
+        Some(&'\u{200d}')
+    );
+}
+
+#[test]
 fn emoji_modifiers_and_flag_pairs_share_a_cell_span() {
     let screen = parse(2, 20, "\x1b[31m👍\x1b[32m🏽X🇨🇳🇯🇵Z".as_bytes());
     assert_eq!(screen.cursor(), (0, 8));

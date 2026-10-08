@@ -19,7 +19,8 @@ fn assert_grid(screen: &Screen, replay: &Screen) {
 }
 #[test]
 fn modified_emoji_erasure_matches_an_independent_two_column_glyph() {
-    for emoji in ["👍🏽", "🇨🇳", "☝️🏿"] {
+    for emoji in ["👍🏽", "🇨🇳", "☝️🏿", "👩‍💻", "👨‍👩‍👧‍👦", "🧑🏻‍🤝‍🧑🏿", "🏳️‍🌈"]
+    {
         let mut source = Screen::new(2, 20).unwrap();
         let mut physical = Screen::new(2, 20).unwrap();
         let mut renderer = Renderer::default();

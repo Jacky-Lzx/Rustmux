@@ -31,6 +31,23 @@ for base, suffix, base_column in [("👍", "🏽", 3), ("☝", "🏿", 2), ("�
     receive(b"\x1b[1;3R")
     os.write(1, b"X\x1b[6n")
     receive(b"\x1b[1;4R")
+# DSR between every component verifies incremental ZWJ joining through the
+# real child/server parser, rather than only replaying completed UTF-8 strings.
+for base, suffix in [("👩", "‍💻"), ("👨", "‍👩‍👧‍👦"), ("🧑", "🏻‍🤝‍🧑🏿"), ("🏳️", "‍🌈")]:
+    os.write(1, ("\x1b[2J\x1b[H" + base + "\x1b[6n").encode())
+    receive(b"\x1b[1;3R")
+    for component in suffix:
+        os.write(1, (component + "\x1b[6n").encode())
+        receive(b"\x1b[1;3R")
+    os.write(1, b"X\x1b[6n")
+    receive(b"\x1b[1;4R")
+# A pending wrap belongs to the complete emoji, not its next joined component.
+os.write(1, "\x1b[2J\x1b[1;77H👩\x1b[6n".encode())
+receive(b"\x1b[1;78R")
+os.write(1, "‍💻\x1b[6n".encode())
+receive(b"\x1b[1;78R")
+os.write(1, b"X\x1b[6n")
+receive(b"\x1b[2;2R")
 # A late flag suffix grows past the 78-column pane edge as one whole glyph.
 os.write(1, "\x1b[2J\x1b[1;78H🇨\x1b[6n".encode())
 receive(b"\x1b[1;78R")
