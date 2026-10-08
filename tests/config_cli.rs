@@ -68,6 +68,10 @@ fn exported_defaults_round_trip_and_ignore_active_broken_config() {
         settings(&checked)["mouse_hover_cursor"].as_bool(),
         Some(false)
     );
+    assert_eq!(
+        settings(&checked)["idle_frame_coalescing"].as_bool(),
+        Some(false)
+    );
     assert!(!root.join("state").exists());
     assert_eq!(
         fs::read_to_string(root.join("rustmux/config.toml")).unwrap(),
@@ -169,6 +173,59 @@ fn compact_is_boolean_and_reported_without_ignored_option_warnings() {
         );
         assert!(!output.status.success());
         assert!(String::from_utf8_lossy(&output.stderr).contains("compact"));
+    }
+}
+
+#[test]
+fn idle_frame_coalescing_is_opt_in_boolean_and_reported() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    let config = root.join("coalescing.toml");
+    for (text, value) in [
+        ("", false),
+        ("idle_frame_coalescing=false", false),
+        ("idle_frame_coalescing=true", true),
+    ] {
+        fs::write(&config, text).unwrap();
+        let output = command(
+            root,
+            &[
+                "config",
+                "check",
+                "--config",
+                config.to_str().unwrap(),
+                "--toml",
+                "--strict",
+            ],
+        );
+        assert!(output.status.success(), "{output:?}");
+        let checked = report(&output);
+        assert_eq!(
+            settings(&checked)["idle_frame_coalescing"].as_bool(),
+            Some(value)
+        );
+        assert!(checked["warnings"].as_array().unwrap().is_empty());
+        let plain = command(
+            root,
+            &["config", "check", "--config", config.to_str().unwrap()],
+        );
+        assert!(plain.status.success(), "{plain:?}");
+        assert!(
+            String::from_utf8_lossy(&plain.stdout)
+                .contains(&format!("idle_frame_coalescing: {value}"))
+        );
+    }
+    for value in ["'true'", "1", "[]"] {
+        fs::write(&config, format!("idle_frame_coalescing={value}")).unwrap();
+        let output = command(
+            root,
+            &["config", "check", "--config", config.to_str().unwrap()],
+        );
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("idle_frame_coalescing must be a boolean")
+        );
     }
 }
 

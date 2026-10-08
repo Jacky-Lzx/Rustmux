@@ -23,6 +23,7 @@ pub struct Settings {
     pub scrollback_lines: usize,
     pub default_mode: DefaultMode,
     pub compact: bool,
+    pub idle_frame_coalescing: bool,
     pub remain_on_exit: bool,
     pub mouse_hover_cursor: bool,
     pub clipboard_write: bool,
@@ -82,6 +83,7 @@ impl From<&Config> for Settings {
             scrollback_lines: config.scrollback_lines,
             default_mode: config.default_mode,
             compact: config.compact,
+            idle_frame_coalescing: config.idle_frame_coalescing,
             remain_on_exit: config.remain_on_exit,
             mouse_hover_cursor: config.mouse_hover_cursor,
             clipboard_write: config.clipboard_write,
@@ -113,6 +115,7 @@ fn ignored_options(source: &str) -> Vec<String> {
                 | "tab_name"
                 | "default_mode"
                 | "compact"
+                | "idle_frame_coalescing"
                 | "scrollback_lines"
                 | "remain_on_exit"
                 | "mouse_hover_cursor"
@@ -219,6 +222,8 @@ default_mode = "locked"
 # Automatic tabs follow the foreground program; use "title" for OSC titles.
 tab_name = "application"
 compact = false
+# Wait 6 ms for the first visible output batch after idle; opt-in.
+idle_frame_coalescing = false
 scrollback_lines = {DEFAULT_SCROLLBACK_LINES}
 remain_on_exit = false
 mouse_hover_cursor = false

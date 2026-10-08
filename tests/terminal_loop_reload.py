@@ -19,9 +19,11 @@ with tempfile.TemporaryDirectory(prefix="rustmux-reload-") as temporary:
     name = f"reload-{os.getpid()}"
     session = None
 
-    def write(key="c", lines=1000, executable="/bin/sh", bell=False, autosave=0, save=False, retain=True):
+    def write(key="c", lines=1000, executable="/bin/sh", bell=False, autosave=0, save=False, retain=True,
+              coalescing=False):
         selected.write_text(f'''shell="{executable}"
 remain_on_exit={str(retain).lower()}
+idle_frame_coalescing={str(coalescing).lower()}
 scrollback_lines={lines}
 autosave_interval_seconds={autosave}
 save_scrollback={str(save).lower()}
@@ -83,11 +85,13 @@ new_window="{key}"
         original = panes()[0]
         first = original["id"]
         assert Path(status()["path"]).resolve() == selected.resolve()
+        assert not status()["settings"]["idle_frame_coalescing"]
         send(first, "stty -echo; KEEP=preserved; i=0; while [ $i -lt 100 ]; do printf 'OLD_%s\\n' $i; i=$((i+1)); done")
         wait_capture(first, "OLD_99")
-        write("N", 0, shell)
+        write("N", 0, shell, coalescing=True)
         changed = wait(lambda c: c.get("new_window_key") == "N" and c["settings"]["scrollback_lines"] == 0)
         assert changed["generation"] > 0 and "error" not in changed
+        assert changed["settings"]["idle_frame_coalescing"]
         assert panes()[0]["pid"] == original["pid"]
         assert "OLD_0" in capture(first)  # Existing history capacity is preserved.
         second = int(run("window new").stdout)
@@ -101,7 +105,7 @@ new_window="{key}"
         failed = wait(lambda c: "error" in c)
         assert failed["generation"] == changed["generation"]
         assert failed["settings"] == changed["settings"]
-        write("N", 0, shell)
+        write("N", 0, shell, coalescing=True)
         wait(lambda c: "error" not in c)
         # Entering NORMAL defers a whole update until the old binding completes.
         session = Session(extra_env=env, arguments=("--config", str(root / "unused.toml"), "attach", name))
@@ -113,7 +117,8 @@ new_window="{key}"
         assert pending["new_window_key"] == "N"
         before = len(panes())
         session.send(b"N")
-        wait(lambda c: c["new_window_key"] == "P")
+        changed = wait(lambda c: c["new_window_key"] == "P")
+        assert not changed["settings"]["idle_frame_coalescing"]
         assert len(panes()) == before + 1
         session.send(b"\x02P")
         deadline = time.monotonic() + 5

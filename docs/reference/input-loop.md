@@ -36,7 +36,16 @@ accumulating frames. Reads are at most 8 KiB. Writes retain unsent tails and ret
 Interrupted/WouldBlock on later iterations.
 
 Changed screen state is painted at a target minimum spacing of 6 ms after the
-previous frame was generated. Frames redraw changed cell spans or whole rows, with full repaint on
+previous frame was generated. The top-level boolean `idle_frame_coalescing`
+defaults to `false`, retaining that frame pacing without a new wait after idle.
+When enabled, the first visible output after idle also starts a 6 ms coalescing
+window, so a prompt's carriage return and immediately following repaint need
+not expose the temporary cursor position as a frame. Further chunks do not
+extend that deadline, keeping continuous output bounded. This can add about
+6 ms of display waiting after idle; input forwarding is unchanged. The setting
+supports [configuration hot reload](config-reload.md) and is reported by
+`config check` and `config show` as `[settings].idle_frame_coalescing`.
+Frames redraw changed cell spans or whole rows, with full repaint on
 startup or resize. Idle screens are not redrawn. [Synchronized output](synchronized-output.md)
 defers new frames until every visible pane in the active window releases its hold or
 its bounded wait expires. Explicit focus/layout changes force a redraw. See

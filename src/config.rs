@@ -712,6 +712,7 @@ pub struct Config {
     scrollback_lines: usize,
     default_mode: DefaultMode,
     compact: bool,
+    idle_frame_coalescing: bool,
     shortcuts: Shortcuts,
     persistence: PersistenceOptions,
     remain_on_exit: bool,
@@ -734,6 +735,9 @@ pub struct PersistenceOptions {
 impl Config {
     pub fn compact(&self) -> bool {
         self.compact
+    }
+    pub fn idle_frame_coalescing(&self) -> bool {
+        self.idle_frame_coalescing
     }
     pub fn default_mode(&self) -> DefaultMode {
         self.default_mode
@@ -799,6 +803,7 @@ struct ParsedConfig {
     scrollback_lines: Option<usize>,
     default_mode: DefaultMode,
     compact: bool,
+    idle_frame_coalescing: bool,
     shortcuts: Shortcuts,
     persistence: PersistenceOptions,
     remain_on_exit: bool,
@@ -855,6 +860,7 @@ fn resolve_config(configured: ParsedConfig) -> Config {
             .unwrap_or(DEFAULT_SCROLLBACK_LINES),
         default_mode: configured.default_mode,
         compact: configured.compact,
+        idle_frame_coalescing: configured.idle_frame_coalescing,
         shortcuts: configured.shortcuts,
         persistence: configured.persistence,
         remain_on_exit: configured.remain_on_exit,
@@ -996,6 +1002,7 @@ fn parse_config(source: &str) -> Result<ParsedConfig, String> {
         scrollback_lines,
         default_mode: DefaultMode::parse(document.get("default_mode"), shortcuts)?,
         compact: boolean("compact")?,
+        idle_frame_coalescing: boolean("idle_frame_coalescing")?,
         shortcuts,
         persistence,
         remain_on_exit: boolean("remain_on_exit")?,
@@ -2230,6 +2237,7 @@ preset = "mocha"
                 scrollback_lines: Some(5000),
                 default_mode: DefaultMode::Locked,
                 compact: false,
+                idle_frame_coalescing: false,
                 shortcuts: Shortcuts::default(),
                 persistence: PersistenceOptions::default(),
                 remain_on_exit: false,

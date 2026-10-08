@@ -78,6 +78,22 @@ the mode indicator to the window bar and give the footer row to the panes. Both
 configuration inspection and server status report `[settings].compact`. See
 [Compact Layout](compact-layout.md) for geometry, reload, and restore behavior.
 
+## Idle output coalescing
+
+```toml
+idle_frame_coalescing = false
+```
+
+This top-level boolean defaults to `false`. Set it to `true` to wait 6 ms for
+the first visible output batch after idle, reducing transient cursor positions
+when a prompt's carriage return and repaint arrive in separate reads. It does
+not change the normal 6 ms frame spacing or input forwarding, but can add about
+6 ms of display waiting after idle. Later chunks do not extend the wait.
+The option supports hot reload and is reported as
+`[settings].idle_frame_coalescing` by `config check` and `config show`.
+Values other than TOML booleans are rejected. See
+[Input and Rendering Loop](input-loop.md) for scheduling details.
+
 ## Default input mode
 
 ```toml

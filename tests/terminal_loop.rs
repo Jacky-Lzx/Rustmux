@@ -223,6 +223,11 @@ fn frame_reconstruction() {
 }
 
 #[test]
+fn frame_coalescing() {
+    run_scenario("frame_coalescing");
+}
+
+#[test]
 fn input_backpressure() {
     run_scenario("writes");
 }

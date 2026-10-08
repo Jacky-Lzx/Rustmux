@@ -15,6 +15,7 @@ rustmux config show -s work
 | --- | --- |
 | Supported shortcuts and mode bindings | Update together at the next safe input boundary; footer and Help use the new bindings |
 | `compact` | Resize existing panes and move mode/prompt status to the top row; reject the whole update if any window cannot fit the smaller canvas |
+| `idle_frame_coalescing` | Enable or disable the opt-in 6 ms wait for the first visible output batch after idle; normal frame spacing and input forwarding stay unchanged |
 | `default_mode` | Update the mode used for subsequent runtime resets and attachments; preserve the current mode. Explicit switch-mode bindings keep their target |
 | Theme | Update interface colors together; existing child cells and terminal defaults retain their colors |
 | `mouse_hover_cursor` | Enable or disable window-control pointer feedback; disabling restores the application's latest pointer shape |

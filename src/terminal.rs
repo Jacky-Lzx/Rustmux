@@ -947,6 +947,20 @@ fn synchronized_pause(
     }
 }
 
+fn output_frame_deadline(
+    next_frame: Instant,
+    now: Instant,
+    pending: bool,
+    idle_frame_coalescing: bool,
+) -> Instant {
+    if pending || !idle_frame_coalescing {
+        next_frame
+    } else {
+        // Coalesce the start of an idle burst too, not just adjacent frames.
+        next_frame.max(now + FRAME_INTERVAL)
+    }
+}
+
 // Bound total resident grids and descriptors before starting another process.
 pub(crate) const MAX_WINDOWS: usize = 16;
 
@@ -2320,6 +2334,7 @@ fn service_pane(
 struct RuntimeConfig {
     tab_name: crate::config::TabName,
     compact: bool,
+    idle_frame_coalescing: bool,
     default_mode: crate::config::DefaultMode,
     clipboard_write: bool,
     clipboard_read: bool,
@@ -2339,6 +2354,7 @@ impl RuntimeConfig {
         self.tab_name = config.tab_name();
         self.compact = config.compact();
         self.default_mode = config.default_mode();
+        self.idle_frame_coalescing = config.idle_frame_coalescing();
         self.theme = config.theme();
         self.mouse_hover_cursor = config.mouse_hover_cursor();
         self.clipboard_write = config.clipboard_write();
@@ -2468,6 +2484,9 @@ fn forward(
             .as_ref()
             .map_or_else(crate::config::TabName::default, |r| r.current().tab_name()),
         compact: context.compact,
+        idle_frame_coalescing: reload
+            .as_ref()
+            .is_some_and(|r| r.current().idle_frame_coalescing()),
         default_mode,
         clipboard_read: reload
             .as_ref()
@@ -4471,7 +4490,7 @@ fn forward(
         }
         let active = windows.active().unwrap().id();
         let active_set = windows.active().unwrap().content();
-        let active_dirty = active_set.iter().any(|(id, pane)| {
+        let mut active_dirty = active_set.iter().any(|(id, pane)| {
             (!active_set.layout().is_zoomed() || id == active_set.layout().active())
                 && !(history.is_some() && id == active_set.layout().active())
                 && pane.io().dirty
@@ -4693,6 +4712,10 @@ fn forward(
                 inner_events.remove(PollFlags::POLLIN);
             }
             let window = windows.get_mut(id).unwrap();
+            let layout = window.content().layout();
+            let visible = id == active
+                && (!layout.is_zoomed() || pane_id == layout.active())
+                && !(history.is_some() && pane_id == layout.active());
             let pane = window
                 .content_mut()
                 .get_mut(pane_id)
@@ -4716,6 +4739,15 @@ fn forward(
                     drop_target: runtime.drop_target,
                 },
             )?;
+            if visible && pane.io().dirty {
+                next_frame = output_frame_deadline(
+                    next_frame,
+                    Instant::now(),
+                    active_dirty,
+                    runtime.idle_frame_coalescing,
+                );
+                active_dirty = true;
+            }
             // Reset followed by set in one PTY read still revokes old events.
             if paste_generation != pane.screen().rich_paste_generation() {
                 rich_clipboard.forget_paste(pane.rich_clipboard_owner());
@@ -5714,6 +5746,55 @@ mod tests {
                 .unwrap();
             assert_eq!(&snapshot.pixels[..4], &[1, 2, 3, 4]);
             pane.shell_mut().terminate().unwrap();
+        }
+    }
+}
+
+#[cfg(test)]
+mod frame_deadline_tests {
+    use super::*;
+
+    #[test]
+    fn idle_output_starts_a_bounded_coalescing_window() {
+        let now = Instant::now();
+        let expired = now - FRAME_INTERVAL;
+        assert_eq!(
+            output_frame_deadline(expired, now, false, true),
+            now + FRAME_INTERVAL
+        );
+    }
+
+    #[test]
+    fn later_chunks_do_not_extend_the_pending_frame() {
+        let now = Instant::now();
+        let deadline = now + FRAME_INTERVAL;
+        assert_eq!(
+            output_frame_deadline(deadline, now + FRAME_INTERVAL / 2, true, true),
+            deadline
+        );
+        assert_eq!(
+            output_frame_deadline(deadline, deadline + FRAME_INTERVAL, true, true),
+            deadline
+        );
+    }
+
+    #[test]
+    fn existing_frame_pacing_is_not_shortened() {
+        let now = Instant::now();
+        let deadline = now + FRAME_INTERVAL * 2;
+        assert_eq!(output_frame_deadline(deadline, now, false, true), deadline);
+    }
+
+    #[test]
+    fn disabled_coalescing_keeps_existing_frame_deadlines() {
+        let now = Instant::now();
+        for deadline in [now - FRAME_INTERVAL, now + FRAME_INTERVAL] {
+            for pending in [false, true] {
+                assert_eq!(
+                    output_frame_deadline(deadline, now, pending, false),
+                    deadline
+                );
+            }
         }
     }
 }
