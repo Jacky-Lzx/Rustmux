@@ -2,12 +2,10 @@ name: Deploy documentation
 
 on:
   push:
-    branches: [main, main-human]
+    branches: [main]
     paths:
       - 'docs/**'
       - 'book.toml'
-      - 'scripts/build-docs.sh'
-      - 'scripts/build-docs.py'
       - '.github/workflows/docs.yml'
   workflow_dispatch:
 
@@ -20,17 +18,10 @@ concurrency:
 
 jobs:
   build:
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/main-human'
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-        with:
-          ref: main
-          path: source-main
-      - uses: actions/checkout@v6
-        with:
-          ref: main-human
-          path: source-human
       - uses: dtolnay/rust-toolchain@stable
       - name: Install mdBook
         run: cargo install mdbook --version 0.5.4 --locked
@@ -39,13 +30,13 @@ jobs:
         uses: actions/configure-pages@v6
       - name: Build documentation
         env:
-          # Keep local/Sites builds at / and adapt Pages builds to its base path.
+          # Local builds use /; Pages builds use the repository base path.
           MDBOOK_OUTPUT__HTML__SITE_URL: '${{ steps.pages.outputs.base_path }}/'
-        run: ./source-main/scripts/build-docs.sh --human-source ./source-human
+        run: mdbook build
       - name: Upload documentation
         uses: actions/upload-pages-artifact@v5
         with:
-          path: source-main/dist
+          path: dist
 
   deploy:
     needs: build

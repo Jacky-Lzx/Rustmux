@@ -1,6 +1,6 @@
 # Build and Run
 
-Use a Rust toolchain supporting edition 2024. From the `main-human` checkout:
+Use a Rust toolchain supporting edition 2024. From the `main` checkout:
 
 ```sh
 cargo build --locked

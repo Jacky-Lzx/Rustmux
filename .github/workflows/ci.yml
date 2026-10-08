@@ -1,11 +1,11 @@
-name: Human track CI
+name: CI
 
 on:
   workflow_dispatch:
   push:
-    branches: [main-human]
+    branches: [main]
   pull_request:
-    branches: [main-human]
+    branches: [main]
 
 permissions:
   contents: read
@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   check:
-    name: Human check (${{ matrix.os }})
+    name: Check (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false

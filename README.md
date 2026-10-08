@@ -19,7 +19,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution and review rules.
 Named workspaces can be saved with `rustmux save-session NAME` and recreated with
 `rustmux new NAME`. Optional history and autosave settings are documented in
 [Session Snapshots](docs/reference/session-snapshots.md).
-The [implementation plan and acceptance ledger](https://github.com/Jacky-Lzx/Rustmux/blob/main/docs/reference/human-review-plan.md) are maintained on `main` (the link becomes available after publication).
+The historical [implementation plan and acceptance ledger](https://github.com/Jacky-Lzx/Rustmux/blob/main-AI/docs/reference/human-review-plan.md) remain on `main-AI` after the branch rename.
 
 ## Optional Compatibility Checks
 
