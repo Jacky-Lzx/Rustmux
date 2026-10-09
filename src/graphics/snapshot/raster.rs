@@ -49,6 +49,15 @@ pub(super) fn rasterize_placement(
             })?;
         return Ok((layout, pixels));
     }
+    if matches!(image.format, ImageFormat::Rgb | ImageFormat::Rgba)
+        && let Some((width, height)) = dimensions
+    {
+        let layout = pixel_layout(width, height, cell).ok_or(SnapshotError::InvalidLayout)?;
+        let pixels = image
+            .resample_raw_placement_region(layout, layout.destination)
+            .map_err(SnapshotError::Resample)?;
+        return Ok((layout, pixels));
+    }
     let decoded = image.decode_rgba().map_err(SnapshotError::Decode)?;
     let layout =
         pixel_layout(decoded.width, decoded.height, cell).ok_or(SnapshotError::InvalidLayout)?;
@@ -138,9 +147,7 @@ pub(super) fn collect_visible_clips(
                 match image.format {
                     ImageFormat::Rgb | ImageFormat::Rgba => {
                         let pixels = image
-                            .decode_rgba()
-                            .map_err(SnapshotError::Decode)?
-                            .resample_placement_region(layout, region)
+                            .resample_raw_placement_region(layout, region)
                             .map_err(SnapshotError::Resample)?;
                         Some(ClippedPlacement {
                             destination,

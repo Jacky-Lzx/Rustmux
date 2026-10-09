@@ -1,4 +1,4 @@
-//! Bounded sampling and clipping of already-decoded RGBA placement pixels.
+//! Bounded sampling of stored RGB/RGBA sources and decoded placement pixels.
 //! Stream decoding stays in the parent module and shares its sampling math.
 
 use super::sampling::nearest_sample;
@@ -6,6 +6,7 @@ use super::{DecodeError, DecodedImage, decoded_size};
 use crate::graphics::geometry::{
     CellPixelSize, PixelRect, PixelSize, PlacementGeometry, PlacementPixelLayout, SignedPixelPoint,
 };
+use crate::graphics_store::{ImageFormat, StoredImage};
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct ResampledPlacement {
@@ -57,10 +58,65 @@ impl DecodedImage {
         layout: PlacementPixelLayout,
         region: PixelRect,
     ) -> Result<ResampledPlacement, ResampleError> {
-        let expected = decoded_size(self.width, self.height).map_err(|error| match error {
+        decoded_size(self.width, self.height).map_err(|error| match error {
             DecodeError::OutputLimit => ResampleError::OutputLimit,
             _ => ResampleError::InvalidPixels,
         })?;
+        RawPixels {
+            width: self.width,
+            height: self.height,
+            channels: 4,
+            pixels: &self.pixels,
+        }
+        .resample_region(layout, region)
+    }
+}
+
+impl StoredImage {
+    /// Sample an uncompressed source directly into bounded visible RGBA pixels.
+    /// The complete source is never converted or copied into an RGBA buffer.
+    pub fn resample_raw_placement_region(
+        &self,
+        layout: PlacementPixelLayout,
+        region: PixelRect,
+    ) -> Result<ResampledPlacement, ResampleError> {
+        let channels = match self.format {
+            ImageFormat::Rgb => 3,
+            ImageFormat::Rgba => 4,
+            _ => return Err(ResampleError::InvalidPixels),
+        };
+        let (Some(width), Some(height)) = (self.declared_width, self.declared_height) else {
+            return Err(ResampleError::InvalidPixels);
+        };
+        RawPixels {
+            width,
+            height,
+            channels,
+            pixels: &self.data,
+        }
+        .resample_region(layout, region)
+    }
+}
+
+struct RawPixels<'a> {
+    width: u32,
+    height: u32,
+    channels: usize,
+    pixels: &'a [u8],
+}
+
+impl RawPixels<'_> {
+    fn resample_region(
+        &self,
+        layout: PlacementPixelLayout,
+        region: PixelRect,
+    ) -> Result<ResampledPlacement, ResampleError> {
+        let expected = usize::try_from(self.width)
+            .ok()
+            .and_then(|width| width.checked_mul(usize::try_from(self.height).ok()?))
+            .and_then(|pixels| pixels.checked_mul(self.channels))
+            .filter(|_| self.width > 0 && self.height > 0)
+            .ok_or(ResampleError::InvalidPixels)?;
         if self.pixels.len() != expected {
             return Err(ResampleError::InvalidPixels);
         }
@@ -108,8 +164,11 @@ impl DecodedImage {
                 let source_x = source.x + nearest_sample(output_x, source.width, destination.width);
                 let index = (usize::try_from(source_y).unwrap() * input_width
                     + usize::try_from(source_x).unwrap())
-                    * 4;
-                rgba.copy_from_slice(&self.pixels[index..index + 4]);
+                    * self.channels;
+                rgba[..self.channels].copy_from_slice(&self.pixels[index..index + self.channels]);
+                if self.channels == 3 {
+                    rgba[3] = 255;
+                }
             }
         }
         Ok(ResampledPlacement {
@@ -340,6 +399,110 @@ mod tests {
                 (6, 60),
                 (6, 60),
             ]
+        );
+    }
+
+    #[test]
+    fn stored_raw_sampling_matches_decoded_rgb_and_rgba() {
+        for (format, channels) in [(ImageFormat::Rgb, 3), (ImageFormat::Rgba, 4)] {
+            let image = StoredImage {
+                format,
+                data: (0..4 * 3 * channels).map(|i| i as u8).collect(),
+                declared_width: Some(4),
+                declared_height: Some(3),
+            };
+            for (width, height) in [(7, 5), (2, 2)] {
+                let layout = PlacementPixelLayout {
+                    source: PixelRect {
+                        x: 1,
+                        y: 0,
+                        width: 3,
+                        height: 3,
+                    },
+                    cell_bounds: PixelSize { width, height },
+                    destination: PixelRect {
+                        x: 11,
+                        y: 13,
+                        width,
+                        height,
+                    },
+                };
+                let region = PixelRect {
+                    x: 12,
+                    y: 14,
+                    width: width - 1,
+                    height: height - 1,
+                };
+                assert_eq!(
+                    image.resample_raw_placement_region(layout, region),
+                    image
+                        .decode_rgba()
+                        .unwrap()
+                        .resample_placement_region(layout, region)
+                );
+            }
+            let mut invalid = image;
+            invalid.data.pop();
+            let rect = PixelRect {
+                x: 0,
+                y: 0,
+                width: 1,
+                height: 1,
+            };
+            let layout = PlacementPixelLayout {
+                source: rect,
+                destination: rect,
+                cell_bounds: PixelSize {
+                    width: 1,
+                    height: 1,
+                },
+            };
+            assert_eq!(
+                invalid.resample_raw_placement_region(layout, rect),
+                Err(ResampleError::InvalidPixels)
+            );
+        }
+    }
+
+    #[test]
+    fn stored_64_mib_raw_source_samples_only_visible_pixels() {
+        let image = StoredImage {
+            format: ImageFormat::Rgba,
+            data: [1, 2, 3, 4].repeat(4096 * 4096),
+            declared_width: Some(4096),
+            declared_height: Some(4096),
+        };
+        assert_eq!(image.decode_rgba(), Err(DecodeError::OutputLimit));
+        let source = PixelRect {
+            x: 0,
+            y: 0,
+            width: 4096,
+            height: 4096,
+        };
+        let layout = PlacementPixelLayout {
+            source,
+            destination: source,
+            cell_bounds: PixelSize {
+                width: 4096,
+                height: 4096,
+            },
+        };
+        let region = PixelRect {
+            x: 4094,
+            y: 4094,
+            width: 2,
+            height: 2,
+        };
+        assert_eq!(
+            image
+                .resample_raw_placement_region(layout, region)
+                .unwrap()
+                .pixels,
+            [1, 2, 3, 4].repeat(4)
+        );
+        assert_eq!(
+            image.resample_raw_placement_region(layout, source),
+            Err(ResampleError::OutputLimit)
         );
     }
 

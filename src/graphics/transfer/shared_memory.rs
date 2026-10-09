@@ -218,6 +218,24 @@ mod tests {
     }
 
     #[test]
+    fn shared_memory_raw_accepts_64_mib_and_rejects_larger_sources() {
+        let data = vec![0x80; super::super::MAX_DIRECT_TRANSFER_BYTES];
+        let name = make_shm(&data);
+        let command = shm_command("a=T,t=s,f=32,s=4096,v=4096,i=17", &name);
+        let transfer = shared_memory_transfer(&command).unwrap().unwrap();
+        assert_eq!(transfer.data, data);
+        assert_unlinked(&name);
+        drop(transfer);
+        drop(data);
+
+        let data = vec![0; super::super::MAX_DIRECT_TRANSFER_BYTES + 4];
+        let name = make_shm(&data);
+        let command = shm_command("a=T,t=s,f=32,s=1,v=16777217,i=17", &name);
+        assert!(shared_memory_transfer(&command).unwrap().is_err());
+        assert_unlinked(&name);
+    }
+
+    #[test]
     fn shared_memory_compressed_png_reads_selected_range_and_unlinks() {
         let mut png = Vec::new();
         {

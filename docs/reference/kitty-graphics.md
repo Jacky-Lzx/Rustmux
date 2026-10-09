@@ -45,13 +45,14 @@ PNG bytes remain opaque until a later image decoder validates them.
 
 One encoded chunk is limited to 128 KiB to accommodate installed `kitten icat`
 output (the published protocol specifies 4096 bytes); an assembled raw transfer
-is limited to 16 MiB, while direct PNG file bytes may use the pane's 32 MiB
-image-store budget. The final chunk may omit Base64 padding. Direct data
+is limited to 64 MiB, while direct PNG file bytes retain a separate 32 MiB
+limit. The pane's total image-store budget is 128 MiB. The final chunk may omit
+Base64 padding. Direct data
 (`t=d`, `a=t/T/q`) may be uncompressed or use `o=z` zlib compression.
 Compressed input follows the same format-specific limit. Raw RGB/RGBA whose
 declared expansion exceeds 16 MiB is kept compressed and validated a
 row at a time, up to 256 MiB expanded and a 32 MiB row budget; smaller raw
-transfers retain the 16 MiB expansion limit, while compressed PNG file bytes
+transfers are expanded eagerly, while compressed PNG file bytes
 may expand to 32 MiB. Raw RGB/RGBA output must match its dimensions, and
 compressed direct PNG requires
 `S=<uncompressed-byte-count>`. Malformed streams, mismatched sizes,
@@ -79,7 +80,7 @@ opening, and only regular
 files are read. The file is opened without blocking on a replaced FIFO and its
 descriptor type is checked again. `O` is the byte offset and optional positive
 `S` selects the stored byte count; without `S`, the rest of the file is read.
-Reads are bounded to 16 MiB for raw/compressed-raw data and 32 MiB for PNG data.
+Reads are bounded to 64 MiB for raw/compressed-raw data and 32 MiB for PNG data.
 Zlib raw data retains the existing expanded-size bounds; zlib PNG expansion is
 separately bounded to 32 MiB. File bytes reuse the image-validation, query,
 storage and placement paths, and `t=f` never removes the source file.
@@ -117,7 +118,7 @@ still requires an explicit ID or a nonzero image number.
 The running multiplexer now uses that bounded store for live, detached and
 temporarily closed/undoable panes; the public `Pane::process_output` method
 still discards graphics unless its caller opts in.
-Replacement and explicit removal update byte accounting. At 32 MiB or 256
+Replacement and explicit removal update byte accounting. At 128 MiB or 256
 images per pane, quota eviction chooses the oldest image without placement
 references first, falling back to the oldest placed image only when necessary.
 Among unplaced images, uploads with the `N=1` transient bit are evicted first;
@@ -177,9 +178,10 @@ also sample only placeholder-referenced PNG cells, including for small images;
 bounded interlaced images retain the full-decode fallback. PNG validation still
 reads through the final row and tail, including when only a fragment is visible.
 Uncompressed RGB/RGBA regular placements likewise sample only the visible
-destination pixels after bounded source decoding, so enlarging a small image
-beyond the 32 MiB placement limit does not prevent a small fragment from
-appearing in the viewport.
+destination pixels directly from stored RGB/RGBA bytes. A source up to 64 MiB
+does not require a full RGBA conversion; visible output retains its 32 MiB
+budget. Enlarging a small image beyond that output limit likewise does not
+prevent a small fragment from appearing in the viewport.
 
 The private `graphics::decode::raw_reader` module handles raw RGB/RGBA buffers
 and zlib-compressed pixel rows. It retains raw byte-count validation, expanded
@@ -755,7 +757,7 @@ reply after its final chunk and the store result. Successful storage and
 placement return `OK`, with a valid nonzero `p` echoed; invalid geometry
 returns `EINVAL:invalid placement`, while rejected image data or unsupported
 controls return `EINVAL:invalid image`. Transfers exceeding the assembler's
-format-specific 16 or 32 MiB bound never complete, so they receive no
+format-specific 64 or 32 MiB bound never complete, so they receive no
 reply.
 Unknown display controls are rejected before replacing an existing image, and
 `q=1`/`q=2` retain the same reply suppression rules. Incomplete or malformed
@@ -768,7 +770,7 @@ The query/DA ordering follows the
 Unit tests cover every two-chunk split of a command, ordinary output ordering,
 non-graphics APCs, UTF-8/C1 ambiguity, oversized and cancelled commands, and
 EOF recovery. Assembler tests cover chunk inheritance, raw byte counts,
-format-specific 16/32 MiB bounds, a valid PNG above the raw-transfer limit
+format-specific 64/32 MiB bounds, a valid PNG above the former 16 MiB transfer limit
 reaching the validated pane store, unsupported media and recovery. Pane tests
 cover interleaved text, per-pane
 isolation and command-output filtering. Run `cargo test --lib graphics::tests`,

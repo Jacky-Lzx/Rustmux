@@ -13,7 +13,7 @@ use crate::{
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-pub const MAX_PANE_IMAGE_BYTES: usize = 32 * 1024 * 1024;
+pub const MAX_PANE_IMAGE_BYTES: usize = 128 * 1024 * 1024;
 pub const MAX_PANE_IMAGES: usize = 256;
 pub const MAX_PANE_PLACEMENTS: usize = 1024;
 

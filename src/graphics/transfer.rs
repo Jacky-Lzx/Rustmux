@@ -19,9 +19,10 @@ use std::io::Read;
 
 pub use super::command::MAX_ENCODED_CHUNK_BYTES;
 /// Cap one in-progress image independently of its number of chunks.
-pub const MAX_DIRECT_TRANSFER_BYTES: usize = 16 * 1024 * 1024;
-/// PNG file bytes may use the pane's larger stored-image budget. Raw pixel
-/// transfers keep the smaller limit above unless they remain zlib-compressed.
+pub const MAX_DIRECT_TRANSFER_BYTES: usize = 64 * 1024 * 1024;
+/// Keep larger zlib sources compressed instead of allocating their full pixels.
+const MAX_EAGER_RAW_BYTES: usize = 16 * 1024 * 1024;
+/// Bound PNG file bytes independently of the larger raw-image transfer budget.
 pub const MAX_DIRECT_PNG_TRANSFER_BYTES: usize = 32 * 1024 * 1024;
 /// Bound the declared expanded size of a compressed raw image. Such transfers
 /// remain compressed in the store and are decoded a row at a time.
@@ -341,8 +342,8 @@ fn finish(pending: Pending) -> Option<AssembledDirectTransfer> {
         .and_then(|value| parse_positive(value))
         .map(|size| size as usize);
     let expected_size = raw_size.or(declared_size);
-    let streamed_raw_zlib = controls.contains_key(&b'o')
-        && raw_size.is_some_and(|size| size > MAX_DIRECT_TRANSFER_BYTES);
+    let streamed_raw_zlib =
+        controls.contains_key(&b'o') && raw_size.is_some_and(|size| size > MAX_EAGER_RAW_BYTES);
     let data = if streamed_raw_zlib {
         let limit = raw_size?;
         if limit > MAX_STREAMED_RAW_BYTES || declared_size.is_some_and(|size| size != limit) {
@@ -639,28 +640,27 @@ mod tests {
         let mut full = vec![0; MAX_DIRECT_TRANSFER_BYTES];
         assert!(!append_bounded(&mut full, b"x", MAX_DIRECT_TRANSFER_BYTES));
         assert_eq!(full.len(), MAX_DIRECT_TRANSFER_BYTES);
-        assert!(append_bounded(
-            &mut full,
+        let mut png = vec![0; MAX_DIRECT_PNG_TRANSFER_BYTES];
+        assert!(!append_bounded(
+            &mut png,
             b"x",
             MAX_DIRECT_PNG_TRANSFER_BYTES
         ));
-        assert_eq!(full.len(), MAX_DIRECT_TRANSFER_BYTES + 1);
+        assert!(append_bounded(&mut png, b"x", MAX_DIRECT_TRANSFER_BYTES));
+        assert_eq!(png.len(), MAX_DIRECT_PNG_TRANSFER_BYTES + 1);
     }
 
     #[test]
-    fn png_transfer_can_cross_raw_limit_but_still_recovers_at_pane_quota() {
-        assert_eq!(
-            MAX_DIRECT_PNG_TRANSFER_BYTES,
-            crate::graphics_store::MAX_PANE_IMAGE_BYTES
-        );
+    fn png_transfer_keeps_its_independent_limit_and_recovers_after_overflow() {
+        const { assert!(MAX_DIRECT_PNG_TRANSFER_BYTES < crate::graphics_store::MAX_PANE_IMAGE_BYTES) };
         let mut assembler = DirectTransferAssembler::new();
         let chunk = vec![7; 96 * 1024];
-        for index in 0..=MAX_DIRECT_TRANSFER_BYTES / chunk.len() {
+        for index in 0..=MAX_EAGER_RAW_BYTES / chunk.len() {
             let controls = if index == 0 { "f=100,m=1" } else { "m=1" };
             assert!(assembler.accept(&direct(controls, &chunk)).is_none());
         }
         let transfer = assembler.accept(&direct("m=0", b"x")).unwrap();
-        assert!(transfer.data.len() > MAX_DIRECT_TRANSFER_BYTES);
+        assert!(transfer.data.len() > MAX_EAGER_RAW_BYTES);
         assert!(transfer.data.len() < MAX_DIRECT_PNG_TRANSFER_BYTES);
         assert_eq!(transfer.data.last(), Some(&b'x'));
 
@@ -675,7 +675,7 @@ mod tests {
 
     #[test]
     fn compressed_png_declared_size_uses_png_budget() {
-        let original = vec![0; MAX_DIRECT_TRANSFER_BYTES + 1];
+        let original = vec![0; MAX_EAGER_RAW_BYTES + 1];
         let compressed = zlib(&original);
         let command = direct(&format!("f=100,o=z,S={}", original.len()), &compressed);
         let transfer = DirectTransferAssembler::new().accept(&command).unwrap();
@@ -691,7 +691,7 @@ mod tests {
     }
 
     #[test]
-    fn valid_png_above_raw_limit_reaches_validated_pane_store() {
+    fn valid_png_above_legacy_limit_reaches_validated_pane_store() {
         use crate::graphics_store::{CellAnchor, ImageStore};
 
         let (width, height) = (2048, 2800);
@@ -713,7 +713,7 @@ mod tests {
             writer.write_image_data(&raw).unwrap();
             writer.finish().unwrap();
         }
-        assert!(png_data.len() > MAX_DIRECT_TRANSFER_BYTES);
+        assert!(png_data.len() > MAX_EAGER_RAW_BYTES);
         assert!(png_data.len() < MAX_DIRECT_PNG_TRANSFER_BYTES);
 
         let mut assembler = DirectTransferAssembler::new();
@@ -738,6 +738,55 @@ mod tests {
             .unwrap();
         assert_eq!(id, 7);
         assert_eq!(store.total_bytes(), png_data.len());
+    }
+
+    #[test]
+    fn two_maximum_raw_images_fit_the_pane_and_third_evicts_oldest() {
+        use crate::graphics_store::ImageStore;
+
+        let mut store = ImageStore::new();
+        for id in 1..=3 {
+            let transfer = finish(Pending {
+                controls: Controls::from([
+                    (b'a', b"T".to_vec()),
+                    (b'c', b"1".to_vec()),
+                    (b'r', b"1".to_vec()),
+                    (b'C', b"1".to_vec()),
+                    (b'f', b"32".to_vec()),
+                    (b's', b"4096".to_vec()),
+                    (b'v', b"4096".to_vec()),
+                    (b'i', id.to_string().into_bytes()),
+                ]),
+                data: [1, 2, 3, 255].repeat(MAX_DIRECT_TRANSFER_BYTES / 4),
+            })
+            .unwrap();
+            store
+                .insert_for_pane(
+                    transfer,
+                    crate::graphics_store::CellAnchor::default(),
+                    Some(crate::graphics::geometry::CellPixelSize::new(1, 1).unwrap()),
+                    true,
+                )
+                .unwrap();
+            assert_eq!(
+                store.total_bytes(),
+                (id as usize).min(2) * MAX_DIRECT_TRANSFER_BYTES
+            );
+        }
+        assert!(store.get(1).is_none());
+        assert!(store.get(2).is_some());
+        assert!(store.get(3).is_some());
+        let snapshot = crate::graphics_snapshot::compose_store_snapshot(
+            &store,
+            false,
+            crate::graphics::geometry::PixelSize {
+                width: 1,
+                height: 1,
+            },
+            crate::graphics::geometry::CellPixelSize::new(1, 1).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(snapshot.pixels, [1, 2, 3, 255]);
     }
 
     #[test]
