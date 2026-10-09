@@ -95,13 +95,13 @@ pub(super) enum Choice {
 
 pub(super) fn choose(
     sessions: &[SessionInfo],
-    initially_selected: Option<&SessionName>,
+    current_session: Option<&SessionName>,
     config_path: Option<&std::path::Path>,
 ) -> io::Result<Choice> {
     let config = crate::config::load_with_path(config_path).map_err(io::Error::other)?;
     let mut reload =
         crate::config::reload::Reload::new(&config)?.expect("loaded configuration source");
-    let worker = worker::Worker::new(initially_selected.cloned())?;
+    let worker = worker::Worker::new(current_session.cloned())?;
     let file = TerminalDevice::open_controlling()?;
     let signals = PickerSignals::install()?;
     let mut terminal = TerminalDevice::enter(file)?;
@@ -109,7 +109,7 @@ pub(super) fn choose(
         &mut terminal,
         &signals,
         sessions,
-        initially_selected,
+        current_session,
         &mut reload,
         &worker,
     );
@@ -119,15 +119,22 @@ pub(super) fn choose(
     result.and_then(|selection| restored.map(|()| selection))
 }
 
+fn default_selection(sessions: &[SessionInfo], current: Option<&SessionName>) -> usize {
+    sessions
+        .iter()
+        .position(|session| !session.attached && current != Some(&session.name))
+        .unwrap_or(0)
+}
+
 fn run_picker(
     terminal: &mut TerminalDevice,
     signals: &PickerSignals,
     sessions: &[SessionInfo],
-    initially_selected: Option<&SessionName>,
+    current_session: Option<&SessionName>,
     reload: &mut crate::config::reload::Reload,
     worker: &worker::Worker,
 ) -> io::Result<Choice> {
-    let mut current = initially_selected.cloned();
+    let mut current = current_session.cloned();
     let mut sessions = sessions.to_vec();
     let mut bindings = reload.current().manager().clone();
     let mut status = None;
@@ -138,9 +145,7 @@ fn run_picker(
     let mut renaming = false;
     let mut disconnecting = false;
     let mut rename_source: Option<(SessionName, Option<i32>)> = None;
-    let mut selected = initially_selected
-        .and_then(|name| sessions.iter().position(|session| &session.name == name))
-        .unwrap_or(0);
+    let mut selected = default_selection(&sessions, current.as_ref());
     let mut name_input: Option<String> = None;
     let mut search_input: Option<String> = None;
     let mut delete_armed: Option<(SessionName, bool)> = None;
@@ -1214,6 +1219,45 @@ impl Drop for PickerSignals {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn initial_selection_skips_current_and_attached_sessions_in_display_order() {
+        let make = |name: &str, attached, saved, last_connected_at| SessionInfo {
+            name: SessionName::new(name).unwrap(),
+            attached,
+            saved,
+            server_pid: (!saved).then_some(42),
+            last_connected_at,
+        };
+        let current = SessionName::new("current").unwrap();
+        let mut sessions = vec![
+            make("older", false, false, Some(10)),
+            make("saved", false, true, None),
+            make("current", false, false, Some(40)),
+            make("recent", false, false, Some(20)),
+            make("attached", true, false, Some(30)),
+        ];
+        super::super::order_info(&mut sessions, Some(&current));
+        assert_eq!(
+            sessions[default_selection(&sessions, Some(&current))]
+                .name
+                .as_str(),
+            "recent"
+        );
+        assert_eq!(default_selection(&sessions[..2], Some(&current)), 0);
+        assert_eq!(default_selection(&[], Some(&current)), 0);
+
+        sessions.retain(|session| session.name == current || session.attached || session.saved);
+        assert_eq!(
+            sessions[default_selection(&sessions, Some(&current))]
+                .name
+                .as_str(),
+            "saved"
+        );
+        super::super::order_info(&mut sessions, None);
+        assert_eq!(sessions[default_selection(&sessions, None)].name, current);
+        assert_eq!(default_selection(&sessions[..1], None), 0);
+    }
 
     #[test]
     fn disconnect_only_targets_other_attached_live_sessions_and_hints_follow_bindings() {

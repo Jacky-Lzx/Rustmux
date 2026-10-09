@@ -5,6 +5,11 @@ Open the Session Manager with Ctrl-B then Ctrl-W inside a named session, or
 use the attaching client's selected configuration, including `--config PATH`.
 The manager checks that startup-selected file every 500 ms while it is open.
 
+On opening, the manager selects the first session in display order that has no
+attached client, skipping the current session. Saved workspaces are eligible
+too. If no other unattached session exists, it selects the first row (the current
+session when opened from one). Navigation and list refreshes retain your selection.
+
 ```toml
 [session_manager]
 up = ["k", "up"]

@@ -147,6 +147,8 @@ with tempfile.TemporaryDirectory(prefix="rustmux-live-rename-") as root:
         client.expect(b"RUSTMUX_READY>")
         client.send(b"\x02\x17")
         expect(client, b"[CURRENT]")
+        client.send(("/" + new).encode())
+        expect(client, ("Search: " + new + "_").encode())
         client.send(b"\x12")
         expect(client, ("Rename session: " + new + "_").encode())
         edit(client, new, final)
