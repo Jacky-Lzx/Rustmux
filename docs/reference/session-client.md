@@ -16,7 +16,11 @@ display bytes have reached the terminal.
 
 Signals, protocol errors, socket disconnects and normal process exit all pass
 through the same terminal guard. It restores termios plus cursor, keypad, mouse,
-focus, paste, style and alternate-screen modes before returning. A server socket
+focus, paste, style and alternate-screen modes before returning. Manager entry
+instead transfers that guard to the picker, retaining the current alternate-screen
+contents and raw mode while resetting input/display modes for manager keys.
+The picker restores the terminal on closing; errors also release the guard.
+A server socket
 that closes without `Exit` is reported as an incomplete session rather than a
 successful command.
 
@@ -25,8 +29,8 @@ not the attaching process's current config. When the server retains default
 bindings, it forwards that key to the server-side window parser except for
 prefix-`d` and prefix-Ctrl-W. Both queue `Detach` after any earlier bytes
 and return once the frame is written. The
-first exits to the outer terminal; the second restores the terminal before the
-supervisor opens the Session Manager. Bracketed paste contents never trigger
+first exits to the outer terminal; the second keeps the current display behind
+the Session Manager. Bracketed paste contents never trigger
 either shortcut. With `clear_defaults = true`, the handshake disables both
 client-side shortcuts; the server alone decides whether a configured binding
 handles those bytes.
@@ -34,8 +38,9 @@ handles those bytes.
 A named-session server can request the same manager transition when its footer
 hint or configured SESSION-mode key is used. SESSION-mode `detach` uses a separate
 server control message. The client stops accepting further terminal or socket
-input, drains prior display output, restores the terminal, and then returns
-control to the supervisor. Local unnamed processes do not enter SESSION mode.
+input, drains prior display output, and hands the terminal guard to the
+supervisor for manager entry (or restores it for detachment).
+Local unnamed processes do not enter SESSION mode.
 
 PTY unit tests exercise the real raw-mode boundary: initial dimensions and
 resize propagation, keyboard input, rendered output, terminal controls and exact

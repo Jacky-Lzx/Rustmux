@@ -184,10 +184,10 @@ pub fn attach(name: &SessionName, config_path: Option<&Path>) -> io::Result<u8> 
     let mut name = name.clone();
     loop {
         match attach_once(&mut name)? {
-            client::ClientExit::Process(status) => return Ok(status),
-            client::ClientExit::Detached => return Ok(0),
-            client::ClientExit::SessionManager => {
-                match manage_sessions(Some(&name), false, config_path)? {
+            client::AttachmentExit::Process(status) => return Ok(status),
+            client::AttachmentExit::Detached => return Ok(0),
+            client::AttachmentExit::SessionManager(mut terminal) => {
+                match manage_sessions(Some(&name), false, config_path, Some(&mut terminal))? {
                     Some(next) => name = next,
                     None => return Ok(0),
                 }
@@ -196,7 +196,7 @@ pub fn attach(name: &SessionName, config_path: Option<&Path>) -> io::Result<u8> 
     }
 }
 
-fn attach_once(name: &mut SessionName) -> io::Result<client::ClientExit> {
+fn attach_once(name: &mut SessionName) -> io::Result<client::AttachmentExit> {
     use std::os::unix::fs::MetadataExt;
     let _lease = acquire_client(name)?;
     let metadata = fs::symlink_metadata(session_socket_path(name))?;
@@ -204,7 +204,7 @@ fn attach_once(name: &mut SessionName) -> io::Result<client::ClientExit> {
     let result = client::run(connect(name)?, name);
     // A local prefix shortcut can detach before an in-flight Renamed notice
     // is read. Recover the same listener identity rather than reusing an alias.
-    if matches!(result, Ok(client::ClientExit::SessionManager))
+    if matches!(&result, Ok(client::AttachmentExit::SessionManager(_)))
         && let Some(session) = super::list_info()?.into_iter().find(|s| {
             fs::symlink_metadata(session_socket_path(&s.name))
                 .is_ok_and(|m| (m.dev(), m.ino()) == identity)
@@ -217,7 +217,7 @@ fn attach_once(name: &mut SessionName) -> io::Result<client::ClientExit> {
 
 /// Attach directly when one session exists, or ask the user to choose among several.
 pub fn choose_and_attach(config_path: Option<&Path>) -> io::Result<u8> {
-    match manage_sessions(None, true, config_path)? {
+    match manage_sessions(None, true, config_path, None)? {
         Some(name) => attach(&name, config_path),
         None => Ok(0),
     }
@@ -227,6 +227,7 @@ fn manage_sessions(
     return_to: Option<&SessionName>,
     attach_single_directly: bool,
     config_path: Option<&Path>,
+    mut terminal: Option<&mut crate::terminal_device::TerminalDevice>,
 ) -> io::Result<Option<SessionName>> {
     let mut return_to = return_to.cloned();
     let mut changed = false;
@@ -247,7 +248,12 @@ fn manage_sessions(
             }
             _ => {}
         }
-        match super::picker::choose(&sessions, return_to.as_ref(), config_path)? {
+        match super::picker::choose(
+            &sessions,
+            return_to.as_ref(),
+            config_path,
+            terminal.as_deref_mut(),
+        )? {
             super::picker::Choice::Attach(name) => {
                 let latest = super::list_info()?;
                 let session = latest

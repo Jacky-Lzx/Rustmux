@@ -10,6 +10,12 @@ attached client, skipping the current session. Saved workspaces are eligible
 too. If no other unattached session exists, it selects the first row (the current
 session when opened from one). Navigation and list refreshes retain your selection.
 
+When opened from a session, the manager overlays the session's existing terminal
+contents. That background stays at the moment of entry while pane processes
+continue running. Closing or switching sessions restores the terminal before
+reattaching, and the session then redraws its latest contents. The standalone
+`attach` picker still starts with a blank background.
+
 ```toml
 [session_manager]
 up = ["k", "up"]

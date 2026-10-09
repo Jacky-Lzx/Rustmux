@@ -34,12 +34,12 @@ const ENTER: &[u8] = b"\x1b[?1049h\x1b]8;;\x1b\\\x1b]22;\x1b\\";
 // OSC 8 ;; ST: close links, including a partially delivered render run.
 // OSC 22 ST: reset the alternate-screen pointer before leaving it.
 // 0m: reset text attributes, including colors and bold.
-// ?25h: show the cursor.
-// ?1049l: return to the main screen buffer and restore the saved cursor.
 // These are baseline resets, not a snapshot of the previous display modes.
 // Raw mode and other termios attributes are restored separately.
-const LEAVE: &[u8] =
-    b"\x1b[0 q\x1b>\x1b[?1l\x1b[?67l\x1b[=0u\x1b[?2004l\x1b[?5522l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1004l\x1b[?1006l\x1b]112\x1b\\\x1b]8;;\x1b\\\x1b]22;\x1b\\\x1b[0m\x1b[?25h\x1b[?1049l";
+const RESET_DISPLAY_MODES: &[u8] =
+    b"\x1b[0 q\x1b>\x1b[?1l\x1b[?67l\x1b[=0u\x1b[?2004l\x1b[?5522l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1004l\x1b[?1006l\x1b]112\x1b\\\x1b]8;;\x1b\\\x1b]22;\x1b\\\x1b[0m";
+// Show the cursor, then return to the main screen and restore the saved cursor.
+const LEAVE_SCREEN: &[u8] = b"\x1b[?25h\x1b[?1049l";
 
 /// One nonblocking file description for terminal input and output.
 pub(crate) struct TerminalDevice {
@@ -79,13 +79,21 @@ impl TerminalDevice {
         window_size(&self.file)
     }
 
+    /// Keep the current alternate-screen contents and raw-mode guard for a picker.
+    pub(crate) fn prepare_session_manager(&mut self) -> io::Result<()> {
+        self.write_all(RESET_DISPLAY_MODES)?;
+        self.write_all(b"\x1b[?25l")
+    }
+
     pub(crate) fn restore(&mut self) -> io::Result<()> {
         if !self.active {
             return Ok(());
         }
         // Always attempt termios restoration, independently of output failures.
         let modes = termios::tcsetattr(&self.file, SetArg::TCSANOW, &self.original);
-        let screen = self.write_all(LEAVE);
+        let screen = self
+            .write_all(RESET_DISPLAY_MODES)
+            .and_then(|()| self.write_all(LEAVE_SCREEN));
         if modes.is_ok() && screen.is_ok() {
             self.active = false;
         }

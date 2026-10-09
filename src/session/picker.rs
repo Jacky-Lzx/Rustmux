@@ -97,25 +97,40 @@ pub(super) fn choose(
     sessions: &[SessionInfo],
     current_session: Option<&SessionName>,
     config_path: Option<&std::path::Path>,
+    terminal: Option<&mut TerminalDevice>,
 ) -> io::Result<Choice> {
     let config = crate::config::load_with_path(config_path).map_err(io::Error::other)?;
     let mut reload =
         crate::config::reload::Reload::new(&config)?.expect("loaded configuration source");
     let worker = worker::Worker::new(current_session.cloned())?;
-    let file = TerminalDevice::open_controlling()?;
     let signals = PickerSignals::install()?;
-    let mut terminal = TerminalDevice::enter(file)?;
+    let preserve_background = terminal.is_some();
+    let mut owned_terminal;
+    let terminal = match terminal {
+        Some(terminal) => terminal,
+        None => {
+            owned_terminal = TerminalDevice::enter(TerminalDevice::open_controlling()?)?;
+            &mut owned_terminal
+        }
+    };
     let result = run_picker(
-        &mut terminal,
+        terminal,
         &signals,
         sessions,
         current_session,
         &mut reload,
         &worker,
+        preserve_background,
     );
     worker.shutdown();
     reload.shutdown();
-    let restored = terminal.restore();
+    // Killing a session refreshes the same manager. Retain its background and
+    // guard across that refresh, but restore before attachment or a server fork.
+    let restored = if preserve_background && matches!(&result, Ok(Choice::Kill(..))) {
+        Ok(())
+    } else {
+        terminal.restore()
+    };
     result.and_then(|selection| restored.map(|()| selection))
 }
 
@@ -133,6 +148,7 @@ fn run_picker(
     current_session: Option<&SessionName>,
     reload: &mut crate::config::reload::Reload,
     worker: &worker::Worker,
+    preserve_background: bool,
 ) -> io::Result<Choice> {
     let mut current = current_session.cloned();
     let mut sessions = sessions.to_vec();
@@ -285,6 +301,7 @@ fn run_picker(
                 },
                 size,
                 reload.current().theme(),
+                preserve_background,
             ))?;
             previous_size = Some(size);
             dirty = false;
@@ -588,9 +605,15 @@ fn render(
         },
         size,
         crate::theme::Theme::default(),
+        false,
     )
 }
-fn render_view(view: &PickerView<'_>, size: (u16, u16), theme: crate::theme::Theme) -> Vec<u8> {
+fn render_view(
+    view: &PickerView<'_>,
+    size: (u16, u16),
+    theme: crate::theme::Theme,
+    preserve_background: bool,
+) -> Vec<u8> {
     let PickerView {
         sessions,
         selected,
@@ -603,9 +626,13 @@ fn render_view(view: &PickerView<'_>, size: (u16, u16), theme: crate::theme::The
         status: _,
     } = *view;
     let (box_row, box_column, height, width) = picker_rect(size);
-    // Clear with the terminal's default background so emulator transparency is
-    // preserved outside the explicitly painted manager window.
-    let mut frame = String::from("\x1b[0m\x1b[2J\x1b[H\x1b[?25l");
+    let mut frame = String::from("\x1b[0m");
+    if !preserve_background {
+        // Standalone pickers clear using the terminal's default background to
+        // preserve emulator transparency outside the manager window.
+        frame.push_str("\x1b[2J\x1b[H");
+    }
+    frame.push_str("\x1b[?25l");
     for row in 0..height {
         write_field(
             &mut frame,
@@ -1221,6 +1248,48 @@ mod tests {
     use super::*;
 
     #[test]
+    fn attached_picker_preserves_background_cells_and_styles_outside_its_window() {
+        let mut screen = crate::screen::Screen::new(24, 80).unwrap();
+        let mut parser = crate::parser::Parser::new();
+        parser.advance(&mut screen, b"\x1b[31;44m");
+        for row in 0..24 {
+            parser.advance(
+                &mut screen,
+                format!("\x1b[{};1Hrow-{row:02} {}", row + 1, "x".repeat(65)).as_bytes(),
+            );
+        }
+        let background = (0..24)
+            .map(|row| screen.row(row).unwrap().to_vec())
+            .collect::<Vec<_>>();
+        let bindings = Bindings::default();
+        let view = PickerView {
+            sessions: &[],
+            selected: 0,
+            name_input: None,
+            renaming_name: false,
+            search_input: None,
+            delete_armed: None,
+            current: None,
+            bindings: &bindings,
+            status: None,
+        };
+        let frame = render_view(&view, (24, 80), crate::theme::Theme::default(), true);
+        parser.advance(&mut screen, &frame);
+        let (top, left, height, width) = picker_rect((24, 80));
+        for (row, cells) in background.iter().enumerate() {
+            for (column, cell) in cells.iter().enumerate() {
+                if !(top - 1..top - 1 + height).contains(&row)
+                    || !(left - 1..left - 1 + width).contains(&column)
+                {
+                    assert_eq!(&screen.row(row).unwrap()[column], cell, "{row}, {column}");
+                }
+            }
+        }
+        let standalone = render_view(&view, (24, 80), crate::theme::Theme::default(), false);
+        assert!(standalone.windows(4).any(|bytes| bytes == b"\x1b[2J"));
+    }
+
+    #[test]
     fn initial_selection_skips_current_and_attached_sessions_in_display_order() {
         let make = |name: &str, attached, saved, last_connected_at| SessionInfo {
             name: SessionName::new(name).unwrap(),
@@ -1523,8 +1592,13 @@ mod tests {
             ((24, 160), "Rename session: new-name_"),
             ((6, 160), "Rename: new-name_"),
         ] {
-            let frame = String::from_utf8(render_view(&view, size, crate::theme::Theme::default()))
-                .unwrap();
+            let frame = String::from_utf8(render_view(
+                &view,
+                size,
+                crate::theme::Theme::default(),
+                false,
+            ))
+            .unwrap();
             assert!(frame.contains(title), "{frame}");
             assert!(frame.contains("<Enter> Rename"));
             assert!(!frame.contains("Search: saved"));

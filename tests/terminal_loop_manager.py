@@ -50,7 +50,10 @@ down=["{down}"]
         fcntl.ioctl(session.slave,termios.TIOCSWINSZ,struct.pack("HHHH",24,160,0,0))
         session.expect(b"RUSTMUX_READY>")
         session.send(b"\x02\x17")
-        expect(b"Session Manager",b"<Ctrl-S> Save")
+        transition=expect(b"Session Manager",b"<Ctrl-S> Save")
+        for destructive in (b"\x1b[?1049l",b"\x1b[?1049h",b"\x1b[2J"):
+            assert destructive not in transition, (destructive,transition)
+        assert b"\x1b[=0u" in transition  # Manager keys use baseline terminal encoding.
 
     def leave():
         global session
@@ -80,6 +83,7 @@ down=["{down}"]
         session.send(b"/manager")
         captured=expect(b"Search: manager_")
         assert b"Saved "+name.encode() not in captured
+        assert b"\x1b[2J" not in captured
         os.kill(pid,signal.SIGCONT)
         stopped=None
         expect(b"Saved "+name.encode())

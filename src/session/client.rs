@@ -25,8 +25,9 @@ const MAX_BUFFERED_OUTPUT_BYTES: usize = MAX_FRAME_BYTES + READ_BYTES;
 /// Attach a connected session socket to the controlling terminal.
 ///
 /// The terminal enters raw mode and the alternate screen only after the
-/// handshake succeeds. All return paths restore its termios and display modes.
-pub(crate) fn run(stream: UnixStream, name: &mut SessionName) -> io::Result<ClientExit> {
+/// handshake succeeds. Opening the manager transfers the guard to its picker;
+/// other return paths restore termios and display modes here.
+pub(crate) fn run(stream: UnixStream, name: &mut SessionName) -> io::Result<AttachmentExit> {
     let file = TerminalDevice::open_controlling()?;
     let size = crate::terminal_device::window_size(&file)?;
     let workspace = super::acquire_workspace(name)?;
@@ -44,7 +45,11 @@ pub(crate) fn run(stream: UnixStream, name: &mut SessionName) -> io::Result<Clie
 
 #[cfg(test)]
 fn run_attached(file: File, peer: ClientPeer, signals: &ClientSignals) -> io::Result<ClientExit> {
-    run_named_attached(file, peer, signals, &mut None)
+    run_named_attached(file, peer, signals, &mut None).map(|exit| match exit {
+        AttachmentExit::Process(status) => ClientExit::Process(status),
+        AttachmentExit::Detached => ClientExit::Detached,
+        AttachmentExit::SessionManager(_) => ClientExit::SessionManager,
+    })
 }
 
 fn run_named_attached(
@@ -52,14 +57,24 @@ fn run_named_attached(
     peer: ClientPeer,
     signals: &ClientSignals,
     name: &mut Option<SessionName>,
-) -> io::Result<ClientExit> {
+) -> io::Result<AttachmentExit> {
     let mut terminal = TerminalDevice::enter(file)?;
     let result = bridge(&mut terminal, peer, signals, name);
-    let restored = terminal.restore();
-    match result {
-        Err(error) => Err(error),
-        Ok(status) => restored.map(|()| status),
-    }
+    let restored = if matches!(result, Ok(ClientExit::SessionManager)) {
+        Ok(())
+    } else {
+        terminal.restore()
+    };
+    let exit = result?;
+    restored?;
+    Ok(match exit {
+        ClientExit::Process(status) => AttachmentExit::Process(status),
+        ClientExit::Detached => AttachmentExit::Detached,
+        ClientExit::SessionManager => {
+            terminal.prepare_session_manager()?;
+            AttachmentExit::SessionManager(terminal)
+        }
+    })
 }
 
 fn bridge(
@@ -312,6 +327,12 @@ pub(crate) enum ClientExit {
     Process(u8),
     Detached,
     SessionManager,
+}
+
+pub(crate) enum AttachmentExit {
+    Process(u8),
+    Detached,
+    SessionManager(TerminalDevice),
 }
 
 #[derive(Debug, Default)]
@@ -608,7 +629,7 @@ mod tests {
     }
 
     #[test]
-    fn server_session_manager_control_flushes_output_and_restores_terminal() {
+    fn server_session_manager_control_flushes_output_and_hands_off_terminal() {
         let size = Winsize {
             ws_row: 24,
             ws_col: 80,
@@ -641,14 +662,19 @@ mod tests {
             resize: Arc::new(AtomicBool::new(false)),
             ids: Vec::new(),
         };
-        let client = thread::spawn(move || run_attached(slave, peer, &signals).unwrap());
+        let client =
+            thread::spawn(move || run_named_attached(slave, peer, &signals, &mut None).unwrap());
 
-        assert_eq!(client.join().unwrap(), ClientExit::SessionManager);
+        let AttachmentExit::SessionManager(terminal) = client.join().unwrap() else {
+            panic!("expected session manager terminal handoff");
+        };
         server.join().unwrap();
-        let mut restored = termios::tcgetattr(&observer).unwrap();
-        original.local_flags.remove(LocalFlags::PENDIN);
-        restored.local_flags.remove(LocalFlags::PENDIN);
-        assert_eq!(restored.local_flags, original.local_flags);
+        assert!(
+            !termios::tcgetattr(&observer)
+                .unwrap()
+                .local_flags
+                .contains(LocalFlags::ICANON)
+        );
 
         let rendered = read_buffered_output(&mut master);
         assert!(
@@ -657,6 +683,17 @@ mod tests {
                 .any(|bytes| bytes == b"before-manager"),
             "rendered bytes: {rendered:?}"
         );
+        assert!(!rendered.windows(8).any(|bytes| bytes == b"\x1b[?1049l"));
+        assert!(rendered.windows(5).any(|bytes| bytes == b"\x1b[=0u"));
+
+        // The handed-off guard also restores on an error before the picker opens.
+        drop(terminal);
+        let mut restored = termios::tcgetattr(&observer).unwrap();
+        original.local_flags.remove(LocalFlags::PENDIN);
+        restored.local_flags.remove(LocalFlags::PENDIN);
+        assert_eq!(restored.local_flags, original.local_flags);
+        let rendered = read_buffered_output(&mut master);
+        assert!(rendered.windows(8).any(|bytes| bytes == b"\x1b[?1049l"));
     }
 
     #[test]
