@@ -12,6 +12,9 @@ use crate::{
     graphics_decode::DecodeError, graphics_transfer::AssembledDirectTransfer, screen::ScrollEvent,
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static NEXT_IMAGE_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 pub const MAX_PANE_IMAGE_BYTES: usize = 128 * 1024 * 1024;
 pub const MAX_PANE_IMAGES: usize = 256;
@@ -193,6 +196,8 @@ impl CellRegion {
 #[derive(Debug, Default)]
 pub struct ImageStore {
     images: BTreeMap<u32, StoredImage>,
+    /// Immutable upload identity, unique across pane/store lifetimes.
+    image_generations: BTreeMap<u32, u64>,
     /// IDs reserved only inside this store for protocol image ID zero. They
     /// are not addressable by child placement/deletion commands.
     private_images: BTreeSet<u32>,
@@ -217,6 +222,10 @@ impl ImageStore {
 
     pub fn get(&self, id: u32) -> Option<&StoredImage> {
         self.images.get(&id)
+    }
+
+    pub(crate) fn image_generation(&self, id: u32) -> Option<u64> {
+        self.image_generations.get(&id).copied()
     }
 
     pub(crate) fn protocol_image_id(&self, id: u32) -> u32 {
@@ -522,6 +531,8 @@ impl ImageStore {
         self.total_bytes += size;
         self.oldest.push_back(id);
         self.images.insert(id, image);
+        self.image_generations
+            .insert(id, NEXT_IMAGE_GENERATION.fetch_add(1, Ordering::Relaxed));
         if anonymous {
             self.private_images.insert(id);
         }
@@ -571,6 +582,9 @@ impl ImageStore {
         let replacement = self.first_free_private_id()?;
         let image = self.images.remove(&id).expect("private image exists");
         self.images.insert(replacement, image);
+        if let Some(generation) = self.image_generations.remove(&id) {
+            self.image_generations.insert(replacement, generation);
+        }
         self.private_images.remove(&id);
         self.private_images.insert(replacement);
         if let Some(dimensions) = self.decoded_dimensions.remove(&id) {
@@ -1152,6 +1166,7 @@ impl ImageStore {
     /// Explicit data removal, including its placement references.
     pub fn remove(&mut self, id: u32) -> Option<StoredImage> {
         let removed = self.images.remove(&id)?;
+        self.image_generations.remove(&id);
         self.private_images.remove(&id);
         self.numbered_images.remove(&id);
         self.transient_images.remove(&id);
@@ -1166,6 +1181,7 @@ impl ImageStore {
     pub fn clear(&mut self) {
         let changed = !self.images.is_empty() || !self.placements.is_empty();
         self.images.clear();
+        self.image_generations.clear();
         self.private_images.clear();
         self.numbered_images.clear();
         self.transient_images.clear();
@@ -1378,6 +1394,25 @@ mod tests {
         store.images.insert(1, image);
         assert_eq!(store.image_dimensions(1), Some((1, 1)));
         assert_eq!(store.known_image_dimensions(1), Some((1, 1)));
+    }
+
+    #[test]
+    fn image_generations_survive_placement_changes_and_distinguish_store_lifetimes() {
+        let mut first = ImageStore::new();
+        let mut second = ImageStore::new();
+        let upload = || transfer(b"\x1b_Ga=t,f=32,s=1,v=1,i=7;AQIDBA==\x1b\\");
+        first.insert(upload()).unwrap();
+        let original = first.image_generation(7).unwrap();
+        first.place(7, Some(1)).unwrap();
+        assert_eq!(first.image_generation(7), Some(original));
+        second.insert(upload()).unwrap();
+        assert_ne!(second.image_generation(7), Some(original));
+        first.insert(upload()).unwrap();
+        assert_ne!(first.image_generation(7), Some(original));
+        first.clear();
+        assert!(first.image_generations.is_empty());
+        first.insert(upload()).unwrap();
+        assert_ne!(first.image_generation(7), Some(original));
     }
 
     #[test]

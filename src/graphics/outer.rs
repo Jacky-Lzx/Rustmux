@@ -13,7 +13,7 @@ use super::{
         kitty_rgba_placement_len, write_kitty_png_passthrough_with_limit,
         write_kitty_rgb_placement_with_limit, write_kitty_rgba_placement_with_limit,
     },
-    shared_memory_output::{SharedPixels, cached_placement_command},
+    shared_memory_output::SharedPixels,
     snapshot::{ImageBand, SourceImagePlacement, SourceImageProgress},
 };
 use crate::{
@@ -25,8 +25,9 @@ use crate::{
 };
 
 const MAX_PENDING_SHM_BYTES: usize = 64 * 1024 * 1024;
-const MAX_CACHED_OUTER_IMAGE_BYTES: usize = 32 * 1024 * 1024;
+const MAX_CACHED_OUTER_IMAGE_BYTES: usize = 128 * 1024 * 1024;
 const MAX_CACHED_OUTER_IMAGES: usize = 8;
+const MAX_CACHED_VIRTUAL_SOURCE_BYTES: usize = 32 * 1024 * 1024;
 
 // Yazi paints virtual-image placeholders over several PTY reads. Give an
 // incomplete rectangle time to finish before composing an expensive PNG.
@@ -194,8 +195,10 @@ struct CachedOuterImage {
     format: u8,
     width: u32,
     height: u32,
-    fingerprint: u64,
-    data: Vec<u8>,
+    generation: u64,
+    size: usize,
+    // Virtual preview applications may retransmit identical bytes under new IDs.
+    content: Option<(u64, Vec<u8>)>,
     last_used: u64,
 }
 
@@ -344,14 +347,46 @@ impl KittyOverlays {
         true
     }
 
-    fn cached_source(&self, source: &SourceImagePlacement<'_>, fingerprint: u64) -> Option<usize> {
+    fn cached_source(&self, source: &SourceImagePlacement<'_>) -> Option<usize> {
+        if let Some(index) = self
+            .cached_images
+            .iter()
+            .position(|cached| cached.generation == source.generation)
+        {
+            return Some(index);
+        }
+        // Regular PDF movement never scans source bytes. Preserve content
+        // deduplication only for a newly uploaded virtual preview.
+        if source.geometry.is_some() {
+            return None;
+        }
+        let fingerprint = source_fingerprint(source);
         self.cached_images.iter().position(|cached| {
-            cached.fingerprint == fingerprint
-                && cached.format == source.format
+            cached.format == source.format
                 && cached.width == source.width
                 && cached.height == source.height
-                && cached.data == source.data
+                && cached
+                    .content
+                    .as_ref()
+                    .is_some_and(|(hash, data)| *hash == fingerprint && data == source.data)
         })
+    }
+
+    fn retain_virtual_source(&self, source: &SourceImagePlacement<'_>) -> Option<(u64, Vec<u8>)> {
+        let retained: usize = self
+            .cached_images
+            .iter()
+            .filter_map(|cached| cached.content.as_ref().map(|(_, data)| data.len()))
+            .sum();
+        if source.geometry.is_some()
+            || source.data.len() > MAX_CACHED_VIRTUAL_SOURCE_BYTES.saturating_sub(retained)
+        {
+            return None;
+        }
+        let mut data = Vec::new();
+        data.try_reserve_exact(source.data.len()).ok()?;
+        data.extend_from_slice(source.data);
+        Some((source_fingerprint(source), data))
     }
 
     fn make_cache_room(&mut self, size: usize, output: &mut VecDeque<u8>) -> io::Result<bool> {
@@ -363,7 +398,7 @@ impl KittyOverlays {
             || self
                 .cached_images
                 .iter()
-                .map(|image| image.data.len())
+                .map(|image| image.size)
                 .sum::<usize>()
                 > MAX_CACHED_OUTER_IMAGE_BYTES - size
         {
@@ -576,19 +611,17 @@ impl KittyOverlays {
                     }) {
                         continue;
                     }
-                    let fingerprint = source_fingerprint(raw);
-                    if let Some(cached) = self.cached_source(raw, fingerprint)
+                    if let Some(cached) = self.cached_source(raw)
                         && let Some(next_placement_id) = self.next_placement_id.checked_add(1)
                     {
                         let image_id = self.cached_images[cached].image_id;
                         let placement_id = self.next_placement_id;
-                        let command = cached_placement_command(
-                            raw.format,
-                            (raw.columns, raw.rows),
-                            image_id,
-                            placement_id,
-                            band.output_z(),
-                        );
+                        let command = format!(
+                            "\x1b_Ga=p,i={image_id},p={placement_id}{},z={},C=1,q=1\x1b\\",
+                            raw.placement_controls(),
+                            band.output_z()
+                        )
+                        .into_bytes();
                         if position.len() + command.len() + restore.len() > MAX_FRAME - output.len()
                         {
                             self.pending_retry = true;
@@ -614,20 +647,13 @@ impl KittyOverlays {
                             self.staged_placements.push((overlay, display));
                         } else {
                             FrameWriter(output).write_all(position.as_bytes())?;
-                            UploadWriter { output, staging }.write_all(&command)?;
-                            if staging {
-                                let fit = if raw.format == 100 {
-                                    None
-                                } else {
-                                    Some((raw.columns, raw.rows))
-                                };
-                                self.stage_placement(overlay, &position, fit);
-                            }
+                            FrameWriter(output).write_all(&command)?;
                             moved_cursor = true;
                         }
                         self.next_placement_id = next_placement_id;
                         self.cache_clock = self.cache_clock.wrapping_add(1);
                         self.cached_images[cached].last_used = self.cache_clock;
+                        self.cached_images[cached].generation = raw.generation;
                         self.entries.push(overlay);
                         continue;
                     }
@@ -638,23 +664,12 @@ impl KittyOverlays {
                             && let Ok(object) = SharedPixels::create(raw.data)
                         {
                             let next_placement_id = self.next_placement_id.checked_add(1);
-                            let mut cached_data = if next_placement_id.is_some()
-                                && raw.data.len() <= MAX_CACHED_OUTER_IMAGE_BYTES
-                            {
-                                let mut copy = Vec::new();
-                                copy.try_reserve_exact(raw.data.len()).ok().map(|()| {
-                                    copy.extend_from_slice(raw.data);
-                                    copy
-                                })
-                            } else {
-                                None
-                            };
-                            let mut command = object.placement_command_with_id(
-                                raw.format,
-                                (raw.width, raw.height),
-                                (raw.columns, raw.rows),
+                            let mut cache_source = next_placement_id.is_some()
+                                && raw.data.len() <= MAX_CACHED_OUTER_IMAGE_BYTES;
+                            let mut command = object.source_command(
+                                raw,
                                 image_id,
-                                cached_data.as_ref().map(|_| self.next_placement_id),
+                                cache_source.then_some(self.next_placement_id),
                                 band.output_z(),
                             );
                             if position.len() + command.len() + restore.len()
@@ -663,20 +678,13 @@ impl KittyOverlays {
                                 self.pending_retry = true;
                                 continue;
                             }
-                            if cached_data.is_some()
-                                && !self.make_cache_room(raw.data.len(), output)?
-                            {
+                            if cache_source && !self.make_cache_room(raw.data.len(), output)? {
                                 if self.pending_retry {
                                     continue;
                                 }
-                                cached_data = None;
-                                command = object.placement_command(
-                                    raw.format,
-                                    (raw.width, raw.height),
-                                    (raw.columns, raw.rows),
-                                    image_id,
-                                    band.output_z(),
-                                );
+                                cache_source = false;
+                                command =
+                                    object.source_command(raw, image_id, None, band.output_z());
                             }
                             if position.len() + command.len() + restore.len()
                                 > MAX_FRAME - output.len()
@@ -684,7 +692,7 @@ impl KittyOverlays {
                                 self.pending_retry = true;
                                 continue;
                             }
-                            let placement_id = cached_data.as_ref().map(|_| self.next_placement_id);
+                            let placement_id = cache_source.then_some(self.next_placement_id);
                             let overlay = KittyOverlay {
                                 window,
                                 pane: id,
@@ -700,22 +708,34 @@ impl KittyOverlays {
                                 row_offset: raw.row,
                             };
                             FrameWriter(output).write_all(position.as_bytes())?;
-                            FrameWriter(output).write_all(&command)?;
+                            UploadWriter { output, staging }.write_all(&command)?;
+                            if staging {
+                                let placement =
+                                    placement_id.map_or_else(String::new, |id| format!(",p={id}"));
+                                let display = format!(
+                                    "{position}\x1b_Ga=p,i={image_id}{placement}{},z={},C=1,q=1\x1b\\",
+                                    raw.placement_controls(),
+                                    band.output_z()
+                                );
+                                self.staged_placements.push((overlay, display.into_bytes()));
+                            }
                             moved_cursor = true;
                             self.next_id = next_id;
                             self.entries.push(overlay);
                             self.pending_shm.push(object);
-                            if let Some(data) = cached_data {
+                            if cache_source {
                                 self.next_placement_id =
                                     next_placement_id.expect("cache ID checked");
                                 self.cache_clock = self.cache_clock.wrapping_add(1);
+                                let content = self.retain_virtual_source(raw);
                                 self.cached_images.push(CachedOuterImage {
                                     image_id,
                                     format: raw.format,
                                     width: raw.width,
                                     height: raw.height,
-                                    fingerprint,
-                                    data,
+                                    generation: raw.generation,
+                                    size: raw.data.len(),
+                                    content,
                                     last_used: self.cache_clock,
                                 });
                             }
@@ -725,6 +745,7 @@ impl KittyOverlays {
                 }
                 if let Some(SourceImageProgress::Complete(source)) = &source_progress
                     && source.format == 100
+                    && source.geometry.is_none()
                     && let Some(next_id) = self.next_id.checked_add(1)
                     && !self.entries.iter().any(|entry| {
                         entry.window == window && entry.pane == id && entry.band == band
@@ -1137,8 +1158,9 @@ mod tests {
                 format: 32,
                 width: 1,
                 height: 1,
-                fingerprint: index as u64,
-                data: vec![index as u8],
+                generation: index as u64,
+                size: 1,
+                content: None,
                 last_used: index as u64,
             });
         }
@@ -1200,6 +1222,120 @@ mod tests {
     }
 
     #[test]
+    fn regular_crop_moves_reuse_source_and_replacements_upload_atomically() {
+        use base64::Engine;
+        let cell = CellPixelSize::new(10, 10).unwrap();
+        let mut windows = Windows::default();
+        let window = windows
+            .create("crop".into(), image_window(8, 8).unwrap())
+            .unwrap();
+        let panes = windows.active_mut().unwrap().content_mut();
+        let pixels = vec![255; 4 * 4 * 3];
+        let upload = format!(
+            "\x1b_Ga=T,f=24,s=4,v=4,i=7,p=1,c=2,r=2,x=0,y=0,w=2,h=2,X=1,Y=2,z=-1,C=1;{}\x1b\\",
+            base64::engine::general_purpose::STANDARD.encode(&pixels)
+        );
+        panes.active_mut().process_output_with_image_store_sized(
+            upload.as_bytes(),
+            &mut |_| {},
+            cell,
+        );
+        let band = ImageBand::BehindText;
+        let source = panes.active().source_image_band(cell, band).unwrap();
+        assert_eq!(
+            source.placement_controls(),
+            ",x=0,y=0,w=2,h=2,c=2,r=2,X=1,Y=2"
+        );
+        let generation = source.generation;
+        let mut cache = KittyOverlays {
+            shm_supported: true,
+            ..KittyOverlays::default()
+        };
+        let mut output = VecDeque::new();
+        cache
+            .render(window, panes, cell, 10, (0, 0), &mut output)
+            .unwrap();
+        let first = String::from_utf8(output.drain(..).collect()).unwrap();
+        assert!(
+            first.contains(
+                "a=T,t=s,f=24,s=4,v=4,S=48,i=2147483648,p=1,x=0,y=0,w=2,h=2,c=2,r=2,X=1,Y=2,z=-1"
+            ),
+            "{first}"
+        );
+        for y in [1, 2, 0] {
+            let movement =
+                format!("\x1b[2;2H\x1b_Ga=p,i=7,p=1,c=2,r=2,x=1,y={y},w=2,h=2,z=-1,C=1\x1b\\");
+            panes.active_mut().process_output_with_image_store_sized(
+                movement.as_bytes(),
+                &mut |_| {},
+                cell,
+            );
+            assert_eq!(
+                panes
+                    .active()
+                    .source_image_band(cell, band)
+                    .unwrap()
+                    .generation,
+                generation
+            );
+            cache
+                .render(window, panes, cell, 10, (0, 0), &mut output)
+                .unwrap();
+            let moved = String::from_utf8(output.drain(..).collect()).unwrap();
+            assert!(
+                moved.contains(&format!(
+                    "a=p,i=2147483648,p={},x=1,y={y},w=2,h=2,c=2,r=2,z=-1",
+                    cache.next_placement_id - 1
+                )),
+                "{moved}"
+            );
+            assert!(!moved.contains("t=s") && !moved.contains("a=T") && !moved.contains("a=t"));
+            assert!(moved.find("a=p").unwrap() < moved.find("a=d").unwrap());
+            assert_eq!(
+                cache.pending_shm.len(),
+                1,
+                "movement must not copy source pixels"
+            );
+            assert_eq!(cache.cached_images.len(), 1);
+        }
+        // Explicit child IDs may be reused for different pixels. Never reuse
+        // stale outer pixels, and stage this upload before displaying it.
+        panes.active_mut().process_output_with_image_store_sized(
+            upload.as_bytes(),
+            &mut |_| {},
+            cell,
+        );
+        assert_ne!(
+            panes
+                .active()
+                .source_image_band(cell, band)
+                .unwrap()
+                .generation,
+            generation
+        );
+        cache
+            .render(window, panes, cell, 10, (0, 0), &mut output)
+            .unwrap();
+        let replaced = String::from_utf8(output.drain(..).collect()).unwrap();
+        assert!(
+            replaced.contains("a=t,t=s") && !replaced.contains("a=T"),
+            "{replaced}"
+        );
+        assert!(replaced.find("a=t").unwrap() < replaced.find("a=p").unwrap());
+        assert!(replaced.find("a=p").unwrap() < replaced.find("a=d").unwrap());
+        assert_eq!(cache.cached_images.len(), 2);
+        // Pane clipping and overlapping placements still require composition.
+        panes.active_mut().process_output_with_image_store_sized(
+            b"\x1b[8;8H\x1b_Ga=p,i=7,p=1,c=2,r=2,z=-1,C=1\x1b\\",
+            &mut |_| {},
+            cell,
+        );
+        assert!(panes.active().source_image_band(cell, band).is_none());
+        panes.active_mut().process_output_with_image_store_sized(b"\x1b[1;1H\x1b_Ga=p,i=7,p=1,c=2,r=2,z=-1,C=1\x1b\\\x1b_Ga=p,i=7,p=2,c=2,r=2,z=-1,C=1\x1b\\", &mut |_| {}, cell);
+        assert!(panes.active().source_image_band(cell, band).is_none());
+    }
+
+    #[test]
     fn kitty_overlay_forwards_complete_virtual_rgb_without_compositing() {
         use base64::Engine;
 
@@ -1249,6 +1385,22 @@ mod tests {
             .unwrap();
         assert!(output.is_empty());
 
+        // Yazi retransmits the same preview when returning to a file. A new
+        // upload generation must still reuse its retained virtual source.
+        panes.active_mut().process_output_with_image_store_sized(
+            child.as_bytes(),
+            &mut |_| {},
+            cell,
+        );
+        cache
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        let reused = String::from_utf8(output.drain(..).collect()).unwrap();
+        assert!(reused.contains("a=p,i=2147483648,p=2,c=2,r=2"), "{reused}");
+        assert!(!reused.contains("t=s"));
+        assert_eq!(cache.cached_images.len(), 1);
+        assert_eq!(cache.pending_shm.len(), 1);
+
         // An incomplete rectangle must not queue a provisional composite while
         // the child is still painting it. A stable sparse scene still falls
         // back to the normal clipped composition after the quiet period.
@@ -1266,7 +1418,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             output.drain(..).collect::<Vec<_>>(),
-            b"\x1b_Ga=d,d=i,i=2147483648,p=1,q=2\x1b\\"
+            b"\x1b_Ga=d,d=i,i=2147483648,p=2,q=2\x1b\\"
         );
         assert!(!cache.pending_retry);
         assert!(cache.next_deferred_retry().is_some());

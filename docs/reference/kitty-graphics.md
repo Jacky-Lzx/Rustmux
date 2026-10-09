@@ -604,8 +604,13 @@ pane-sized RGBA composition and PNG encoding when its Unicode placeholders
 cover one complete contiguous rectangle and its source is neither cropped nor
 offset. On a cache miss, Rustmux uploads the stored raw pixels or original PNG
 bytes through a new POSIX shared-memory object and remaps the image ID. It
-retains up to eight exact source images or 32 MiB per attachment. Repeating a
-source uses `a=p` with a new placement ID instead of another upload; deleting
+retains up to eight source images or 128 MiB of outer-terminal image data per
+attachment. Each immutable upload has a process-wide unique generation; cache
+lookup for regular placements does not hash, compare, or retain another copy
+of the source bytes. Virtual previews retain content deduplication across new
+uploads, with at most 32 MiB of retained source copies per attachment.
+Repeating a placement for the same upload uses `a=p` with a new placement ID
+instead of another upload; deleting
 an old placement with `d=i,p=...` preserves its image data. The least recently
 used inactive image is freed with `d=I` when the cache is full. An outer error
 reply invalidates the cached image and triggers a fresh upload. Raw previews
@@ -619,7 +624,17 @@ rectangle, Rustmux waits for the next child update instead of repeatedly
 encoding partial composites. Complete rectangles take the fast path
 immediately. A rectangle still incomplete after 350 ms without changes uses
 the composed PNG/raw fallback.
-Overlapping placements, unsupported media, failed shared-memory creation, or
+A sole regular RGB/RGBA/PNG placement in any band also bypasses composition
+when its complete destination fits inside the pane and it has no scroll-margin
+clipping. Its source crop (`x/y/w/h`), sizing (`c/r`), and first-cell offsets
+(`X/Y`) are preserved. PDF movement therefore sends only `a=p` for the cached
+source, followed by deletion of the old placement in the synchronized frame.
+An explicit child ID reused for a new upload receives a new generation. New
+shared-memory uploads in a replacement scene use `a=t` before the atomic
+placement publication, preserving the previous image until the new one is ready.
+
+Overlapping placements, pane/scroll-margin clipping, unsupported media, failed
+shared-memory creation, or
 an unsuccessful outer query also use that fallback.
 
 The private `graphics::snapshot::source_placement` module recognizes these

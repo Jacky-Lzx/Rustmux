@@ -5,17 +5,19 @@
 use super::ImageBand;
 use crate::{
     graphics::{
-        geometry::{CellPixelSize, PixelRect, PixelSize, PlacementSizing},
+        geometry::{CellPixelSize, PixelRect, PixelSize, PlacementGeometry, PlacementSizing},
         placeholder::decode_row,
         store::{ImageFormat, ImageStore},
     },
     screen::Screen,
 };
 
-/// A complete RGB/RGBA/PNG virtual placement whose placeholder cells form one
-/// contiguous rectangle. The outer terminal can fit the stored source image
-/// into that rectangle without a pane-sized RGBA canvas.
+/// A sole RGB/RGBA/PNG placement fully contained in the pane, or a complete
+/// virtual placeholder rectangle. Both can reuse native outer image data.
 pub(crate) struct SourceImagePlacement<'a> {
+    pub generation: u64,
+    /// Regular crop/fit controls; None retains virtual-placeholder sizing.
+    pub geometry: Option<PlacementGeometry>,
     pub data: &'a [u8],
     pub format: u8,
     pub width: u32,
@@ -52,20 +54,71 @@ pub(crate) fn source_image_pane_band_progress<'a>(
     cell: CellPixelSize,
     band: ImageBand,
 ) -> Option<SourceImageProgress<'a>> {
-    if band != ImageBand::AboveText {
-        return None;
-    }
     let (screen_rows, screen_columns) = screen.dimensions();
     if u128::try_from(screen_columns).ok()? * u128::from(cell.width()) != u128::from(viewport.width)
         || u128::try_from(screen_rows).ok()? * u128::from(cell.height())
             != u128::from(viewport.height)
-        || store.placements().any(|placement| {
-            placement.geometry.is_some_and(|geometry| {
-                geometry.anchor.alternate == screen.is_alternate()
-                    && band.contains(geometry.z_index)
-            })
-        })
     {
+        return None;
+    }
+    let mut regulars = store.placements().filter(|placement| {
+        placement.geometry.is_some_and(|geometry| {
+            geometry.anchor.alternate == screen.is_alternate() && band.contains(geometry.z_index)
+        })
+    });
+    if let Some(placement) = regulars.next() {
+        // Compositing is still required for overlapping/multiple placements or
+        // pane/scroll-margin clipping. Native placement cannot clip to a pane.
+        if regulars.next().is_some()
+            || store
+                .placements()
+                .any(|p| p.virtual_layout.is_some_and(|v| band.contains(v.z_index)))
+        {
+            return None;
+        }
+        let geometry = placement.geometry?;
+        if geometry.clip_top_rows != 0 || geometry.clip_bottom_rows != 0 {
+            return None;
+        }
+        let image = store.get(placement.image_id)?;
+        let format = match image.format {
+            ImageFormat::Rgb => 24,
+            ImageFormat::Rgba => 32,
+            ImageFormat::Png => 100,
+            _ => return None,
+        };
+        let (width, height) = store.validated_image_dimensions(placement.image_id)?;
+        let layout = geometry.pixel_layout(width, height, cell)?;
+        let anchor = geometry.pixel_anchor(cell)?;
+        let right = anchor
+            .x
+            .checked_add(i64::from(layout.destination.x))?
+            .checked_add(i64::from(layout.destination.width))?;
+        let bottom = anchor
+            .y
+            .checked_add(i64::from(layout.destination.y))?
+            .checked_add(i64::from(layout.destination.height))?;
+        if anchor.x < 0
+            || anchor.y < 0
+            || right > i64::from(viewport.width)
+            || bottom > i64::from(viewport.height)
+        {
+            return None;
+        }
+        return Some(SourceImageProgress::Complete(SourceImagePlacement {
+            generation: store.image_generation(placement.image_id)?,
+            geometry: Some(geometry),
+            data: &image.data,
+            format,
+            width,
+            height,
+            columns: layout.cell_bounds.width / u32::from(cell.width()),
+            rows: layout.cell_bounds.height / u32::from(cell.height()),
+            column: geometry.anchor.column,
+            row: usize::try_from(anchor.y / i64::from(cell.height())).ok()?,
+        }));
+    }
+    if band != ImageBand::AboveText {
         return None;
     }
     // The regular snapshot resolves duplicate virtual identities in insertion
@@ -159,6 +212,8 @@ pub(crate) fn source_image_pane_band_progress<'a>(
         return Some(SourceImageProgress::Incomplete);
     }
     Some(SourceImageProgress::Complete(SourceImagePlacement {
+        generation: store.image_generation(placement.image_id)?,
+        geometry: None,
         data: &image.data,
         format,
         width,
@@ -168,4 +223,49 @@ pub(crate) fn source_image_pane_band_progress<'a>(
         column,
         row,
     }))
+}
+
+impl SourceImagePlacement<'_> {
+    pub(crate) fn placement_controls(&self) -> String {
+        let Some(geometry) = self.geometry else {
+            return if self.format == 100 {
+                String::new()
+            } else {
+                format!(",c={},r={}", self.columns, self.rows)
+            };
+        };
+        let source = geometry.source;
+        let mut controls = format!(",x={},y={}", source.left, source.top);
+        if let Some(width) = source.width {
+            controls.push_str(&format!(",w={width}"));
+        }
+        if let Some(height) = source.height {
+            controls.push_str(&format!(",h={height}"));
+        }
+        if matches!(
+            geometry.sizing,
+            PlacementSizing::FitWidth | PlacementSizing::FitBox
+        ) {
+            controls.push_str(&format!(
+                ",c={}",
+                geometry.columns.expect("validated fit width")
+            ));
+        }
+        if matches!(
+            geometry.sizing,
+            PlacementSizing::FitHeight | PlacementSizing::FitBox
+        ) {
+            controls.push_str(&format!(
+                ",r={}",
+                geometry.rows.expect("validated fit height")
+            ));
+        }
+        if geometry.cell_offset.x != 0 {
+            controls.push_str(&format!(",X={}", geometry.cell_offset.x));
+        }
+        if geometry.cell_offset.y != 0 {
+            controls.push_str(&format!(",Y={}", geometry.cell_offset.y));
+        }
+        controls
+    }
 }
