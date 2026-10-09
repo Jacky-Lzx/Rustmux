@@ -795,6 +795,12 @@ rules, malformed/duplicate fields, quiet validation, and independent size limits
 intersection, aspect-ratio sizing, anchor overflow, and pixel-layout bounds.
 `cargo test --lib graphics::outer::tests` covers crop/encoding decisions, cache
 reuse, frame-budget retries, stacking bands, and image/placement cleanup.
+Regular placement replacements keep the displayed scene while new tiles are
+uploaded with `a=t`. Once every tile fits, Rustmux publishes the placements and
+removes the old scene inside one outer synchronized update (`CSI ?2026`). A
+clear, alternate-screen switch, or changed pane geometry cancels the retained
+scene. `cargo test --test terminal_loop graphics_replacement` checks the actual
+outer PTY command ordering and image visibility at synchronized-frame boundaries.
 `cargo test --lib graphics::snapshot::placeholder_raster::tests` checks
 letterboxed source-cell clipping, destination coordinates, and bounded-region
 equivalence.

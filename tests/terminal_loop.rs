@@ -38,6 +38,11 @@ fn graphics() {
 }
 
 #[test]
+fn graphics_replacement() {
+    run_scenario("graphics_replacement");
+}
+
+#[test]
 fn clipboard() {
     run_scenario("clipboard");
 }

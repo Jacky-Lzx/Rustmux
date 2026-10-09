@@ -48,7 +48,7 @@ impl ImageBand {
         }
     }
 
-    fn contains(self, z: i32) -> bool {
+    pub(super) fn contains(self, z: i32) -> bool {
         match self {
             Self::BehindBackground => z < BACKGROUND_Z_BOUNDARY,
             Self::BehindText => (BACKGROUND_Z_BOUNDARY..0).contains(&z),

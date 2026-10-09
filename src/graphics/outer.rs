@@ -212,6 +212,50 @@ enum OuterImageDelete {
     Placement { image_id: u32, placement_id: u32 },
 }
 
+impl KittyOverlay {
+    fn deletion(self) -> OuterImageDelete {
+        match self.placement_id {
+            Some(placement_id) => OuterImageDelete::Placement {
+                image_id: self.image_id,
+                placement_id,
+            },
+            None => OuterImageDelete::Image(self.image_id),
+        }
+    }
+}
+
+impl OuterImageDelete {
+    fn command(self) -> String {
+        match self {
+            Self::Image(image_id) => format!("\x1b_Ga=d,d=I,i={image_id},q=2\x1b\\"),
+            Self::Placement {
+                image_id,
+                placement_id,
+            } => format!("\x1b_Ga=d,d=i,i={image_id},p={placement_id},q=2\x1b\\"),
+        }
+    }
+}
+
+struct UploadWriter<'a> {
+    output: &'a mut VecDeque<u8>,
+    staging: bool,
+}
+
+impl Write for UploadWriter<'_> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if self.staging && bytes.starts_with(b"\x1b_Ga=T,") {
+            FrameWriter(self.output).write_all(b"\x1b_Ga=t,")?;
+            FrameWriter(self.output).write_all(&bytes[7..])?;
+            Ok(bytes.len())
+        } else {
+            FrameWriter(self.output).write(bytes)
+        }
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
 struct PendingPngTile {
     overlay: KittyOverlay,
     png: EncodedKittyPng,
@@ -232,6 +276,8 @@ struct IncompleteVirtual {
 
 pub(crate) struct KittyOverlays {
     entries: Vec<KittyOverlay>,
+    retired: Vec<KittyOverlay>,
+    staged_placements: Vec<(KittyOverlay, Vec<u8>)>,
     pending_delete: VecDeque<OuterImageDelete>,
     cached_images: Vec<CachedOuterImage>,
     pending_png: Option<PendingPngTile>,
@@ -248,6 +294,8 @@ impl Default for KittyOverlays {
     fn default() -> Self {
         Self {
             entries: Vec::new(),
+            retired: Vec::new(),
+            staged_placements: Vec::new(),
             pending_delete: VecDeque::new(),
             cached_images: Vec::new(),
             pending_png: None,
@@ -287,6 +335,9 @@ impl KittyOverlays {
         };
         self.cached_images.remove(index);
         self.entries.retain(|entry| entry.image_id != image_id);
+        self.retired.retain(|entry| entry.image_id != image_id);
+        self.staged_placements
+            .retain(|(entry, _)| entry.image_id != image_id);
         self.pending_delete
             .push_back(OuterImageDelete::Image(image_id));
         self.pending_retry = true;
@@ -324,6 +375,7 @@ impl KittyOverlays {
                     !self
                         .entries
                         .iter()
+                        .chain(&self.retired)
                         .any(|entry| entry.image_id == image.image_id)
                 })
                 .min_by_key(|(_, image)| image.last_used)
@@ -422,6 +474,32 @@ impl KittyOverlays {
         }) {
             self.pending_png = None;
         }
+        // A replacement may span several bounded output frames. Keep the
+        // displayed scene while its new tiles are uploaded without placements.
+        // Geometry changes and genuine clears must still remove old images.
+        let can_retain = |old: &KittyOverlay| {
+            old.window == window
+                && old.cell == cell
+                && visible
+                    .iter()
+                    .any(|(id, rect)| *id == old.pane && *rect == old.rect)
+                && panes.get(old.pane).is_some_and(|pane| {
+                    pane.screen().is_alternate() == old.alternate
+                        && pane.image_store().placements().any(|placement| {
+                            placement.geometry.is_some_and(|geometry| {
+                                geometry.anchor.alternate == old.alternate
+                                    && old.band.contains(geometry.z_index)
+                            })
+                        })
+                })
+        };
+        for old in std::mem::take(&mut self.retired) {
+            if can_retain(&old) {
+                self.retired.push(old);
+            } else {
+                self.pending_delete.push_back(old.deletion());
+            }
+        }
         let mut moved_cursor = false;
         for old in std::mem::take(&mut self.entries) {
             let current = visible.iter().find(|(id, _)| *id == old.pane);
@@ -436,15 +514,19 @@ impl KittyOverlays {
             if unchanged {
                 self.entries.push(old);
             } else {
-                self.pending_delete.push_back(match old.placement_id {
-                    Some(placement_id) => OuterImageDelete::Placement {
-                        image_id: old.image_id,
-                        placement_id,
-                    },
-                    None => OuterImageDelete::Image(old.image_id),
-                });
+                let staged = self
+                    .staged_placements
+                    .iter()
+                    .any(|(entry, _)| *entry == old);
+                self.staged_placements.retain(|(entry, _)| *entry != old);
+                if !staged && can_retain(&old) {
+                    self.retired.push(old);
+                } else {
+                    self.pending_delete.push_back(old.deletion());
+                }
             }
         }
+        let staging = !self.retired.is_empty() || !self.staged_placements.is_empty();
         self.flush_deletes(output)?;
         if !self.pending_delete.is_empty() {
             return Ok(());
@@ -526,9 +608,23 @@ impl KittyOverlays {
                             column_offset: raw.column,
                             row_offset: raw.row,
                         };
-                        FrameWriter(output).write_all(position.as_bytes())?;
-                        FrameWriter(output).write_all(&command)?;
-                        moved_cursor = true;
+                        if staging {
+                            let mut display = position.into_bytes();
+                            display.extend_from_slice(&command);
+                            self.staged_placements.push((overlay, display));
+                        } else {
+                            FrameWriter(output).write_all(position.as_bytes())?;
+                            UploadWriter { output, staging }.write_all(&command)?;
+                            if staging {
+                                let fit = if raw.format == 100 {
+                                    None
+                                } else {
+                                    Some((raw.columns, raw.rows))
+                                };
+                                self.stage_placement(overlay, &position, fit);
+                            }
+                            moved_cursor = true;
+                        }
                         self.next_placement_id = next_placement_id;
                         self.cache_clock = self.cache_clock.wrapping_add(1);
                         self.cached_images[cached].last_used = self.cache_clock;
@@ -665,8 +761,11 @@ impl KittyOverlays {
                                 image_id,
                                 band.output_z(),
                                 MAX_FRAME - output.len() - restore.len(),
-                                &mut FrameWriter(output),
+                                &mut UploadWriter { output, staging },
                             )?;
+                            if staging {
+                                self.stage_placement(overlay, &position, None);
+                            }
                             moved_cursor = true;
                             self.next_id = next_id;
                             self.entries.push(overlay);
@@ -775,21 +874,24 @@ impl KittyOverlays {
                                 image_id,
                                 band.output_z(),
                                 remaining,
-                                &mut FrameWriter(output),
+                                &mut UploadWriter { output, staging },
                             )?,
                             OverlayPayload::Rgba => write_kitty_rgba_placement_with_limit(
                                 tile,
                                 image_id,
                                 band.output_z(),
                                 remaining,
-                                &mut FrameWriter(output),
+                                &mut UploadWriter { output, staging },
                             )?,
                             OverlayPayload::Png(png) => png.write_with_limit(
                                 image_id,
                                 band.output_z(),
                                 remaining,
-                                &mut FrameWriter(output),
+                                &mut UploadWriter { output, staging },
                             )?,
+                        }
+                        if staging {
+                            self.stage_placement(overlay, &position, None);
                         }
                         moved_cursor = true;
                         self.next_id = next_id;
@@ -808,7 +910,58 @@ impl KittyOverlays {
         }
         if !self.pending_retry {
             self.pending_png = None;
+            self.publish_replacement(cursor, output)?;
         }
+        Ok(())
+    }
+
+    fn stage_placement(&mut self, overlay: KittyOverlay, position: &str, fit: Option<(u32, u32)>) {
+        let placement = overlay
+            .placement_id
+            .map_or_else(String::new, |id| format!(",p={id}"));
+        let fit = fit.map_or_else(String::new, |(columns, rows)| {
+            format!(",c={columns},r={rows}")
+        });
+        let command = format!(
+            "{position}\x1b_Ga=p,i={}{placement}{fit},z={},C=1,q=1\x1b\\",
+            overlay.image_id,
+            overlay.band.output_z()
+        );
+        self.staged_placements.push((overlay, command.into_bytes()));
+    }
+
+    fn publish_replacement(
+        &mut self,
+        cursor: (usize, usize),
+        output: &mut VecDeque<u8>,
+    ) -> io::Result<()> {
+        if self.retired.is_empty() && self.staged_placements.is_empty() {
+            return Ok(());
+        }
+        let restore = format!("\x1b[{};{}H", cursor.0 + 1, cursor.1 + 1);
+        let length = self
+            .staged_placements
+            .iter()
+            .map(|(_, command)| command.len())
+            .sum::<usize>()
+            + self
+                .retired
+                .iter()
+                .map(|old| old.deletion().command().len())
+                .sum::<usize>()
+            + restore.len();
+        if length > MAX_FRAME - output.len() {
+            self.pending_retry = true;
+            return Ok(());
+        }
+        for (_, command) in self.staged_placements.drain(..) {
+            FrameWriter(output).write_all(&command)?;
+        }
+        for old in self.retired.drain(..) {
+            self.pending_delete.push_back(old.deletion());
+        }
+        self.flush_deletes(output)?;
+        FrameWriter(output).write_all(restore.as_bytes())?;
         Ok(())
     }
 
@@ -816,7 +969,8 @@ impl KittyOverlays {
         self.pending_retry = false;
         self.pending_png = None;
         self.incomplete_virtual.clear();
-        for entry in self.entries.drain(..) {
+        self.staged_placements.clear();
+        for entry in self.entries.drain(..).chain(self.retired.drain(..)) {
             if entry.placement_id.is_none() {
                 self.pending_delete
                     .push_back(OuterImageDelete::Image(entry.image_id));
@@ -832,15 +986,7 @@ impl KittyOverlays {
 
     fn flush_deletes(&mut self, output: &mut VecDeque<u8>) -> io::Result<()> {
         while let Some(&delete) = self.pending_delete.front() {
-            let command = match delete {
-                OuterImageDelete::Image(image_id) => {
-                    format!("\x1b_Ga=d,d=I,i={image_id},q=2\x1b\\")
-                }
-                OuterImageDelete::Placement {
-                    image_id,
-                    placement_id,
-                } => format!("\x1b_Ga=d,d=i,i={image_id},p={placement_id},q=2\x1b\\"),
-            };
+            let command = delete.command();
             if command.len() > MAX_FRAME - output.len() {
                 self.pending_retry = true;
                 break;
@@ -1329,7 +1475,7 @@ mod tests {
     }
 
     #[test]
-    fn kitty_overlay_retries_invalidation_delete_when_frame_is_full() {
+    fn kitty_overlay_retains_displayed_image_when_replacement_frame_is_full() {
         let cell = CellPixelSize::new(1, 1).unwrap();
         let mut windows = Windows::default();
         let window_id = windows
@@ -1358,18 +1504,58 @@ mod tests {
         cache
             .render(window_id, panes, cell, 6, (3, 2), &mut output)
             .unwrap();
-        assert_eq!(
-            cache.pending_delete.front(),
-            Some(&OuterImageDelete::Image(0x8000_0000))
-        );
+        assert!(cache.pending_delete.is_empty());
+        assert_eq!(cache.retired.len(), 1);
+        assert_eq!(cache.retired[0].image_id, 0x8000_0000);
         assert!(cache.pending_retry);
         assert!(cache.entries.is_empty());
+        let image = panes
+            .active()
+            .compose_image_band(cell, ImageBand::AboveText)
+            .unwrap()
+            .unwrap();
+        let (image, _, _) = crop_overlay_to_visible_cells(image, cell).unwrap();
+        let allowance = b"\x1b[3;2H".len()
+            + kitty_rgba_placement_len(&image, cache.next_id, 0).unwrap()
+            + b"\x1b[4;3H".len();
+        output = VecDeque::from(vec![0; MAX_FRAME - allowance]);
+        cache
+            .render(window_id, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        let mut refreshed: Vec<_> = output.drain(MAX_FRAME - allowance..).collect();
+        assert!(cache.pending_retry);
+        assert_eq!(cache.staged_placements.len(), 1);
+        assert_eq!(cache.retired.len(), 1);
+        assert!(
+            !refreshed
+                .windows(6)
+                .any(|w| w == b"\x1b_Ga=p" || w == b"\x1b_Ga=d")
+        );
         output.clear();
         cache
             .render(window_id, panes, cell, 6, (3, 2), &mut output)
             .unwrap();
-        let refreshed: Vec<_> = output.into();
-        assert!(refreshed.starts_with(delete));
+        let commit: Vec<_> = output.into();
+        assert!(
+            !commit.windows(6).any(|w| w == b"\x1b_Ga=t"),
+            "completed upload must not repeat"
+        );
+        refreshed.extend(commit);
+        let upload = refreshed
+            .windows(b"a=t,f=32".len())
+            .position(|w| w == b"a=t,f=32")
+            .unwrap();
+        let placement = refreshed
+            .windows(b"a=p,i=2147483649".len())
+            .position(|w| w == b"a=p,i=2147483649")
+            .unwrap();
+        let deletion = refreshed
+            .windows(delete.len())
+            .position(|w| w == delete)
+            .unwrap();
+        assert!(upload < placement && placement < deletion);
+        assert!(cache.retired.is_empty());
+        assert!(cache.staged_placements.is_empty());
         assert!(
             refreshed
                 .windows(b"i=2147483649,z=0".len())
@@ -1758,5 +1944,193 @@ mod tests {
             );
         }
         assert!(cache.entries.is_empty());
+    }
+    fn replace_three_bands(panes: &mut PaneSet<Pane>, cell: CellPixelSize, pixels: &str) {
+        for (id, z) in [(1, i32::MIN), (2, -1), (3, 0)] {
+            let command =
+                format!("\x1b_Ga=T,f=32,s=1,v=1,i={id},p=1,c=1,r=1,z={z},C=1;{pixels}\x1b\\");
+            panes.active_mut().process_output_with_image_store_sized(
+                command.as_bytes(),
+                &mut |_| {},
+                cell,
+            );
+        }
+    }
+
+    #[test]
+    fn kitty_overlay_publishes_all_replacement_bands_before_retiring_old_scene() {
+        let cell = CellPixelSize::new(1, 1).unwrap();
+        let mut windows = Windows::default();
+        let window = windows
+            .create("replacement".into(), image_window(4, 6).unwrap())
+            .unwrap();
+        let panes = windows.active_mut().unwrap().content_mut();
+        replace_three_bands(panes, cell, "AQID/w==");
+        let mut cache = KittyOverlays::default();
+        let mut output = VecDeque::new();
+        cache
+            .render(window, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        let old_ids: Vec<_> = cache.entries.iter().map(|entry| entry.image_id).collect();
+        assert_eq!(old_ids.len(), 3);
+        replace_three_bands(panes, cell, "BAUG/w==");
+        let image = panes
+            .active()
+            .compose_image_band(cell, ImageBand::BehindBackground)
+            .unwrap()
+            .unwrap();
+        let (image, _, _) = crop_overlay_to_visible_cells(image, cell).unwrap();
+        let allowance = b"\x1b[3;2H".len()
+            + kitty_rgb_placement_len(&image, cache.next_id, i32::MIN).unwrap()
+            + b"\x1b[4;3H".len();
+        output = VecDeque::from(vec![0; MAX_FRAME - allowance]);
+        cache
+            .render(window, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        let first: Vec<_> = output.into_iter().skip(MAX_FRAME - allowance).collect();
+        assert!(cache.pending_retry);
+        assert_eq!(cache.retired.len(), 3);
+        assert_eq!(cache.staged_placements.len(), 1);
+        assert!(first.windows(6).any(|w| w == b"\x1b_Ga=t"));
+        assert!(
+            !first
+                .windows(6)
+                .any(|w| w == b"\x1b_Ga=p" || w == b"\x1b_Ga=d" || w == b"\x1b_Ga=T")
+        );
+
+        let mut output = VecDeque::new();
+        cache
+            .render(window, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        let bytes: Vec<_> = output.into();
+        let last_upload = bytes.windows(6).rposition(|w| w == b"\x1b_Ga=t").unwrap();
+        let first_display = bytes.windows(6).position(|w| w == b"\x1b_Ga=p").unwrap();
+        let last_display = bytes.windows(6).rposition(|w| w == b"\x1b_Ga=p").unwrap();
+        let first_delete = bytes.windows(6).position(|w| w == b"\x1b_Ga=d").unwrap();
+        assert!(last_upload < first_display && last_display < first_delete);
+        for id in old_ids {
+            let command = OuterImageDelete::Image(id).command();
+            assert!(
+                bytes
+                    .windows(command.len())
+                    .any(|w| w == command.as_bytes())
+            );
+        }
+        assert!(!cache.pending_retry);
+        assert_eq!(cache.entries.len(), 3);
+        assert!(cache.retired.is_empty() && cache.staged_placements.is_empty());
+    }
+
+    #[test]
+    fn kitty_overlay_clear_cancels_unpublished_replacement() {
+        let cell = CellPixelSize::new(1, 1).unwrap();
+        let mut windows = Windows::default();
+        let window = windows
+            .create("replacement".into(), image_window(4, 6).unwrap())
+            .unwrap();
+        let panes = windows.active_mut().unwrap().content_mut();
+        replace_three_bands(panes, cell, "AQID/w==");
+        let mut cache = KittyOverlays::default();
+        let mut output = VecDeque::new();
+        cache
+            .render(window, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        replace_three_bands(panes, cell, "BAUG/w==");
+        // Uploads fit, but the final placement/delete batch does not.
+        let image = panes
+            .active()
+            .compose_image_band(cell, ImageBand::BehindBackground)
+            .unwrap()
+            .unwrap();
+        let (image, _, _) = crop_overlay_to_visible_cells(image, cell).unwrap();
+        let allowance = b"\x1b[3;2H".len()
+            + kitty_rgb_placement_len(&image, cache.next_id, i32::MIN).unwrap()
+            + b"\x1b[4;3H".len();
+        output = VecDeque::from(vec![0; MAX_FRAME - allowance]);
+        cache
+            .render(window, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        let ids: Vec<_> = cache
+            .entries
+            .iter()
+            .chain(&cache.retired)
+            .map(|entry| entry.image_id)
+            .collect();
+        assert_eq!(ids.len(), 4);
+        output.clear();
+        cache.clear(&mut output).unwrap();
+        let bytes: Vec<_> = output.into();
+        for id in ids {
+            let command = OuterImageDelete::Image(id).command();
+            assert!(
+                bytes
+                    .windows(command.len())
+                    .any(|w| w == command.as_bytes())
+            );
+        }
+        assert!(!bytes.windows(6).any(|w| w == b"\x1b_Ga=p"));
+        assert!(
+            cache.entries.is_empty()
+                && cache.retired.is_empty()
+                && cache.staged_placements.is_empty()
+        );
+    }
+    #[test]
+    fn kitty_overlay_discards_stale_hidden_tiles_before_publishing_newer_revision() {
+        let cell = CellPixelSize::new(1, 1).unwrap();
+        let mut windows = Windows::default();
+        let window = windows
+            .create("rapid replacement".into(), image_window(4, 6).unwrap())
+            .unwrap();
+        let panes = windows.active_mut().unwrap().content_mut();
+        replace_three_bands(panes, cell, "AQID/w==");
+        let mut cache = KittyOverlays::default();
+        let mut output = VecDeque::new();
+        cache
+            .render(window, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        let old = cache.entries[0].image_id;
+        replace_three_bands(panes, cell, "BAUG/w==");
+        let image = panes
+            .active()
+            .compose_image_band(cell, ImageBand::BehindBackground)
+            .unwrap()
+            .unwrap();
+        let (image, _, _) = crop_overlay_to_visible_cells(image, cell).unwrap();
+        let allowance = b"\x1b[3;2H".len()
+            + kitty_rgb_placement_len(&image, cache.next_id, i32::MIN).unwrap()
+            + b"\x1b[4;3H".len();
+        output = VecDeque::from(vec![0; MAX_FRAME - allowance]);
+        cache
+            .render(window, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        let stale = cache.staged_placements[0].0.image_id;
+        replace_three_bands(panes, cell, "BwgJ/w==");
+        output.clear();
+        cache
+            .render(window, panes, cell, 6, (3, 2), &mut output)
+            .unwrap();
+        let bytes: Vec<_> = output.into();
+        let stale_delete = OuterImageDelete::Image(stale).command();
+        assert!(
+            bytes
+                .windows(stale_delete.len())
+                .any(|w| w == stale_delete.as_bytes())
+        );
+        let stale_display = format!("a=p,i={stale},");
+        assert!(
+            !bytes
+                .windows(stale_display.len())
+                .any(|w| w == stale_display.as_bytes())
+        );
+        let last_display = bytes.windows(6).rposition(|w| w == b"\x1b_Ga=p").unwrap();
+        let old_delete = OuterImageDelete::Image(old).command();
+        let retired = bytes
+            .windows(old_delete.len())
+            .position(|w| w == old_delete.as_bytes())
+            .unwrap();
+        assert!(last_display < retired);
+        assert!(cache.retired.is_empty() && cache.staged_placements.is_empty());
+        assert!(!cache.pending_retry);
     }
 }

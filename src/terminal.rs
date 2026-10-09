@@ -35,7 +35,10 @@ use crate::{
     pane_set::PaneSet,
     pane_view,
     prompt::{EditResult, PromptKind, WindowPrompt},
-    render::{Renderer, frame::FrameWriter},
+    render::{
+        Renderer,
+        frame::{FrameWriter, synchronized_frame},
+    },
     screen::{MouseTracking, Screen},
     session::{
         SessionEndpoint,
@@ -3478,35 +3481,43 @@ fn forward(
                         };
                         keys.decorate_hover(&mut view, panes.layout(), &bar, &footer, *outer_rows);
                     }
-                    if let Some(prompt) = &prompt {
-                        renderer.render(
-                            &prompt.overlay_themed_layout(&view, runtime.theme, runtime.compact),
-                            &mut FrameWriter(&mut to_terminal),
-                        )?;
-                    } else if let Some(help) = &mut help {
-                        renderer.render(
-                            &help.overlay_themed(&view, runtime.theme),
-                            &mut FrameWriter(&mut to_terminal),
-                        )?;
-                    } else {
-                        renderer.render(&view, &mut FrameWriter(&mut to_terminal))?;
-                    }
-                    if graphics_ready && prompt.is_none() && help.is_none() && history.is_none() {
-                        if let Some(cell) = *cell_pixels {
-                            kitty_overlays.render(
-                                id,
-                                panes,
-                                cell,
-                                *outer_rows,
-                                view.cursor(),
-                                &mut to_terminal,
+                    synchronized_frame(&mut to_terminal, |frame| {
+                        if let Some(prompt) = &prompt {
+                            renderer.render(
+                                &prompt.overlay_themed_layout(
+                                    &view,
+                                    runtime.theme,
+                                    runtime.compact,
+                                ),
+                                &mut FrameWriter(frame),
+                            )?;
+                        } else if let Some(help) = &mut help {
+                            renderer.render(
+                                &help.overlay_themed(&view, runtime.theme),
+                                &mut FrameWriter(frame),
                             )?;
                         } else {
-                            kitty_overlays.clear(&mut to_terminal)?;
+                            renderer.render(&view, &mut FrameWriter(frame))?;
                         }
-                    } else {
-                        kitty_overlays.clear(&mut to_terminal)?;
-                    }
+                        if graphics_ready && prompt.is_none() && help.is_none() && history.is_none()
+                        {
+                            if let Some(cell) = *cell_pixels {
+                                kitty_overlays.render(
+                                    id,
+                                    panes,
+                                    cell,
+                                    *outer_rows,
+                                    view.cursor(),
+                                    frame,
+                                )?;
+                            } else {
+                                kitty_overlays.clear(frame)?;
+                            }
+                        } else {
+                            kitty_overlays.clear(frame)?;
+                        }
+                        Ok(())
+                    })?;
                     for (pane_id, pane) in panes.iter_mut() {
                         if !zoomed || pane_id == focused {
                             pane.parts_mut().3.dirty = false;

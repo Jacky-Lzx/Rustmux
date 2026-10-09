@@ -180,7 +180,7 @@ try:
         b"\\033_Ga=T,f=32,s=1,v=1,i=6,p=1,c=1,r=1,z=-1,C=1,q=2;AQIDBA==\\033\\\\"
         b"\\033_Ga=T,f=32,s=1,v=1,i=7,p=1,c=1,r=1,z=0,C=1,q=2;AQIDBA==\\033\\\\'\n"
     )
-    header = rb"\x1b_Ga=T,f=32,s=([0-9]+),v=([0-9]+),i=([0-9]+),z=(-2147483648|-1|0),C=1,q=2,m=0;"
+    header = rb"\x1b_Ga=[Tt],f=32,s=([0-9]+),v=([0-9]+),i=([0-9]+),z=(-2147483648|-1|0),C=1,q=2,m=0;"
     deadline = time.monotonic() + 8
     while len({int(z) for _, _, _, z in re.findall(header, s.output)}) != 3:
         s.read()
