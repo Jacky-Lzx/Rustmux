@@ -1,6 +1,7 @@
 //! Local terminal bridge for one attached session client.
 
 use std::collections::VecDeque;
+#[cfg(test)]
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::os::fd::AsFd;
@@ -26,17 +27,29 @@ const MAX_BUFFERED_OUTPUT_BYTES: usize = MAX_FRAME_BYTES + READ_BYTES;
 ///
 /// The terminal enters raw mode and the alternate screen only after the
 /// handshake succeeds. Opening the manager transfers the guard to its picker;
-/// other return paths restore termios and display modes here.
-pub(crate) fn run(stream: UnixStream, name: &mut SessionName) -> io::Result<AttachmentExit> {
-    let file = TerminalDevice::open_controlling()?;
+/// returning from that picker reuses the guard without switching screens.
+/// Other return paths restore termios and display modes here.
+pub(crate) fn run(
+    stream: UnixStream,
+    name: &mut SessionName,
+    terminal: Option<TerminalDevice>,
+) -> io::Result<AttachmentExit> {
+    let file = match terminal.as_ref() {
+        Some(terminal) => terminal.file().try_clone()?,
+        None => TerminalDevice::open_controlling()?,
+    };
     let size = crate::terminal_device::window_size(&file)?;
     let workspace = super::acquire_workspace(name)?;
     let peer = handshake::client_with_size(stream, size)?;
     record_connection(name)?;
     drop(workspace);
     let signals = ClientSignals::install()?;
+    let terminal = match terminal {
+        Some(terminal) => terminal,
+        None => TerminalDevice::enter(file)?,
+    };
     let mut current = Some(name.clone());
-    let result = run_named_attached(file, peer, &signals, &mut current);
+    let result = run_named_attached(terminal, peer, &signals, &mut current);
     if let Some(current) = current {
         *name = current;
     }
@@ -45,20 +58,21 @@ pub(crate) fn run(stream: UnixStream, name: &mut SessionName) -> io::Result<Atta
 
 #[cfg(test)]
 fn run_attached(file: File, peer: ClientPeer, signals: &ClientSignals) -> io::Result<ClientExit> {
-    run_named_attached(file, peer, signals, &mut None).map(|exit| match exit {
-        AttachmentExit::Process(status) => ClientExit::Process(status),
-        AttachmentExit::Detached => ClientExit::Detached,
-        AttachmentExit::SessionManager(_) => ClientExit::SessionManager,
-    })
+    run_named_attached(TerminalDevice::enter(file)?, peer, signals, &mut None).map(
+        |exit| match exit {
+            AttachmentExit::Process(status) => ClientExit::Process(status),
+            AttachmentExit::Detached => ClientExit::Detached,
+            AttachmentExit::SessionManager(_) => ClientExit::SessionManager,
+        },
+    )
 }
 
 fn run_named_attached(
-    file: File,
+    mut terminal: TerminalDevice,
     peer: ClientPeer,
     signals: &ClientSignals,
     name: &mut Option<SessionName>,
 ) -> io::Result<AttachmentExit> {
-    let mut terminal = TerminalDevice::enter(file)?;
     let result = bridge(&mut terminal, peer, signals, name);
     let restored = if matches!(result, Ok(ClientExit::SessionManager)) {
         Ok(())
@@ -662,8 +676,10 @@ mod tests {
             resize: Arc::new(AtomicBool::new(false)),
             ids: Vec::new(),
         };
-        let client =
-            thread::spawn(move || run_named_attached(slave, peer, &signals, &mut None).unwrap());
+        let client = thread::spawn(move || {
+            let terminal = TerminalDevice::enter(slave).unwrap();
+            run_named_attached(terminal, peer, &signals, &mut None).unwrap()
+        });
 
         let AttachmentExit::SessionManager(terminal) = client.join().unwrap() else {
             panic!("expected session manager terminal handoff");

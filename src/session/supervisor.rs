@@ -182,8 +182,9 @@ pub fn attach_or_create(name: &SessionName, config_path: Option<&Path>) -> io::R
 /// Attach this terminal to an existing named session.
 pub fn attach(name: &SessionName, config_path: Option<&Path>) -> io::Result<u8> {
     let mut name = name.clone();
+    let mut retained_terminal = None;
     loop {
-        match attach_once(&mut name)? {
+        match attach_once(&mut name, retained_terminal.take())? {
             client::AttachmentExit::Process(status) => return Ok(status),
             client::AttachmentExit::Detached => return Ok(0),
             client::AttachmentExit::SessionManager(mut terminal) => {
@@ -191,17 +192,23 @@ pub fn attach(name: &SessionName, config_path: Option<&Path>) -> io::Result<u8> 
                     Some(next) => name = next,
                     None => return Ok(0),
                 }
+                if terminal.is_active() {
+                    retained_terminal = Some(terminal);
+                }
             }
         }
     }
 }
 
-fn attach_once(name: &mut SessionName) -> io::Result<client::AttachmentExit> {
+fn attach_once(
+    name: &mut SessionName,
+    terminal: Option<crate::terminal_device::TerminalDevice>,
+) -> io::Result<client::AttachmentExit> {
     use std::os::unix::fs::MetadataExt;
     let _lease = acquire_client(name)?;
     let metadata = fs::symlink_metadata(session_socket_path(name))?;
     let identity = (metadata.dev(), metadata.ino());
-    let result = client::run(connect(name)?, name);
+    let result = client::run(connect(name)?, name, terminal);
     // A local prefix shortcut can detach before an in-flight Renamed notice
     // is read. Recover the same listener identity rather than reusing an alias.
     if matches!(&result, Ok(client::AttachmentExit::SessionManager(_)))

@@ -12,9 +12,11 @@ session when opened from one). Navigation and list refreshes retain your selecti
 
 When opened from a session, the manager overlays the session's existing terminal
 contents. That background stays at the moment of entry while pane processes
-continue running. Closing or switching sessions restores the terminal before
-reattaching, and the session then redraws its latest contents. The standalone
-`attach` picker still starts with a blank background.
+continue running. Cancelling with Esc, `q` or Ctrl-C returns to the current
+session in the same alternate screen, where it redraws its latest contents
+without exposing the outer shell. Switching sessions restores the terminal
+before reattaching. The standalone `attach` picker still starts with a blank
+background.
 
 ```toml
 [session_manager]

@@ -246,10 +246,9 @@ try:
     picker.expect(b"RUSTMUX_READY>")
     expect_bar(picker, f"Rustmux ({picker_target})".encode())
 
-    # Clicking the named-session footer asks the client to leave the alternate
-    # screen, opens the manager with the current session selected, and attaches
-    # the chosen session. Cancelling a manager opened this way reconnects the
-    # session that opened it.
+    # Clicking the named-session footer opens the manager over the current
+    # session and attaches the chosen session. Cancelling reconnects the session
+    # that opened it without switching the alternate screen.
     expect_footer(picker, b"LOCKED")
     assert b"Ctrl-W" not in picker.physical_rows[-1]
     picker.send(b"\x1b[<0;11;24M\x1b[<0;11;24m")
@@ -284,7 +283,7 @@ try:
         picker.read()
         assert time.monotonic() < end, bytes(picker.output[-2000:])
     picker.output.clear()
-    picker.last_rows.clear()
+    picker.frames.clear()
     picker.send(b"q")
     picker.expect(b"RUSTMUX_READY>")
     expect_bar(picker, f"Rustmux ({picker_helper})".encode())
@@ -305,6 +304,10 @@ try:
     while b"Session Manager" not in picker.output:
         picker.read()
         assert time.monotonic() < end, bytes(picker.output[-2000:])
+    # Wait for the resumed client's frame rather than a cached pre-manager
+    # prompt before sending the next command (which changes keyboard encoding).
+    picker.output.clear()
+    picker.frames.clear()
     picker.send(b"q")
     picker.expect(b"RUSTMUX_READY>")
     expect_bar(picker, f"Rustmux ({picker_helper})".encode())

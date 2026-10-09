@@ -57,10 +57,19 @@ down=["{down}"]
 
     def leave():
         global session
-        session.send(b"\x1b")
-        session.expect(b"RUSTMUX_READY>")
+        for attempt in range(2):
+            session.send(b"\x1b")
+            transition=session.expect(b"RUSTMUX_READY>")
+            # Returning to the current session must not expose the outer shell
+            # or clear the alternate screen before the session redraws it.
+            for destructive in (b"\x1b[?1049l",b"\x1b[?1049h",b"\x1b[2J"):
+                assert destructive not in transition, (destructive,transition)
+            if attempt == 0:
+                session.send(b"\x02\x17")
+                expect(b"Session Manager")
         session.send(b"\x02d")
         session.finish(0)
+        assert b"\x1b[?1049l" in session.output
         session.close()
         session=None
 

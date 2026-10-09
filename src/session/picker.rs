@@ -124,9 +124,11 @@ pub(super) fn choose(
     );
     worker.shutdown();
     reload.shutdown();
-    // Killing a session refreshes the same manager. Retain its background and
-    // guard across that refresh, but restore before attachment or a server fork.
-    let restored = if preserve_background && matches!(&result, Ok(Choice::Kill(..))) {
+    // Retain the guard while refreshing the manager or returning to its live
+    // session. Other selections restore before attachment or a server fork.
+    let restored = if preserve_background
+        && matches!(&result, Ok(Choice::Kill(..) | Choice::Cancel(Some(_))))
+    {
         Ok(())
     } else {
         terminal.restore()

@@ -79,6 +79,10 @@ impl TerminalDevice {
         window_size(&self.file)
     }
 
+    pub(crate) fn is_active(&self) -> bool {
+        self.active
+    }
+
     /// Keep the current alternate-screen contents and raw-mode guard for a picker.
     pub(crate) fn prepare_session_manager(&mut self) -> io::Result<()> {
         self.write_all(RESET_DISPLAY_MODES)?;
