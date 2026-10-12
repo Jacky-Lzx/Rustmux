@@ -132,8 +132,14 @@ down=["{down}"]
         session.send(b"\x1b")
         expect(b"<v> New")
         # Listings refresh in the open view and retain the search editor.
+        # The fixed per-user runtime directory can contain real or parallel-test
+        # sessions. Filter before creation so refresh is tested within our fixture.
+        session.send(("/"+helper).encode())
+        expect(("Search: "+helper+"_").encode(),b"0 SESSIONS")
         run("new",helper,"--detached","--config",selected)
-        expect(helper.encode())
+        expect(("Search: "+helper+"_").encode(),b"1 SESSION",b"[DETACHED]")
+        session.send(b"\x1b")
+        expect(b"<v> New")
         run("kill",helper)
         # A no-op key paints after the worker has refreshed, then search proves
         # the stopped session is gone rather than matching an older frame.

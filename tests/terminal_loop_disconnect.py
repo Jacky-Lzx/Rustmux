@@ -137,9 +137,10 @@ with tempfile.TemporaryDirectory(prefix="rustmux-disconnect-") as temporary:
         resize(picker)
         picker.expect(b"RUSTMUX_READY>")
         picker.send(b"\x02\x17")
-        expect(picker, b"[CURRENT]")
+        expect(picker, b"Session Manager")
+        # Other live sessions may push this row outside the initial viewport.
         picker.send(("/" + current).encode())
-        expect(picker, ("Search: " + current + "_").encode())
+        expect(picker, ("Search: " + current + "_").encode(), b"[CURRENT]")
         picker.send(b"\x18")
         expect(picker, b"Disconnect failed: current session")
         picker.send(b"\x1b")

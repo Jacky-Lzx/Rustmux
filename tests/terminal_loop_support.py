@@ -111,7 +111,14 @@ class Session:
                     # OSC 8 metadata wraps glyphs but never occupies cells.
                     text_frame = re.sub(rb"\x1b\]8;[^\x1b\x07]*(?:\x1b\\|\x07)", b"", text_frame)
                     positions = list(re.finditer(rb"\x1b\[([0-9]+);([0-9]+)H", text_frame))
-                    height = struct.unpack("HHHH", fcntl.ioctl(self.slave, termios.TIOCGWINSZ, b"\0" * 8))[0]
+                    try:
+                        height = struct.unpack("HHHH", fcntl.ioctl(self.slave, termios.TIOCGWINSZ, b"\0" * 8))[0]
+                    except OSError as error:
+                        # macOS can revoke the slave after supervisor exit while
+                        # one final rendered frame remains readable on the master.
+                        if error.errno != errno.ENOTTY or self.child.poll() is None:
+                            raise
+                        height = len(self.physical_rows) or 24
                     height = height or len(self.last_rows)
                     rows = (self.physical_rows + [b""] * height)[:height]
                     for pos, following in zip(positions, positions[1:]):
