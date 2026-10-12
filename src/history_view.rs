@@ -355,6 +355,9 @@ impl HistoryView {
                         })
                         .or_else(|| {
                             (!self.shortcuts.clear_defaults()
+                                && !self
+                                    .shortcuts
+                                    .disabled(crate::config::BindingMode::History, canonical)
                                 && self.shortcuts.history_binding(canonical).is_none())
                             .then(|| canonical.label())
                         })

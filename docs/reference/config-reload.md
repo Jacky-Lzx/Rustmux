@@ -44,6 +44,10 @@ other settings. Connected clients continue using the server's existing entry
 policy. See [Interface Themes](interface-themes.md) for presets, color overrides
 and client/server ownership.
 
+[OS and machine overrides](config-overrides.md) reuse the server identity captured
+at startup. The active selection and field sources appear in `config show`;
+new clients do not change the server selection.
+
 ## Applying updates and handling errors
 
 A valid update applies atomically. With an attached terminal it waits for LOCKED

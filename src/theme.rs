@@ -58,7 +58,7 @@ pub(crate) fn default_palette_color(index: u8) -> (u8, u8, u8) {
     }
 }
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 pub(crate) type Rgb = (u8, u8, u8);
@@ -106,7 +106,7 @@ impl Default for Theme {
     }
 }
 
-#[derive(Default, Deserialize)]
+#[derive(Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ThemeConfig {
     #[serde(default)]
@@ -115,7 +115,7 @@ pub(crate) struct ThemeConfig {
     colors: BTreeMap<String, String>,
 }
 
-#[derive(Default, Deserialize)]
+#[derive(Default, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 enum Preset {
     #[default]

@@ -18,6 +18,7 @@ const MAX_BYTES: u64 = 512 * 1024;
 pub(crate) struct Source {
     pub path: PathBuf,
     pub allow_missing: bool,
+    pub environment: Environment,
 }
 
 type Update = Result<Config, String>;
@@ -52,13 +53,14 @@ impl Reload {
                             .as_ref()
                             .map_err(Clone::clone)
                             .and_then(|text| {
-                                let parsed = match text {
-                                    Some(text) => parse_config(text).map_err(|error| {
-                                        format!("invalid {}: {error}", source.path.display())
-                                    })?,
-                                    None => ParsedConfig::default(),
-                                };
+                                let (parsed, selection, _) =
+                                    parse_source(text.as_deref(), &source.environment).map_err(
+                                        |error| {
+                                            format!("invalid {}: {error}", source.path.display())
+                                        },
+                                    )?;
                                 let mut config = resolve_config(parsed);
+                                config.selection = Some(selection);
                                 config.source = Some(source.clone());
                                 Ok(config)
                             })
@@ -160,6 +162,7 @@ impl Reload {
             new_window_key: Option<String>,
             settings: Settings,
             session_manager: std::collections::BTreeMap<String, Vec<String>>,
+            selection: Option<&'a Selection>,
         }
         toml::to_string(&Status {
             path: self
@@ -180,6 +183,7 @@ impl Reload {
                 .then(|| char::from(self.current.shortcuts.key_for(b'c')).to_string()),
             settings: Settings::from(&self.current),
             session_manager: self.current.manager.report(),
+            selection: self.current.selection.as_ref(),
         })
         .map_err(io::Error::other)
     }
@@ -343,11 +347,56 @@ mod tests {
         assert!(!reload.current().remain_on_exit());
     }
     #[test]
+    fn overrides_reload_using_the_startup_identity_and_recover_atomically() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("config.toml");
+        let environment = Environment::detect(Some("linux"), Some("desk")).unwrap();
+        let source = "compact=false\n[overrides.os.linux]\ncompact=true\n[overrides.machine.desk]\nscrollback_lines=7";
+        fs::write(&path, source).unwrap();
+        let (parsed, selection, _) = parse_config_for(source, &environment).unwrap();
+        let mut config = resolve_config(parsed);
+        config.selection = Some(selection);
+        config.source = Some(Source {
+            path: path.clone(),
+            allow_missing: true,
+            environment,
+        });
+        let mut reload = Reload::new(&config).unwrap().unwrap();
+        initialized(&mut reload);
+        assert!(reload.current().compact());
+        assert_eq!(reload.current().scrollback_lines(), 7);
+        fs::write(
+            &path,
+            "[overrides.machine.desk]\nscrollback_lines='invalid'",
+        )
+        .unwrap();
+        wait(&mut reload, |r| r.error().is_some());
+        assert_eq!(reload.current().scrollback_lines(), 7);
+        assert!(reload.take().is_none());
+        fs::write(&path, "compact=false\n[overrides.os.linux]\ncompact=true").unwrap();
+        wait(&mut reload, |r| r.pending());
+        let next = reload.take().unwrap();
+        assert_eq!(next.scrollback_lines(), DEFAULT_SCROLLBACK_LINES);
+        assert!(next.compact());
+        reload.commit(next);
+        let report: toml::Table = reload.status().unwrap().parse().unwrap();
+        assert_eq!(
+            report["selection"]["environment"]["machine"].as_str(),
+            Some("desk")
+        );
+        fs::remove_file(&path).unwrap();
+        wait(&mut reload, |r| r.pending());
+        assert!(!reload.take().unwrap().compact());
+        reload.shutdown();
+    }
+
+    #[test]
     fn bounded_reader_rejects_large_invalid_utf8_and_special_files() {
         let root = tempfile::tempdir().unwrap();
         let source = Source {
             path: root.path().join("config.toml"),
             allow_missing: false,
+            environment: Environment::detect(None, None).unwrap(),
         };
         fs::write(&source.path, vec![b'x'; MAX_BYTES as usize + 1]).unwrap();
         assert!(read(&source).unwrap_err().contains("512 KiB"));

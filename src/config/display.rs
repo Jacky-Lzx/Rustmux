@@ -125,6 +125,20 @@ pub(super) fn parse_displays(table: &toml::Table, shortcuts: &mut Shortcuts) -> 
 }
 
 impl Shortcuts {
+    pub(crate) fn disabled(&self, mode: BindingMode, key: HistoryKey) -> bool {
+        // Named footer keys share codes with non-ASCII bytes; those bytes are input.
+        if matches!(key, HistoryKey::Byte(128..=255)) {
+            return false;
+        }
+        let code = key.footer_code();
+        self.disabled[mode as usize * 2 + usize::from(code / 128)] & (1_u128 << (code % 128)) != 0
+    }
+
+    pub(super) fn disable(&mut self, mode: BindingMode, key: HistoryKey) {
+        let code = key.footer_code();
+        self.disabled[mode as usize * 2 + usize::from(code / 128)] |= 1_u128 << (code % 128);
+    }
+
     pub(crate) fn display(&self, mode: BindingMode, key: HistoryKey) -> BindingDisplay {
         self.displays
             .iter()
@@ -134,6 +148,12 @@ impl Shortcuts {
     }
 
     pub(crate) fn has_display(&self, mode: BindingMode) -> bool {
+        if self.disabled[mode as usize * 2..mode as usize * 2 + 2]
+            .iter()
+            .any(|bits| *bits != 0)
+        {
+            return true;
+        }
         self.displays.iter().flatten().any(|(m, _, _)| *m == mode)
     }
 
@@ -206,6 +226,9 @@ impl Shortcuts {
         key: HistoryKey,
         session: bool,
     ) -> Option<&'static str> {
+        if self.disabled(mode, key) {
+            return None;
+        }
         let byte = if let HistoryKey::Byte(byte) = key {
             Some(byte)
         } else {

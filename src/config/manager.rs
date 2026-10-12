@@ -114,6 +114,14 @@ impl Default for Bindings {
 }
 impl Bindings {
     pub fn parse(value: Option<&toml::Value>) -> Result<Self, String> {
+        Self::parse_fields(value, true)
+    }
+
+    pub(super) fn validate_local(value: &toml::Value) -> Result<(), String> {
+        Self::parse_fields(Some(value), false).map(|_| ())
+    }
+
+    fn parse_fields(value: Option<&toml::Value>, check_conflicts: bool) -> Result<Self, String> {
         let mut result = Self::default();
         if let Some(value) = value {
             let table = value.as_table().ok_or("session_manager must be a table")?;
@@ -152,7 +160,7 @@ impl Bindings {
             }
             for (action, name, keys) in overrides {
                 for key in keys {
-                    if result.keys.insert(key, action).is_some() {
+                    if result.keys.insert(key, action).is_some() && check_conflicts {
                         return Err(format!(
                             "session_manager.{name} key {} conflicts with another action",
                             key.label()

@@ -1222,7 +1222,11 @@ impl WindowInput {
         let mut bytes = self.take_mouse();
         if self.mode == InputMode::Normal
             && let Some((direction, event_type)) = arrow_key_event(&bytes)
-            && self.shortcuts.normal_arrow_binding(direction).is_some()
+            && (self.shortcuts.normal_arrow_binding(direction).is_some()
+                || self.shortcuts.disabled(
+                    crate::config::BindingMode::Normal,
+                    crate::config::HistoryKey::arrow(direction),
+                ))
         {
             if event_type != 3 {
                 self.normal_arrow_shortcut(direction, output);
@@ -1597,6 +1601,12 @@ impl WindowInput {
     }
 
     fn shortcut(&mut self, byte: u8, output: &mut Vec<WindowKey>) {
+        if self.shortcuts.disabled(
+            crate::config::BindingMode::Normal,
+            crate::config::HistoryKey::Byte(byte),
+        ) {
+            return;
+        }
         if self.session_available && !self.shortcuts.clear_defaults() && byte == b'd' {
             self.mode = InputMode::Locked;
             output.push(WindowKey::Detach);
@@ -1649,6 +1659,12 @@ impl WindowInput {
     }
 
     fn normal_arrow_shortcut(&mut self, direction: Direction, output: &mut Vec<WindowKey>) {
+        if self.shortcuts.disabled(
+            crate::config::BindingMode::Normal,
+            crate::config::HistoryKey::arrow(direction),
+        ) {
+            return;
+        }
         let Some(binding) = self.shortcuts.normal_arrow_binding(direction) else {
             return;
         };
@@ -1661,6 +1677,12 @@ impl WindowInput {
     }
 
     fn pane_shortcut(&mut self, byte: u8, output: &mut Vec<WindowKey>) {
+        if self.shortcuts.disabled(
+            crate::config::BindingMode::Pane,
+            crate::config::HistoryKey::Byte(byte),
+        ) {
+            return;
+        }
         let Some(binding) = self.shortcuts.pane_binding(byte) else {
             return;
         };
@@ -1668,6 +1690,12 @@ impl WindowInput {
     }
 
     fn pane_arrow_shortcut(&mut self, direction: Direction, output: &mut Vec<WindowKey>) {
+        if self.shortcuts.disabled(
+            crate::config::BindingMode::Pane,
+            crate::config::HistoryKey::arrow(direction),
+        ) {
+            return;
+        }
         let Some(binding) = self.shortcuts.pane_arrow_binding(direction) else {
             return;
         };
@@ -1717,6 +1745,12 @@ impl WindowInput {
     }
 
     fn resize_shortcut(&mut self, byte: u8, output: &mut Vec<WindowKey>) {
+        if self.shortcuts.disabled(
+            crate::config::BindingMode::Resize,
+            crate::config::HistoryKey::Byte(byte),
+        ) {
+            return;
+        }
         let Some(binding) = self.shortcuts.resize_binding(byte) else {
             return;
         };
@@ -1724,6 +1758,12 @@ impl WindowInput {
     }
 
     fn resize_arrow_shortcut(&mut self, direction: Direction, output: &mut Vec<WindowKey>) {
+        if self.shortcuts.disabled(
+            crate::config::BindingMode::Resize,
+            crate::config::HistoryKey::arrow(direction),
+        ) {
+            return;
+        }
         let Some(action) = self.shortcuts.resize_arrow_action(direction) else {
             return;
         };
@@ -1750,6 +1790,12 @@ impl WindowInput {
     }
 
     fn move_shortcut(&mut self, byte: u8, output: &mut Vec<WindowKey>) {
+        if self.shortcuts.disabled(
+            crate::config::BindingMode::Move,
+            crate::config::HistoryKey::Byte(byte),
+        ) {
+            return;
+        }
         let Some(binding) = self.shortcuts.move_binding(byte) else {
             return;
         };
@@ -1757,6 +1803,12 @@ impl WindowInput {
     }
 
     fn move_arrow_shortcut(&mut self, direction: Direction, output: &mut Vec<WindowKey>) {
+        if self.shortcuts.disabled(
+            crate::config::BindingMode::Move,
+            crate::config::HistoryKey::arrow(direction),
+        ) {
+            return;
+        }
         let Some(action) = self.shortcuts.move_arrow_action(direction) else {
             return;
         };
@@ -1783,6 +1835,12 @@ impl WindowInput {
     }
 
     fn tab_shortcut(&mut self, byte: u8, output: &mut Vec<WindowKey>) {
+        if self.shortcuts.disabled(
+            crate::config::BindingMode::Tab,
+            crate::config::HistoryKey::Byte(byte),
+        ) {
+            return;
+        }
         let Some(binding) = self.shortcuts.tab_binding(byte) else {
             return;
         };
@@ -1790,6 +1848,12 @@ impl WindowInput {
     }
 
     fn tab_arrow_shortcut(&mut self, direction: Direction, output: &mut Vec<WindowKey>) {
+        if self.shortcuts.disabled(
+            crate::config::BindingMode::Tab,
+            crate::config::HistoryKey::arrow(direction),
+        ) {
+            return;
+        }
         let Some(binding) = self.shortcuts.tab_arrow_binding(direction) else {
             return;
         };
@@ -1830,6 +1894,12 @@ impl WindowInput {
     }
 
     fn session_shortcut(&mut self, byte: u8, output: &mut Vec<WindowKey>) {
+        if self.shortcuts.disabled(
+            crate::config::BindingMode::Session,
+            crate::config::HistoryKey::Byte(byte),
+        ) {
+            return;
+        }
         let Some(binding) = self.shortcuts.session_binding(byte) else {
             return;
         };
@@ -7589,6 +7659,35 @@ mod control;
 #[cfg(test)]
 mod config_reload_input_tests {
     use super::*;
+    #[test]
+    fn removed_bindings_do_not_dispatch_or_leave_their_mode() {
+        let os = std::env::consts::OS;
+        let source = format!(
+            "[overrides.os.{os}.keybinds.normal]\nn=[]\nleft=[]\n[overrides.os.{os}.keybinds.pane]\nx=[]"
+        );
+        let shortcuts = crate::config::Shortcuts::test_from_config(&source);
+        for (mode, bytes) in [
+            (InputMode::Normal, &b"n"[..]),
+            (InputMode::Normal, &b"\x1b[110u"[..]),
+            (InputMode::Normal, &b"\x1b[D"[..]),
+            (InputMode::Normal, &b"\x1b[1D"[..]),
+            (InputMode::Pane, &b"x"[..]),
+        ] {
+            let mut input = WindowInput {
+                shortcuts,
+                mode,
+                kitty_keyboard_flags: u8::from(bytes.ends_with(b"u")),
+                ..WindowInput::default()
+            };
+            let mut output = Vec::new();
+            for &byte in bytes {
+                input.feed(byte, &mut output);
+            }
+            assert!(output.is_empty(), "{mode:?} {bytes:?}: {output:?}");
+            assert_eq!(input.mode, mode);
+        }
+    }
+
     #[test]
     fn reload_barrier_preserves_modes_partial_mouse_and_paste_markers() {
         let mut input = WindowInput::default();

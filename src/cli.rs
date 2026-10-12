@@ -89,6 +89,15 @@ pub enum ConfigCommand {
         /// Treat ignored fields and bindings as errors.
         #[arg(long)]
         strict: bool,
+        /// Simulate an operating system for configuration selection.
+        #[arg(long)]
+        os: Option<String>,
+        /// Simulate a machine instead of RUSTMUX_MACHINE or the system hostname.
+        #[arg(long)]
+        machine: Option<String>,
+        /// Show selected layers and field sources.
+        #[arg(long, conflicts_with = "toml")]
+        explain: bool,
     },
     /// Show a running server's active settings and configuration reload status as TOML.
     Show {
@@ -330,6 +339,9 @@ mod tests {
             Some(Command::Config(ConfigCommand::Check {
                 toml: true,
                 strict: true,
+                os: None,
+                machine: None,
+                explain: false,
             }))
         );
         assert_eq!(

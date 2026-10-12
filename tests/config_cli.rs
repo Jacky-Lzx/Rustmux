@@ -14,6 +14,7 @@ fn base_command(root: &Path) -> Command {
         .env("XDG_STATE_HOME", root.join("state"))
         .env("HOME", root)
         .env("RUSTMUX", "1") // These read-only commands are allowed inside a pane.
+        .env_remove("RUSTMUX_MACHINE")
         .env_remove("RUSTMUX_SHELL")
         .env_remove("SHELL");
     command
@@ -680,4 +681,91 @@ fn strict_display_validation_accepts_supported_overrides_and_reports_ignored_act
             .iter()
             .any(|warning| warning.as_str().unwrap().contains("ignored binding"))
     );
+}
+
+#[test]
+fn overrides_follow_fixed_priority_and_expose_sources_in_toml_and_explanation() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    let config = root.join("overrides.toml");
+    fs::write(&config, "scrollback_lines=10\ncompact=false\n[overrides.machine.'desk.local']\nscrollback_lines=30\n[overrides.os.linux]\nscrollback_lines=20\ncompact=true").unwrap();
+    let args = [
+        "config",
+        "check",
+        "--config",
+        config.to_str().unwrap(),
+        "--os",
+        "linux",
+        "--machine",
+        "desk.local",
+    ];
+    let output = base_command(root)
+        .args(args)
+        .args(["--toml", "--strict"])
+        .env("RUSTMUX_MACHINE", "ignored")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let report = report(&output);
+    assert_eq!(settings(&report)["scrollback_lines"].as_integer(), Some(30));
+    assert_eq!(settings(&report)["compact"].as_bool(), Some(true));
+    assert_eq!(
+        report["selection"]["environment"]["machine"].as_str(),
+        Some("desk.local")
+    );
+    assert_eq!(
+        report["selection"]["sources"]["scrollback_lines"].as_str(),
+        Some("overrides.machine.desk.local")
+    );
+    assert!(report["warnings"].as_array().unwrap().is_empty());
+    let output = command(root, &[&args[..], &["--explain"]].concat());
+    assert!(output.status.success(), "{output:?}");
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.contains("machine: desk.local (from --machine)"));
+    assert!(text.contains(
+        "built-in defaults -> config -> overrides.os.linux -> overrides.machine.desk.local"
+    ));
+    assert!(text.contains("scrollback_lines <- overrides.machine.desk.local"));
+    assert!(!root.join("state").exists());
+}
+
+#[test]
+fn explicit_machine_precedes_environment_and_inactive_overrides_fail_validation() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    let config = root.join("overrides.toml");
+    fs::write(
+        &config,
+        "[overrides.machine.environment]\ncompact=true\n[overrides.machine.cli]\ncompact=false",
+    )
+    .unwrap();
+    let check = |args: &[&str], machine: &str| {
+        base_command(root)
+            .args([
+                "config",
+                "check",
+                "--config",
+                config.to_str().unwrap(),
+                "--toml",
+            ])
+            .args(args)
+            .env("RUSTMUX_MACHINE", machine)
+            .output()
+            .unwrap()
+    };
+    let output = check(&[], "environment");
+    assert!(output.status.success());
+    assert_eq!(settings(&report(&output))["compact"].as_bool(), Some(true));
+    let output = check(&["--machine", "cli"], "");
+    assert!(output.status.success());
+    assert_eq!(settings(&report(&output))["compact"].as_bool(), Some(false));
+    assert!(!check(&[], "").status.success());
+    assert!(!check(&["--os", "maco"], "cli").status.success());
+    fs::write(&config, "[overrides.machine.other]\ncompact_typo=true").unwrap();
+    let output = check(&["--machine", "cli"], "environment");
+    assert!(!output.status.success());
+    let error = String::from_utf8(output.stderr).unwrap();
+    assert!(error.contains("overrides.machine.other"));
+    assert!(error.contains("unknown field"));
+    assert!(!root.join("state").exists());
 }

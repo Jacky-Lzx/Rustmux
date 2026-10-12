@@ -27,8 +27,16 @@ fn execute(cli: rustmux::cli::Cli) -> Result<u8, String> {
             print!("{}", rustmux::config::default_config());
             Ok(0)
         }
-        Some(rustmux::cli::Command::Config(ConfigCommand::Check { toml, strict })) => {
-            let report = rustmux::config::inspect(config_path)?;
+        Some(rustmux::cli::Command::Config(ConfigCommand::Check {
+            toml,
+            strict,
+            os,
+            machine,
+            explain,
+        })) => {
+            let environment =
+                rustmux::config::Environment::detect(os.as_deref(), machine.as_deref())?;
+            let report = rustmux::config::inspect_for_environment(config_path, &environment)?;
             if toml {
                 print!(
                     "{}",
@@ -69,6 +77,9 @@ fn execute(cli: rustmux::cli::Cli) -> Result<u8, String> {
                     "command_duration_seconds: {}",
                     report.settings.command_duration_seconds
                 );
+                if explain {
+                    print!("{}", report.selection.explain());
+                }
                 for warning in &report.warnings {
                     eprintln!("rustmux: warning: {warning}");
                 }

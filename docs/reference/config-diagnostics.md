@@ -15,6 +15,10 @@ defaulting to `false`. `[settings].clipboard_read` independently reports
 `[settings].file_transfer` reports the independent [OSC 5113 relay](file-transfer.md),
 also disabled by default.
 
+For shared dotfiles, [OS and machine overrides](config-overrides.md) add fixed-order
+layers. Use `config check --os linux --machine dev-server --explain` to inspect
+selection, or `--toml` for the structured `[selection]` report.
+
 Inspect configuration before starting a terminal or named-session server:
 
 ```sh

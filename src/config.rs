@@ -11,11 +11,13 @@ use crate::layout::Direction;
 mod diagnostics;
 mod display;
 mod mode;
+mod overrides;
 pub(crate) use display::{BindingDisplay, BindingHint, BindingMode};
 pub use mode::DefaultMode;
+pub use overrides::{Environment, Selection};
 pub(crate) mod manager;
 pub(crate) mod reload;
-pub use diagnostics::{Inspection, Settings, default_config, inspect};
+pub use diagnostics::{Inspection, Settings, default_config, inspect, inspect_for_environment};
 
 const DEFAULT_COMMAND_DURATION_SECONDS: u64 = 5;
 pub const DEFAULT_SCROLLBACK_LINES: usize = crate::screen::SCROLLBACK_MAX_LINES;
@@ -49,6 +51,15 @@ pub enum HistoryKey {
 }
 
 impl HistoryKey {
+    pub(crate) fn arrow(direction: Direction) -> Self {
+        match direction {
+            Direction::Up => Self::Up,
+            Direction::Down => Self::Down,
+            Direction::Left => Self::Left,
+            Direction::Right => Self::Right,
+        }
+    }
+
     // Footer target codes are local UI metadata, never written to a child PTY.
     pub(crate) fn footer_code(self) -> u8 {
         match self {
@@ -291,6 +302,7 @@ pub struct SessionBinding {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Shortcuts {
     clear_defaults: bool,
+    disabled: [u128; 16],
     displays: [Option<(BindingMode, HistoryKey, BindingDisplay)>; 256],
     locked_enter: u8,
     locked_configured: bool,
@@ -329,6 +341,7 @@ impl Default for Shortcuts {
     fn default() -> Self {
         Self {
             clear_defaults: false,
+            disabled: [0; 16],
             displays: [None; 256],
             locked_enter: 2,
             locked_configured: false,
@@ -368,6 +381,14 @@ impl Default for Shortcuts {
 impl Shortcuts {
     pub(crate) fn has_normal_arrows(self) -> bool {
         self.normal_arrows.iter().any(Option::is_some)
+            || [
+                HistoryKey::Up,
+                HistoryKey::Down,
+                HistoryKey::Left,
+                HistoryKey::Right,
+            ]
+            .iter()
+            .any(|key| self.disabled(BindingMode::Normal, *key))
     }
 
     pub fn normal_arrow_binding(self, direction: Direction) -> Option<NormalFocusBinding> {
@@ -430,6 +451,9 @@ impl Shortcuts {
     }
 
     pub fn resolve(self, key: u8) -> Option<u8> {
+        if self.disabled(BindingMode::Normal, HistoryKey::Byte(key)) {
+            return None;
+        }
         if let Some((_, action)) = self.normal_actions[..self.normal_action_len]
             .iter()
             .flatten()
@@ -475,6 +499,9 @@ impl Shortcuts {
     }
 
     pub fn history_binding(self, key: HistoryKey) -> Option<HistoryBinding> {
+        if self.disabled(BindingMode::History, key) {
+            return Some(HistoryBinding { actions: [None; 3] });
+        }
         self.history_bindings[..self.history_binding_len]
             .iter()
             .flatten()
@@ -703,6 +730,7 @@ impl TabName {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Config {
+    selection: Option<Selection>,
     source: Option<reload::Source>,
     manager: manager::Bindings,
     theme: crate::theme::Theme,
@@ -823,11 +851,11 @@ pub fn load() -> Result<Config, String> {
 /// Load an explicit configuration file, or use the default discovery path.
 /// An explicitly selected file must exist; a missing default file is optional.
 pub fn load_with_path(path: Option<&Path>) -> Result<Config, String> {
-    let configured = match path {
-        Some(path) => load_config(path, false)?,
-        None => load_config(&config_path(), true)?,
-    };
+    let environment = Environment::detect(None, None)?;
     let selected = path.map(Path::to_owned).unwrap_or_else(config_path);
+    let source = read_config(&selected, path.is_none())?;
+    let (configured, selection, _) = parse_source(source.as_deref(), &environment)
+        .map_err(|error| format!("invalid {}: {error}", selected.display()))?;
     let selected = if selected.is_absolute() {
         selected
     } else {
@@ -836,15 +864,18 @@ pub fn load_with_path(path: Option<&Path>) -> Result<Config, String> {
             .join(selected)
     };
     let mut config = resolve_config(configured);
+    config.selection = Some(selection);
     config.source = Some(reload::Source {
         path: selected,
         allow_missing: path.is_none(),
+        environment,
     });
     Ok(config)
 }
 
 fn resolve_config(configured: ParsedConfig) -> Config {
     Config {
+        selection: None,
         source: None,
         manager: configured.manager,
         theme: configured.theme,
@@ -893,6 +924,7 @@ fn select_shell(
         .unwrap_or_else(|| OsString::from("/bin/sh"))
 }
 
+#[cfg(test)]
 fn load_config(path: &Path, allow_missing: bool) -> Result<ParsedConfig, String> {
     let source = read_config(path, allow_missing)?;
     match source {
@@ -911,10 +943,47 @@ fn read_config(path: &Path, allow_missing: bool) -> Result<Option<String>, Strin
     }
 }
 
+#[cfg(test)]
 fn parse_config(source: &str) -> Result<ParsedConfig, String> {
-    let document = source
-        .parse::<toml::Table>()
-        .map_err(|error| error.to_string())?;
+    parse_config_for(source, &Environment::detect(None, None)?).map(|result| result.0)
+}
+
+fn parse_source(
+    source: Option<&str>,
+    environment: &Environment,
+) -> Result<(ParsedConfig, Selection, Vec<String>), String> {
+    let (parsed, mut selection, warnings) = parse_config_for(source.unwrap_or(""), environment)?;
+    if source.is_none() {
+        selection.layers.retain(|layer| layer != "config");
+    }
+    Ok((parsed, selection, warnings))
+}
+
+fn parse_config_for(
+    source: &str,
+    environment: &Environment,
+) -> Result<(ParsedConfig, Selection, Vec<String>), String> {
+    let compiled = overrides::compile(source, environment)?;
+    let mut parsed = parse_document(&compiled.document)?;
+    compiled.disable_bindings(&mut parsed.shortcuts)?;
+    let warnings = diagnostics::ignored_table(&compiled.document);
+    let mut selection = compiled.selection;
+    if env::var_os("RUSTMUX_SHELL").is_some_and(|value| !value.is_empty()) {
+        selection
+            .sources
+            .insert("shell".into(), "RUSTMUX_SHELL".into());
+    } else if parsed.shell.is_none() {
+        let source = if env::var_os("SHELL").is_some_and(|value| !value.is_empty()) {
+            "SHELL"
+        } else {
+            "fallback /bin/sh"
+        };
+        selection.sources.insert("shell".into(), source.into());
+    }
+    Ok((parsed, selection, warnings))
+}
+
+fn parse_document(document: &toml::Table) -> Result<ParsedConfig, String> {
     let shell = match document.get("shell") {
         None => None,
         Some(value) => {
@@ -2047,7 +2116,7 @@ fn parse_mode_key(key: &str) -> Option<u8> {
     }
     if let Some(letter) = key.strip_prefix("Ctrl ") {
         let byte = parse_printable_key(letter)?.to_ascii_lowercase();
-        return (byte.is_ascii_lowercase()).then_some(byte - b'a' + 1);
+        return (byte.is_ascii_lowercase()).then(|| byte - b'a' + 1);
     }
     parse_printable_key(key)
 }

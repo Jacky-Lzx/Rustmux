@@ -13,6 +13,7 @@ pub struct Inspection {
     pub warnings: Vec<String>,
     pub settings: Settings,
     pub session_manager: std::collections::BTreeMap<String, Vec<String>>,
+    pub selection: Selection,
 }
 
 #[derive(Debug, Serialize)]
@@ -45,13 +46,18 @@ pub struct Settings {
 /// Validate one read of the selected source and expose the resulting settings.
 /// Missing discovered files use defaults; explicitly selected files must exist.
 pub fn inspect(path: Option<&Path>) -> Result<Inspection, String> {
+    inspect_for_environment(path, &Environment::detect(None, None)?)
+}
+
+/// Inspect a simulated environment without starting or changing a running server.
+pub fn inspect_for_environment(
+    path: Option<&Path>,
+    environment: &Environment,
+) -> Result<Inspection, String> {
     let selected = path.map(Path::to_owned).unwrap_or_else(config_path);
     let source = read_config(&selected, path.is_none())?;
-    let parsed = match &source {
-        Some(source) => parse_config(source)
-            .map_err(|error| format!("invalid {}: {error}", selected.display()))?,
-        None => ParsedConfig::default(),
-    };
+    let (parsed, selection, warnings) = parse_source(source.as_deref(), environment)
+        .map_err(|error| format!("invalid {}: {error}", selected.display()))?;
     let shell_source = if env::var_os("RUSTMUX_SHELL").is_some_and(|value| !value.is_empty()) {
         "RUSTMUX_SHELL"
     } else if parsed.shell.is_some() {
@@ -61,7 +67,6 @@ pub fn inspect(path: Option<&Path>) -> Result<Inspection, String> {
     } else {
         "fallback"
     };
-    let warnings = source.as_deref().map(ignored_options).unwrap_or_default();
     let config = resolve_config(parsed);
     Ok(Inspection {
         path: selected.to_string_lossy().into_owned(),
@@ -71,6 +76,7 @@ pub fn inspect(path: Option<&Path>) -> Result<Inspection, String> {
         warnings,
         settings: Settings::from(&config),
         session_manager: config.manager.report(),
+        selection,
     })
 }
 
@@ -104,9 +110,7 @@ impl From<&Config> for Settings {
     }
 }
 
-fn ignored_options(source: &str) -> Vec<String> {
-    // The caller already validated this exact source with parse_config.
-    let table = source.parse::<toml::Table>().expect("validated config");
+pub(super) fn ignored_table(table: &toml::Table) -> Vec<String> {
     let mut warnings = Vec::new();
     for key in table.keys() {
         if !matches!(
@@ -274,6 +278,9 @@ backspace = ["backspace"]
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn ignored_options(source: &str) -> Vec<String> {
+        ignored_table(&source.parse().unwrap())
+    }
     #[test]
     fn drop_targets_are_opt_in_independent_typed_and_reported() {
         let defaults = resolve_config(parse_config("").unwrap());

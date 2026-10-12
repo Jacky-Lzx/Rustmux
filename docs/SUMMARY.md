@@ -5,6 +5,7 @@
 - [Build and Run](getting-started/quick-start.md)
 - [Native Development Configuration](reference/dev-config.md)
 - [Configuration Diagnostics](reference/config-diagnostics.md)
+- [OS and Machine Overrides](reference/config-overrides.md)
 - [Configuration Hot Reload](reference/config-reload.md)
 - [Compact Layout](reference/compact-layout.md)
 - [Floating Terminal](reference/floating-terminal.md)

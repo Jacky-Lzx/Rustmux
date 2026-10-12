@@ -331,3 +331,8 @@ fn binding_display() {
 fn floating() {
     run_scenario("floating");
 }
+
+#[test]
+fn config_overrides() {
+    run_scenario("config_overrides");
+}
