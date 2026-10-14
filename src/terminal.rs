@@ -4466,7 +4466,7 @@ fn forward(
                             scrollback_lines,
                         ) {
                             Ok(pane) => {
-                                windows.create(String::new(), pane)?;
+                                windows.create_after_active(String::new(), pane)?;
                             }
                             Err(_) => {
                                 if to_terminal.is_empty() {

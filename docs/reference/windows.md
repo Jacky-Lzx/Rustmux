@@ -45,6 +45,9 @@ mode, so automatic windows independently follow their own focused panes.
 ## Identity and focus
 
 - Creation appends a window and makes it active.
+- Interactive `new-window` (Ctrl-B, then `c` by default) inserts immediately
+  to the right of the current window and selects it. Existing windows retain
+  their relative order; displayed numbers follow the new positions.
 - `WindowId` is stable within its originating collection, independent of the
   window's position and name. IDs start at zero and are never reused, even after
   all windows have been closed. They are not cross-collection or persistent IDs.
@@ -146,7 +149,7 @@ replace it.
 
 | Input | Action |
 | --- | --- |
-| Ctrl-B, then c | Create a shell window and select it |
+| Ctrl-B, then c | Create a shell window to the right of the current window and select it |
 | Ctrl-B, then n | Select the next window, wrapping |
 | Ctrl-B, then p | Select the previous window, wrapping |
 | Ctrl-B, then Tab | Return to the last active window |

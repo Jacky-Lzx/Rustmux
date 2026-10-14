@@ -83,6 +83,47 @@ try:
 finally:
     s.close()
 
+# Creating from the middle inserts on its right, focuses the new shell, and
+# preserves existing shell state and last-window navigation.
+s = Session(lifetime=30)
+try:
+    s.expect(b"RUSTMUX_READY> ")
+    for label in (b"A", b"B", b"C"):
+        if label != b"A":
+            s.send(b"\x02c")
+            s.expect(b"RUSTMUX_READY> ")
+        s.send(b"\x02," + label + b"\r")
+        expect_bar(s, label)
+        s.send(b"WIN=" + label + b"\n")
+        s.expect(b"RUSTMUX_READY> ")
+    s.send(b"\x022\x02c")
+    s.expect(b"RUSTMUX_READY> ")
+    s.send(b"\x02,D\r")
+    expect_bar(s, b"3 D")
+    bar = s.physical_rows[0]
+    assert bar.index(b"1 A") < bar.index(b"2 B") < bar.index(b"3 D") < bar.index(b"4 C"), bar
+    s.send(b"printf '\\033[2J\\033[H%s:%s\\n' INSERTED ${WIN-unset}\n")
+    s.expect(b"INSERTED:unset")
+    s.send(b"\x02\t")
+    s.send(b"printf '\\033[2J\\033[H%s:%s\\n' PREVIOUS $WIN\n")
+    s.expect(b"PREVIOUS:B")
+    s.send(b"\x02\t")
+    s.expect(b"INSERTED:unset")
+    s.send(b"\x02n")
+    s.send(b"printf '\\033[2J\\033[H%s:%s\\n' NEXT $WIN\n")
+    s.expect(b"NEXT:C")
+    s.send(b"\x023exit\n")
+    expect_bar_without(s, b"D")
+    expect_bar(s, b"3 C")
+    s.send(b"exit\n")
+    expect_bar_without(s, b"C")
+    s.send(b"exit\n")
+    expect_bar_without(s, b"B")
+    s.send(b"exit\n")
+    s.finish(0)
+finally:
+    s.close()
+
 # Prefix escaping and bracketed paste containing window commands reach the child.
 prefix_probe = r"""
 import os, select, time, tty

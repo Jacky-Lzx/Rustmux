@@ -35,6 +35,57 @@ fn creation_selection_and_wrapping_keep_stable_ids() {
 }
 
 #[test]
+fn insertion_after_each_position_preserves_contents_focus_and_last_window() {
+    for position in 0..3 {
+        let mut windows = Windows::default();
+        let ids: Vec<_> = (0..3)
+            .map(|i| windows.create(i.to_string(), Box::new(i)).unwrap())
+            .collect();
+        windows.select(ids[position]).unwrap();
+        let inserted = windows
+            .create_after_active("new".into(), Box::new(9))
+            .unwrap();
+        let mut expected = ids.clone();
+        expected.insert(position + 1, inserted);
+        assert_eq!(windows.iter().map(|w| w.id()).collect::<Vec<_>>(), expected);
+        assert_eq!(windows.active().unwrap().id(), inserted);
+        assert!(inserted.get() > ids[2].get());
+        for (i, &id) in ids.iter().enumerate() {
+            assert_eq!(**windows.get(id).unwrap().content(), i);
+        }
+        assert_eq!(windows.select_last(), Some(ids[position]));
+        assert_eq!(windows.select_last(), Some(inserted));
+        windows.close(inserted).unwrap();
+        assert_eq!(windows.iter().map(|w| w.id()).collect::<Vec<_>>(), ids);
+        assert_eq!(windows.active().unwrap().id(), ids[(position + 1).min(2)]);
+    }
+}
+
+#[test]
+fn insertion_handles_empty_collection_and_floating_return_target() {
+    let mut windows = Windows::default();
+    let a = windows.create_after_active("a".into(), 1).unwrap();
+    let b = windows.create_after_active("b".into(), 2).unwrap();
+    windows.select(a).unwrap();
+    let floating = windows.create_floating("floating".into(), 3).unwrap();
+    let c = windows.create_after_active("c".into(), 4).unwrap();
+    assert_eq!(
+        windows.iter().map(|w| w.id()).collect::<Vec<_>>(),
+        [a, c, b]
+    );
+    assert_eq!(windows.active().unwrap().id(), c);
+    assert!(!windows.floating_visible());
+    assert_eq!(windows.get(floating).unwrap().content(), &3);
+    assert_eq!(windows.select_last(), Some(a));
+    for id in [a, b, c] {
+        windows.close(id).unwrap();
+    }
+    let d = windows.create_after_active("d".into(), 5).unwrap();
+    assert_eq!(windows.active().unwrap().id(), d);
+    assert!(d.get() > c.get());
+}
+
+#[test]
 fn every_removal_preserves_focus_or_selects_the_nearest_survivor() {
     for active in 0..3 {
         for removed in 0..3 {

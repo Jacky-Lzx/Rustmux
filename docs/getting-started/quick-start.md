@@ -242,7 +242,8 @@ Rustmux itself. Type `exit` or use the shell's EOF key to close the current pane
 window closes, its exit status is returned to the caller. Shell output is drained before normal exit, and
 the outer terminal modes and previous screen are restored.
 
-Use Ctrl-B followed by `c` to create a window, `n` for the next window and `p`
+Use Ctrl-B followed by `c` to create and select a window immediately to the right
+of the current window, `n` for the next window and `p`
 for the previous one. Ctrl-B followed by `1`–`9` selects that window number;
 `0` selects window 10. Ctrl-B followed by Tab returns to the last active window;
 repeat it to toggle between two windows. Ctrl-B followed by `<` or `>` moves

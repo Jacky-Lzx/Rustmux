@@ -70,18 +70,35 @@ impl<T> Default for Windows<T> {
 }
 
 impl<T> Windows<T> {
-    /// Insert an already constructed content value and activate it. On ID
+    /// Append an already constructed content value and activate it. On ID
     /// exhaustion the supplied value is dropped and the collection is unchanged.
     pub fn create(&mut self, name: String, content: T) -> io::Result<WindowId> {
+        self.insert(self.entries.len(), name, content)
+    }
+
+    /// Insert to the right of the selected ordinary window and activate it.
+    /// A visible floating window uses its ordinary return target as the anchor.
+    /// Empty collections insert at the start. ID exhaustion leaves focus and
+    /// order unchanged, dropping the supplied content just like `create`.
+    pub fn create_after_active(&mut self, name: String, content: T) -> io::Result<WindowId> {
+        let index = if self.entries.is_empty() {
+            0
+        } else {
+            self.active + 1
+        };
+        self.insert(index, name, content)
+    }
+
+    fn insert(&mut self, index: usize, name: String, content: T) -> io::Result<WindowId> {
         let value = self
             .next_id
             .ok_or_else(|| io::Error::other("window IDs exhausted"))?;
         let id = WindowId(value);
         self.floating_visible = false;
         self.last_active = self.active().map(|window| window.id());
-        self.entries.push(Window { id, name, content });
+        self.entries.insert(index, Window { id, name, content });
         self.next_id = value.checked_add(1);
-        self.active = self.entries.len() - 1;
+        self.active = index;
         Ok(id)
     }
 
