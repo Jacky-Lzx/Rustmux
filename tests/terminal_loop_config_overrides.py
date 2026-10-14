@@ -5,7 +5,7 @@ import subprocess
 import tempfile
 import time
 import tomllib
-from terminal_loop_support import BINARY, Session
+from terminal_loop_support import BINARY, Session, expect_footer
 
 with tempfile.TemporaryDirectory(prefix="rustmux-overrides-") as temporary:
     root = Path(temporary)
@@ -21,6 +21,8 @@ with tempfile.TemporaryDirectory(prefix="rustmux-overrides-") as temporary:
     def write(machine=True, remove=False):
         selected.write_text(f'''remain_on_exit=true
 scrollback_lines=100
+[keybinds.normal]
+esc={{actions=[{{action="switch-mode",mode="locked"}}]}}
 [theme]
 preset="light"
 [overrides.os.{os_name}]
@@ -82,8 +84,10 @@ c=[]
         session.send(b"\x02c")
         session.read(0.15)
         assert len(panes()) == 1
-        session.send(b"\x02")  # Return to LOCKED using the literal-prefix operation.
-        session.read(0.05)
+        # Escape locks without forwarding a literal Ctrl-B into the shell's
+        # pending command. Linux /bin/sh does not consume it as a cursor key.
+        session.send(b"\x1b")
+        expect_footer(session, b"LOCKED")
 
         selected.write_text("[overrides.machine.server]\nscrollback_lines='invalid'\n")
         current = wait(lambda c: "error" in c)
