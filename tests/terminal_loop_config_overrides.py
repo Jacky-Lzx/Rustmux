@@ -95,13 +95,20 @@ c=[]
         assert current["settings"]["theme"]["background"] == "#f5f6fa", current
         assert current["settings"]["theme"]["accent"] == "#040506", current
         assert panes()[0]["pid"] == first["pid"]
+        # Redirection creates the file before the command writes its contents.
+        # Delay the write to exercise that interval deterministically.
         run("pane", "send-keys", "-s", name, "-p", first["id"], "--literal", "--enter",
-            'printf "%s" "$OVERLAY_PRESERVED" > retained-variable')
+            '{ sleep 0.1; printf "%s" "$OVERLAY_PRESERVED"; } > retained-variable')
         end = time.monotonic() + 3
-        while not (root / "retained-variable").exists():
+        while True:
+            try:
+                retained = (root / "retained-variable").read_text()
+            except FileNotFoundError:
+                retained = None
+            if retained == "yes":
+                break
             session.read(0.01)
-            assert time.monotonic() < end
-        assert (root / "retained-variable").read_text() == "yes"
+            assert time.monotonic() < end, {"expected": "yes", "actual": retained}
         session.send(b"\x02d")
         session.finish(0)
         session.close()
