@@ -48,6 +48,9 @@ cargo install --path . --locked
 rustmux
 ```
 
+Linux users can also build with `nix build` or run with `nix run . -- --help`.
+See [Nix package](nix/README.md) for supported systems and flake integration.
+
 Running `rustmux` without arguments opens an **unnamed foreground workspace**.
 It starts in **locked** mode, where input goes directly to your shell. To create
 and later reconnect to a persistent named session:

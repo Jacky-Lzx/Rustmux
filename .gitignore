@@ -1,3 +1,6 @@
 /target/
 /dist/
 __pycache__/
+/result
+/result-*
+/.direnv/
