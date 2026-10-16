@@ -21,6 +21,7 @@ pub struct Settings {
     pub theme: std::collections::BTreeMap<String, String>,
     pub shell: String,
     pub tab_name: TabName,
+    pub tab_close_focus: TabCloseFocus,
     pub scrollback_lines: usize,
     pub default_mode: DefaultMode,
     pub compact: bool,
@@ -86,6 +87,7 @@ impl From<&Config> for Settings {
             theme: config.theme.report(),
             shell: config.shell.to_string_lossy().into_owned(),
             tab_name: config.tab_name,
+            tab_close_focus: config.tab_close_focus,
             scrollback_lines: config.scrollback_lines,
             default_mode: config.default_mode,
             compact: config.compact,
@@ -117,6 +119,7 @@ pub(super) fn ignored_table(table: &toml::Table) -> Vec<String> {
             key.as_str(),
             "shell"
                 | "tab_name"
+                | "tab_close_focus"
                 | "default_mode"
                 | "compact"
                 | "idle_frame_coalescing"
@@ -225,6 +228,8 @@ pub fn default_config() -> String {
 default_mode = "locked"
 # Automatic tabs follow the foreground program; use "title" for OSC titles.
 tab_name = "application"
+# Prefer the right neighbor on close; use "left" to prefer the left neighbor.
+tab_close_focus = "right"
 compact = false
 # Wait 6 ms for the first visible output batch after idle; opt-in.
 idle_frame_coalescing = false

@@ -26,6 +26,7 @@ rustmux config show -s work
 | `drop_target` | Enable or disable [OSC 72 receiving](drop-target.md); disabling cancels the drop, discards staged data and unregisters all targets |
 | Notifications | Update existing panes, including the hidden pane retained for undo; running commands use the latest policy at completion |
 | `remain_on_exit` | Update the session policy; disabling it also removes already drained, exited panes that use this default. Explicit project/pane overrides still apply |
+| `tab_close_focus` | Set the preferred neighbor (`left` or `right`, default `right`) for subsequent tab closures; current selection stays unchanged |
 | `tab_name` | Switch automatically named windows between foreground program names (`application`, the default) and OSC terminal titles (`title`); explicit names remain fixed |
 | `shell` | Used when creating or respawning panes; existing child processes keep running |
 | `scrollback_lines` | Used by future panes and as the history limit for future saves; existing panes keep their current history capacity |

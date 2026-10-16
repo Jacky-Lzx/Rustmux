@@ -118,6 +118,9 @@ fn run_inner(
         None,
         false,
     )?;
+    if let Some(config) = config {
+        session.windows.set_close_focus(config.tab_close_focus());
+    }
     session.remain_on_exit = remain_on_exit;
     session.default_mode =
         config.map_or_else(crate::config::DefaultMode::default, |c| c.default_mode());
@@ -236,6 +239,9 @@ fn serve_inner(
         options,
         context.scrollback_lines,
     )?);
+    if let Some(config) = config {
+        session.windows.set_close_focus(config.tab_close_focus());
+    }
     session.remain_on_exit = remain_on_exit;
     session.default_mode =
         config.map_or_else(crate::config::DefaultMode::default, |c| c.default_mode());
@@ -2480,6 +2486,7 @@ fn apply_config(
     closed: &mut Option<crate::closed_pane::ClosedPane>,
     persistence: Option<&mut crate::session::snapshot::SnapshotService>,
 ) {
+    windows.set_close_focus(config.tab_close_focus());
     for window in windows.all_iter_mut() {
         for (_, pane) in window.content_mut().iter_mut() {
             pane.configure_notifications(config.notifications());

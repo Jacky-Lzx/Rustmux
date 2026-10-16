@@ -2,6 +2,15 @@
 
 use std::io;
 
+/// Preferred neighbor after closing the selected ordinary window.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TabCloseFocus {
+    Left,
+    #[default]
+    Right,
+}
+
 /// Stable within one Windows collection. IDs are never reused by that collection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct WindowId(u64);
@@ -43,13 +52,14 @@ impl<T> Window<T> {
 
 /// Owns window contents in display order; no Clone bound or process operations.
 /// Empty collections have no focus. New windows become active. Closing the active
-/// window selects its successor, or its predecessor when removing the last entry.
+/// window selects the configured neighbor, falling back to the other side at an edge.
 /// A separate floating window may own focus while retaining the selected ordinary
 /// window as its return target. Ordinary iteration excludes that floating content.
 #[derive(Debug)]
 pub struct Windows<T> {
     entries: Vec<Window<T>>,
     active: usize,
+    close_focus: TabCloseFocus,
     next_id: Option<u64>,
     last_active: Option<WindowId>,
     floating: Option<Window<T>>,
@@ -61,6 +71,7 @@ impl<T> Default for Windows<T> {
         Self {
             entries: Vec::new(),
             active: 0,
+            close_focus: TabCloseFocus::default(),
             next_id: Some(0),
             last_active: None,
             floating: None,
@@ -70,6 +81,11 @@ impl<T> Default for Windows<T> {
 }
 
 impl<T> Windows<T> {
+    /// Set the fallback policy without changing current focus or history.
+    pub fn set_close_focus(&mut self, focus: TabCloseFocus) {
+        self.close_focus = focus;
+    }
+
     /// Append an already constructed content value and activate it. On ID
     /// exhaustion the supplied value is dropped and the collection is unchanged.
     pub fn create(&mut self, name: String, content: T) -> io::Result<WindowId> {
@@ -308,7 +324,9 @@ impl<T> Windows<T> {
         }
         if index < self.active {
             self.active -= 1;
-        } else if self.active == self.entries.len() {
+        } else if index == self.active
+            && (self.close_focus == TabCloseFocus::Left || self.active == self.entries.len())
+        {
             self.active = self.active.saturating_sub(1);
         }
         // Automatic focus fallback must not remember a dead or already active target.

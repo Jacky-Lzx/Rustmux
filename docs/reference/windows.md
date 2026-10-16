@@ -58,11 +58,25 @@ mode, so automatic windows independently follow their own focused panes.
   runtime validates names in its interactive editor and script interface before
   displaying them; see [Script Window Rename](script-window-rename.md).
 - Closing an inactive window preserves the active window's identity. Closing
-  the active window selects its successor, or its predecessor if it was last.
+  the active window selects the neighbor chosen by `tab_close_focus` (default
+  `"right"`), falling back to the other side at either edge.
   Closing the only window leaves the collection empty; creating again works.
 - Selecting, renaming or closing an unknown ID returns `NotFound` without changing
   the collection. ID exhaustion fails creation without wrapping or changing focus;
   the supplied content is dropped on this error, as documented by `create`.
+
+Set the top-level option to prefer the left neighbor after a close:
+
+```toml
+tab_close_focus = "left"
+```
+
+Accepted values are `"left"` and `"right"`. For tabs A, B, C, closing the selected
+B focuses A with `"left"`, or C with `"right"`. There is no wrapping: closing A
+selects B with either setting. This also applies when a tab's final pane exits or
+is explicitly closed. Closing a floating terminal returns to its ordinary tab.
+The setting supports [configuration reload](config-reload.md), including detached
+named sessions, and changing it preserves the current selection.
 
 ## Ownership boundary
 
@@ -508,8 +522,8 @@ from the last position wraps to the start. Other windows retain their relative
 order. Empty and single-window collections are unchanged. The active shell,
 stable ID, name, contents and last-window record are preserved. Numeric shortcuts
 and next/previous selection follow the resulting display order, as does the
-successor/predecessor rule when a window closes. New windows still append at the
-right edge. [Named-session snapshots](session-snapshots.md) preserve the
+configured neighbor preference when a window closes. Interactive creation inserts
+to the right of the current window. [Named-session snapshots](session-snapshots.md) preserve the
 ordinary window order at save time and restore it when recreating the workspace.
 An unnamed foreground workspace has no saved order across launches.
 

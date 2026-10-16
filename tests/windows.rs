@@ -1,4 +1,8 @@
-use rustmux::{parser::Parser, screen::Screen, window::Windows};
+use rustmux::{
+    parser::Parser,
+    screen::Screen,
+    window::{TabCloseFocus, Windows},
+};
 use std::{cell::Cell, rc::Rc};
 
 #[test]
@@ -87,33 +91,42 @@ fn insertion_handles_empty_collection_and_floating_return_target() {
 
 #[test]
 fn every_removal_preserves_focus_or_selects_the_nearest_survivor() {
-    for active in 0..3 {
-        for removed in 0..3 {
-            let mut windows = Windows::default();
-            let ids: Vec<_> = (0..3)
-                .map(|i| windows.create(i.to_string(), i).unwrap())
-                .collect();
-            windows.select(ids[active]).unwrap();
-            assert_eq!(windows.close(ids[removed]).unwrap().into_content(), removed);
-            let expected = if active != removed {
-                active
-            } else if removed == 2 {
-                1
-            } else {
-                removed + 1
-            };
-            assert_eq!(windows.active().unwrap().id(), ids[expected]);
-            for &id in &ids {
-                if windows.get(id).is_some() {
-                    windows.close(id).unwrap();
+    for policy in [TabCloseFocus::Left, TabCloseFocus::Right] {
+        for count in 1..=4 {
+            for active in 0..count {
+                for removed in 0..count {
+                    let mut windows = Windows::default();
+                    let ids: Vec<_> = (0..count)
+                        .map(|i| windows.create(i.to_string(), i).unwrap())
+                        .collect();
+                    windows.select(ids[active]).unwrap();
+                    windows.set_close_focus(policy);
+                    assert_eq!(windows.active().unwrap().id(), ids[active]);
+                    assert_eq!(windows.close(ids[removed]).unwrap().into_content(), removed);
+                    let expected = if active != removed {
+                        Some(ids[active])
+                    } else if count == 1 {
+                        None
+                    } else if (policy == TabCloseFocus::Left && removed > 0) || removed == count - 1
+                    {
+                        Some(ids[removed - 1])
+                    } else {
+                        Some(ids[removed + 1])
+                    };
+                    assert_eq!(windows.active().map(|w| w.id()), expected);
+                    for &id in &ids {
+                        if windows.get(id).is_some() {
+                            windows.close(id).unwrap();
+                        }
+                    }
+                    assert!(windows.active().is_none());
+                    assert!(windows.active_mut().is_none());
+                    assert!(windows.select_next().is_none());
+                    let new = windows.create(String::new(), 9).unwrap();
+                    assert!(new.get() > ids[count - 1].get());
+                    assert_eq!(windows.active().unwrap().id(), new);
                 }
             }
-            assert!(windows.active().is_none());
-            assert!(windows.active_mut().is_none());
-            assert!(windows.select_next().is_none());
-            let new = windows.create(String::new(), 9).unwrap();
-            assert!(new.get() > ids[2].get());
-            assert_eq!(windows.active().unwrap().id(), new);
         }
     }
 }

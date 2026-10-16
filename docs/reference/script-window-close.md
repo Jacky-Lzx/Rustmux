@@ -30,7 +30,8 @@ Their runtime pane IDs become invalid. Surviving IDs, child processes, terminal
 state, layouts, zoom and remembered pane selection are preserved.
 
 Closing an inactive window preserves active window identity. Closing the active
-window selects its successor in display order, or its predecessor at the end,
+window selects the neighbor configured by `tab_close_focus` (default `"right"`),
+falling back to the other side at either edge,
 using that window's remembered selected pane. The existing last-window model
 discards references to removed windows. Successful operations use the normal
 control refresh: surviving PTYs/screens are synchronized; an attached client

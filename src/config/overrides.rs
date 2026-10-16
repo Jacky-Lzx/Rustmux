@@ -219,6 +219,7 @@ impl Selection {
 struct Patch {
     shell: Option<String>,
     tab_name: Option<String>,
+    tab_close_focus: Option<String>,
     default_mode: Option<String>,
     compact: Option<bool>,
     idle_frame_coalescing: Option<bool>,

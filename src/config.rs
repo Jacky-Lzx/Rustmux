@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::layout::Direction;
+pub use crate::window::TabCloseFocus;
 
 mod diagnostics;
 mod display;
@@ -728,6 +729,19 @@ impl TabName {
     }
 }
 
+impl TabCloseFocus {
+    fn parse(value: Option<&toml::Value>) -> Result<Self, String> {
+        match value {
+            None => Ok(Self::default()),
+            Some(value) => match value.as_str() {
+                Some("left") => Ok(Self::Left),
+                Some("right") => Ok(Self::Right),
+                _ => Err("tab_close_focus must be 'left' or 'right'".to_owned()),
+            },
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Config {
     selection: Option<Selection>,
@@ -736,6 +750,7 @@ pub struct Config {
     theme: crate::theme::Theme,
     shell: OsString,
     tab_name: TabName,
+    tab_close_focus: TabCloseFocus,
     notifications: Notifications,
     scrollback_lines: usize,
     default_mode: DefaultMode,
@@ -804,6 +819,10 @@ impl Config {
         &self.shell
     }
 
+    pub fn tab_close_focus(&self) -> TabCloseFocus {
+        self.tab_close_focus
+    }
+
     pub fn tab_name(&self) -> TabName {
         self.tab_name
     }
@@ -827,6 +846,7 @@ struct ParsedConfig {
     theme: crate::theme::Theme,
     shell: Option<String>,
     tab_name: TabName,
+    tab_close_focus: TabCloseFocus,
     notifications: Notifications,
     scrollback_lines: Option<usize>,
     default_mode: DefaultMode,
@@ -885,6 +905,7 @@ fn resolve_config(configured: ParsedConfig) -> Config {
             env::var_os("SHELL"),
         ),
         tab_name: configured.tab_name,
+        tab_close_focus: configured.tab_close_focus,
         notifications: configured.notifications,
         scrollback_lines: configured
             .scrollback_lines
@@ -1067,6 +1088,7 @@ fn parse_document(document: &toml::Table) -> Result<ParsedConfig, String> {
             .unwrap_or_default(),
         shell,
         tab_name: TabName::parse(document.get("tab_name"))?,
+        tab_close_focus: TabCloseFocus::parse(document.get("tab_close_focus"))?,
         notifications,
         scrollback_lines,
         default_mode: DefaultMode::parse(document.get("default_mode"), shortcuts)?,
@@ -2256,6 +2278,35 @@ clear_defaults = true
     }
 
     #[test]
+    fn tab_close_focus_is_validated_and_resolved() {
+        for (source, expected) in [
+            ("", TabCloseFocus::Right),
+            ("tab_close_focus='left'", TabCloseFocus::Left),
+            ("tab_close_focus='right'", TabCloseFocus::Right),
+        ] {
+            assert_eq!(
+                resolve_config(parse_config(source).unwrap()).tab_close_focus(),
+                expected
+            );
+        }
+        for source in [
+            "tab_close_focus=1",
+            "tab_close_focus=true",
+            "tab_close_focus=[]",
+            "tab_close_focus='previous'",
+            "tab_close_focus=''",
+            "tab_close_focus='Left'",
+        ] {
+            assert!(
+                parse_config(source)
+                    .unwrap_err()
+                    .contains("tab_close_focus"),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
     fn tab_name_modes_are_validated_and_resolved() {
         assert_eq!(
             resolve_config(parse_config("").unwrap()).tab_name(),
@@ -2302,6 +2353,7 @@ preset = "mocha"
                 theme: crate::theme::Theme::default(),
                 shell: Some("/opt/homebrew/bin/fish".to_owned()),
                 tab_name: TabName::default(),
+                tab_close_focus: TabCloseFocus::default(),
                 notifications: Notifications::default(),
                 scrollback_lines: Some(5000),
                 default_mode: DefaultMode::Locked,

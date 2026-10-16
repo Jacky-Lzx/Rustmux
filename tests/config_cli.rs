@@ -66,6 +66,10 @@ fn exported_defaults_round_trip_and_ignore_active_broken_config() {
     assert_eq!(settings(&checked)["default_mode"].as_str(), Some("locked"));
     assert_eq!(settings(&checked)["tab_name"].as_str(), Some("application"));
     assert_eq!(
+        settings(&checked)["tab_close_focus"].as_str(),
+        Some("right")
+    );
+    assert_eq!(
         settings(&checked)["mouse_hover_cursor"].as_bool(),
         Some(false)
     );

@@ -23,6 +23,11 @@ fn normal_focus_arrows() {
 }
 
 #[test]
+fn tab_close_focus() {
+    run_scenario("tab_close_focus");
+}
+
+#[test]
 fn compact() {
     run_scenario("compact");
 }
